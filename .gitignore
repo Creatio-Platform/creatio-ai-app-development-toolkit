@@ -22,3 +22,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Test artifacts
+tests/*.log
