@@ -2,17 +2,26 @@
 
 A sophisticated TypeScript service featuring multiple AI-powered agents with a beautiful web UI:
 1. **Translation Agent**: Ukrainian to English translation with terminology management
-2. **Creatio Schema Agent**: Create ClientUnitSchema entities in Creatio platform using factory pattern
-3. **Web UI**: Simple, intuitive interface for schema creation with natural language
+2. **Creatio Schema Agent**: NLP-powered schema creation for Creatio platform
+3. **Web UI**: Intuitive interface with natural language processing
 
 ## Features
 
-### 🎨 Web UI
-- **Natural Language Commands**: Create schemas by simply typing "створи схему з назвою MyPage"
-- **Beautiful Design**: Modern gradient UI with smooth animations
-- **Real-time Feedback**: Instant success/error notifications with schema details
-- **Direct Integration**: One-click link to open created schema in Creatio
-- **Smart Parsing**: Automatically extracts schema names from various command formats
+### 🤖 Creatio AI Assistant
+- **Natural Language Processing**: Interprets commands in Ukrainian or English
+  - "створи схему ProductPage" → Creates schema
+  - "видали схему TestPage" → Rejects (not supported)
+  - "мені потрібна нова сторінка" → Understands intent and creates schema
+- **Intelligent Intent Detection**: LLM analyzes text to determine operations
+- **Auto-Generated Names**: Creatio creates unique names (e.g., UsrClientUnit_15416f6)
+- **Supported Operations**: 
+  - ✅ Create schemas
+  - ✅ Extend schemas  
+  - ✅ Get schema info
+  - ❌ Delete schemas (not supported)
+  - ❌ Modify code (not supported)
+- **Beautiful Web UI**: Modern gradient design with real-time feedback
+- **Direct Creatio Links**: One-click access to created schemas
 
 ### Translation Service
 - **Deep Agent Translation**: AI-powered translation using LangChain DeepAgents framework
@@ -76,9 +85,13 @@ The server will start on the port specified in your `.env` file (default: 3000).
 
 1. Start the server: `npm start`
 2. Open browser: http://localhost:3000
-3. Type a command: "створи схему з назвою MyPage"
-4. Click "Створити схему"
-5. Done! 🎉
+3. Type a natural language command:
+   - "створи схему ProductPage"
+   - "мені потрібна нова сторінка для клієнтів"
+   - "create schema named OrderForm"
+4. Click "Виконати" (Execute)
+5. AI analyzes your request and creates the schema
+6. Click link to open in Creatio! 🎉
 
 ### Using API Endpoints
 
@@ -94,6 +107,55 @@ Response:
 ```json
 {
   "ok": true
+}
+```
+
+### Creatio AI Agent (Natural Language)
+
+Send natural language commands to create schemas:
+
+**Create schema:**
+```bash
+curl -X POST http://localhost:3000/agent/creatio \
+  -H "Content-Type: application/json" \
+  -d '{"text": "створи схему ProductPage"}'
+```
+
+**Natural language (no explicit name):**
+```bash
+curl -X POST http://localhost:3000/agent/creatio \
+  -H "Content-Type: application/json" \
+  -d '{"text": "мені потрібна нова сторінка для замовлень"}'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "operation": "create_schema",
+  "message": "Схему успішно створено.",
+  "schemaUId": "8c02c1f1-7fb0-4691-964c-be7890e06cda",
+  "schemaName": "UsrClientUnit_191fa59",
+  "schemaType": "AngularSchema",
+  "packageUId": "a00051f4-cde3-4f3f-b08e-c5ad1a5c735a",
+  "reasoning": "Creatio автоматично генерує унікальні імена схем...",
+  "creatio_url": "http://your-instance/0/ClientApp/#/PageDesigner/..."
+}
+```
+
+**Unsupported operation:**
+```bash
+curl -X POST http://localhost:3000/agent/creatio \
+  -H "Content-Type: application/json" \
+  -d '{"text": "видали схему TestPage"}'
+```
+
+Response:
+```json
+{
+  "success": false,
+  "operation": "not_supported",
+  "message": "Видалення схем ще не підтримується"
 }
 ```
 
