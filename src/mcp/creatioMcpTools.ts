@@ -18,13 +18,17 @@ export const createNewSchemaTool = () =>
     },
     {
       name: 'create_new_schema',
-      description: `Create a new ClientUnitSchema in Creatio using factory pattern. 
-Automatically generates unique name with Usr prefix, applies parent if specified, and initializes schema body.
-Returns: schemaUId, schemaName, schemaType, parent.`,
+      description: `Create a new ClientUnitSchema in Creatio with custom name. 
+Adds Usr prefix to customName parameter (e.g., "AccountPage" becomes "UsrAccountPage").
+Optionally applies page template selected by templateName/templateUId from schema.template.api.
+Returns: schemaUId, schemaName, schemaType, parent, customName, template.`,
       schema: z.object({
         schemaType: z.string().describe('Schema type: AngularSchema, Module, EntitySchema, etc.'),
         packageUId: z.string().describe('Package GUID where schema will be created'),
+        customName: z.string().optional().describe('Desired schema name (Usr prefix will be added). Example: "AccountPage" becomes "UsrAccountPage"'),
         parentSchemaUId: z.string().optional().describe('Optional parent schema GUID for inheritance'),
+        templateUId: z.string().optional().describe('Optional page template GUID from schema.template.api/templates'),
+        templateName: z.string().optional().describe('Optional page template name/title (e.g., BlankPageTemplate)'),
         userLevelSchema: z.boolean().optional().describe('User-level (true) or system-level (false), default: false'),
       }),
     },
@@ -158,6 +162,31 @@ Returns availability status. Use before creating schemas to avoid conflicts.
 Returns: available (boolean), message.`,
       schema: z.object({
         schemaName: z.string().describe('Schema name to validate'),
+      }),
+    },
+  );
+
+/**
+ * LangChain tool for listing schema templates
+ */
+export const listSchemaTemplatesTool = () =>
+  tool(
+    async (args) => {
+      try {
+        const server = getCreatioServer();
+        const result = await server.listTemplates(args);
+        return result.content[0].text;
+      } catch (error: any) {
+        return JSON.stringify({ success: false, error: error.message });
+      }
+    },
+    {
+      name: 'list_schema_templates',
+      description: `List available schema templates from schema.template.api/templates.
+Use schemaType AngularSchema (9) for page templates.
+Returns: templates array with uId, name, title, groupName.`,
+      schema: z.object({
+        schemaType: z.string().optional().describe('Schema type: AngularSchema, Module, EntitySchema, etc. Default: AngularSchema'),
       }),
     },
   );
