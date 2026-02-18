@@ -148,6 +148,13 @@ export class CreatioClient {
    * Make authenticated GET request to Creatio API
    */
   async get<T = any>(endpoint: string, params?: any): Promise<T> {
+    return this.makeGetRequest(endpoint, params, false);
+  }
+
+  /**
+   * Internal method to make GET requests with retry logic
+   */
+  private async makeGetRequest<T = any>(endpoint: string, params: any, isRetry: boolean): Promise<T> {
     await this.ensureAuthenticated();
 
     try {
@@ -163,12 +170,28 @@ export class CreatioClient {
         url = `${config.creatio.url}${config.creatio.serviceEndpoint}${endpoint}`;
       }
 
+      console.log(`[CreatioClient] GET ${url}`);
+
       const response = await this.axiosInstance.get(url, {
         params,
         headers: {
           Cookie: this.cookies.join('; '),
         },
+        validateStatus: (status) => status < 500,
       });
+
+      console.log(`[CreatioClient] Response ${response.status}:`, response.data);
+
+      if (response.status === 401 && !isRetry) {
+        console.log('[CreatioClient] Session expired (401) for GET, re-authenticating...');
+        this.isAuthenticated = false;
+        this.cookies = [];
+        return this.makeGetRequest(endpoint, params, true);
+      }
+
+      if (response.data?.success === false) {
+        throw new Error(response.data?.message || response.data?.errorInfo?.message || 'API request failed');
+      }
 
       return response.data;
     } catch (error: any) {

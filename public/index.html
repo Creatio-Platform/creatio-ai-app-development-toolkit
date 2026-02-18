@@ -241,13 +241,9 @@
         const loading = document.getElementById('loading');
         const result = document.getElementById('result');
         const commandInput = document.getElementById('command');
+        let pendingTemplateSelectionId = null;
 
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const command = commandInput.value.trim();
-            if (!command) return;
-
+        async function sendCreatioRequest(payload) {
             // Show loading
             submitBtn.disabled = true;
             loading.classList.add('active');
@@ -259,9 +255,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        text: command
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
@@ -273,7 +267,37 @@
                 // Show result
                 result.classList.add('show');
 
+                if (data.operation === 'awaiting_template_selection' && Array.isArray(data.templates)) {
+                    pendingTemplateSelectionId = data.selectionId;
+                    result.className = 'result show success';
+
+                    const buttons = data.templates.map((tpl, index) =>
+                        `<button type="button" class="template-btn" data-template-uid="${tpl.uId}" style="margin: 6px 0; width: 100%; text-align: left; padding: 10px;">
+                            ${index + 1}. ${tpl.title || tpl.name}
+                            <span style="display:block; font-size:12px; opacity:0.8;">${tpl.name}</span>
+                        </button>`
+                    ).join('');
+
+                    result.innerHTML = `
+                        <h3>📋 ${data.message}</h3>
+                        <p><strong>Схема:</strong> ${data.schemaName}</p>
+                        <p><strong>Тип:</strong> ${data.schemaType}</p>
+                        <div style="margin-top: 12px;">${buttons}</div>
+                    `;
+
+                    result.querySelectorAll('.template-btn').forEach((btn) => {
+                        btn.addEventListener('click', () => {
+                            sendCreatioRequest({
+                                templateSelectionId: pendingTemplateSelectionId,
+                                templateUId: btn.dataset.templateUid,
+                            });
+                        });
+                    });
+                    return;
+                }
+
                 if (data.success) {
+                    pendingTemplateSelectionId = null;
                     result.className = 'result show success';
                     
                     let resultHTML = `<h3>✅ ${data.message || 'Операцію виконано успішно!'}</h3>`;
@@ -324,6 +348,15 @@
                     <p>Переконайтеся, що сервер запущено на http://localhost:3000</p>
                 `;
             }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const command = commandInput.value.trim();
+            if (!command) return;
+            pendingTemplateSelectionId = null;
+            await sendCreatioRequest({ text: command });
         });
 
         // Auto-resize textarea

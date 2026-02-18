@@ -6,6 +6,7 @@ import {
   listAvailableParentsTool,
   getDesignPackageUIdTool,
   validateSchemaNameTool,
+  listSchemaTemplatesTool,
 } from '../mcp/creatioMcpTools.js';
 
 /**
@@ -96,6 +97,7 @@ Language Support:
 - Keep messages simple and clear: "Створено схему UsrAccountPage" not technical explanations`,
   tools: [
     getDesignPackageUIdTool(),
+    listSchemaTemplatesTool(),
     createNewSchemaTool(),
     extendSchemaTool(),
     getSchemaInfoTool(),
