@@ -1,34 +1,31 @@
-# Add Creatio Schema Creation and Translation Services
+# AI-Powered Creatio Schema Creation with Natural Language Processing
 
 ## Overview
-This PR adds two major AI-powered services to the application:
-1. **Translation Service** - Ukrainian to English translation with terminology management
-2. **Creatio Schema Creation Service** - Create and manage ClientUnitSchema entities in Creatio platform
+This PR adds an intelligent Creatio schema management system powered by LLM-based natural language processing:
+1. **NLP Agent** - Interprets natural language commands in Ukrainian/English to create schemas
+2. **Beautiful Web UI** - Modern gradient interface for easy interaction
+3. **Translation Service** - Ukrainian to English translation with terminology management (existing)
 
-## Key Features
+## 🚀 Key Features
 
-### Translation Service
-- ✅ DeepAgent-powered translation using LangChain framework
-- ✅ Automatic language detection
-- ✅ Persistent terminology database
-- ✅ Style-aware translation (technical, conversational, formal)
-- ✅ Context understanding (ML, medical, legal domains)
-- ✅ Agent reasoning and planning capabilities
+### Creatio AI Assistant (NEW)
+- 🤖 **Natural Language Processing**: Understands commands like "створи схему ProductPage" or "мені потрібна нова сторінка"
+- 🧠 **Intelligent Intent Detection**: LLM analyzes text to determine operations (create/extend/info)
+- ✅ **Supported Operations**:
+  - Create schemas with auto-generated names (UsrClientUnit_XXXXX)
+  - Extend existing schemas
+  - Get schema information
+- ❌ **Smart Rejection**: Automatically rejects unsupported operations (delete, modify code, deploy)
+- 🌐 **Bilingual**: Full support for Ukrainian and English commands
+- 🎨 **Web UI**: Beautiful gradient design with real-time feedback
+- 🔗 **Direct Links**: One-click access to created schemas in Creatio
 
-### Creatio Integration Service
-- ✅ Schema creation with factory pattern
-- ✅ Auto-generated schema names with Usr prefix
-- ✅ Parent schema support (inheritance)
-- ✅ Schema type mapping (AngularSchema, Module, EntitySchema, etc.)
-- ✅ Name validation before creation
-- ✅ Multi-step operations with agent planning
-
-## Technical Improvements
-- ✅ Automatic authentication retry on 401 errors
-- ✅ Session management with cookie persistence
-- ✅ CSRF token handling
-- ✅ Type-safe schema type conversion
-- ✅ Comprehensive error handling
+### Technical Architecture
+- **DeepAgent Framework**: Uses LangChain DeepAgents with gpt-4o-mini
+- **Tool-based Execution**: LLM selects appropriate tools (create_new_schema, extend_schema, etc.)
+- **Structured Responses**: JSON format with operation type, success status, and reasoning
+- **Error Handling**: Graceful handling of unsupported operations and API errors
+- **Type Safety**: Full TypeScript implementation with proper types
 
 ## Code Organization
 - Moved all test files to `tests/` directory
@@ -36,17 +33,79 @@ This PR adds two major AI-powered services to the application:
 - Removed deprecated chain endpoints
 - Updated project documentation
 
-## Testing
-All endpoints have been tested and verified:
-- ✅ Health check endpoint
-- ✅ Translation service with terminology
-- ✅ Schema creation with authentication retry
-- ✅ Build passes without errors
+## 🧪 Testing
+
+### Automated Tests
+New test suite added: `tests/test-nlp-agent.js`
+- ✅ 6 test cases covering all scenarios
+- ✅ Ukrainian and English commands
+- ✅ Natural language variations
+- ✅ Supported operations validation
+- ✅ Unsupported operations rejection
+- ✅ Response structure validation
+
+Run tests:
+```bash
+node tests/test-nlp-agent.js
+```
+
+### Manual Testing via UI
+1. Open http://localhost:3000
+2. Try commands:
+   - "створи схему ProductPage" ✅
+   - "мені потрібна нова сторінка" ✅
+   - "видали схему TestPage" ❌ (correctly rejected)
+
+### API Testing
+```bash
+curl -X POST http://localhost:3000/agent/creatio \
+  -H "Content-Type: application/json" \
+  -d '{"text": "create schema OrderForm"}'
+```
+
+All tests pass with 100% success rate! 🎉
 
 ## API Endpoints
 
-### Translation
+### New: Natural Language Agent
+```bash
+POST /agent/creatio
+Body: { "text": "створи схему ProductPage" }
+
+Response:
+{
+  "success": true,
+  "operation": "create_schema",
+  "message": "Схему успішно створено",
+  "schemaUId": "8c02c1f1-7fb0-4691-964c-be7890e06cda",
+  "schemaName": "UsrClientUnit_191fa59",
+  "schemaType": "AngularSchema",
+  "reasoning": "Creatio автоматично генерує унікальні імена...",
+  "creatio_url": "http://instance/0/ClientApp/#/PageDesigner/..."
+}
 ```
+
+Unsupported operation response:
+```json
+{
+  "success": false,
+  "operation": "not_supported",
+  "message": "Видалення схем ще не підтримується"
+}
+```
+
+### Legacy: Structured Schema Creation
+```bash
+POST /agent/creatio/schema
+Body: {
+  "action": "create",
+  "schemaName": "TestPage",
+  "schemaType": "AngularSchema"
+}
+```
+
+### Translation
+```bash
 POST /agent/translate
 Body: {
   "input": "Ukrainian text",
@@ -55,22 +114,27 @@ Body: {
 }
 ```
 
-### Schema Creation
-```
-POST /agent/creatio/schema
-Body: {
-  "action": "create",
-  "schemaName": "TestPage",
-  "schemaType": "AngularSchema",
-  "description": "Description"
-}
-```
+## 📁 Files Changed
 
-## Files Changed
-- 30 files changed, 5015 insertions(+), 113 deletions(-)
-- Added: 22 files
-- Modified: 8 files
-- Deleted: 2 deprecated files
+### New Files
+- `public/index.html` - AI Assistant web UI (refactored)
+- `public/debug.html` - Debug UI with detailed logging
+- `tests/test-nlp-agent.js` - Comprehensive NLP agent tests
+- `src/routes/creatioAgent.ts` - NLP endpoint handler
+- `src/agent/creatioSchemaAgent.ts` - LLM-powered agent
+- `src/mcp/creatioMcpTools.ts` - LangChain tools
+- `src/mcp/creatioMcpServer.ts` - MCP server implementation
+- `src/creatio/creatioClient.ts` - Creatio API client
+
+### Modified Files  
+- `README.md` - Added NLP examples and usage guide
+- `src/server.ts` - Added NLP endpoint route
+- Various configuration and test files
+
+### Statistics
+- 6 files changed in last commit
+- 533 insertions, 134 deletions
+- Total project: ~5000+ lines of AI-powered code
 
 ## Dependencies
 - No new production dependencies
@@ -98,10 +162,32 @@ None - Only additions to the API
 ## Related Issues
 N/A - Initial implementation
 
-## Checklist
-- [x] Code builds successfully
-- [x] All endpoints tested and working
-- [x] Documentation updated
-- [x] Tests organized in separate directory
-- [x] No breaking changes
-- [x] Git trailer added to commit
+## ✅ Checklist
+- [x] Code builds successfully (`npm run build`)
+- [x] All tests pass (6/6 in test-nlp-agent.js)
+- [x] UI tested in browser
+- [x] API endpoints tested with curl
+- [x] Documentation updated (README.md)
+- [x] Technical analysis documented (SCHEMA_CREATION_ANALYSIS.md)
+- [x] No breaking changes - only additions
+- [x] Git trailer added to all commits
+- [x] Follows LangChain best practices
+- [x] TypeScript types are correct
+- [x] Error handling implemented
+- [x] Bilingual support (Ukrainian/English)
+
+## 🎯 Demo
+
+1. **Start server**: `npm start`
+2. **Open UI**: http://localhost:3000
+3. **Try command**: "створи схему для роботи з клієнтами"
+4. **Result**: Schema created with auto-generated name
+5. **Click link**: Opens schema in Creatio Designer
+
+Example response:
+```
+✅ Схему успішно створено!
+Назва: UsrClientUnit_191fa59
+GUID: 8c02c1f1-7fb0-4691-964c-be7890e06cda
+URL: http://ts1-infr-web01:88/.../PageDesigner/...
+```
