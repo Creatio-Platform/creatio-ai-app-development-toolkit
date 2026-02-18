@@ -35,6 +35,7 @@ export const startServer = (app: Express): void => {
     console.log(`UI: http://localhost:${port}`);
     console.log(`Health check: http://localhost:${port}/health`);
     console.log(`DeepAgent Translation: http://localhost:${port}/agent/translate`);
+    console.log(`DeepAgent Creatio (NLP): http://localhost:${port}/agent/creatio`);
     console.log(`DeepAgent Creatio Schema: http://localhost:${port}/agent/creatio/schema`);
   });
 };

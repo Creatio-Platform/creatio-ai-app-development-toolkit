@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Creatio Schema Creator</title>
+    <title>Creatio AI Assistant</title>
     <style>
         * {
             margin: 0;
@@ -53,7 +53,6 @@
             font-weight: 500;
         }
 
-        input[type="text"],
         textarea {
             width: 100%;
             padding: 12px 16px;
@@ -62,17 +61,13 @@
             font-size: 16px;
             transition: border-color 0.3s;
             font-family: inherit;
+            resize: vertical;
+            min-height: 100px;
         }
 
-        input[type="text"]:focus,
         textarea:focus {
             outline: none;
             border-color: #667eea;
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 100px;
         }
 
         .example {
@@ -101,25 +96,21 @@
             transition: transform 0.2s, box-shadow 0.2s;
         }
 
-        button:hover {
+        button:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
-        }
-
-        button:active {
-            transform: translateY(0);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
 
         button:disabled {
-            background: #ccc;
+            opacity: 0.6;
             cursor: not-allowed;
-            transform: none;
         }
 
         .loading {
             display: none;
             text-align: center;
-            margin: 20px 0;
+            margin-top: 20px;
+            padding: 20px;
         }
 
         .loading.active {
@@ -127,13 +118,13 @@
         }
 
         .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
             width: 40px;
             height: 40px;
-            animation: spin 1s linear infinite;
             margin: 0 auto 10px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
         }
 
         @keyframes spin {
@@ -208,19 +199,21 @@
 </head>
 <body>
     <div class="container">
-        <h1>🚀 Creatio Schema Creator</h1>
-        <p class="subtitle">Створіть нову схему в Creatio простим описом</p>
+        <h1>🤖 Creatio AI Assistant</h1>
+        <p class="subtitle">Керуйте Creatio природною мовою</p>
 
         <div class="example">
-            <strong>Приклади:</strong><br>
-            • "створи схему з назвою MyPage"<br>
+            <strong>Приклади команд:</strong><br>
+            • "створи схему з назвою AccountPage"<br>
             • "зроби нову сторінку CustomerForm"<br>
-            • "create schema named TestPage"
+            • "create schema named OrderPage"<br>
+            • "extend BasePageV2"<br>
+            • "покажи інфо про схему ContactPage"
         </div>
 
         <form id="schemaForm">
             <div class="input-group">
-                <label for="command">Команда</label>
+                <label for="command">Що потрібно зробити?</label>
                 <textarea 
                     id="command" 
                     name="command" 
@@ -230,13 +223,13 @@
             </div>
 
             <button type="submit" id="submitBtn">
-                Створити схему
+                Виконати
             </button>
         </form>
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <p>Створюється схема, зачекайте...</p>
+            <p>AI обробляє ваш запит...</p>
         </div>
 
         <div class="result" id="result"></div>
@@ -249,34 +242,11 @@
         const result = document.getElementById('result');
         const commandInput = document.getElementById('command');
 
-        // Extract schema name from user input
-        function extractSchemaName(text) {
-            // Try different patterns
-            const patterns = [
-                /(?:з назвою|named|называється|with name|ім'ям)\s+([A-Za-z0-9_]+)/i,
-                /(?:схему|schema|page|сторінку)\s+([A-Za-z0-9_]+)/i,
-                /([A-Z][A-Za-z0-9_]*)/,  // CamelCase name
-            ];
-
-            for (const pattern of patterns) {
-                const match = text.match(pattern);
-                if (match && match[1]) {
-                    return match[1];
-                }
-            }
-
-            // Default name if nothing found
-            return 'TestPage_' + Date.now();
-        }
-
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
 
             const command = commandInput.value.trim();
             if (!command) return;
-
-            // Extract schema name
-            const schemaName = extractSchemaName(command);
 
             // Show loading
             submitBtn.disabled = true;
@@ -284,16 +254,13 @@
             result.classList.remove('show');
 
             try {
-                const response = await fetch('/agent/creatio/schema', {
+                const response = await fetch('/agent/creatio', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        action: 'create',
-                        schemaName: schemaName,
-                        schemaType: 'AngularSchema',
-                        description: command
+                        text: command
                     })
                 });
 
@@ -309,28 +276,41 @@
                 if (data.success) {
                     result.className = 'result show success';
                     
-                    // Extract info from agent response
-                    const schemaGuid = data.agent_response.match(/Schema GUID.*?: ([a-f0-9-]+)/i);
-                    const schemaNameResult = data.agent_response.match(/Schema Name.*?: ([A-Za-z0-9_]+)/i);
+                    let resultHTML = `<h3>✅ ${data.message || 'Операцію виконано успішно!'}</h3>`;
                     
-                    result.innerHTML = `
-                        <h3>✅ Схему успішно створено!</h3>
-                        <div class="schema-info">
-                            ${schemaGuid ? `<p><strong>GUID:</strong> ${schemaGuid[1]}</p>` : ''}
-                            ${schemaNameResult ? `<p><strong>Назва:</strong> ${schemaNameResult[1]}</p>` : ''}
-                        </div>
-                        <p style="margin-top: 12px;">
-                            <a href="${data.creatio_url}/0/ClientApp/#/SchemaDesigner/${schemaGuid ? schemaGuid[1] : ''}" 
-                               target="_blank">
-                                Відкрити в Creatio →
-                            </a>
-                        </p>
-                    `;
+                    // Show schema details if created
+                    if (data.schemaUId && data.schemaName) {
+                        resultHTML += `
+                            <div class="schema-info">
+                                <p><strong>Назва схеми:</strong> ${data.schemaName}</p>
+                                <p><strong>GUID:</strong> ${data.schemaUId}</p>
+                                ${data.schemaType ? `<p><strong>Тип:</strong> ${data.schemaType}</p>` : ''}
+                            </div>
+                        `;
+                        
+                        if (data.creatio_url) {
+                            resultHTML += `
+                                <p style="margin-top: 12px;">
+                                    <a href="${data.creatio_url}" target="_blank">
+                                        Відкрити в Creatio →
+                                    </a>
+                                </p>
+                            `;
+                        }
+                    }
+                    
+                    // Show reasoning if provided
+                    if (data.reasoning) {
+                        resultHTML += `<p style="margin-top: 10px; font-size: 13px; opacity: 0.8;"><em>${data.reasoning}</em></p>`;
+                    }
+                    
+                    result.innerHTML = resultHTML;
                 } else {
                     result.className = 'result show error';
                     result.innerHTML = `
-                        <h3>❌ Помилка при створенні схеми</h3>
-                        <p>${data.agent_response || 'Невідома помилка'}</p>
+                        <h3>❌ ${data.operation === 'not_supported' ? 'Функція не підтримується' : 'Помилка'}</h3>
+                        <p>${data.message || data.error || 'Невідома помилка'}</p>
+                        ${data.reasoning ? `<p style="margin-top: 10px; font-size: 13px;"><em>${data.reasoning}</em></p>` : ''}
                     `;
                 }
             } catch (error) {

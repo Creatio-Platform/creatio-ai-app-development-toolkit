@@ -5,8 +5,81 @@ import { config } from '../config/env.js';
 const router = Router();
 
 /**
- * POST /agent/creatio-schema
- * Create or extend Creatio ClientUnitSchema using DeepAgent
+ * POST /agent/creatio
+ * Process natural language commands for Creatio operations
+ * Body: { text: string } - Natural language command in Ukrainian or English
+ */
+router.post('/', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { text } = req.body;
+
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required field: text is required (natural language command)',
+      });
+      return;
+    }
+
+    console.log('[Creatio Agent] Processing command:', text);
+
+    // Invoke DeepAgent with natural language input
+    const agentResult = await creatioSchemaAgent.invoke({
+      messages: [{ role: 'user', content: text }],
+    });
+
+    // Parse agent response
+    const lastMessage = agentResult.messages[agentResult.messages.length - 1];
+    let agentResponse = lastMessage.content;
+
+    // Try to parse as JSON if agent returned structured response
+    let parsedResponse;
+    try {
+      // Strip markdown code blocks if present (```json ... ```)
+      let jsonStr = typeof agentResponse === 'string' ? agentResponse : JSON.stringify(agentResponse);
+      const codeBlockMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1].trim();
+      }
+      
+      parsedResponse = JSON.parse(jsonStr);
+    } catch {
+      // If not JSON, wrap in response object
+      const responseText = String(agentResponse);
+      const isUnsupported = 
+        responseText.includes('не підтримується') || 
+        responseText.includes('not supported') ||
+        responseText.includes('cannot');
+        
+      parsedResponse = {
+        success: !isUnsupported,
+        operation: isUnsupported ? 'not_supported' : 'unknown',
+        message: responseText,
+        raw_response: responseText,
+      };
+    }
+
+    // Add Creatio URL if schema was created
+    if (parsedResponse.schemaUId && config.creatio.url) {
+      parsedResponse.creatio_url = `${config.creatio.url}/0/ClientApp/#/PageDesigner/${parsedResponse.schemaUId}`;
+    }
+
+    console.log('[Creatio Agent] Response:', JSON.stringify(parsedResponse, null, 2));
+
+    res.json(parsedResponse);
+  } catch (error: any) {
+    console.error('[Creatio Agent] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to process command',
+      details: error.stack,
+    });
+  }
+});
+
+/**
+ * POST /agent/creatio/schema
+ * Create or extend Creatio ClientUnitSchema using structured input (legacy)
  */
 router.post('/schema', async (req: Request, res: Response): Promise<void> => {
   try {
