@@ -6,6 +6,7 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getCreatioClient } from '../creatio/creatioClient.js';
+import { NameGenerator } from '../tools/nameGenerator.js';
 
 /**
  * Schema type mapping: string names to Creatio numeric codes
@@ -73,7 +74,7 @@ export class CreatioMCPServer {
       {
         name: 'create_new_schema',
         description:
-          'Create a new ClientUnitSchema using factory pattern. Automatically generates unique name with Usr prefix, applies parent if specified, and initializes schema body. Returns schemaUId and schemaName.',
+          'Create a new ClientUnitSchema with custom name. Adds Usr prefix to customName. Returns schemaUId and schemaName.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -84,6 +85,10 @@ export class CreatioMCPServer {
             packageUId: {
               type: 'string',
               description: 'Package GUID where schema will be created',
+            },
+            customName: {
+              type: 'string',
+              description: 'Desired schema name (Usr prefix will be added). Example: "AccountPage" becomes "UsrAccountPage"',
             },
             parentSchemaUId: {
               type: 'string',
@@ -235,22 +240,53 @@ export class CreatioMCPServer {
   }
 
   /**
+   * Generate default schema body code for ClientUnitSchema
+   */
+  private generateSchemaBody(schemaName: string): string {
+    return `define("${schemaName}", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SCHEMA_ARGS*/()/**SCHEMA_ARGS*/ {
+\treturn {
+\t\tviewConfigDiff: /**SCHEMA_VIEW_CONFIG_DIFF*/[]/**SCHEMA_VIEW_CONFIG_DIFF*/,
+\t\tviewModelConfigDiff: /**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/[]/**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/,
+\t\tmodelConfigDiff: /**SCHEMA_MODEL_CONFIG_DIFF*/[
+\t\t\t{
+\t\t\t\t"operation": "merge",
+\t\t\t\t"path": [],
+\t\t\t\t"values": {
+\t\t\t\t\t"dataSources": {}
+\t\t\t\t}
+\t\t\t}
+\t\t]/**SCHEMA_MODEL_CONFIG_DIFF*/,
+\t\thandlers: /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/,
+\t\tconverters: /**SCHEMA_CONVERTERS*/{}/**SCHEMA_CONVERTERS*/,
+\t\tvalidators: /**SCHEMA_VALIDATORS*/{}/**SCHEMA_VALIDATORS*/
+\t};
+});`;
+  }
+
+  /**
    * Factory method: Create new schema with auto-naming and initialization
    */
   private async createNewSchema(args: any) {
-    const { schemaType, packageUId, parentSchemaUId, userLevelSchema = false } = args;
+    const { schemaType, packageUId, parentSchemaUId, customName, userLevelSchema = false } = args;
+
+    console.log('[createNewSchema] Starting schema creation...');
+    console.log('[createNewSchema] Args:', JSON.stringify(args, null, 2));
 
     // Convert schema type string to numeric code
     const schemaTypeCode = getSchemaTypeCode(schemaType);
+    console.log('[createNewSchema] Schema type code:', schemaTypeCode);
 
     // Step 1: Create schema via API using CreateNewSchema (correct method name)
+    console.log('[createNewSchema] Calling CreateNewSchema API...');
     const createResponse = await this.client.post('CreateNewSchema', {
       packageUId,
       schemaType: schemaTypeCode,
       userLevelSchema,
     });
+    console.log('[createNewSchema] CreateNewSchema response:', JSON.stringify(createResponse, null, 2));
 
     let schema = createResponse.schema;
+    console.log('[createNewSchema] Schema created with auto name:', schema?.name, schema?.uId);
 
     // Step 2: Apply parent if specified
     if (parentSchemaUId) {
@@ -260,7 +296,46 @@ export class CreatioMCPServer {
         userLevelSchema,
       });
       schema = applyParentResponse.schema;
+      console.log('[createNewSchema] Parent applied');
     }
+
+    // Step 3: Generate custom name if provided (just add Usr prefix, no unique suffix)
+    if (customName) {
+      const schemaName = NameGenerator.generate(customName, 'Usr', false);
+      console.log('[createNewSchema] Using custom name:', schemaName);
+      schema.name = schemaName;
+    }
+
+    // Step 4: Generate schema body code (required for SaveSchema)
+    console.log('[createNewSchema] Generating body...');
+    schema.body = this.generateSchemaBody(schema.name);
+    
+    // Add caption with custom name
+    const displayName = customName || schema.name;
+    schema.caption = [{ cultureName: 'en-US', value: `${displayName} Auto-generated` }];
+    console.log('[createNewSchema] Body and caption set, preparing to save...');
+
+    // Step 5: Save schema to persist it in database with new name
+    console.log('[createNewSchema] Calling SaveSchema...');
+    console.log('[createNewSchema] Schema to save:', JSON.stringify({
+      uId: schema.uId,
+      name: schema.name,
+      schemaType: schema.schemaType,
+      packageUId: schema.packageUId,
+      hasBody: !!schema.body,
+      bodyLength: schema.body?.length
+    }, null, 2));
+    // SaveSchema expects the schema object directly, not wrapped
+    const saveResponse = await this.client.post('SaveSchema', schema);
+    console.log('[createNewSchema] SaveSchema response:', JSON.stringify(saveResponse, null, 2));
+    
+    // Check if save was successful
+    if (!saveResponse.success) {
+      throw new Error(`SaveSchema failed: ${saveResponse.errorInfo?.message || 'Unknown error'}`);
+    }
+    
+    schema = saveResponse.schema || schema;
+    console.log('[createNewSchema] Schema saved successfully with name:', schema.name);
 
     return {
       content: [
@@ -272,6 +347,8 @@ export class CreatioMCPServer {
             schemaName: schema.name,
             schemaType: schema.schemaType,
             parent: schema.parent?.uId,
+            saved: true,
+            customName: customName || null,
           }),
         },
       ],
@@ -313,6 +390,20 @@ export class CreatioMCPServer {
     schema.extendParent = true;
     schema.name = parentSchema.name;
 
+    // Generate schema body and caption
+    schema.body = this.generateSchemaBody(schema.name);
+    schema.caption = [{ cultureName: 'en-US', value: `${schema.name} Extended` }];
+
+    // Save schema to persist it
+    // SaveSchema expects the schema object directly, not wrapped
+    const saveResponse = await this.client.post('SaveSchema', schema);
+    
+    if (!saveResponse.success) {
+      throw new Error(`SaveSchema failed: ${saveResponse.errorInfo?.message || 'Unknown error'}`);
+    }
+    
+    schema = saveResponse.schema || schema;
+
     return {
       content: [
         {
@@ -323,6 +414,7 @@ export class CreatioMCPServer {
             schemaName: schema.name,
             schemaType: schema.schemaType,
             parentSchemaUId: newParentUid,
+            saved: true,
           }),
         },
       ],

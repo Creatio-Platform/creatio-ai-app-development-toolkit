@@ -1,8 +1,99 @@
 import { Router, Request, Response } from 'express';
 import { creatioSchemaAgent } from '../agent/creatioSchemaAgent.js';
 import { config } from '../config/env.js';
+import { getCreatioServer } from '../mcp/creatioMcpServer.js';
 
 const router = Router();
+
+type ToolResponse = {
+  content?: Array<{ type?: string; text?: string }>;
+};
+
+type ParsedToolResponse = Record<string, any>;
+type DirectCreateResult = ParsedToolResponse & {
+  packageUId: string;
+  schemaUId?: string;
+  schemaName?: string;
+};
+
+function parseToolResponse(response: ToolResponse): ParsedToolResponse {
+  const text = response.content?.[0]?.text;
+  if (!text) {
+    throw new Error('Empty tool response');
+  }
+  return JSON.parse(text);
+}
+
+function isUkrainianText(text: string): boolean {
+  return /[А-Яа-яІіЇїЄєҐґ]/.test(text);
+}
+
+function detectSchemaType(text: string): string {
+  const lower = text.toLowerCase();
+  if (/\bmodule\b|модул/.test(lower)) {
+    return 'Module';
+  }
+  if (/\bentity\b|сутніст/.test(lower)) {
+    return 'EntitySchema';
+  }
+  return 'AngularSchema';
+}
+
+function extractSchemaName(text: string): string | null {
+  const patterns = [
+    /(?:з\s+назвою|іменем|named|name)\s*["']?([A-Za-z][A-Za-z0-9_]*)["']?/i,
+    /(?:схем(?:у|а|и)?|schema|page|сторінк(?:у|а|и)?|module|entity)\s+["']?([A-Za-z][A-Za-z0-9_]*)["']?$/i,
+    /^(?:створи|зроби|create|make|build)\s+["']?([A-Za-z][A-Za-z0-9_]*)["']?$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+function isCreateIntent(text: string): boolean {
+  return /(створи|зроби|create|make|build|нова\s+схема|new\s+schema|нова\s+сторінка|new\s+page)/i.test(text);
+}
+
+function isUnsupportedIntent(text: string): boolean {
+  return /(видали|delete|remove|зміни\s+код|modify\s+code|update\s+code|компіляц|compile|deploy|деплой)/i.test(text);
+}
+
+async function createSchemaDirectly(
+  customName: string,
+  schemaType: string,
+  userLevelSchema: boolean,
+): Promise<DirectCreateResult> {
+  const server = getCreatioServer();
+  const packageResult = parseToolResponse(await server.getPackageUId({ userLevelSchema }));
+
+  if (!packageResult.success || !packageResult.packageUId) {
+    throw new Error(packageResult.error || 'Failed to resolve design package');
+  }
+
+  const createResult = parseToolResponse(
+    await server.createSchema({
+      schemaType,
+      packageUId: packageResult.packageUId,
+      customName,
+      userLevelSchema,
+    }),
+  );
+
+  if (!createResult.success) {
+    throw new Error(createResult.error || 'Failed to create schema');
+  }
+
+  return {
+    ...createResult,
+    packageUId: String(packageResult.packageUId),
+  } as DirectCreateResult;
+}
 
 /**
  * POST /agent/creatio
@@ -22,11 +113,59 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     }
 
     console.log('[Creatio Agent] Processing command:', text);
+    console.log('[Creatio Agent] Request timestamp:', new Date().toISOString());
+
+    const isUk = isUkrainianText(text);
+
+    if (isUnsupportedIntent(text)) {
+      res.json({
+        success: false,
+        operation: 'not_supported',
+        message: isUk
+          ? 'Операція ще не підтримується. Доступні: створення та розширення схем.'
+          : 'Operation is not supported yet. Supported operations: create and extend schema.',
+      });
+      return;
+    }
+
+    if (isCreateIntent(text)) {
+      const customName = extractSchemaName(text);
+
+      if (customName) {
+        const schemaType = detectSchemaType(text);
+        const directResult = await createSchemaDirectly(customName, schemaType, false);
+
+        const response = {
+          success: true,
+          operation: 'create_schema',
+          message: isUk
+            ? `Створено схему ${directResult.schemaName}`
+            : `Schema ${directResult.schemaName} has been created`,
+          schemaUId: directResult.schemaUId,
+          schemaName: directResult.schemaName,
+          schemaType: schemaType,
+          packageUId: directResult.packageUId,
+          reasoning: isUk
+            ? 'Команда розпізнана як створення схеми і виконана напряму через MCP-інструменти.'
+            : 'Command was detected as schema creation and executed directly via MCP tools.',
+        };
+
+        if (config.creatio.url) {
+          (response as any).creatio_url = `${config.creatio.url}/0/ClientApp/#/PageDesigner/${directResult.schemaUId}`;
+        }
+
+        res.json(response);
+        return;
+      }
+    }
 
     // Invoke DeepAgent with natural language input
     const agentResult = await creatioSchemaAgent.invoke({
       messages: [{ role: 'user', content: text }],
     });
+    
+    console.log('[Creatio Agent] Agent invocation completed');
+    console.log('[Creatio Agent] Messages count:', agentResult.messages.length);
 
     // Parse agent response
     const lastMessage = agentResult.messages[agentResult.messages.length - 1];
@@ -93,9 +232,6 @@ router.post('/schema', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Build agent input based on action type
-    let agentInput = '';
-
     if (action === 'create') {
       if (!schemaName || !schemaType) {
         res.status(400).json({
@@ -105,22 +241,58 @@ router.post('/schema', async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
-      agentInput = `Create a new Creatio schema with the following details:
-- Schema Name: ${schemaName}
-- Schema Type: ${schemaType}
-${packageUId ? `- Package GUID: ${packageUId}` : '- Package GUID: (get design package automatically)'}
-- User Level: ${userLevelSchema ?? false}
-${parentSchemaName ? `- Parent Schema: ${parentSchemaName} (apply inheritance)` : ''}
-${description ? `- Purpose: ${description}` : ''}
+      const server = getCreatioServer();
+      const type = String(schemaType);
+      const isUk = isUkrainianText(String(description || schemaName));
 
-Steps:
-${packageUId ? '' : '1. Get design package GUID using get_design_package_uid\n'}
-${packageUId ? '1' : '2'}. Validate that schema name "${schemaName}" is available
-${parentSchemaName ? `${packageUId ? '2' : '3'}. Find parent schema "${parentSchemaName}" in available parents` : ''}
-${parentSchemaName ? `${packageUId ? '3' : '4'}. Create schema with parent inheritance` : `${packageUId ? '2' : '3'}. Create new schema`}
-${parentSchemaName ? `${packageUId ? '4' : '5'}. Verify schema was created successfully` : `${packageUId ? '3' : '4'}. Verify schema was created successfully`}
+      let resolvedPackageUId = packageUId;
+      if (!resolvedPackageUId) {
+        const packageResult = parseToolResponse(await server.getPackageUId({ userLevelSchema: userLevelSchema ?? false }));
+        if (!packageResult.success || !packageResult.packageUId) {
+          throw new Error(packageResult.error || 'Failed to get design package UID');
+        }
+        resolvedPackageUId = packageResult.packageUId;
+      }
 
-Return the created schema details including GUID and final name.`;
+      let parentSchemaUId: string | undefined;
+      if (parentSchemaName) {
+        const parentInfo = parseToolResponse(await server.getSchema({ schemaName: parentSchemaName }));
+        parentSchemaUId = parentInfo?.schemaInfo?.schemaUId;
+        if (!parentSchemaUId) {
+          throw new Error(`Parent schema not found: ${parentSchemaName}`);
+        }
+      }
+
+      const createResult = parseToolResponse(
+        await server.createSchema({
+          schemaType: type,
+          packageUId: resolvedPackageUId,
+          customName: schemaName,
+          parentSchemaUId,
+          userLevelSchema: userLevelSchema ?? false,
+        }),
+      );
+
+      if (!createResult.success) {
+        throw new Error(createResult.error || 'Failed to create schema');
+      }
+
+      const response = {
+        success: true,
+        operation: 'create_schema',
+        message: isUk
+          ? `Створено схему ${createResult.schemaName}`
+          : `Schema ${createResult.schemaName} has been created`,
+        schemaUId: createResult.schemaUId,
+        schemaName: createResult.schemaName,
+        schemaType: type,
+        packageUId: resolvedPackageUId,
+        parentSchemaUId: parentSchemaUId || null,
+        description: description || null,
+      };
+
+      res.json(response);
+      return;
     } else if (action === 'extend') {
       if (!parentSchemaName) {
         res.status(400).json({
@@ -130,20 +302,52 @@ Return the created schema details including GUID and final name.`;
         return;
       }
 
-      agentInput = `Extend an existing Creatio schema:
-- Parent Schema Name: ${parentSchemaName}
-${packageUId ? `- Package GUID: ${packageUId}` : '- Package GUID: (get design package automatically)'}
-- User Level: ${userLevelSchema ?? false}
-${description ? `- Purpose: ${description}` : ''}
+      const server = getCreatioServer();
+      const isUk = isUkrainianText(String(description || parentSchemaName));
 
-Steps:
-${packageUId ? '' : '1. Get design package GUID using get_design_package_uid\n'}
-${packageUId ? '1' : '2'}. Find parent schema "${parentSchemaName}" using get_schema_info
-${packageUId ? '2' : '3'}. Use extend_schema to create child schema
-${packageUId ? '3' : '4'}. Verify inheritance was applied correctly
-${packageUId ? '4' : '5'}. Return extended schema details
+      let resolvedPackageUId = packageUId;
+      if (!resolvedPackageUId) {
+        const packageResult = parseToolResponse(await server.getPackageUId({ userLevelSchema: userLevelSchema ?? false }));
+        if (!packageResult.success || !packageResult.packageUId) {
+          throw new Error(packageResult.error || 'Failed to get design package UID');
+        }
+        resolvedPackageUId = packageResult.packageUId;
+      }
 
-The extended schema will inherit the parent's name and configuration.`;
+      const parentInfo = parseToolResponse(await server.getSchema({ schemaName: parentSchemaName }));
+      const parentSchemaUId = parentInfo?.schemaInfo?.schemaUId;
+      if (!parentSchemaUId) {
+        throw new Error(`Parent schema not found: ${parentSchemaName}`);
+      }
+
+      const extendResult = parseToolResponse(
+        await server.extendSchemaMethod({
+          parentSchemaUId,
+          packageUId: resolvedPackageUId,
+          userLevelSchema: userLevelSchema ?? false,
+        }),
+      );
+
+      if (!extendResult.success) {
+        throw new Error(extendResult.error || 'Failed to extend schema');
+      }
+
+      const response = {
+        success: true,
+        operation: 'extend_schema',
+        message: isUk
+          ? `Схему ${parentSchemaName} розширено`
+          : `Schema ${parentSchemaName} has been extended`,
+        schemaUId: extendResult.schemaUId,
+        schemaName: extendResult.schemaName,
+        schemaType: extendResult.schemaType,
+        packageUId: resolvedPackageUId,
+        parentSchemaUId,
+        description: description || null,
+      };
+
+      res.json(response);
+      return;
     } else {
       res.status(400).json({
         success: false,
@@ -151,25 +355,6 @@ The extended schema will inherit the parent's name and configuration.`;
       });
       return;
     }
-
-    // Invoke DeepAgent
-    const agentResult = await creatioSchemaAgent.invoke({
-      messages: [{ role: 'user', content: agentInput }],
-    });
-
-    // Parse agent response
-    const lastMessage = agentResult.messages[agentResult.messages.length - 1];
-    const agentResponse = lastMessage.content;
-
-    const response = {
-      success: true,
-      agent_response: agentResponse,
-      creatio_url: config.creatio.url,
-      action,
-      package: packageUId,
-    };
-
-    res.json(response);
   } catch (error: any) {
     console.error('Creatio schema agent error:', error);
     res.status(500).json({

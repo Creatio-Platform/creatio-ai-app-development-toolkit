@@ -18,12 +18,13 @@ export const createNewSchemaTool = () =>
     },
     {
       name: 'create_new_schema',
-      description: `Create a new ClientUnitSchema in Creatio using factory pattern. 
-Automatically generates unique name with Usr prefix, applies parent if specified, and initializes schema body.
-Returns: schemaUId, schemaName, schemaType, parent.`,
+      description: `Create a new ClientUnitSchema in Creatio with custom name. 
+Adds Usr prefix to customName parameter (e.g., "AccountPage" becomes "UsrAccountPage").
+Returns: schemaUId, schemaName, schemaType, parent, customName.`,
       schema: z.object({
         schemaType: z.string().describe('Schema type: AngularSchema, Module, EntitySchema, etc.'),
         packageUId: z.string().describe('Package GUID where schema will be created'),
+        customName: z.string().optional().describe('Desired schema name (Usr prefix will be added). Example: "AccountPage" becomes "UsrAccountPage"'),
         parentSchemaUId: z.string().optional().describe('Optional parent schema GUID for inheritance'),
         userLevelSchema: z.boolean().optional().describe('User-level (true) or system-level (false), default: false'),
       }),
