@@ -1,10 +1,18 @@
 # LangChain DeepAgent Services
 
-A sophisticated TypeScript service featuring multiple AI-powered agents:
+A sophisticated TypeScript service featuring multiple AI-powered agents with a beautiful web UI:
 1. **Translation Agent**: Ukrainian to English translation with terminology management
 2. **Creatio Schema Agent**: Create ClientUnitSchema entities in Creatio platform using factory pattern
+3. **Web UI**: Simple, intuitive interface for schema creation with natural language
 
 ## Features
+
+### 🎨 Web UI
+- **Natural Language Commands**: Create schemas by simply typing "створи схему з назвою MyPage"
+- **Beautiful Design**: Modern gradient UI with smooth animations
+- **Real-time Feedback**: Instant success/error notifications with schema details
+- **Direct Integration**: One-click link to open created schema in Creatio
+- **Smart Parsing**: Automatically extracts schema names from various command formats
 
 ### Translation Service
 - **Deep Agent Translation**: AI-powered translation using LangChain DeepAgents framework
@@ -62,7 +70,17 @@ A sophisticated TypeScript service featuring multiple AI-powered agents:
 
 The server will start on the port specified in your `.env` file (default: 3000).
 
-## API Endpoints
+## Quick Start
+
+### Using Web UI (Easiest)
+
+1. Start the server: `npm start`
+2. Open browser: http://localhost:3000
+3. Type a command: "створи схему з назвою MyPage"
+4. Click "Створити схему"
+5. Done! 🎉
+
+### Using API Endpoints
 
 ### Health Check
 

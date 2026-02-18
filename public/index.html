@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Creatio Schema Creator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .example {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .example strong {
+            color: #333;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .result {
+            display: none;
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 8px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .result.show {
+            display: block;
+        }
+
+        .result.success {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            color: #155724;
+        }
+
+        .result.error {
+            background: #f8d7da;
+            border: 2px solid #dc3545;
+            color: #721c24;
+        }
+
+        .result h3 {
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .result p {
+            margin: 5px 0;
+            line-height: 1.6;
+        }
+
+        .result a {
+            color: inherit;
+            text-decoration: underline;
+            word-break: break-all;
+        }
+
+        .schema-info {
+            background: rgba(255, 255, 255, 0.5);
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 10px;
+        }
+
+        .schema-info p {
+            margin: 5px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Creatio Schema Creator</h1>
+        <p class="subtitle">Створіть нову схему в Creatio простим описом</p>
+
+        <div class="example">
+            <strong>Приклади:</strong><br>
+            • "створи схему з назвою MyPage"<br>
+            • "зроби нову сторінку CustomerForm"<br>
+            • "create schema named TestPage"
+        </div>
+
+        <form id="schemaForm">
+            <div class="input-group">
+                <label for="command">Команда</label>
+                <textarea 
+                    id="command" 
+                    name="command" 
+                    placeholder="Наприклад: створи схему з назвою MyTestPage"
+                    required
+                ></textarea>
+            </div>
+
+            <button type="submit" id="submitBtn">
+                Створити схему
+            </button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Створюється схема, зачекайте...</p>
+        </div>
+
+        <div class="result" id="result"></div>
+    </div>
+
+    <script>
+        const form = document.getElementById('schemaForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const loading = document.getElementById('loading');
+        const result = document.getElementById('result');
+        const commandInput = document.getElementById('command');
+
+        // Extract schema name from user input
+        function extractSchemaName(text) {
+            // Try different patterns
+            const patterns = [
+                /(?:з назвою|named|называється|with name|ім'ям)\s+([A-Za-z0-9_]+)/i,
+                /(?:схему|schema|page|сторінку)\s+([A-Za-z0-9_]+)/i,
+                /([A-Z][A-Za-z0-9_]*)/,  // CamelCase name
+            ];
+
+            for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match && match[1]) {
+                    return match[1];
+                }
+            }
+
+            // Default name if nothing found
+            return 'TestPage_' + Date.now();
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const command = commandInput.value.trim();
+            if (!command) return;
+
+            // Extract schema name
+            const schemaName = extractSchemaName(command);
+
+            // Show loading
+            submitBtn.disabled = true;
+            loading.classList.add('active');
+            result.classList.remove('show');
+
+            try {
+                const response = await fetch('/agent/creatio/schema', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        action: 'create',
+                        schemaName: schemaName,
+                        schemaType: 'AngularSchema',
+                        description: command
+                    })
+                });
+
+                const data = await response.json();
+
+                // Hide loading
+                loading.classList.remove('active');
+                submitBtn.disabled = false;
+
+                // Show result
+                result.classList.add('show');
+
+                if (data.success) {
+                    result.className = 'result show success';
+                    
+                    // Extract info from agent response
+                    const schemaGuid = data.agent_response.match(/Schema GUID.*?: ([a-f0-9-]+)/i);
+                    const schemaNameResult = data.agent_response.match(/Schema Name.*?: ([A-Za-z0-9_]+)/i);
+                    
+                    result.innerHTML = `
+                        <h3>✅ Схему успішно створено!</h3>
+                        <div class="schema-info">
+                            ${schemaGuid ? `<p><strong>GUID:</strong> ${schemaGuid[1]}</p>` : ''}
+                            ${schemaNameResult ? `<p><strong>Назва:</strong> ${schemaNameResult[1]}</p>` : ''}
+                        </div>
+                        <p style="margin-top: 12px;">
+                            <a href="${data.creatio_url}/0/ClientApp/#/SchemaDesigner/${schemaGuid ? schemaGuid[1] : ''}" 
+                               target="_blank">
+                                Відкрити в Creatio →
+                            </a>
+                        </p>
+                    `;
+                } else {
+                    result.className = 'result show error';
+                    result.innerHTML = `
+                        <h3>❌ Помилка при створенні схеми</h3>
+                        <p>${data.agent_response || 'Невідома помилка'}</p>
+                    `;
+                }
+            } catch (error) {
+                loading.classList.remove('active');
+                submitBtn.disabled = false;
+                result.classList.add('show');
+                result.className = 'result show error';
+                result.innerHTML = `
+                    <h3>❌ Помилка з'єднання</h3>
+                    <p>Не вдалося підключитися до сервера: ${error.message}</p>
+                    <p>Переконайтеся, що сервер запущено на http://localhost:3000</p>
+                `;
+            }
+        });
+
+        // Auto-resize textarea
+        commandInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+    </script>
+</body>
+</html>
