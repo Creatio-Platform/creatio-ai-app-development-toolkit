@@ -1,7 +1,8 @@
 import express, { Express } from 'express';
 import { config } from './config/env.js';
 import healthRouter from './routes/health.js';
-import chainRouter from './routes/chain.js';
+import agentRouter from './routes/agent.js';
+import creatioAgentRouter from './routes/creatioAgent.js';
 
 export const createServer = (): Express => {
   const app = express();
@@ -11,7 +12,8 @@ export const createServer = (): Express => {
 
   // Routes
   app.use('/health', healthRouter);
-  app.use('/chain', chainRouter);
+  app.use('/agent', agentRouter);
+  app.use('/agent/creatio', creatioAgentRouter);
 
   return app;
 };
@@ -22,6 +24,7 @@ export const startServer = (app: Express): void => {
   app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
     console.log(`Health check: http://localhost:${port}/health`);
-    console.log(`Chain endpoint: http://localhost:${port}/chain/hello`);
+    console.log(`DeepAgent Translation: http://localhost:${port}/agent/translate`);
+    console.log(`DeepAgent Creatio Schema: http://localhost:${port}/agent/creatio/schema`);
   });
 };
