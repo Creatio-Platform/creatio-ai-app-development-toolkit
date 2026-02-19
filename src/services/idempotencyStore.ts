@@ -1,59 +1,52 @@
-import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
-import type { SchemaLocale } from './creatioSchemaService.js';
 
-export type PendingTemplateSelection = {
-  schemaName: string;
-  schemaType: string;
-  userLevelSchema: boolean;
-  language: SchemaLocale;
+export type IdempotencyRecord = {
   createdAt: number;
+  response: Record<string, unknown>;
 };
 
-export class TemplateSelectionStore {
-  private readonly entries = new Map<string, PendingTemplateSelection>();
+export class IdempotencyStore {
+  private readonly entries = new Map<string, IdempotencyRecord>();
   private readonly storagePath: string;
 
   constructor(
-    private readonly ttlMs: number = 10 * 60 * 1000,
-    storagePath: string = path.join(process.cwd(), 'data', 'template-selections.json'),
+    private readonly ttlMs: number = 24 * 60 * 60 * 1000,
+    storagePath: string = path.join(process.cwd(), 'data', 'idempotency-keys.json'),
   ) {
     this.storagePath = storagePath;
     this.loadFromDisk();
   }
 
-  create(input: Omit<PendingTemplateSelection, 'createdAt'>): string {
+  get(scope: string, key: string): Record<string, unknown> | undefined {
     this.cleanup();
-    const selectionId = randomUUID();
-    this.entries.set(selectionId, {
-      ...input,
+    const entry = this.entries.get(this.getCompoundKey(scope, key));
+    return entry?.response;
+  }
+
+  set(scope: string, key: string, response: Record<string, unknown>): void {
+    this.cleanup();
+    this.entries.set(this.getCompoundKey(scope, key), {
       createdAt: Date.now(),
+      response,
     });
     this.saveToDisk();
-    return selectionId;
   }
 
-  get(selectionId: string): PendingTemplateSelection | undefined {
-    this.cleanup();
-    return this.entries.get(selectionId);
+  private getCompoundKey(scope: string, key: string): string {
+    return `${scope}:${key}`;
   }
 
-  delete(selectionId: string): void {
-    if (this.entries.delete(selectionId)) {
-      this.saveToDisk();
-    }
-  }
-
-  cleanup(): void {
-    let changed = false;
+  private cleanup(): void {
     const now = Date.now();
+    let changed = false;
     for (const [key, value] of this.entries.entries()) {
       if (now - value.createdAt > this.ttlMs) {
         this.entries.delete(key);
         changed = true;
       }
     }
+
     if (changed) {
       this.saveToDisk();
     }
@@ -70,7 +63,7 @@ export class TemplateSelectionStore {
         return;
       }
 
-      const parsed = JSON.parse(raw) as Record<string, PendingTemplateSelection>;
+      const parsed = JSON.parse(raw) as Record<string, IdempotencyRecord>;
       for (const [key, value] of Object.entries(parsed)) {
         this.entries.set(key, value);
       }
@@ -86,7 +79,7 @@ export class TemplateSelectionStore {
       mkdirSync(dir, { recursive: true });
     }
 
-    const serialized: Record<string, PendingTemplateSelection> = {};
+    const serialized: Record<string, IdempotencyRecord> = {};
     for (const [key, value] of this.entries.entries()) {
       serialized[key] = value;
     }
@@ -94,4 +87,3 @@ export class TemplateSelectionStore {
     writeFileSync(this.storagePath, JSON.stringify(serialized, null, 2), 'utf-8');
   }
 }
-

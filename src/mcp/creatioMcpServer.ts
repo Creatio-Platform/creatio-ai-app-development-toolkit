@@ -6,35 +6,8 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getCreatioClient } from '../creatio/creatioClient.js';
+import { toSchemaTypeCode } from '../domain/schema/schemaType.js';
 import { NameGenerator } from '../tools/nameGenerator.js';
-
-/**
- * Schema type mapping: string names to Creatio numeric codes
- */
-const SCHEMA_TYPE_MAP: Record<string, number> = {
-  AngularSchema: 9,
-  Module: 3,
-  EntitySchema: 0,
-  BusinessProcess: 13,
-  SourceCodeSchema: 6,
-};
-
-/**
- * Convert schema type string to numeric code
- */
-function getSchemaTypeCode(schemaType: string | number): number {
-  if (typeof schemaType === 'number') {
-    return schemaType;
-  }
-  if (/^\d+$/.test(schemaType)) {
-    return Number(schemaType);
-  }
-  const code = SCHEMA_TYPE_MAP[schemaType];
-  if (code === undefined) {
-    throw new Error(`Unknown schema type: ${schemaType}. Valid types: ${Object.keys(SCHEMA_TYPE_MAP).join(', ')}`);
-  }
-  return code;
-}
 
 /**
  * MCP Server for Creatio schema operations
@@ -300,7 +273,7 @@ export class CreatioMCPServer {
     console.log('[createNewSchema] Args:', JSON.stringify(args, null, 2));
 
     // Convert schema type string to numeric code
-    const schemaTypeCode = getSchemaTypeCode(schemaType);
+    const schemaTypeCode = toSchemaTypeCode(schemaType);
     console.log('[createNewSchema] Schema type code:', schemaTypeCode);
 
     // Step 1: Create schema via API using CreateNewSchema (correct method name)
@@ -634,7 +607,7 @@ export class CreatioMCPServer {
    * List available schema templates from schema.template.api
    */
   private async listSchemaTemplates(args: any) {
-    const schemaTypeCode = getSchemaTypeCode(args?.schemaType ?? 'AngularSchema');
+    const schemaTypeCode = toSchemaTypeCode(args?.schemaType ?? 'AngularSchema');
     const response = await this.client.get('/0/rest/schema.template.api/templates', {
       schemaType: schemaTypeCode,
     });
@@ -707,3 +680,4 @@ export function getCreatioServer(): CreatioMCPServer {
   }
   return creatioServerInstance;
 }
+

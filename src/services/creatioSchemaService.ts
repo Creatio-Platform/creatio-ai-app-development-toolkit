@@ -1,13 +1,8 @@
-import { getCreatioServer } from '../mcp/creatioMcpServer.js';
+import { notFound, upstreamError } from '../domain/errors/apiError.js';
+import { getSchemaCreationGateway } from '../integrations/schema-creation/gateway.js';
+import type { TemplateRef } from '../integrations/schema-creation/types.js';
 
-type ToolResponse = {
-  content?: Array<{ type?: string; text?: string }>;
-};
-
-export type TemplateRef = {
-  templateName?: string;
-  templateUId?: string;
-};
+export type { TemplateRef };
 
 export type SchemaLocale = 'uk' | 'en';
 
@@ -18,10 +13,11 @@ export type CreateSchemaInput = {
   template?: TemplateRef;
 };
 
-export type DirectCreateResult = Record<string, any> & {
+export type DirectCreateResult = {
   packageUId: string;
   schemaUId?: string;
   schemaName?: string;
+  schemaType?: string | number;
   template?: {
     uId?: string;
     name?: string;
@@ -47,23 +43,20 @@ export type StructuredExtendInput = {
   userLevelSchema?: boolean;
 };
 
-function parseToolResponse(response: ToolResponse): Record<string, any> {
-  const text = response.content?.[0]?.text;
-  if (!text) {
-    throw new Error('Empty tool response');
-  }
-  return JSON.parse(text);
-}
+export type StructuredGetInfoInput = {
+  schemaName?: string;
+  schemaUId?: string;
+};
 
 async function resolvePackageUId(userLevelSchema: boolean, packageUId?: string): Promise<string> {
   if (packageUId) {
     return packageUId;
   }
 
-  const server = getCreatioServer();
-  const packageResult = parseToolResponse(await server.getPackageUId({ userLevelSchema }));
+  const gateway = await getSchemaCreationGateway();
+  const packageResult = await gateway.getDesignPackageUId({ userLevelSchema });
   if (!packageResult.success || !packageResult.packageUId) {
-    throw new Error(packageResult.error || 'Failed to get design package UID');
+    throw upstreamError(packageResult.error || 'Failed to get design package UID');
   }
 
   return String(packageResult.packageUId);
@@ -74,11 +67,11 @@ async function resolveParentSchemaUId(parentSchemaName?: string): Promise<string
     return undefined;
   }
 
-  const server = getCreatioServer();
-  const parentInfo = parseToolResponse(await server.getSchema({ schemaName: parentSchemaName }));
+  const gateway = await getSchemaCreationGateway();
+  const parentInfo = await gateway.getSchemaInfo({ schemaName: parentSchemaName });
   const parentSchemaUId = parentInfo?.schemaInfo?.schemaUId;
-  if (!parentSchemaUId) {
-    throw new Error(`Parent schema not found: ${parentSchemaName}`);
+  if (!parentSchemaUId || typeof parentSchemaUId !== 'string') {
+    throw notFound(`Parent schema not found: ${parentSchemaName}`);
   }
 
   return parentSchemaUId;
@@ -96,60 +89,63 @@ function localizedExtendMessage(locale: SchemaLocale, parentSchemaName: string):
     : `Schema ${parentSchemaName} has been extended`;
 }
 
+function localizedInfoMessage(locale: SchemaLocale): string {
+  return locale === 'uk' ? 'Інформацію про схему отримано' : 'Schema information loaded';
+}
+
 export async function createSchemaDirectly(input: CreateSchemaInput): Promise<DirectCreateResult> {
-  const server = getCreatioServer();
+  const gateway = await getSchemaCreationGateway();
   const packageUId = await resolvePackageUId(input.userLevelSchema);
 
-  const createResult = parseToolResponse(
-    await server.createSchema({
-      schemaType: input.schemaType,
-      packageUId,
-      customName: input.schemaName,
-      userLevelSchema: input.userLevelSchema,
-      templateName: input.template?.templateName,
-      templateUId: input.template?.templateUId,
-    }),
-  );
+  const createResult = await gateway.createSchema({
+    schemaType: input.schemaType,
+    packageUId,
+    customName: input.schemaName,
+    userLevelSchema: input.userLevelSchema,
+    templateName: input.template?.templateName,
+    templateUId: input.template?.templateUId,
+  });
 
   if (!createResult.success) {
-    throw new Error(createResult.error || 'Failed to create schema');
+    throw upstreamError(createResult.error || 'Failed to create schema');
   }
 
   return {
-    ...createResult,
     packageUId,
-  } as DirectCreateResult;
+    schemaUId: createResult.schemaUId,
+    schemaName: createResult.schemaName,
+    schemaType: createResult.schemaType,
+    template: createResult.template || null,
+  };
 }
 
-export async function listSchemaTemplates(schemaType: string): Promise<Record<string, any>> {
-  const server = getCreatioServer();
-  const result = parseToolResponse(await server.listTemplates({ schemaType }));
+export async function listSchemaTemplates(schemaType: string): Promise<Record<string, unknown>> {
+  const gateway = await getSchemaCreationGateway();
+  const result = await gateway.listSchemaTemplates({ schemaType });
   if (!result.success) {
-    throw new Error(result.error || 'Failed to load schema templates');
+    throw upstreamError(result.error || 'Failed to load schema templates');
   }
   return result;
 }
 
-export async function createSchemaStructured(input: StructuredCreateInput, locale: SchemaLocale): Promise<Record<string, any>> {
-  const server = getCreatioServer();
+export async function createSchemaStructured(input: StructuredCreateInput, locale: SchemaLocale): Promise<Record<string, unknown>> {
+  const gateway = await getSchemaCreationGateway();
   const userLevelSchema = input.userLevelSchema ?? false;
   const packageUId = await resolvePackageUId(userLevelSchema, input.packageUId);
   const parentSchemaUId = await resolveParentSchemaUId(input.parentSchemaName);
 
-  const createResult = parseToolResponse(
-    await server.createSchema({
-      schemaType: String(input.schemaType),
-      packageUId,
-      customName: input.schemaName,
-      parentSchemaUId,
-      templateName: input.templateName,
-      templateUId: input.templateUId,
-      userLevelSchema,
-    }),
-  );
+  const createResult = await gateway.createSchema({
+    schemaType: String(input.schemaType),
+    packageUId,
+    customName: input.schemaName,
+    parentSchemaUId,
+    templateName: input.templateName,
+    templateUId: input.templateUId,
+    userLevelSchema,
+  });
 
   if (!createResult.success) {
-    throw new Error(createResult.error || 'Failed to create schema');
+    throw upstreamError(createResult.error || 'Failed to create schema');
   }
 
   return {
@@ -166,26 +162,24 @@ export async function createSchemaStructured(input: StructuredCreateInput, local
   };
 }
 
-export async function extendSchemaStructured(input: StructuredExtendInput, locale: SchemaLocale): Promise<Record<string, any>> {
-  const server = getCreatioServer();
+export async function extendSchemaStructured(input: StructuredExtendInput, locale: SchemaLocale): Promise<Record<string, unknown>> {
+  const gateway = await getSchemaCreationGateway();
   const userLevelSchema = input.userLevelSchema ?? false;
   const packageUId = await resolvePackageUId(userLevelSchema, input.packageUId);
   const parentSchemaUId = await resolveParentSchemaUId(input.parentSchemaName);
 
   if (!parentSchemaUId) {
-    throw new Error(`Parent schema not found: ${input.parentSchemaName}`);
+    throw notFound(`Parent schema not found: ${input.parentSchemaName}`);
   }
 
-  const extendResult = parseToolResponse(
-    await server.extendSchemaMethod({
-      parentSchemaUId,
-      packageUId,
-      userLevelSchema,
-    }),
-  );
+  const extendResult = await gateway.extendSchema({
+    parentSchemaUId,
+    packageUId,
+    userLevelSchema,
+  });
 
   if (!extendResult.success) {
-    throw new Error(extendResult.error || 'Failed to extend schema');
+    throw upstreamError(extendResult.error || 'Failed to extend schema');
   }
 
   return {
@@ -201,7 +195,33 @@ export async function extendSchemaStructured(input: StructuredExtendInput, local
   };
 }
 
-export function withCreatioUrl(response: Record<string, any>, creatioUrl: string): Record<string, any> {
+export async function getSchemaInfoStructured(
+  input: StructuredGetInfoInput,
+  locale: SchemaLocale,
+): Promise<Record<string, unknown>> {
+  const gateway = await getSchemaCreationGateway();
+  const schemaInfoResult = await gateway.getSchemaInfo({
+    schemaName: input.schemaName,
+    schemaUId: input.schemaUId,
+  });
+
+  if (!schemaInfoResult.success) {
+    throw upstreamError(schemaInfoResult.error || 'Failed to load schema info');
+  }
+
+  if (!schemaInfoResult.schemaInfo) {
+    throw notFound('Schema not found');
+  }
+
+  return {
+    success: true,
+    operation: 'get_info',
+    message: localizedInfoMessage(locale),
+    schemaInfo: schemaInfoResult.schemaInfo,
+  };
+}
+
+export function withCreatioUrl(response: Record<string, unknown>, creatioUrl: string): Record<string, unknown> {
   if (!response.schemaUId || !creatioUrl) {
     return response;
   }
@@ -211,4 +231,3 @@ export function withCreatioUrl(response: Record<string, any>, creatioUrl: string
     creatio_url: `${creatioUrl}/0/ClientApp/#/PageDesigner/${response.schemaUId}`,
   };
 }
-
