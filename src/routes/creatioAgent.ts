@@ -1,304 +1,280 @@
+import { randomUUID } from 'crypto';
 import { Router, Request, Response } from 'express';
-import { creatioSchemaAgent } from '../agent/creatioSchemaAgent.js';
-import { parseCreatioIntent } from '../agent/creatioIntentParser.js';
+import { ZodError } from 'zod';
 import { config } from '../config/env.js';
 import {
-  createSchemaDirectly,
+  naturalCreatioRequestSchema,
+  structuredSchemaRequestSchema,
+} from '../domain/schema/contracts.js';
+import { toApiError, validationError } from '../domain/errors/apiError.js';
+import {
   createSchemaStructured,
   extendSchemaStructured,
   listSchemaTemplates,
   withCreatioUrl,
   type SchemaLocale,
 } from '../services/creatioSchemaService.js';
-import { TemplateSelectionStore } from '../services/templateSelectionStore.js';
+import { IdempotencyStore } from '../services/idempotencyStore.js';
+import { getSchemaCreationGateway } from '../integrations/schema-creation/gateway.js';
+import {
+  getCreatioGraphState,
+  resumeCreatioGraph,
+  runCreatioGraph,
+  streamCreatioGraph,
+} from '../graph/creatio/runtime.js';
 
 const router = Router();
-const templateSelectionStore = new TemplateSelectionStore();
+const idempotencyStore = new IdempotencyStore();
 
 function isUkrainianText(text: string): boolean {
   return /[А-Яа-яІіЇїЄєҐґ]/.test(text);
-}
-
-function parseAgentResponse(agentResponse: unknown): Record<string, any> {
-  try {
-    let jsonStr = typeof agentResponse === 'string' ? agentResponse : JSON.stringify(agentResponse);
-    const codeBlockMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-    if (codeBlockMatch) {
-      jsonStr = codeBlockMatch[1].trim();
-    }
-    return JSON.parse(jsonStr);
-  } catch {
-    const responseText = String(agentResponse);
-    const isUnsupported =
-      responseText.includes('не підтримується') ||
-      responseText.includes('not supported') ||
-      responseText.includes('cannot');
-
-    return {
-      success: !isUnsupported,
-      operation: isUnsupported ? 'not_supported' : 'unknown',
-      message: responseText,
-      raw_response: responseText,
-    };
-  }
 }
 
 function localeFromText(text: string): SchemaLocale {
   return isUkrainianText(text) ? 'uk' : 'en';
 }
 
+function toValidationMessage(error: ZodError): string {
+  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
+}
+
+function getIdempotencyKey(req: Request, bodyKey?: string): string | undefined {
+  const headerValue = req.header('Idempotency-Key');
+  if (headerValue && headerValue.trim().length > 0) {
+    return headerValue.trim();
+  }
+
+  if (bodyKey && bodyKey.trim().length > 0) {
+    return bodyKey.trim();
+  }
+
+  return undefined;
+}
+
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { text, templateSelectionId, templateUId, templateName } = req.body;
+    const input = naturalCreatioRequestSchema.parse(req.body);
+    const idempotencyKey = getIdempotencyKey(req, input.idempotencyKey);
+    const threadId = input.threadId || input.templateSelectionId || randomUUID();
 
-    if (
-      (!templateSelectionId && (!text || typeof text !== 'string' || text.trim().length === 0)) ||
-      (templateSelectionId && typeof templateSelectionId !== 'string')
-    ) {
+    const isResume = (!!input.threadId || !!input.templateSelectionId)
+      && (!!input.templateUId || !!input.templateName);
+
+    if (isResume) {
+      if (idempotencyKey) {
+        const cached = idempotencyStore.get(`graph:resume:${threadId}`, idempotencyKey);
+        if (cached) {
+          res.json(cached);
+          return;
+        }
+      }
+
+      const result = await resumeCreatioGraph({
+        threadId,
+        templateUId: input.templateUId,
+        templateName: input.templateName,
+      });
+
+      if (idempotencyKey) {
+        idempotencyStore.set(`graph:resume:${threadId}`, idempotencyKey, result);
+      }
+
+      res.json(result);
+      return;
+    }
+
+    if (!input.text) {
       res.status(400).json({
         success: false,
-        error: 'Invalid input. Provide text command or valid templateSelectionId.',
+        code: 'BAD_REQUEST',
+        error: 'Text is required for run step',
       });
       return;
     }
 
-    if (templateSelectionId) {
-      const pending = templateSelectionStore.get(templateSelectionId);
-      if (!pending) {
-        res.status(400).json({
-          success: false,
-          operation: 'template_selection_expired',
-          message: 'Template selection is expired or not found. Please repeat your create request.',
-        });
+    if (idempotencyKey) {
+      const cached = idempotencyStore.get(`graph:run:${threadId}`, idempotencyKey);
+      if (cached) {
+        res.json(cached);
         return;
       }
-
-      if (!templateUId && !templateName) {
-        res.status(400).json({
-          success: false,
-          operation: 'template_selection_required',
-          message: pending.language === 'uk'
-            ? 'Оберіть шаблон зі списку.'
-            : 'Please choose one of the listed templates.',
-        });
-        return;
-      }
-
-      const created = await createSchemaDirectly({
-        schemaName: pending.schemaName,
-        schemaType: pending.schemaType,
-        userLevelSchema: pending.userLevelSchema,
-        template: { templateUId, templateName },
-      });
-
-      templateSelectionStore.delete(templateSelectionId);
-
-      const response = withCreatioUrl(
-        {
-          success: true,
-          operation: 'create_schema',
-          message: pending.language === 'uk'
-            ? `Створено схему ${created.schemaName}`
-            : `Schema ${created.schemaName} has been created`,
-          schemaUId: created.schemaUId,
-          schemaName: created.schemaName,
-          schemaType: pending.schemaType,
-          packageUId: created.packageUId,
-          template: created.template || null,
-          reasoning: pending.language === 'uk'
-            ? 'Схему створено після вибору шаблону.'
-            : 'Schema was created after template selection.',
-        },
-        config.creatio.url,
-      );
-
-      res.json(response);
-      return;
     }
 
-    console.log('[Creatio Agent] Processing command:', text);
-    console.log('[Creatio Agent] Request timestamp:', new Date().toISOString());
-
-    const intent = await parseCreatioIntent(text);
-    const isUk = intent.language === 'uk';
-
-    if (intent.operation === 'not_supported') {
-      res.json({
-        success: false,
-        operation: 'not_supported',
-        message: isUk
-          ? 'Операція ще не підтримується. Доступні: створення та розширення схем.'
-          : 'Operation is not supported yet. Supported operations: create and extend schema.',
-      });
-      return;
-    }
-
-    if (intent.operation === 'create_schema' && intent.schemaName) {
-      if (!intent.templateName && !intent.templateUId) {
-        const templatesResult = await listSchemaTemplates(intent.schemaType || 'AngularSchema');
-        const templates = Array.isArray(templatesResult.templates) ? templatesResult.templates : [];
-
-        if (templates.length === 0) {
-          throw new Error('No templates available for selected schema type');
-        }
-
-        const selectionId = templateSelectionStore.create({
-          schemaName: intent.schemaName,
-          schemaType: intent.schemaType || 'AngularSchema',
-          userLevelSchema: intent.userLevelSchema ?? false,
-          language: intent.language,
-        });
-
-        res.json({
-          success: true,
-          operation: 'awaiting_template_selection',
-          message: isUk
-            ? 'Оберіть шаблон для нової сторінки.'
-            : 'Choose a template for the new page.',
-          selectionId,
-          schemaName: intent.schemaName,
-          schemaType: intent.schemaType || 'AngularSchema',
-          templates,
-        });
-        return;
-      }
-
-      const created = await createSchemaDirectly({
-        schemaName: intent.schemaName,
-        schemaType: intent.schemaType || 'AngularSchema',
-        userLevelSchema: intent.userLevelSchema ?? false,
-        template: {
-          templateName: intent.templateName || undefined,
-          templateUId: intent.templateUId || undefined,
-        },
-      });
-
-      const response = withCreatioUrl(
-        {
-          success: true,
-          operation: 'create_schema',
-          message: isUk
-            ? `Створено схему ${created.schemaName}`
-            : `Schema ${created.schemaName} has been created`,
-          schemaUId: created.schemaUId,
-          schemaName: created.schemaName,
-          schemaType: intent.schemaType || 'AngularSchema',
-          packageUId: created.packageUId,
-          template: created.template || null,
-          reasoning: isUk
-            ? 'Команда розпізнана LLM як створення схеми і виконана напряму через MCP-інструменти.'
-            : 'LLM detected schema creation and it was executed directly via MCP tools.',
-        },
-        config.creatio.url,
-      );
-
-      res.json(response);
-      return;
-    }
-
-    const agentResult = await creatioSchemaAgent.invoke({
-      messages: [{ role: 'user', content: text }],
+    const result = await runCreatioGraph({
+      text: input.text,
+      threadId,
     });
 
-    console.log('[Creatio Agent] Agent invocation completed');
-    console.log('[Creatio Agent] Messages count:', agentResult.messages.length);
+    if (idempotencyKey) {
+      idempotencyStore.set(`graph:run:${threadId}`, idempotencyKey, result);
+    }
 
-    const lastMessage = agentResult.messages[agentResult.messages.length - 1];
-    const parsed = parseAgentResponse(lastMessage.content);
-    res.json(withCreatioUrl(parsed, config.creatio.url));
-  } catch (error: any) {
+    res.json(result);
+  } catch (error: unknown) {
+    if (error instanceof ZodError) {
+      const apiError = validationError(toValidationMessage(error));
+      res.status(apiError.statusCode).json({
+        success: false,
+        code: apiError.code,
+        error: apiError.message,
+      });
+      return;
+    }
+
+    const apiError = toApiError(error);
     console.error('[Creatio Agent] Error:', error);
-    res.status(500).json({
+    res.status(apiError.statusCode).json({
       success: false,
-      error: error.message || 'Failed to process command',
-      details: error.stack,
+      code: apiError.code,
+      error: apiError.message,
+      meta: apiError.meta,
+    });
+  }
+});
+
+router.post('/stream', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const input = naturalCreatioRequestSchema.parse(req.body);
+    const threadId = input.threadId || input.templateSelectionId || randomUUID();
+
+    const isResume = (!!input.threadId || !!input.templateSelectionId)
+      && (!!input.templateUId || !!input.templateName);
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const stream = await streamCreatioGraph({
+      threadId,
+      text: input.text,
+      resume: isResume
+        ? {
+            templateUId: input.templateUId,
+            templateName: input.templateName,
+          }
+        : undefined,
+    });
+
+    for await (const chunk of stream) {
+      res.write(`data: ${JSON.stringify({ threadId, chunk })}\n\n`);
+    }
+
+    res.write('event: done\ndata: {}\n\n');
+    res.end();
+  } catch (error: unknown) {
+    const apiError = toApiError(error);
+    if (res.headersSent) {
+      res.write(`event: error\ndata: ${JSON.stringify({
+        success: false,
+        code: apiError.code,
+        error: apiError.message,
+        meta: apiError.meta,
+      })}\n\n`);
+      res.end();
+      return;
+    }
+
+    res.status(apiError.statusCode).json({
+      success: false,
+      code: apiError.code,
+      error: apiError.message,
+      meta: apiError.meta,
+    });
+  }
+});
+
+router.get('/state', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const threadId = String(req.query.threadId || '').trim();
+    if (!threadId) {
+      res.status(400).json({
+        success: false,
+        code: 'BAD_REQUEST',
+        error: 'threadId is required',
+      });
+      return;
+    }
+
+    const state = await getCreatioGraphState(threadId);
+    res.json({ success: true, ...state });
+  } catch (error: unknown) {
+    const apiError = toApiError(error);
+    res.status(apiError.statusCode).json({
+      success: false,
+      code: apiError.code,
+      error: apiError.message,
+      meta: apiError.meta,
     });
   }
 });
 
 router.post('/schema', async (req: Request, res: Response): Promise<void> => {
   try {
-    const {
-      action,
-      schemaName,
-      schemaType,
-      packageUId,
-      parentSchemaName,
-      templateName,
-      templateUId,
-      description,
-      userLevelSchema,
-    } = req.body;
+    const input = structuredSchemaRequestSchema.parse(req.body);
 
-    if (!action) {
-      res.status(400).json({
+    if (input.action === 'create') {
+      const idempotencyKey = getIdempotencyKey(req, input.idempotencyKey);
+      if (idempotencyKey) {
+        const cached = idempotencyStore.get('api:create', idempotencyKey);
+        if (cached) {
+          res.json(cached);
+          return;
+        }
+      }
+
+      const locale = localeFromText(String(input.description || input.schemaName));
+      const response = await createSchemaStructured(
+        {
+          schemaName: input.schemaName,
+          schemaType: input.schemaType,
+          packageUId: input.packageUId,
+          parentSchemaName: input.parentSchemaName,
+          templateName: input.templateName,
+          templateUId: input.templateUId,
+          description: input.description,
+          userLevelSchema: input.userLevelSchema,
+        },
+        locale,
+      );
+
+      const createResponse = withCreatioUrl(response, config.creatio.url);
+      if (idempotencyKey) {
+        idempotencyStore.set('api:create', idempotencyKey, createResponse);
+      }
+      res.json(createResponse);
+      return;
+    }
+
+    const locale = localeFromText(String(input.description || input.parentSchemaName));
+    const response = await extendSchemaStructured(
+      {
+        parentSchemaName: input.parentSchemaName,
+        packageUId: input.packageUId,
+        description: input.description,
+        userLevelSchema: input.userLevelSchema,
+      },
+      locale,
+    );
+
+    res.json(withCreatioUrl(response, config.creatio.url));
+  } catch (error: unknown) {
+    if (error instanceof ZodError) {
+      const apiError = validationError(toValidationMessage(error));
+      res.status(apiError.statusCode).json({
         success: false,
-        error: 'Missing required field: action is required',
+        code: apiError.code,
+        error: apiError.message,
       });
       return;
     }
 
-    if (action === 'create') {
-      if (!schemaName || !schemaType) {
-        res.status(400).json({
-          success: false,
-          error: 'For create action: schemaName and schemaType are required',
-        });
-        return;
-      }
-
-      const locale = localeFromText(String(description || schemaName));
-      const response = await createSchemaStructured(
-        {
-          schemaName,
-          schemaType: String(schemaType),
-          packageUId,
-          parentSchemaName,
-          templateName,
-          templateUId,
-          description,
-          userLevelSchema,
-        },
-        locale,
-      );
-
-      res.json(response);
-      return;
-    }
-
-    if (action === 'extend') {
-      if (!parentSchemaName) {
-        res.status(400).json({
-          success: false,
-          error: 'For extend action: parentSchemaName is required',
-        });
-        return;
-      }
-
-      const locale = localeFromText(String(description || parentSchemaName));
-      const response = await extendSchemaStructured(
-        {
-          parentSchemaName,
-          packageUId,
-          description,
-          userLevelSchema,
-        },
-        locale,
-      );
-
-      res.json(response);
-      return;
-    }
-
-    res.status(400).json({
+    const apiError = toApiError(error);
+    res.status(apiError.statusCode).json({
       success: false,
-      error: 'Invalid action. Supported: "create" or "extend"',
-    });
-  } catch (error: any) {
-    console.error('Creatio schema agent error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to process schema request',
+      code: apiError.code,
+      error: apiError.message,
+      meta: apiError.meta,
     });
   }
 });
@@ -308,10 +284,13 @@ router.get('/templates', async (req: Request, res: Response) => {
     const schemaType = String(req.query.schemaType || 'AngularSchema');
     const result = await listSchemaTemplates(schemaType);
     res.json(result);
-  } catch (error: any) {
-    res.status(500).json({
+  } catch (error: unknown) {
+    const apiError = toApiError(error);
+    res.status(apiError.statusCode).json({
       success: false,
-      error: error.message || 'Failed to load schema templates',
+      code: apiError.code,
+      error: apiError.message,
+      meta: apiError.meta,
     });
   }
 });
@@ -320,6 +299,7 @@ router.get('/schema/health', async (_req: Request, res: Response) => {
   try {
     const { getCreatioClient } = await import('../creatio/creatioClient.js');
     const client = getCreatioClient();
+    const schemaGateway = await getSchemaCreationGateway();
 
     const isConnected = client.isConnected();
     const hasConfig = !!(config.creatio.url && config.creatio.username && config.creatio.password);
@@ -329,16 +309,24 @@ router.get('/schema/health', async (_req: Request, res: Response) => {
       creatio_configured: hasConfig,
       creatio_url: config.creatio.url || 'not configured',
       authenticated: isConnected,
+      schema_creation_gateway: schemaGateway.getSourceLabel(),
+      langgraph: {
+        enabled: true,
+        endpoints: ['/agent/creatio', '/agent/creatio/stream', '/agent/creatio/state'],
+      },
       message: hasConfig
         ? isConnected
           ? 'Creatio client authenticated'
           : 'Creatio client configured but not authenticated yet'
         : 'Creatio configuration missing (set CREATIO_URL, CREATIO_USERNAME, CREATIO_PASSWORD)',
     });
-  } catch (error: any) {
-    res.status(500).json({
+  } catch (error: unknown) {
+    const apiError = toApiError(error);
+    res.status(apiError.statusCode).json({
       success: false,
-      error: error.message,
+      code: apiError.code,
+      error: apiError.message,
+      meta: apiError.meta,
     });
   }
 });

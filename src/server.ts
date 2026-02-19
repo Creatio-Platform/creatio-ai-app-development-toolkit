@@ -3,7 +3,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from './config/env.js';
 import healthRouter from './routes/health.js';
-import agentRouter from './routes/agent.js';
 import creatioAgentRouter from './routes/creatioAgent.js';
 
 // Get __dirname equivalent in ES modules
@@ -21,7 +20,6 @@ export const createServer = (): Express => {
 
   // Routes
   app.use('/health', healthRouter);
-  app.use('/agent', agentRouter);
   app.use('/agent/creatio', creatioAgentRouter);
 
   return app;
@@ -34,8 +32,9 @@ export const startServer = (app: Express): void => {
     console.log(`Server is running on http://localhost:${port}`);
     console.log(`UI: http://localhost:${port}`);
     console.log(`Health check: http://localhost:${port}/health`);
-    console.log(`DeepAgent Translation: http://localhost:${port}/agent/translate`);
-    console.log(`DeepAgent Creatio (NLP): http://localhost:${port}/agent/creatio`);
-    console.log(`DeepAgent Creatio Schema: http://localhost:${port}/agent/creatio/schema`);
+    console.log(`Creatio LangGraph Run: http://localhost:${port}/agent/creatio`);
+    console.log(`Creatio LangGraph Stream: http://localhost:${port}/agent/creatio/stream`);
+    console.log(`Creatio LangGraph State: http://localhost:${port}/agent/creatio/state?threadId=<id>`);
+    console.log(`Creatio Structured Schema API: http://localhost:${port}/agent/creatio/schema`);
   });
 };
