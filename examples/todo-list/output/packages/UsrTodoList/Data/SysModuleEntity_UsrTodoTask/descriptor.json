@@ -1,0 +1,17 @@
+{
+  "Descriptor": {
+    "UId": "66666666-aaaa-bbbb-cccc-100000000001",
+    "Name": "SysModuleEntity_UsrTodoTask",
+    "ModifiedOnUtc": "/Date(1749500000000)/",
+    "InstallType": 0,
+    "Schema": {
+      "UId": "9c762665-90ad-497b-ac4b-45bb729630a1",
+      "Name": "SysModuleEntity"
+    },
+    "Columns": [
+      {"ColumnUId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617", "IsForceUpdate": false, "IsKey": true, "ColumnName": "Id", "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"},
+      {"ColumnUId": "0c59594b-490a-4b55-a564-5841cfae3c19", "IsForceUpdate": false, "IsKey": false, "ColumnName": "SysEntitySchemaUId", "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"},
+      {"ColumnUId": "3107ef98-a02e-4ea8-809a-67dc3025ef4a", "IsForceUpdate": true, "IsKey": false, "ColumnName": "TypeColumnUId", "DataTypeValueUId": "23018567-a13c-4320-8687-fd6f9e3699bd"}
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "Descriptor": {
+    "UId": "/* REPLACE: lookup entity GUID */",
+    "Name": "/* REPLACE: lookup name (e.g., UsrTodoTaskStatus) */",
+    "ModifiedOnUtc": "/* REPLACE: /Date(milliseconds)/ */",
+    "Parent": {
+      "UId": "11ab4bcb-9b23-4b6d-9c86-520fae925d75",
+      "Name": "BaseLookup"
+    },
+    "ManagerName": "EntitySchemaManager",
+    "Caption": "/* REPLACE: display name (e.g., Todo Task Status) */",
+    "DependsOn": []
+  }
+}
