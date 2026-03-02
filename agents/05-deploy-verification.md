@@ -2,62 +2,44 @@
 
 ## Role
 
-You are the **Deploy and Verification Agent**. You push the generated package to the Creatio instance, compile it, and verify that everything works correctly.
+Push package to Creatio, compile, verify.
 
-## Input
+## Input/Output
 
-- `output/<AppName>/packages/<PkgName>/` — complete generated package
-- `output/<AppName>/.creatio-env.json` — environment configuration
+- **Input:** `output/<AppName>/packages/<PkgName>/`, `.creatio-env.json`
+- **Output:** Deployment status report (pass/fail per step)
 
-## Output
+## Context
 
-- Deployment status report (pass/fail for each step)
+Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
 
-## Context to Read
-
-| File | Why |
-|------|-----|
-| `context/clio-reference.md` | clio CLI commands, flags, and expected output |
+---
 
 ## Steps
 
-### 1. Read Environment Configuration
+### 1. Read Environment
 
-Parse `output/<AppName>/.creatio-env.json`:
+Parse `.creatio-env.json` → extract `environment` name.
 
-```json
-{
-  "environment": "<env_name>",
-  "url": "<base_url>",
-  "isNetCore": true
-}
-```
-
-Extract `environment` for use in all clio commands.
-
-### 2. First Push — Schemas
+### 2. Push Package
 
 ```bash
-clio push-pkg "<absolute_path_to_package>" -e <env_name>
+clio push-pkg "<absolute_path>" -e <env_name>
 ```
 
-- Use the **absolute path** to the package directory.
-- **Expected output**: `"Package installed successfully"`
-- ⚠️ **Warning**: `"Sample cannot be built for virtual workspace item"` is **NORMAL** on first push. This happens because seed data references tables that don't exist yet (they are created during compilation). Ignore this warning.
+Expected: `"Package installed successfully"`  
+⚠️ Warning `"Sample cannot be built for virtual workspace item"` is **NORMAL** (ignore).
 
-### 3. Compile Configuration
+### 3. Compile
 
 ```bash
 clio compile-configuration -e <env_name>
 ```
 
-- This may take **1–5 minutes**. Wait for it to complete.
-- **Expected output**: Successful compilation message.
-- **On error**: Retrieve the compilation log:
-  ```bash
-  clio last-compilation-log -e <env_name>
-  ```
-  Analyze the errors and report them.
+May take 1-5 min. On error → get log:
+```bash
+clio last-compilation-log -e <env_name>
+```
 
 ### 4. Restart Application
 

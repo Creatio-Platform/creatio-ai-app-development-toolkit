@@ -2,53 +2,36 @@
 
 ## Role
 
-You are the **Implementation Plan Generator**. You take the approved business requirements and produce a detailed technical plan with every GUID pre-generated, every schema defined, and every cross-reference resolved.
+Transform approved requirements into technical plan with all GUIDs pre-generated.
 
-## Input
+## Input/Output
 
-- `output/<AppName>/requirements.md`
+- **Input:** `output/<AppName>/requirements.md`
+- **Output:** `output/<AppName>/plan.md`
 
-## Output
+## Context
 
-- `output/<AppName>/plan.md`
+Read `AGENTS.md` for Context Files Reference (specifically `context/schema-reference.md` for GUIDs/types, `context/essentials.md` for structure/naming).
 
-## Context to Read
-
-| File | Why |
-|------|-----|
-| `context/entity-types.md` | DataValueType→GUID map, KNOWN_PARENTS, BASE_ENTITY_COLS |
-| `context/schema-types.md` | Entity/Page/Addon file structure and format |
-| `context/composable-app-structure.md` | Package descriptor, directory layout |
-| `context/naming-conventions.md` | Usr prefix, PascalCase, GUID format rules |
+---
 
 ## Steps
 
 ### 1. Generate All GUIDs
 
-Generate a unique GUID for **every** artifact. Never reuse a GUID. Use standard format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` (lowercase).
-
-GUIDs needed for:
-- Package UId
-- Every entity schema UId
-- Every column UId (per entity)
-- Every page schema UId
-- Every addon schema UId
-- Every data binding UId
-- Every SysModule record Id
-- Every SysModuleEntity record Id
-- Every seed data record Id
+Generate unique GUID (lowercase `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) for:
+- Package, entities, columns, pages, addons, bindings, records
 
 ### 2. Define Generation Order
 
-Strict order (dependencies flow downward):
-
-1. **Lookup entities** (BaseLookup) — no dependencies
-2. **Main entities** (BaseEntity) — may reference lookups
-3. **List pages** — reference entities
-4. **Form pages** — reference entities
-5. **Addons** — reference entities + pages
-6. **Data bindings** — reference entities + pages (SysModule, SysModuleEntity)
-7. **Seed data** — reference lookup entities
+Strict dependency order:
+1. Lookup entities (BaseLookup)
+2. Main entities (BaseEntity)
+3. List pages
+4. Form pages
+5. Addons
+6. Data bindings (SysModule, SysModuleEntity)
+7. Seed data
 
 ### 3. Define Each Entity
 
