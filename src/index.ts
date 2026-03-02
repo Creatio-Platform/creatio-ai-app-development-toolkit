@@ -1,4 +1,1 @@
-import { createServer, startServer } from './server.js';
-
-const app = createServer();
-startServer(app);
+console.log('AI Driven App Creation - Ready for development!');

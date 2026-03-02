@@ -1,7 +1,7 @@
 {
-  "name": "langchain-api-service",
+  "name": "ai-driven-app-creation",
   "version": "1.0.0",
-  "description": "Minimal TypeScript + LangChain HTTP API service",
+  "description": "AI-driven application creation project",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -11,26 +11,16 @@
   },
   "keywords": [
     "typescript",
-    "langchain",
-    "api",
-    "express"
+    "ai",
+    "app-creation"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@langchain/core": "^1.1.26",
-    "@langchain/openai": "^1.2.8",
-    "@modelcontextprotocol/sdk": "^1.26.0",
-    "axios": "^1.13.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "langchain": "^1.2.25",
-    "shortid": "^2.2.17"
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
     "@types/node": "^20.12.7",
-    "@types/shortid": "^2.2.0",
     "tsx": "^4.7.2",
     "typescript": "^5.4.5"
   }
