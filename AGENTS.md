@@ -39,8 +39,10 @@ Developer request + Creatio URL
              ▼
 ┌─────────────────────────┐
 │ Agent 4: Implementation │  Read: agents/04-implementation.md
-│                         │  Skills: skills/entity-creation.md, skills/page-creation.md,
-│  ┌─ Entity Creation     │          skills/addon-creation.md, skills/data-bindings-creation.md
+│                         │  Skills: skills/entity-creation/SKILL.md,
+│  ┌─ Entity Creation     │          skills/page-creation/SKILL.md,
+│  │                       │          skills/data-bindings-creation/SKILL.md,
+│  │                       │          skills/package-descriptor-creation/SKILL.md
 │  ├─ Page Creation       │  Context: context/schema-types.md, context/freedomui-reference.md,
 │  ├─ Addon Creation      │           context/data-bindings-reference.md
 │  └─ Data Bindings       │  Templates: templates/
