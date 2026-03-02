@@ -1,6 +1,0 @@
-{
-  "action": "create",
-  "schemaName": "TestEmptyPage",
-  "schemaType": "AngularSchema",
-  "description": "Test empty page created via API"
-}
