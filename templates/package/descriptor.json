@@ -1,0 +1,11 @@
+{
+  "Descriptor": {
+    "UId": "/* REPLACE: new package GUID */",
+    "PackageVersion": "1.0.0",
+    "Name": "/* REPLACE: package name (e.g., UsrTodoListApp) */",
+    "ModifiedOnUtc": "/* REPLACE: /Date(milliseconds)/ */",
+    "Type": 1,
+    "Maintainer": "Customer",
+    "DependsOn": []
+  }
+}

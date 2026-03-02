@@ -1,0 +1,52 @@
+= MetaData.Schema.UId "/* REPLACE: lookup entity GUID */"
+= MetaData.Schema.A2 "/* REPLACE: lookup name */"
+= MetaData.Schema.A5 "/* REPLACE: package GUID */"
+= MetaData.Schema.B6 "/* REPLACE: dependency package GUID */"
+= MetaData.Schema.EG1.UId "/* REPLACE: events process GUID */"
+= MetaData.Schema.EG1.A2 "/* REPLACE: Entity_<hash>EventsProcess */"
+= MetaData.Schema.EG1.A5 "/* REPLACE: package GUID */"
++ MetaData.Schema.EG1.B8 "0.0.0.0"
+= MetaData.Schema.EG1.BK8 "/* REPLACE: process schema GUID */"
+= MetaData.Schema.D8 "11ab4bcb-9b23-4b6d-9c86-520fae925d75"
++ MetaData.Schema.D29 "null"
++ MetaData.Schema.D30 "null"
++ MetaData.Schema.D31 "null"
+~ MetaData.Schema.D2 [
+  "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+  "e80190a5-03b2-4095-90f7-a193a960adee",
+  "ebf6bb93-8aa6-4a01-900d-c6ea67affe21",
+  "9928edec-4272-425a-93bb-48743fee4b04",
+  "3015559e-cbc6-406a-88af-07f7930be832",
+  "3fabd836-6a53-4d8d-9069-6df88d9dae1e",
+  "736c30a7-c0ec-4fa9-b034-2552b319b633",
+  "9e53fd7c-dde4-4502-a64c-b9e34148108b"
+]
+= MetaData.Schema.D20.A2 "/* REPLACE: LookupNameEvents */"
++ MetaData.Schema.D20.FA1 false
++ MetaData.Schema.D20.FA2 false
++ MetaData.Schema.D20.FA3 false
+= MetaData.Schema.D20.FA4 false
+= MetaData.Schema.D20.FA5 false
+= MetaData.Schema.D20.FA6 false
+= MetaData.Schema.D20.FA7 false
++ MetaData.Schema.D20.FA8 false
++ MetaData.Schema.D20.FA9 false
++ MetaData.Schema.D20.FA10 false
+= MetaData.Schema.D20.FA11 false
+= MetaData.Schema.D20.FA12 false
++ MetaData.Schema.D20.FA16 false
++ MetaData.Schema.D20.FA13 false
++ MetaData.Schema.D20.FA14 false
+= MetaData.Schema.D20.FA15 false
++ MetaData.Schema.D20.FA17 false
+= MetaData.Schema.D36.A3 "/* REPLACE: lookup entity GUID */"
+= MetaData.Schema.D36.BS1 false
++ MetaData.Schema.B7 false
++ MetaData.Schema.D2.["ae0e45ca-c495-4fe7-a39d-3ab7278e1617"].E16 false
++ MetaData.Schema.D2.["e80190a5-03b2-4095-90f7-a193a960adee"].E16 false
++ MetaData.Schema.D2.["ebf6bb93-8aa6-4a01-900d-c6ea67affe21"].E16 false
++ MetaData.Schema.D2.["9928edec-4272-425a-93bb-48743fee4b04"].E16 false
++ MetaData.Schema.D2.["3015559e-cbc6-406a-88af-07f7930be832"].E16 false
++ MetaData.Schema.D2.["3fabd836-6a53-4d8d-9069-6df88d9dae1e"].E16 false
++ MetaData.Schema.D2.["736c30a7-c0ec-4fa9-b034-2552b319b633"].E16 false
++ MetaData.Schema.D2.["9e53fd7c-dde4-4502-a64c-b9e34148108b"].E16 false

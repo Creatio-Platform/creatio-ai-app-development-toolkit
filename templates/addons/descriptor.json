@@ -1,0 +1,9 @@
+{
+  "Descriptor": {
+    "UId": "/* REPLACE: addon GUID */",
+    "Name": "/* REPLACE: addon name (e.g., UsrTodoTask_FormPage_Addon) */",
+    "ModifiedOnUtc": "/* REPLACE: /Date(milliseconds)/ */",
+    "ManagerName": "AddonSchemaManager",
+    "Caption": "/* REPLACE: display name */"
+  }
+}

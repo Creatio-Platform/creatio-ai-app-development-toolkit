@@ -1,0 +1,7 @@
+{
+  "Properties": {
+    "AddonName": "RelatedPage",
+    "TargetSchemaManagerName": "EntitySchemaManager",
+    "TargetSchemaUId": "/* REPLACE: target entity schema UId */"
+  }
+}

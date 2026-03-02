@@ -1,3 +1,6 @@
+# Generated output
+/output/
+
 # Dependencies
 node_modules/
 
@@ -12,10 +15,6 @@ logs/
 *.log
 npm-debug.log*
 
-# OS files
-.DS_Store
-Thumbs.db
-
 # IDE
 .vscode/
 .idea/
@@ -23,5 +22,12 @@ Thumbs.db
 *.swo
 *~
 
-# Test artifacts
-tests/*.log
+# OS
+Thumbs.db
+.DS_Store
+
+# Creatio credentials
+.creatio-env.json
+
+# Copilot session files
+copilot-session-*.md

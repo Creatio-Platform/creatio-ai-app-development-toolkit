@@ -1,0 +1,17 @@
+{
+  "MetaData": {
+    "Schema": {
+      "AD1": "22222222-aaaa-bbbb-cccc-000000000001",
+      "AD2": "EntitySchemaManager",
+      "AD3": "RelatedPage",
+      "AD4": {
+        "Pages": [
+          {
+            "UId": "44444444-aaaa-bbbb-cccc-000000000002",
+            "Caption": "UsrTodoTask_FormPage"
+          }
+        ]
+      }
+    }
+  }
+}

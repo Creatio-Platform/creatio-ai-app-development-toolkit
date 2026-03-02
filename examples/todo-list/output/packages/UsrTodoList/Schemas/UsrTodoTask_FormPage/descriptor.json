@@ -1,0 +1,13 @@
+{
+  "Descriptor": {
+    "UId": "44444444-aaaa-bbbb-cccc-000000000002",
+    "Name": "UsrTodoTask_FormPage",
+    "ModifiedOnUtc": "/Date(1749500000000)/",
+    "Parent": {
+      "UId": "3b2e117f-8c6b-4ca5-80a2-7ebb497cddf9",
+      "Name": "PageWithTabsFreedomTemplate"
+    },
+    "ManagerName": "ClientUnitSchemaManager",
+    "Caption": "Todo Task"
+  }
+}
