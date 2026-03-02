@@ -114,16 +114,14 @@ All agents read from these consolidated files:
 | `context/data-bindings-reference.md` | Binding logic, standard values | Agent 4 (data bindings) |
 
 **Skills (Agent 4 only):**
-- `skills/entity-creation.md` — generates entity schemas
-- `skills/page-creation.md` — generates page schemas
-- `skills/addon-creation.md` — generates addon schemas
-- `skills/data-bindings-creation.md` — generates data bindings
+- `skills/entity-creation/SKILL.md` — generates entity schemas
+- `skills/page-creation/SKILL.md` — generates page schemas
+- `skills/data-bindings-creation/SKILL.md` — generates data bindings
+- `skills/package-descriptor-creation/SKILL.md` — generates package descriptor
 
 **Templates (reference as needed):**
 - `templates/entity/` — entity file examples
 - `templates/pages/` — page file examples
-- `templates/addons/` — addon file examples
-- `templates/data-bindings/` — binding file examples
 
 ---
 
@@ -138,11 +136,11 @@ no-code-assistent/
 │   ├── 03-implementation-plan.md
 │   ├── 04-implementation.md
 │   └── 05-deploy-verification.md
-├── skills/                      # Implementation skills (used by Agent 4)
-│   ├── entity-creation.md
-│   ├── page-creation.md
-│   ├── addon-creation.md
-│   └── data-bindings-creation.md
+├── skills/                      # Implementation skills (directories per Agent Skills spec)
+│   ├── entity-creation/SKILL.md
+│   ├── page-creation/SKILL.md
+│   ├── data-bindings-creation/SKILL.md
+│   └── package-descriptor-creation/SKILL.md
 ├── context/                     # Knowledge base (read-only reference)
 ├── templates/                   # File format templates (read-only reference)
 ├── examples/                    # Reference implementations
