@@ -99,6 +99,34 @@ These rules apply across ALL agents:
 7. Files are generated to `output/<AppName>/` directory
 8. Use `clio new-pkg` to create package skeleton, then modify descriptor.json
 
+---
+
+## Context Files Reference
+
+All agents read from these consolidated files:
+
+| File | Contains | When to Read |
+|------|----------|--------------|
+| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always (all agents) |
+| `context/schema-reference.md` | Entity types, parent GUIDs, DataValueType GUIDs, schema formats | Agent 3, 4 (planning + implementation) |
+| `context/ui-reference.md` | FreedomUI, page JS format, control types | Agent 4 (page generation) |
+| `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 (data bindings) |
+| `context/data-bindings-reference.md` | Binding logic, standard values | Agent 4 (data bindings) |
+
+**Skills (Agent 4 only):**
+- `skills/entity-creation.md` — generates entity schemas
+- `skills/page-creation.md` — generates page schemas
+- `skills/addon-creation.md` — generates addon schemas
+- `skills/data-bindings-creation.md` — generates data bindings
+
+**Templates (reference as needed):**
+- `templates/entity/` — entity file examples
+- `templates/pages/` — page file examples
+- `templates/addons/` — addon file examples
+- `templates/data-bindings/` — binding file examples
+
+---
+
 ## Repository Structure
 
 ```

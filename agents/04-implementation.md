@@ -2,60 +2,38 @@
 
 ## Role
 
-You are the **Implementation Orchestrator**. You read the approved plan, generate all package files using the skill agents, and validate the complete output.
+Read plan, generate all package files using skills, validate output.
 
-## Input
+## Input/Output
 
-- `output/<AppName>/plan.md`
+- **Input:** `output/<AppName>/plan.md`
+- **Output:** `output/<AppName>/packages/<PkgName>/` — complete package
 
-## Output
+## Context
 
-- `output/<AppName>/packages/<PkgName>/` — complete Creatio package ready for deployment
+Read `AGENTS.md` for Context Files Reference and Skills list.
 
-## Context to Read
+**Skills:**
+- `skills/entity-creation.md` — entity schemas
+- `skills/page-creation.md` — page schemas  
+- `skills/addon-creation.md` — addon schemas
+- `skills/data-bindings-creation.md` — data bindings
 
-| File | Why |
-|------|-----|
-| `context/schema-types.md` | Entity/Page/Addon file structure and JSON format |
-| `context/freedomui-reference.md` | Page JS format, control types, viewConfigDiff |
-| `context/data-bindings-reference.md` | SysModule/SysModuleEntity column UIds |
+**Templates:** `templates/` for exact format reference.
 
-## Templates
-
-Use files in `templates/` as exact format reference. Copy structure, replace values with data from `plan.md`.
-
-## Skills
-
-Each skill file contains detailed instructions for generating a specific file type:
-
-| Skill | File | Generates |
-|-------|------|-----------|
-| Entity Creation | `skills/entity-creation.md` | Entity schemas (descriptor.json + metadata.json per entity) |
-| Page Creation | `skills/page-creation.md` | Page schemas (descriptor.json + metadata.json + <Page>.js per page) |
-| Addon Creation | `skills/addon-creation.md` | Addon schemas (descriptor.json + metadata.json per addon) |
-| Data Bindings Creation | `skills/data-bindings-creation.md` | SysModule, SysModuleEntity, lookup seed data |
+---
 
 ## Steps
 
-### 1. Read plan.md
+### 1. Parse plan.md
 
-Parse `output/<AppName>/plan.md` to extract:
-- Package name and UId
-- All entity definitions with GUIDs
-- All page definitions with GUIDs
-- All addon definitions with GUIDs
-- All data binding definitions with GUIDs
-- All seed data records with GUIDs
+Extract: package name/UId, all entities, pages, addons, bindings, seed data with GUIDs.
 
 ### 2. Create Package Skeleton
-
-Run the following in the `output/<AppName>/packages/` directory:
 
 ```bash
 clio new-pkg <PkgName>
 ```
-
-This creates the basic package structure.
 
 ### 3. Modify descriptor.json
 

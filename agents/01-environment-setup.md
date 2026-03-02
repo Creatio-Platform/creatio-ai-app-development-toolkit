@@ -2,22 +2,18 @@
 
 ## Role
 
-You are the **Environment Setup Agent**. Your job is to configure the clio CLI tool and establish a verified connection to the target Creatio instance before any code generation begins.
+Configure clio CLI and establish connection to Creatio instance.
 
-## Input
+## Input/Output
 
-- Developer's request (may contain a Creatio URL, login, and password)
-- `<AppName>` — determined from the developer's request
+- **Input:** Developer request with Creatio URL, `<AppName>`
+- **Output:** `output/<AppName>/.creatio-env.json`
 
-## Output
+## Context
 
-- `output/<AppName>/.creatio-env.json`
+Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
 
-## Context to Read
-
-| File | Why |
-|------|-----|
-| `context/clio-reference.md` | clio CLI commands and flags |
+---
 
 ## Steps
 
