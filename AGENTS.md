@@ -70,15 +70,21 @@ All inter-agent data is passed via markdown files in `output/<AppName>/`. Format
 ## Orchestration Rules
 
 1. **Execute agents sequentially** (1 → 2 → 3 → 4 → 5). Each agent must complete before the next starts.
-2. **Verify each agent's output** before proceeding. Check that expected files exist and are non-empty.
-3. **Agent 2 (Requirements) is INTERACTIVE** — the orchestrator must handle this directly, never delegate to a sub-agent. It requires multiple rounds of Q&A with the developer.
-4. **Agents 1, 3, 4, 5 can be delegated** to sub-agents (task tool with `general-purpose` type).
-5. **Agent 4 orchestrates skills in parallel groups:**
+2. **ALL agents MUST run in background mode** using `task` tool with `mode: "background"`:
+   - Agent 1: `task(agent_type: "general-purpose", mode: "background")`
+   - Agent 2: ⛔ **EXCEPTION** — handle INTERACTIVELY (not via task tool)
+   - Agent 3: `task(agent_type: "general-purpose", mode: "background")`
+   - Agent 4: `task(agent_type: "general-purpose", mode: "background")`
+   - Agent 5: `task(agent_type: "general-purpose", mode: "background")`
+3. **After launching background agent**, use `read_agent(agent_id, wait: true)` to wait for completion
+4. **Verify each agent's output** before proceeding. Check that expected files exist and are non-empty.
+5. **Agent 2 (Requirements) is INTERACTIVE** — the orchestrator must handle this directly, never delegate to a sub-agent. It requires multiple rounds of Q&A with the developer.
+6. **Agent 4 orchestrates skills in parallel groups:**
    - Group 1: All entity schemas (lookups first, then main entities) — parallel
    - Group 2: All page schemas — parallel
    - Group 3: Addons + data bindings — parallel
-6. **On failure**, the orchestrator decides: retry the agent, fix the issue, or report to the developer.
-7. **Do NOT proceed to Agent 5** if Agent 4 validation found errors.
+7. **On failure**, the orchestrator decides: retry the agent, fix the issue, or report to the developer.
+8. **Do NOT proceed to Agent 5** if Agent 4 validation found errors.
 
 ## Global Rules
 
@@ -120,11 +126,35 @@ no-code-assistent/
 When a developer says "Create a <AppName> app on <URL>":
 
 ```
-1. Read agents/01-environment-setup.md → set up clio connection
-2. Read agents/02-requirements-gathering.md → challenge idea → ask questions → iterate → generate requirements.md → get approval
-3. Read agents/03-implementation-plan.md → generate plan.md with all GUIDs
-4. Read agents/04-implementation.md → run clio new-pkg → invoke skills → validate → generate all files
-5. Read agents/05-deploy-verification.md → push, compile, restart, verify
+1. Launch Agent 1 in background → wait for completion → verify .creatio-env.json
+2. Handle Agent 2 INTERACTIVELY → challenge idea → ask questions → get approval → save requirements.md
+3. Launch Agent 3 in background → wait for completion → verify plan.md
+4. Launch Agent 4 in background → wait for completion → verify all package files
+5. Launch Agent 5 in background → wait for completion → verify deployment
+```
+
+**Example orchestration code:**
+```
+# Agent 1
+agent1_id = task(
+  agent_type: "general-purpose",
+  mode: "background",
+  prompt: "Read agents/01-environment-setup.md and execute..."
+)
+result1 = read_agent(agent1_id, wait: true)
+
+# Agent 2 - INTERACTIVE (no task tool, handle directly)
+[Interactive Q&A with developer]
+
+# Agent 3
+agent3_id = task(
+  agent_type: "general-purpose", 
+  mode: "background",
+  prompt: "Read agents/03-implementation-plan.md and execute..."
+)
+result3 = read_agent(agent3_id, wait: true)
+
+# ... and so on
 ```
 
 ## Examples

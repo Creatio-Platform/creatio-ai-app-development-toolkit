@@ -21,10 +21,11 @@ When a developer asks you to create a Creatio application:
 1. **First**, read `AGENTS.md` for the orchestration workflow
 2. **Execute agents in order**: Environment Setup → Requirements → Plan → Implementation → Deploy
 3. **Each agent has its own file** in `agents/` — read it before starting that phase
-4. **Agent 2 (Requirements) is INTERACTIVE** — do NOT delegate to a sub-agent
-5. **Agent 4 uses skills** from `skills/` — each skill generates a specific file type
-6. **Always read referenced context files** (`context/*.md`) — they contain critical GUIDs and format specs
-7. **Use templates** (`templates/`) as exact format reference for generated files
+4. **ALL agents run in background** using `task` tool with `mode: "background"` — wait for completion with `read_agent`
+5. **Agent 2 (Requirements) is INTERACTIVE** — do NOT delegate to a sub-agent (handle directly, not via task tool)
+6. **Agent 4 uses skills** from `skills/` — each skill generates a specific file type
+7. **Always read referenced context files** (`context/*.md`) — they contain critical GUIDs and format specs
+8. **Use templates** (`templates/`) as exact format reference for generated files
 
 ## Key Context Files
 
@@ -41,7 +42,8 @@ When a developer asks you to create a Creatio application:
 
 ## Critical Rules
 
-- **Agent 2 requires user interaction** — always challenge the idea, ask questions, get approval
+- **All agents run in background mode** — use `task` tool with `mode: "background"`, then `read_agent` to wait
+- **Agent 2 requires user interaction** — always challenge the idea, ask questions, get approval (handle directly, NOT via task tool)
 - **Do NOT generate files until .creatio-env.json exists**
 - Entities MUST inherit from BaseEntity or BaseLookup (never standalone)
 - Do NOT add Id, CreatedOn, CreatedBy, ModifiedOn, ModifiedBy columns (inherited)
