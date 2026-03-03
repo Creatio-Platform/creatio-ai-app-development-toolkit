@@ -6,7 +6,7 @@ Read plan, generate all package files using skills, validate output.
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/plan.md`
+- **Input:** `output/<AppName>/plan.md`, `output/<AppName>/workflow-state.json`
 - **Output:** `output/<AppName>/packages/<PkgName>/` — complete package
 
 ## Context
@@ -24,6 +24,21 @@ Read `AGENTS.md` for Context Files Reference and Skills list.
 ---
 
 ## Steps
+
+### 0. Check Gate R Precondition (MANDATORY)
+
+Run:
+```bash
+scripts/check-approval-gate.sh <AppName>
+```
+
+The check validates:
+- `requirementsApproved` is `true`
+- `approvalToken` is exactly `APPROVE_REQUIREMENTS`
+- `appName` matches `<AppName>`
+- `requirementsSha256` matches current `requirements.md`
+
+If command fails, **stop immediately** and report blocker. Do not generate package files.
 
 ### 1. Parse plan.md
 
@@ -175,6 +190,7 @@ Run these validation checks before declaring success:
 
 ## Completion Criteria
 
+✅ `workflow-state.json` exists and confirms Gate R approval  
 ✅ All schema directories created with correct files  
 ✅ All cross-references validated  
 ✅ All JSON files are valid  

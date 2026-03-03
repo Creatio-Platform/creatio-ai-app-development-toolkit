@@ -6,7 +6,7 @@ Push package to Creatio, compile, verify.
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/packages/<PkgName>/`, `.creatio-env.json`
+- **Input:** `output/<AppName>/packages/<PkgName>/`, `.creatio-env.json`, `output/<AppName>/workflow-state.json`
 - **Output:** Deployment status report (pass/fail per step)
 
 ## Context
@@ -16,6 +16,21 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.m
 ---
 
 ## Steps
+
+### 0. Check Gate R Precondition (MANDATORY)
+
+Run:
+```bash
+scripts/check-approval-gate.sh <AppName>
+```
+
+The check validates:
+- `requirementsApproved` is `true`
+- `approvalToken` is exactly `APPROVE_REQUIREMENTS`
+- `appName` matches `<AppName>`
+- `requirementsSha256` matches current `requirements.md`
+
+If command fails, **stop immediately** and report blocker. Do not deploy.
 
 ### 1. Read Environment
 
@@ -135,6 +150,7 @@ If any step failed, use ❌ and include the error details.
 
 ## Completion Criteria
 
+✅ `workflow-state.json` exists and confirms Gate R approval  
 ✅ Package pushed successfully (both pushes)  
 ✅ Compilation completed without errors  
 ✅ Application restarted and healthy  

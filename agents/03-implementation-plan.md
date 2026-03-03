@@ -6,7 +6,7 @@ Transform approved requirements into technical plan with all GUIDs pre-generated
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/requirements.md`
+- **Input:** `output/<AppName>/requirements.md`, `output/<AppName>/workflow-state.json`
 - **Output:** `output/<AppName>/plan.md`
 
 ## Context
@@ -16,6 +16,21 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/schema-refer
 ---
 
 ## Steps
+
+### 0. Check Gate R Precondition (MANDATORY)
+
+Run:
+```bash
+scripts/check-approval-gate.sh <AppName>
+```
+
+The check validates:
+- `requirementsApproved` is `true`
+- `approvalToken` is exactly `APPROVE_REQUIREMENTS`
+- `appName` matches `<AppName>`
+- `requirementsSha256` matches current `requirements.md`
+
+If command fails, **stop immediately** and report blocker. Do not generate `plan.md`.
 
 ### 1. Generate All GUIDs
 
@@ -126,6 +141,7 @@ Write the complete plan to `output/<AppName>/plan.md` with all sections above.
 
 ## Completion Criteria
 
+✅ `workflow-state.json` exists and confirms Gate R approval  
 ✅ `output/<AppName>/plan.md` exists  
 ✅ Every artifact has a unique GUID  
 ✅ All DVT GUIDs match `context/entity-types.md`  

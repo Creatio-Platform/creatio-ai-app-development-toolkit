@@ -11,7 +11,7 @@ Analyze developer's app description, ask questions, produce structured requireme
 ## Input/Output
 
 - **Input:** Natural language app description, `<AppName>`
-- **Output:** `output/<AppName>/requirements.md`
+- **Output:** `output/<AppName>/requirements.md`, `output/<AppName>/workflow-state.json`
 
 ## Context
 
@@ -111,10 +111,33 @@ Present the full `requirements.md` content to the developer and ask:
 > Here are the final requirements. Please review:
 > [requirements content]
 >
-> Is everything correct? Any changes needed?
+> Is everything correct? If approved, reply with exact token: `APPROVE_REQUIREMENTS`
 
 - If the developer requests changes — update and re-present.
-- **Do NOT proceed to the next phase without explicit developer approval.**
+- **Do NOT proceed to the next phase without explicit developer approval token `APPROVE_REQUIREMENTS`.**
+- Do not infer approval from other wording.
+
+### 6. Persist Approval State (MANDATORY)
+
+After receiving `APPROVE_REQUIREMENTS`, create:
+
+`output/<AppName>/workflow-state.json`
+
+Use:
+```bash
+scripts/write-approval-state.sh <AppName> "<approvedBy>"
+```
+
+```json
+{
+  "requirementsApproved": true,
+  "approvalToken": "APPROVE_REQUIREMENTS",
+  "appName": "<AppName>",
+  "requirementsSha256": "<sha256(requirements.md)>",
+  "approvedBy": "<developer-identifier>",
+  "approvedAtUtc": "<ISO-8601 UTC timestamp>"
+}
+```
 
 ## Critical Rules
 
@@ -129,6 +152,9 @@ Present the full `requirements.md` content to the developer and ask:
 
 ✅ Developer has approved the requirements  
 ✅ `output/<AppName>/requirements.md` exists  
+✅ `output/<AppName>/workflow-state.json` exists with `requirementsApproved: true`  
+✅ `workflow-state.json.appName` equals `<AppName>`  
+✅ `workflow-state.json.requirementsSha256` matches `requirements.md`  
 ✅ Every entity has clear fields, types, and required/default info  
 ✅ Every lookup has seed data values  
 ✅ Pages have defined column/field layouts  

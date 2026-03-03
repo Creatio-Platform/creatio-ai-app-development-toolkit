@@ -62,10 +62,10 @@ Developer request + Creatio URL
 | Agent | Input | Output |
 |-------|-------|--------|
 | 1. Environment Setup | Developer request (URL optional) | `output/<App>/.creatio-env.json` |
-| 2. Requirements Gathering | Developer's app description | `output/<App>/requirements.md` |
-| 3. Implementation Plan | `requirements.md` | `output/<App>/plan.md` |
-| 4. Implementation | `plan.md` | `output/<App>/packages/<Pkg>/` (all files) |
-| 5. Deploy & Verification | `.creatio-env.json` + `packages/` | Deployment status report |
+| 2. Requirements Gathering | Developer's app description | `output/<App>/requirements.md` + `output/<App>/workflow-state.json` |
+| 3. Implementation Plan | `requirements.md` + `workflow-state.json` | `output/<App>/plan.md` |
+| 4. Implementation | `plan.md` + `workflow-state.json` | `output/<App>/packages/<Pkg>/` (all files) |
+| 5. Deploy & Verification | `.creatio-env.json` + `packages/` + `workflow-state.json` | Deployment status report |
 
 All inter-agent data is passed via markdown files in `output/<AppName>/`. Format: markdown with structured sections. See each agent's definition for expected format.
 
@@ -87,6 +87,25 @@ All inter-agent data is passed via markdown files in `output/<AppName>/`. Format
    - Group 3: Addons + data bindings — parallel
 7. **On failure**, the orchestrator decides: retry the agent, fix the issue, or report to the developer.
 8. **Do NOT proceed to Agent 5** if Agent 4 validation found errors.
+9. **Interactive approval gates have priority over autonomy**. If a gate is not passed, stop and wait.
+10. **Gate R (Requirements approval) is mandatory**:
+   - After Agent 2 draft is presented, the developer must reply with exact token `APPROVE_REQUIREMENTS`.
+   - Do not infer approval from any other wording.
+11. **Persist gate state immediately after approval** in `output/<AppName>/workflow-state.json`:
+   - `requirementsApproved: true`
+   - `approvalToken: "APPROVE_REQUIREMENTS"`
+   - `appName: "<AppName>"`
+   - `requirementsSha256: "<sha256(requirements.md)>"`
+   - `approvedBy: "<developer-identifier>"`
+   - `approvedAtUtc: "<ISO-8601 UTC timestamp>"`
+   - Use `scripts/write-approval-state.sh <AppName> "<approvedBy>"` to generate this file.
+12. **Before Gate R is approved, forbidden actions**:
+   - Do not create or modify `output/<AppName>/plan.md`
+   - Do not create or modify `output/<AppName>/packages/**`
+   - Do not run Agent 3, Agent 4, Agent 5
+13. **Agent 3/4/5 precondition**:
+   - Run `scripts/check-approval-gate.sh <AppName>`
+   - If command fails, hard stop and return blocker
 
 ## Global Rules
 
@@ -147,6 +166,9 @@ no-code-assistent/
 │   ├── page-creation/SKILL.md
 │   ├── data-bindings-creation/SKILL.md
 │   └── package-descriptor-creation/SKILL.md
+├── scripts/                     # Gate enforcement scripts
+│   ├── write-approval-state.sh
+│   └── check-approval-gate.sh
 ├── context/                     # Knowledge base (read-only reference)
 ├── templates/                   # File format templates (read-only reference)
 ├── examples/                    # Reference implementations
@@ -159,10 +181,10 @@ When a developer says "Create a <AppName> app on <URL>":
 
 ```
 1. Launch Agent 1 in background → wait for completion → verify .creatio-env.json
-2. Handle Agent 2 INTERACTIVELY → challenge idea → ask questions → get approval → save requirements.md
-3. Launch Agent 3 in background → wait for completion → verify plan.md
-4. Launch Agent 4 in background → wait for completion → verify all package files
-5. Launch Agent 5 in background → wait for completion → verify deployment
+2. Handle Agent 2 INTERACTIVELY → challenge idea → ask questions → get explicit token APPROVE_REQUIREMENTS → save requirements.md + workflow-state.json
+3. Run `scripts/check-approval-gate.sh <AppName>` → if pass, launch Agent 3 in background → wait for completion → verify plan.md
+4. Run `scripts/check-approval-gate.sh <AppName>` → if pass, launch Agent 4 in background → wait for completion → verify all package files
+5. Run `scripts/check-approval-gate.sh <AppName>` → if pass, launch Agent 5 in background → wait for completion → verify deployment
 ```
 
 **Example orchestration code:**
