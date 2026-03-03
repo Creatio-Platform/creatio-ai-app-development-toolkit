@@ -1,7 +1,7 @@
 ---
 name: entity-creation
-description: Generate Creatio entity schema files via MCP tools (entity.create / entity.create_lookup). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs. Falls back to manual generation if MCP is unavailable.
-compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/) or context/schema-reference.md for manual fallback
+description: Generate Creatio entity schema files via MCP tools (entity.create / entity.create_lookup). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs.
+compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/)
 metadata:
   version: "4.0"
   category: creatio-schema-generation
@@ -32,6 +32,12 @@ Use this skill when:
 1. Creatio running with MCP endpoint (default: `http://localhost:5001/`)
 2. Read `.creatio-env.json` for actual endpoint URL if different
 3. MCP endpoint must respond to `initialize` handshake
+
+## Hard Fail Policy
+
+- MCP usage is mandatory for entity generation.
+- Manual generation or manual editing of entity schema files is forbidden.
+- If MCP initialize or tool call fails after retries, stop and report blocker.
 
 ## Input Expected
 
@@ -268,6 +274,7 @@ Each column in `columnsJson` is a JSON object:
 6. **Use `dataValueTypeName` (string)** — not numeric IDs (e.g., `"ShortText"` not `1`)
 7. **packageUId must match** — use the same package GUID from plan.md for all entities
 8. **Write files locally** — parse response JSON and write files to `output/<AppName>/packages/<Pkg>/Schemas/<Entity>/`
+9. **Manual fallback is forbidden** — do not generate entity files from templates when MCP is unavailable
 
 ---
 
@@ -279,7 +286,7 @@ If MCP returns an error:
 - **Connection refused** — Creatio not running or MCP not enabled
 - **Timeout** — Creatio starting up, retry after 10s
 
-If MCP endpoint is unavailable, fall back to manual entity generation using templates from `templates/entity/` and format reference from `context/schema-reference.md`.
+Retry each MCP call up to 3 times with 10s delay. If still failing, stop and report blocker.
 
 ---
 

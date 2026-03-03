@@ -100,6 +100,10 @@ These rules apply across ALL agents:
 6. Use `clio push-pkg` for deploy — never OData API for schema creation
 7. Files are generated to `output/<AppName>/` directory
 8. Use `clio new-pkg` to create package skeleton, then modify descriptor.json
+9. Entity schemas MUST be generated only via MCP tools `entity.create_lookup` and `entity.create`
+10. Manual generation or manual editing of entity schema files is forbidden
+11. If MCP is unavailable or entity MCP generation fails after retries, stop and report blocker; do not continue to Agent 5
+12. Agent 4 MUST persist MCP evidence: `output/<AppName>/mcp-entity-report.md` and `output/<AppName>/mcp-logs/<EntityName>.json`
 
 ---
 

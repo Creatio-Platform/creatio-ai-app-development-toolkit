@@ -94,6 +94,20 @@ Create the file `output/<AppName>/.creatio-env.json`:
 Replace `true` with `false` if .NET Framework was detected in Step 4.
 For `mcpUrl`: if .NET Core, use `<URL>/mcp`; if .NET Framework (IIS), use `<URL>/0/mcp`.
 
+### 7. Verify MCP endpoint (MANDATORY)
+
+Run MCP initialize against `mcpUrl` from `.creatio-env.json` and verify response includes `Mcp-Session-Id` header:
+
+```bash
+curl -s -D- "<mcpUrl>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agent","version":"1.0"}}}'
+```
+
+- **Success** (session header exists) — environment setup is complete.
+- **Failure** — stop and report blocker to developer. Do not continue pipeline.
+
 ## Error Handling
 
 | Error | Action |
@@ -102,8 +116,10 @@ For `mcpUrl`: if .NET Core, use `<URL>/mcp`; if .NET Framework (IIS), use `<URL>
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
+| MCP initialize fails or no `Mcp-Session-Id` header | Verify `.creatio-env.json` `mcpUrl`, site reachability, and credentials. Stop pipeline until fixed. |
 
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ `output/<AppName>/.creatio-env.json` exists with correct values  
+✅ MCP initialize succeeds for `mcpUrl` and returns `Mcp-Session-Id`  

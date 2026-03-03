@@ -64,7 +64,7 @@ Keep only:
 
 Invoke the **Entity Creation** skill (`skills/entity-creation/SKILL.md`) for each entity defined in plan.md.
 
-**MCP approach (preferred):** The skill calls MCP tools on the running Creatio instance:
+**MCP approach (required):** The skill calls MCP tools on the running Creatio instance:
 1. Initialize MCP session: `POST <mcpUrl>` with `initialize` method
 2. For lookup entities: call `entity.create_lookup` tool
 3. For main entities: call `entity.create` tool with `columnsJson`
@@ -82,7 +82,19 @@ Schemas/<EntityName>/
   properties.json
 ```
 
-**Fallback:** If MCP endpoint is unavailable, generate files manually using templates from `templates/entity/` and format reference from `context/schema-reference.md`.
+For each entity, persist raw MCP response to:
+```
+output/<AppName>/mcp-logs/<EntityName>.json
+```
+
+Retry each MCP call up to 3 times with 10s delay. If it still fails, stop Agent 4 and report blocker.
+Manual generation or manual editing of entity schema files is forbidden.
+
+After Group 1 completes, create:
+```
+output/<AppName>/mcp-entity-report.md
+```
+Report must include, per entity: MCP endpoint, tool name, status, retries used, output schema path, and log file path.
 
 ### 6. Generate Pages (Group 2)
 
@@ -130,6 +142,8 @@ Run these validation checks before declaring success:
 - [ ] Every page from plan.md has a `Schemas/<PageName>/` directory with `descriptor.json`, `metadata.json`, and `<PageName>.js`
 - [ ] Every addon from plan.md has a `Schemas/<AddonName>/` directory with `descriptor.json` and `metadata.json`
 - [ ] Data binding directories exist under `Data/`
+- [ ] `output/<AppName>/mcp-entity-report.md` exists
+- [ ] `output/<AppName>/mcp-logs/<EntityName>.json` exists for every entity
 
 #### Cross-Reference Validation
 - [ ] Entity UIds referenced in page JS files match entity UIds in plan.md
@@ -165,4 +179,5 @@ Run these validation checks before declaring success:
 ✅ All cross-references validated  
 ✅ All JSON files are valid  
 ✅ No duplicate GUIDs  
+✅ MCP evidence files exist and confirm successful entity generation via MCP  
 ✅ Package is ready for `clio push-pkg`  
