@@ -1,9 +1,9 @@
 ---
 name: entity-creation
 description: Generate Creatio entity schema files via MCP tools (entity.create / entity.create_lookup). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs. Falls back to manual generation if MCP is unavailable.
-compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/mcp) or context/schema-reference.md for manual fallback
+compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/) or context/schema-reference.md for manual fallback
 metadata:
-  version: "3.0"
+  version: "4.0"
   category: creatio-schema-generation
 ---
 
@@ -18,7 +18,7 @@ Calls MCP tools on a running Creatio instance to generate entity schema files:
 - **entity.create_lookup** — Creates BaseLookup entities (Name + Description only)
 - **entity.check_name** — Validates entity name uniqueness
 
-Each entity produces 3 files: `descriptor.json`, `metadata.json`, `properties.json`.
+Each tool returns JSON with file contents (descriptor, metadata, properties). The agent writes them locally.
 
 ## When to Use
 
@@ -29,7 +29,7 @@ Use this skill when:
 
 ## Prerequisites
 
-1. Creatio running locally with MCP endpoint at `http://localhost:5001/mcp`
+1. Creatio running with MCP endpoint (default: `http://localhost:5001/`)
 2. Read `.creatio-env.json` for actual endpoint URL if different
 3. MCP endpoint must respond to `initialize` handshake
 
@@ -43,7 +43,7 @@ From `plan.md`, for each entity:
 - Columns array (BaseEntity only):
   - `name` — column name (starts with `Usr`)
   - `caption` — display name
-  - `dataValueType` — integer (see DataValueType table below)
+  - `dataValueTypeName` — string name (see DataValueType table below)
   - `isRequired` — boolean (optional, default false)
   - `referenceSchemaName` — for Lookup columns only
 
@@ -54,8 +54,8 @@ From `plan.md`, for each entity:
 ### Step 1: Initialize MCP Session
 
 ```bash
-# Get MCP endpoint from .creatio-env.json, default: http://localhost:5001/mcp
-MCP_URL="http://localhost:5001/mcp"
+# Get MCP endpoint from .creatio-env.json, default: http://localhost:5001/
+MCP_URL="http://localhost:5001/"
 
 # Initialize and capture Mcp-Session-Id header
 SESSION_ID=$(curl -s -D- "$MCP_URL" \
@@ -72,6 +72,7 @@ Before creating, verify the name is available:
 ```bash
 curl -s "$MCP_URL" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{
     "jsonrpc":"2.0","id":2,"method":"tools/call",
@@ -79,28 +80,40 @@ curl -s "$MCP_URL" \
   }'
 ```
 
-Returns `"Name 'UsrTodoTask' is available"` or error if taken.
+Returns `{"name":"UsrTodoTask","isUnique":true}` or `{"name":"UsrTodoTask","isUnique":false}`.
 
 ### Step 3a: Create BaseEntity (with columns)
 
 ```bash
 curl -s "$MCP_URL" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{
     "jsonrpc":"2.0","id":3,"method":"tools/call",
     "params":{
       "name":"entity.create",
       "arguments":{
-        "outputPath":"/absolute/path/to/output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask",
         "packageUId":"<package-guid>",
         "name":"UsrTodoTask",
         "caption":"Todo Task",
         "parentSchemaName":"BaseEntity",
-        "columnsJson":"[{\"name\":\"UsrTitle\",\"caption\":\"Title\",\"dataValueType\":1,\"isRequired\":true},{\"name\":\"UsrDescription\",\"caption\":\"Description\",\"dataValueType\":1},{\"name\":\"UsrStatus\",\"caption\":\"Status\",\"dataValueType\":10,\"referenceSchemaName\":\"UsrTodoTaskStatus\"}]"
+        "columnsJson":"[{\"name\":\"UsrTitle\",\"caption\":\"Title\",\"dataValueTypeName\":\"ShortText\",\"isRequired\":true},{\"name\":\"UsrDescription\",\"caption\":\"Description\",\"dataValueTypeName\":\"LongText\"},{\"name\":\"UsrStatus\",\"caption\":\"Status\",\"dataValueTypeName\":\"Lookup\",\"referenceSchemaName\":\"UsrTodoTaskStatus\"}]"
       }
     }
   }'
+```
+
+**Response:** JSON with file contents:
+```json
+{
+  "entityName": "UsrTodoTask",
+  "files": {
+    "descriptor": "{ \"Descriptor\": { \"UId\": \"...\", ... } }",
+    "metadata": "= MetaData.Schema.UId \"...\" ...",
+    "properties": "{ \"Properties\": { ... } }"
+  }
+}
 ```
 
 ### Step 3b: Create BaseLookup (no custom columns)
@@ -108,13 +121,13 @@ curl -s "$MCP_URL" \
 ```bash
 curl -s "$MCP_URL" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{
     "jsonrpc":"2.0","id":4,"method":"tools/call",
     "params":{
       "name":"entity.create_lookup",
       "arguments":{
-        "outputPath":"/absolute/path/to/output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTaskStatus",
         "packageUId":"<package-guid>",
         "name":"UsrTodoTaskStatus",
         "caption":"Todo Task Status"
@@ -123,9 +136,22 @@ curl -s "$MCP_URL" \
   }'
 ```
 
-### Step 4: Verify Files
+**Response:** Same JSON format as `entity.create`.
 
-After each MCP call, verify the files were created:
+### Step 4: Write Files Locally
+
+After receiving the response, write files to the output directory:
+
+```bash
+OUTPUT_DIR="output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask"
+mkdir -p "$OUTPUT_DIR"
+# Parse response JSON and write each file:
+# files.descriptor → descriptor.json
+# files.metadata   → metadata.json
+# files.properties → properties.json
+```
+
+### Step 5: Verify Files
 
 ```bash
 ls -la output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask/
@@ -136,47 +162,51 @@ ls -la output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask/
 
 ## DataValueType Reference
 
-| Type | ID | Description |
-|------|----|-------------|
-| ShortText | 1 | Up to 250 characters |
-| MediumText | 2 | Up to 500 characters |
-| LongText | 3 | Up to 500 characters |
-| MaxSizeText | 13 | Unlimited length |
-| Integer | 4 | 32-bit integer |
-| Float | 5 | Decimal number |
-| Money | 6 | Currency amount |
-| DateTime | 7 | Date and time |
-| Date | 8 | Date only |
-| Time | 9 | Time only |
-| Lookup | 10 | Reference to another entity |
-| Boolean | 12 | True/false |
-| Guid | 0 | UUID |
+| Type Name | Description |
+|-----------|-------------|
+| ShortText | Up to 250 characters |
+| MediumText | Up to 500 characters |
+| LongText | Up to 2500 characters |
+| MaxSizeText | Unlimited length |
+| Integer | 32-bit integer |
+| Float1 | Decimal (1 digit) |
+| Float2 | Decimal (2 digits) |
+| Float3 | Decimal (3 digits) |
+| Float4 | Decimal (4 digits) |
+| Money | Currency (2 digits) |
+| DateTime | Date and time |
+| Date | Date only |
+| Time | Time only |
+| Lookup | Reference to another entity |
+| Boolean | True/false |
+| Guid | UUID |
+| Image | Image reference |
 
 ---
 
 ## MCP Tools Reference
 
 ### entity.create
-Creates a BaseEntity entity with custom columns.
+Creates an entity with custom columns. Returns file contents in response.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| outputPath | string | ✅ | Absolute path for schema files |
 | packageUId | string | ✅ | Package GUID |
 | name | string | ✅ | Entity name (must start with `Usr`) |
 | caption | string | ✅ | Display name |
 | parentSchemaName | string | ❌ | Parent entity (default: `BaseEntity`) |
 | columnsJson | string | ❌ | JSON array of column definitions |
+| outputPath | string | ❌ | Server path to write files (omit for remote) |
 
 ### entity.create_lookup
-Creates a BaseLookup entity (Name + Description columns inherited).
+Creates a BaseLookup entity (Name + Description columns inherited). Returns file contents in response.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| outputPath | string | ✅ | Absolute path for schema files |
 | packageUId | string | ✅ | Package GUID |
 | name | string | ✅ | Entity name (must start with `Usr`) |
 | caption | string | ✅ | Display name |
+| outputPath | string | ❌ | Server path to write files (omit for remote) |
 
 ### entity.check_name
 Checks if entity name is unique in the schema manager.
@@ -186,14 +216,14 @@ Checks if entity name is unique in the schema manager.
 | name | string | ✅ | Entity name to check |
 
 ### entity.list_parents
-Lists available parent schemas with UIds.
+Lists available parent schemas with UIds. No parameters required.
 
-No parameters required.
+### entity.get_schema_info
+Gets UId and details of an existing entity schema.
 
-### entity.list_references
-Lists available reference schemas for lookup columns.
-
-No parameters required.
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| name | string | ✅ | Entity name to look up |
 
 ---
 
@@ -203,11 +233,11 @@ Each column in `columnsJson` is a JSON object:
 
 ```json
 {
-  "name": "UsrTitle",           // Required. Must start with Usr
-  "caption": "Title",           // Required. Display name
-  "dataValueType": 1,           // Required. See DataValueType table
-  "isRequired": true,           // Optional. Default: false
-  "referenceSchemaName": "UsrStatus"  // Required for Lookup (type 10)
+  "name": "UsrTitle",                    // Required. Must start with Usr
+  "caption": "Title",                    // Required. Display name
+  "dataValueTypeName": "ShortText",      // Required. See DataValueType table
+  "isRequired": true,                    // Optional. Default: false
+  "referenceSchemaName": "UsrStatus"     // Required for Lookup type
 }
 ```
 
@@ -235,15 +265,16 @@ Each column in `columnsJson` is a JSON object:
 3. **BaseLookup entities have NO custom columns** — use `entity.create_lookup`, not `entity.create`
 4. **Lookup columns need `referenceSchemaName`** — must point to an existing entity
 5. **Create lookups first** — before entities that reference them
-6. **outputPath must be absolute** — the MCP server writes files to this exact path
+6. **Use `dataValueTypeName` (string)** — not numeric IDs (e.g., `"ShortText"` not `1`)
 7. **packageUId must match** — use the same package GUID from plan.md for all entities
+8. **Write files locally** — parse response JSON and write files to `output/<AppName>/packages/<Pkg>/Schemas/<Entity>/`
 
 ---
 
 ## Error Handling
 
 If MCP returns an error:
-- **"Name is already in use"** — entity exists, check plan.md for conflicts
+- **"name must start with 'Usr' prefix"** — add Usr prefix to entity name
 - **"Parent schema not found"** — parentSchemaName doesn't exist in Creatio
 - **Connection refused** — Creatio not running or MCP not enabled
 - **Timeout** — Creatio starting up, retry after 10s
@@ -266,6 +297,6 @@ After generating all entities via MCP:
 
 ## Output
 
-Files are written by the MCP server to: `output/<AppName>/packages/<PackageName>/Schemas/<EntityName>/`
+Files are written by the agent to: `output/<AppName>/packages/<PackageName>/Schemas/<EntityName>/`
 
 When done, confirm: "Generated entity schema via MCP for `<EntityName>` — ready for the next entity or next skill."
