@@ -1,6 +1,6 @@
 ---
 name: entity-creation
-description: Generate Creatio entity schema files via MCP tools (entity.create / entity.create_lookup). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs.
+description: Generate and update Creatio entity schema files via MCP tools (entity.create / entity.create_lookup / entity.update). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs.
 compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/)
 metadata:
   version: "4.0"
@@ -16,6 +16,7 @@ Generate Creatio entity schema files by calling MCP tools on a running Creatio i
 Calls MCP tools on a running Creatio instance to generate entity schema files:
 - **entity.create** — Creates BaseEntity entities with custom columns
 - **entity.create_lookup** — Creates BaseLookup entities (Name + Description only)
+- **entity.update** — Regenerates an existing entity with updated columns (same UId)
 - **entity.check_name** — Validates entity name uniqueness
 
 Each tool returns JSON with file contents (descriptor, metadata, properties). The agent writes them locally.
@@ -214,6 +215,19 @@ Creates a BaseLookup entity (Name + Description columns inherited). Returns file
 | caption | string | ✅ | Display name |
 | outputPath | string | ❌ | Server path to write files (omit for remote) |
 
+### entity.update
+Regenerates an existing entity with updated columns/caption, preserving the same UId. Provide the FULL desired state (all columns) — this is a complete replace. Use when you need to add columns to an entity that was already created (e.g., adding a lookup column referencing an entity created later).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| entityUId | string | ✅ | Existing entity UId (from previous `entity.create` response) |
+| packageUId | string | ✅ | Package GUID |
+| name | string | ✅ | Entity name (must start with `Usr`) |
+| caption | string | ✅ | Display name |
+| parentSchemaName | string | ❌ | Parent entity (default: `BaseEntity`) |
+| columnsJson | string | ❌ | FULL JSON array of ALL desired columns |
+| outputPath | string | ❌ | Server path to write files (omit for remote) |
+
 ### entity.check_name
 Checks if entity name is unique in the schema manager.
 
@@ -260,6 +274,9 @@ Each column in `columnsJson` is a JSON object:
 
 2. Create main entities (BaseEntity) — may reference lookups
    entity.create → UsrTodoTask (with UsrStatus → UsrTodoTaskStatus)
+
+3. Update entities if cross-references needed — use entity.update
+   entity.update → UsrTodoTask (add UsrRelated → UsrOtherEntity)
 ```
 
 ---
