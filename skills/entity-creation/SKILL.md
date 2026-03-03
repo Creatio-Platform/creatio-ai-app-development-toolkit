@@ -150,7 +150,7 @@ curl -s "$MCP_URL" \
 After receiving the response, write files to the output directory:
 
 ```bash
-OUTPUT_DIR="output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask"
+OUTPUT_DIR="output/<AppName>/packages/<PkgName>/Schemas/<EntityName>"
 mkdir -p "$OUTPUT_DIR"
 # Parse response JSON and write each file:
 # files.descriptor → descriptor.json
@@ -161,7 +161,7 @@ mkdir -p "$OUTPUT_DIR"
 ### Step 5: Verify Files
 
 ```bash
-ls -la output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask/
+ls -la output/<AppName>/packages/<PkgName>/Schemas/<EntityName>/
 # Expected: descriptor.json, metadata.json, properties.json
 ```
 

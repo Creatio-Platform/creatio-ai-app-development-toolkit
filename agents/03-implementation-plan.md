@@ -2,149 +2,122 @@
 
 ## Role
 
-Transform approved requirements into technical plan with all GUIDs pre-generated.
+Transform approved requirements into a technical implementation plan with all GUIDs pre-generated.
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/requirements.md`, `output/<AppName>/workflow-state.json`
-- **Output:** `output/<AppName>/plan.md`
+- Input: `output/<AppName>/requirements.md`, `output/<AppName>/workflow-state.json`
+- Output: `output/<AppName>/plan.md`
 
 ## Context
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/schema-reference.md` for GUIDs/types, `context/essentials.md` for structure/naming).
-
----
+Read:
+- `context/schema-reference.md`
+- `context/essentials.md`
+- `context/data-bindings-reference.md`
 
 ## Steps
 
-### 0. Check Gate R Precondition (MANDATORY)
+### 0. Check Gate R (mandatory)
 
 Run:
 ```bash
 scripts/check-approval-gate.sh <AppName>
 ```
 
-The check validates:
-- `requirementsApproved` is `true`
-- `approvalToken` is exactly `APPROVE_REQUIREMENTS`
-- `appName` matches `<AppName>`
-- `requirementsSha256` matches current `requirements.md`
+If this fails, stop immediately and report blocker.
 
-If command fails, **stop immediately** and report blocker. Do not generate `plan.md`.
+### 1. Parse requirements
 
-### 1. Generate All GUIDs
+Extract:
+- Package name
+- Lookup entities and seed values
+- Main entities and columns
+- Pages (list/form)
+- Business rules affecting required/default fields
 
-Generate unique GUID (lowercase `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) for:
-- Package, entities, columns, pages, addons, bindings, records
+### 2. Generate GUID set
 
-### 2. Define Generation Order
+Generate unique lowercase GUIDs for:
+- Package UId
+- Entity UIds
+- Entity column UIds
+- Page UIds
+- Addon UIds
+- Data-binding descriptor UIds
+- Data-binding record Ids
+- Grid column ids in list page JS
+- Seed data record Ids
 
-Strict dependency order:
+### 3. Define generation order
+
+Use this strict order:
 1. Lookup entities (BaseLookup)
 2. Main entities (BaseEntity)
 3. List pages
 4. Form pages
 5. Addons
-6. Data bindings (SysModule, SysModuleEntity)
+6. Data bindings (SysModuleEntity, SysModule)
 7. Seed data
 
-### 3. Define Each Entity
+### 4. Build plan sections
 
-For every entity, write the following block:
+Create `plan.md` with these sections:
+- Package
+- Generation Order
+- Entities
+- Pages
+- Addons
+- Data Bindings
+- Lookup Seed Data
 
-```
-Entity: UsrTaskStatus
-UId: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-Parent: BaseLookup (11ab4bcb-9b23-4b6d-9c86-520fae925d75)
-Columns: (none — BaseLookup provides Name, Description)
-```
+For each entity include:
+- Name, UId, parent name and parent UId
+- Columns with: name, UId, DVT name, DVT GUID, numeric DVT
+- For lookup columns: referenced schema name + UId
 
-For entities with columns:
+For each page include:
+- Name, UId
+- Parent template + parent UId
+- Target entity
+- Grid columns (list page) or field layout (form page)
 
-```
-Entity: UsrTask
-UId: f9e8d7c6-b5a4-3210-fedc-ba0987654321
-Parent: BaseEntity (1bab9dcf-17d5-49f8-9536-8e0064f1dce0)
-Columns:
-  - UsrName: UId=11111111-2222-3333-4444-555555555555, DVT=Text(250) (8b3f29bb-ea14-4ce5-a5c5-293571e9d8b3) [numeric DVT=1]
-  - UsrDescription: UId=22222222-3333-4444-5555-666666666666, DVT=Text(500) (8b3f29bb-ea14-4ce5-a5c5-293571e9d8b3) [numeric DVT=1]
-  - UsrStatus: UId=33333333-4444-5555-6666-777777777777, DVT=Lookup (b295071f-7ea9-4e62-8d1a-919bf3732ff2) [numeric DVT=10], ReferenceSchema=UsrTaskStatus (a1b2c3d4-e5f6-7890-abcd-ef1234567890)
-  - UsrDueDate: UId=44444444-5555-6666-7777-888888888888, DVT=Date (d21e9ef4-c064-4012-b286-fa1a8171da2e) [numeric DVT=8]
-```
+For addons include:
+- Addon schema name + UId
+- Target entity UId
+- Form page UId
 
-### 4. Define Each Page
+For bindings include:
+- `SysModuleEntity_<Entity>` record Id + entity UId
+- `SysModule_<Entity>` record Id + refs to module entity/form/list page
+- Standard values from `context/data-bindings-reference.md`
 
-```
-ListPage: UsrTask_ListPage
-UId: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
-Parent: ListPageV3Template (b7b898d0-8b1c-4a64-8310-005c2e523c76)
-SchemaType: AngularSchema
-DataGrid columns: UsrName, UsrStatus, UsrDueDate
-```
+### 5. Validate plan consistency
 
-```
-FormPage: UsrTask_FormPage
-UId: bbbbbbbb-cccc-dddd-eeee-ffffffffffff
-Parent: PageWithTabsFreedomTemplate (3b2e117f-efac-49a2-a9f5-0f2e4e8f1496)
-SchemaType: AngularSchema
-Fields:
-  Row1: UsrName (Input)
-  Row2: UsrDescription (Input, multiline)
-  Row3: UsrStatus (ComboBox), UsrPriority (ComboBox)
-  Row4: UsrDueDate (DatePicker)
-```
+Check:
+- All GUIDs unique
+- All references resolvable
+- Lookup entities appear before entities that reference them
+- DVT GUIDs come only from `context/schema-reference.md`
+- Parent UIds come only from `context/schema-reference.md`
 
-### 5. Define Each Addon
+### 6. Save `plan.md`
 
-```
-Addon: UsrTask_FormPage_Addon
-UId: cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa
-TargetEntity: UsrTask (f9e8d7c6-b5a4-3210-fedc-ba0987654321)
-FormPage: UsrTask_FormPage (bbbbbbbb-cccc-dddd-eeee-ffffffffffff)
-```
-
-### 6. Define Data Bindings
-
-```
-SysModuleEntity:
-  Id: dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb
-  SysEntitySchemaUId: f9e8d7c6-b5a4-3210-fedc-ba0987654321 (UsrTask)
-
-SysModule:
-  Id: eeeeeeee-ffff-aaaa-bbbb-cccccccccccc
-  SysModuleEntityId: dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb
-  CardSchemaUId: bbbbbbbb-cccc-dddd-eeee-ffffffffffff (UsrTask_FormPage)
-  SectionSchemaUId: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee (UsrTask_ListPage)
-
-LookupSeed: UsrTaskStatus
-  Records:
-    - { Id: 11111111-aaaa-bbbb-cccc-dddddddddddd, Name: "New" }
-    - { Id: 22222222-aaaa-bbbb-cccc-dddddddddddd, Name: "In Progress" }
-    - { Id: 33333333-aaaa-bbbb-cccc-dddddddddddd, Name: "Done" }
-```
-
-### 7. Save plan.md
-
-Write the complete plan to `output/<AppName>/plan.md` with all sections above.
+Write final plan to:
+- `output/<AppName>/plan.md`
 
 ## Rules
 
-1. **Every GUID must be unique** across the entire plan. No duplicates anywhere.
-2. **Lookups before entities** — generation order matters because entities reference lookups.
-3. **DVT GUIDs must come from `context/entity-types.md`** — never invent DataValueType GUIDs.
-4. **Parent UIds must come from KNOWN_PARENTS** in `context/entity-types.md` — never invent parent GUIDs.
-5. **Do NOT include inherited columns** — `Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy` come from `BaseEntity`/`BaseLookup` automatically.
-6. **Column names must start with `Usr` prefix** — e.g., `UsrName`, `UsrStatus`.
-7. **Entity names must start with `Usr` prefix** — e.g., `UsrTask`, `UsrTaskStatus`.
-8. **Page names follow pattern** `<EntityName>_ListPage` and `<EntityName>_FormPage`.
-9. **Addon names follow pattern** `<EntityName>_FormPage_Addon`.
+1. Do not add inherited columns.
+2. All custom names start with `Usr`.
+3. Do not invent parent UIds or DVT GUIDs.
+4. Use `ListPageV3Template` for list pages and `PageWithTabsFreedomTemplate` for form pages.
+5. Keep plan deterministic and implementation-ready.
 
 ## Completion Criteria
 
-✅ `workflow-state.json` exists and confirms Gate R approval  
-✅ `output/<AppName>/plan.md` exists  
-✅ Every artifact has a unique GUID  
-✅ All DVT GUIDs match `context/entity-types.md`  
-✅ All parent UIds match KNOWN_PARENTS  
-✅ Cross-references are consistent (entity UIds used in pages/addons/bindings match entity definitions)  
-✅ Generation order is explicit: lookups → entities → pages → addons → bindings → seed data  
+- `workflow-state.json` confirms Gate R approval
+- `output/<AppName>/plan.md` exists
+- Every artifact has a unique GUID
+- DVT GUIDs and parent UIds match `context/schema-reference.md`
+- Cross-references are consistent across entities/pages/addons/bindings
