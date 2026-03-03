@@ -1,264 +1,271 @@
 ---
 name: entity-creation
-description: Generate Creatio entity schema files (descriptor.json, metadata.json, properties.json). Use when implementing entities from plan.md — creates 3 files per entity in Schemas/<EntityName>/ with correct DSL diff format, parent inheritance (BaseEntity/BaseLookup), and all required GUIDs.
-compatibility: Requires access to context/schema-reference.md and templates/entity/ directory
+description: Generate Creatio entity schema files via MCP tools (entity.create / entity.create_lookup). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs. Falls back to manual generation if MCP is unavailable.
+compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/mcp) or context/schema-reference.md for manual fallback
 metadata:
-  version: "2.0"
+  version: "3.0"
   category: creatio-schema-generation
 ---
 
-# Entity Schema File Generator
+# Entity Schema File Generator (MCP)
 
-Generate complete entity schema files for Creatio composable apps. Each entity produces exactly 3 files with proper inheritance and metadata.
+Generate Creatio entity schema files by calling MCP tools on a running Creatio instance. The platform generates correct DSL diff metadata automatically — no manual format construction needed.
 
 ## What This Skill Does
 
-Transforms entity definitions from `plan.md` into properly formatted Creatio schema files:
-- **descriptor.json** — Schema identity, parent reference, manager
-- **metadata.json** — DSL diff format with columns and configuration
-- **properties.json** — Property flags
+Calls MCP tools on a running Creatio instance to generate entity schema files:
+- **entity.create** — Creates BaseEntity entities with custom columns
+- **entity.create_lookup** — Creates BaseLookup entities (Name + Description only)
+- **entity.check_name** — Validates entity name uniqueness
+
+Each entity produces 3 files: `descriptor.json`, `metadata.json`, `properties.json`.
 
 ## When to Use
 
 Use this skill when:
-- Implementing entities defined in a technical plan
+- Implementing entities defined in plan.md
 - Creating new BaseEntity or BaseLookup entities
-- Need exact Creatio schema format with DSL diff syntax
+- Creatio is running with MCP endpoint available
+
+## Prerequisites
+
+1. Creatio running locally with MCP endpoint at `http://localhost:5001/mcp`
+2. Read `.creatio-env.json` for actual endpoint URL if different
+3. MCP endpoint must respond to `initialize` handshake
 
 ## Input Expected
 
-From `plan.md`, you need:
-- Entity name (e.g., `UsrTodoTask`)
-- Entity UId (pre-generated GUID)
-- Parent type (`BaseEntity` or `BaseLookup`)
-- Parent UId (from KNOWN_PARENTS)
-- Package UId
+From `plan.md`, for each entity:
+- Entity name (e.g., `UsrTodoTask`) — must start with `Usr`
+- Parent type: `BaseEntity` or `BaseLookup`
+- Package UId (GUID of the composable app package)
 - Caption (display name)
-- Columns array (for BaseEntity only — BaseLookup has no custom columns)
-
-Each column needs: `name`, `uid`, `dataValueType`, `dataValueTypeGuid`  
-Lookup columns also need: `lookupEntityUId`, `lookupFkColumn`, `lookupDisplayColumn`
-
-## Context to Read First
-
-Before generating, read:
-- `context/schema-reference.md` — For KNOWN_PARENTS, KNOWN_DVT, BASE_ENTITY_COLS
-- `templates/entity/base-entity/` OR `templates/entity/base-lookup/` — For exact format
-
-The templates are your source of truth for structure. Copy them and replace placeholders.
+- Columns array (BaseEntity only):
+  - `name` — column name (starts with `Usr`)
+  - `caption` — display name
+  - `dataValueType` — integer (see DataValueType table below)
+  - `isRequired` — boolean (optional, default false)
+  - `referenceSchemaName` — for Lookup columns only
 
 ---
 
 ## How It Works
 
-### 1. descriptor.json Format
+### Step 1: Initialize MCP Session
 
-Use this exact structure:
+```bash
+# Get MCP endpoint from .creatio-env.json, default: http://localhost:5001/mcp
+MCP_URL="http://localhost:5001/mcp"
+
+# Initialize and capture Mcp-Session-Id header
+SESSION_ID=$(curl -s -D- "$MCP_URL" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agent","version":"1.0"}}}' \
+  | grep -i "mcp-session-id" | cut -d' ' -f2 | tr -d '\r')
+```
+
+### Step 2: Check Entity Name (Optional)
+
+Before creating, verify the name is available:
+
+```bash
+curl -s "$MCP_URL" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc":"2.0","id":2,"method":"tools/call",
+    "params":{"name":"entity.check_name","arguments":{"name":"UsrTodoTask"}}
+  }'
+```
+
+Returns `"Name 'UsrTodoTask' is available"` or error if taken.
+
+### Step 3a: Create BaseEntity (with columns)
+
+```bash
+curl -s "$MCP_URL" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc":"2.0","id":3,"method":"tools/call",
+    "params":{
+      "name":"entity.create",
+      "arguments":{
+        "outputPath":"/absolute/path/to/output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask",
+        "packageUId":"<package-guid>",
+        "name":"UsrTodoTask",
+        "caption":"Todo Task",
+        "parentSchemaName":"BaseEntity",
+        "columnsJson":"[{\"name\":\"UsrTitle\",\"caption\":\"Title\",\"dataValueType\":1,\"isRequired\":true},{\"name\":\"UsrDescription\",\"caption\":\"Description\",\"dataValueType\":1},{\"name\":\"UsrStatus\",\"caption\":\"Status\",\"dataValueType\":10,\"referenceSchemaName\":\"UsrTodoTaskStatus\"}]"
+      }
+    }
+  }'
+```
+
+### Step 3b: Create BaseLookup (no custom columns)
+
+```bash
+curl -s "$MCP_URL" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc":"2.0","id":4,"method":"tools/call",
+    "params":{
+      "name":"entity.create_lookup",
+      "arguments":{
+        "outputPath":"/absolute/path/to/output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTaskStatus",
+        "packageUId":"<package-guid>",
+        "name":"UsrTodoTaskStatus",
+        "caption":"Todo Task Status"
+      }
+    }
+  }'
+```
+
+### Step 4: Verify Files
+
+After each MCP call, verify the files were created:
+
+```bash
+ls -la output/MyApp/packages/UsrMyApp/Schemas/UsrTodoTask/
+# Expected: descriptor.json, metadata.json, properties.json
+```
+
+---
+
+## DataValueType Reference
+
+| Type | ID | Description |
+|------|----|-------------|
+| ShortText | 1 | Up to 250 characters |
+| MediumText | 2 | Up to 500 characters |
+| LongText | 3 | Up to 500 characters |
+| MaxSizeText | 13 | Unlimited length |
+| Integer | 4 | 32-bit integer |
+| Float | 5 | Decimal number |
+| Money | 6 | Currency amount |
+| DateTime | 7 | Date and time |
+| Date | 8 | Date only |
+| Time | 9 | Time only |
+| Lookup | 10 | Reference to another entity |
+| Boolean | 12 | True/false |
+| Guid | 0 | UUID |
+
+---
+
+## MCP Tools Reference
+
+### entity.create
+Creates a BaseEntity entity with custom columns.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| outputPath | string | ✅ | Absolute path for schema files |
+| packageUId | string | ✅ | Package GUID |
+| name | string | ✅ | Entity name (must start with `Usr`) |
+| caption | string | ✅ | Display name |
+| parentSchemaName | string | ❌ | Parent entity (default: `BaseEntity`) |
+| columnsJson | string | ❌ | JSON array of column definitions |
+
+### entity.create_lookup
+Creates a BaseLookup entity (Name + Description columns inherited).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| outputPath | string | ✅ | Absolute path for schema files |
+| packageUId | string | ✅ | Package GUID |
+| name | string | ✅ | Entity name (must start with `Usr`) |
+| caption | string | ✅ | Display name |
+
+### entity.check_name
+Checks if entity name is unique in the schema manager.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| name | string | ✅ | Entity name to check |
+
+### entity.list_parents
+Lists available parent schemas with UIds.
+
+No parameters required.
+
+### entity.list_references
+Lists available reference schemas for lookup columns.
+
+No parameters required.
+
+---
+
+## Column Definition Format
+
+Each column in `columnsJson` is a JSON object:
 
 ```json
 {
-  "Descriptor": {
-    "UId": "<entityUId>",
-    "Name": "<entityName>",
-    "ModifiedOnUtc": "/Date(<timestamp>)/",
-    "Parent": {
-      "UId": "<parentUId>",
-      "Name": "<parentType>"
-    },
-    "ManagerName": "EntitySchemaManager",
-    "Caption": "<caption>",
-    "DependsOn": []
-  }
+  "name": "UsrTitle",           // Required. Must start with Usr
+  "caption": "Title",           // Required. Display name
+  "dataValueType": 1,           // Required. See DataValueType table
+  "isRequired": true,           // Optional. Default: false
+  "referenceSchemaName": "UsrStatus"  // Required for Lookup (type 10)
 }
 ```
 
-**Key points:**
-- `<timestamp>` = current milliseconds since Unix epoch
-- `Parent.UId` from KNOWN_PARENTS (BaseEntity: `1bab9dcf-17d5-49f8-9536-8e0064f1dce0`, BaseLookup: `11ab4bcb-9b23-4b6d-9c86-520fae925d75`)
-- Never add `ExtendParent` for new entities
-- `DependsOn` always `[]` for new entities
+---
 
-### 2. metadata.json — DSL Diff Format
+## Execution Order
 
-This is critical: metadata.json uses a DSL diff format, **not plain JSON**. Each line starts with an operator:
-
-- `=` (set/unchanged) — Setting a value
-- `+` (add) — Adding new content
-- `~` (reorder) — Reordering an array
-
-**Start with these lines** (replace placeholders):
+**Always create lookups before entities that reference them:**
 
 ```
-= MetaData.Schema.UId "<entityUId>"
-= MetaData.Schema.A2 "<entityName>"
-= MetaData.Schema.A5 "<packageUId>"
-= MetaData.Schema.B6 "<packageUId>"
-= MetaData.Schema.EG1.UId "<eventsProcessUId>"
-= MetaData.Schema.EG1.A2 "Entity_<hash>EventsProcess"
-= MetaData.Schema.EG1.A5 "<packageUId>"
-+ MetaData.Schema.EG1.B8 "0.0.0.0"
-= MetaData.Schema.EG1.BK8 "<processSchemaUId>"
-= MetaData.Schema.D8 "<parentUId>"
-+ MetaData.Schema.D29 "null"
-+ MetaData.Schema.D30 "null"
-+ MetaData.Schema.D31 "null"
+1. Create lookup entities (BaseLookup) — no dependencies
+   entity.create_lookup → UsrTodoTaskStatus
+   entity.create_lookup → UsrTodoTaskPriority
+
+2. Create main entities (BaseEntity) — may reference lookups
+   entity.create → UsrTodoTask (with UsrStatus → UsrTodoTaskStatus)
 ```
-
-Note: `<hash>` = random 7-char hex (e.g., `a3f2b1c`) for unique events process name.
-
-**Add custom columns** (BaseEntity only):
-
-For each column in your plan:
-
-```
-+ MetaData.Schema.D2 {
-  "UId": "<columnUId>",
-  "A2": "<columnName>",
-  "A3": "<entityUId>",
-  "A4": "<entityUId>",
-  "A5": "<packageUId>",
-  "S2": "<dataValueTypeGuid>"
-}
-```
-
-**For Lookup columns, add these fields inside the same block:**
-
-```json
-  "S4": "<lookupEntityUId>",
-  "E6": true,
-  "E9": true,
-  "E17": "<lookupFkColumn>",
-  "E18": "<lookupDisplayColumn>"
-```
-
-Note: E17 = FK column name (typically `<ColumnName>Id`), E18 = display column (typically `Name`).
-
-**Reorder array** — This lists ALL columns in order (inherited + custom):
-
-```
-~ MetaData.Schema.D2 [
-  "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",  // Id
-  "e80190a5-03b2-4095-90f7-a193a960adee",  // CreatedOn
-  "ebf6bb93-8aa6-4a01-900d-c6ea67affe21",  // CreatedBy
-  "9928edec-4272-425a-93bb-48743fee4b04",  // ModifiedOn
-  "3015559e-cbc6-406a-88af-07f7930be832",  // ModifiedBy
-  "3fabd836-6a53-4d8d-9069-6df88d9dae1e",  // ProcessListeners
-  "<column1Uid>",
-  "<column2Uid>"
-]
-```
-
-Note: List inherited columns first (UIds from BASE_ENTITY_COLS), then custom columns.
-
-**D20 block** — Copy this **exactly as-is**:
-
-```
-= MetaData.Schema.D20.A2 "<entityName>Events"
-+ MetaData.Schema.D20.FA1 false
-+ MetaData.Schema.D20.FA2 false
-+ MetaData.Schema.D20.FA3 false
-= MetaData.Schema.D20.FA4 false
-= MetaData.Schema.D20.FA5 false
-= MetaData.Schema.D20.FA6 false
-= MetaData.Schema.D20.FA7 false
-+ MetaData.Schema.D20.FA8 false
-+ MetaData.Schema.D20.FA9 false
-+ MetaData.Schema.D20.FA10 false
-= MetaData.Schema.D20.FA11 false
-= MetaData.Schema.D20.FA12 false
-+ MetaData.Schema.D20.FA16 false
-+ MetaData.Schema.D20.FA13 false
-+ MetaData.Schema.D20.FA14 false
-= MetaData.Schema.D20.FA15 false
-+ MetaData.Schema.D20.FA17 false
-```
-
-**Critical:** Copy operators (`=` vs `+`) exactly — they configure event handlers.
-
-**Admin rights and E16 flags:**
-
-```
-= MetaData.Schema.D36.A3 "<entityUId>"
-= MetaData.Schema.D36.BS1 false
-+ MetaData.Schema.B7 false
-+ MetaData.Schema.D2.["ae0e45ca-c495-4fe7-a39d-3ab7278e1617"].E16 false
-+ MetaData.Schema.D2.["e80190a5-03b2-4095-90f7-a193a960adee"].E16 false
-+ MetaData.Schema.D2.["ebf6bb93-8aa6-4a01-900d-c6ea67affe21"].E16 false
-+ MetaData.Schema.D2.["9928edec-4272-425a-93bb-48743fee4b04"].E16 false
-+ MetaData.Schema.D2.["3015559e-cbc6-406a-88af-07f7930be832"].E16 false
-+ MetaData.Schema.D2.["3fabd836-6a53-4d8d-9069-6df88d9dae1e"].E16 false
-```
-
-Note: E16 flags **only** for inherited BaseEntity columns, **not** custom columns.
-
-**For BaseLookup:** The structure is similar but simpler. No custom columns are added. The reorder array includes 8 UIds (6 from BaseEntity + 2 from BaseLookup: Name and Description). See `templates/entity/base-lookup/metadata.json` for the exact format.
-
-### 3. properties.json
-
-Always use this exact structure (same for both BaseEntity and BaseLookup):
-
-```json
-{
-  "Properties": {
-    "AdministratedByColumns": "False",
-    "AdministratedByOperations": "False",
-    "AdministratedByRecords": "False",
-    "CreatedInVersion": "0.0.0.0",
-    "IsSSPAvailable": "False",
-    "IsTrackChangesInDB": "False",
-    "IsVirtual": "False",
-    "UseLiveEditing": "False"
-  }
-}
-```
-
-Note: Standard values for custom entities in composable apps.
 
 ---
 
 ## Critical Rules
 
-**Never add inherited columns yourself:**
-- Id, CreatedOn, CreatedBy, ModifiedOn, ModifiedBy, ProcessListeners come from BaseEntity
-- Name, Description come from BaseLookup
-- If you add them manually, you'll create duplicates
+1. **Entity names must start with `Usr`** — the MCP tool validates this
+2. **Column names must start with `Usr`** — platform convention
+3. **BaseLookup entities have NO custom columns** — use `entity.create_lookup`, not `entity.create`
+4. **Lookup columns need `referenceSchemaName`** — must point to an existing entity
+5. **Create lookups first** — before entities that reference them
+6. **outputPath must be absolute** — the MCP server writes files to this exact path
+7. **packageUId must match** — use the same package GUID from plan.md for all entities
 
-**BaseLookup entities have NO custom columns:**
-- They only inherit Name + Description
-- If your plan shows a BaseLookup with custom columns, that's an error — flag it
+---
 
-**All GUIDs must be unique and lowercase:**
-- Format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-- Never reuse GUIDs across schemas
-- Generate new ones for: entityUId, eventsProcessUId, processSchemaUId, each columnUId
+## Error Handling
 
-**Operators matter in DSL diff:**
-- Copy the `=` vs `+` operators exactly from templates
-- Don't change them based on "logic" — they're specific to Creatio's merge system
+If MCP returns an error:
+- **"Name is already in use"** — entity exists, check plan.md for conflicts
+- **"Parent schema not found"** — parentSchemaName doesn't exist in Creatio
+- **Connection refused** — Creatio not running or MCP not enabled
+- **Timeout** — Creatio starting up, retry after 10s
 
-**E16 flags only for inherited columns:**
-- Add E16 for the 6 BaseEntity columns (or 8 if BaseLookup)
-- Never add E16 for your custom columns
+If MCP endpoint is unavailable, fall back to manual entity generation using templates from `templates/entity/` and format reference from `context/schema-reference.md`.
 
 ---
 
 ## Validation Checklist
 
-Before finalizing files, verify:
+After generating all entities via MCP:
 
-- ✅ Entity name starts with `Usr`
-- ✅ All column names start with `Usr`
-- ✅ All GUIDs are lowercase with dashes
-- ✅ No inherited columns in custom column definitions
-- ✅ Lookup columns have S4, E6, E17, E18 fields
-- ✅ Reorder array lists all inherited UIds + custom column UIds
-- ✅ D20 block copied exactly from template
-- ✅ E16 flags only for inherited columns
+- ✅ All entity directories exist under `Schemas/`
+- ✅ Each directory has: `descriptor.json`, `metadata.json`, `properties.json`
+- ✅ All `.json` files are valid JSON (parse without errors)
+- ✅ Entity names match plan.md
+- ✅ Package UIds are consistent across all entities
 
 ---
 
 ## Output
 
-Generate all 3 files directly to: `output/<AppName>/packages/<PackageName>/Schemas/<EntityName>/`
+Files are written by the MCP server to: `output/<AppName>/packages/<PackageName>/Schemas/<EntityName>/`
 
-When done, confirm: "Generated entity schema files for `<EntityName>` — ready for the next entity or next skill."
+When done, confirm: "Generated entity schema via MCP for `<EntityName>` — ready for the next entity or next skill."

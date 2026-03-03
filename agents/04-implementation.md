@@ -60,18 +60,29 @@ Keep only:
 - `Schemas/` directory
 - `Data/` directory
 
-### 5. Generate Entities (Group 1)
+### 5. Generate Entities (Group 1) — via MCP
 
-Invoke the **Entity Creation** skill (`skills/entity-creation.md`) for each entity defined in plan.md.
+Invoke the **Entity Creation** skill (`skills/entity-creation/SKILL.md`) for each entity defined in plan.md.
+
+**MCP approach (preferred):** The skill calls MCP tools on the running Creatio instance:
+1. Initialize MCP session: `POST <mcpUrl>` with `initialize` method
+2. For lookup entities: call `entity.create_lookup` tool
+3. For main entities: call `entity.create` tool with `columnsJson`
+4. The MCP server generates correct DSL diff files automatically
+
+**MCP endpoint:** Read from `output/<AppName>/.creatio-env.json` → `mcpUrl` field (default: `http://localhost:5001/mcp`).
 
 **Order matters**: Generate lookup entities (BaseLookup) first, then main entities (BaseEntity).
 
-For each entity, the skill creates:
+For each entity, the MCP tool creates:
 ```
 Schemas/<EntityName>/
   descriptor.json
   metadata.json
+  properties.json
 ```
+
+**Fallback:** If MCP endpoint is unavailable, generate files manually using templates from `templates/entity/` and format reference from `context/schema-reference.md`.
 
 ### 6. Generate Pages (Group 2)
 

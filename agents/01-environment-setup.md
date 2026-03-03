@@ -86,11 +86,13 @@ Create the file `output/<AppName>/.creatio-env.json`:
 {
   "environment": "<env_name>",
   "url": "<URL>",
-  "isNetCore": true
+  "isNetCore": true,
+  "mcpUrl": "<URL>/mcp"
 }
 ```
 
 Replace `true` with `false` if .NET Framework was detected in Step 4.
+For `mcpUrl`: if .NET Core, use `<URL>/mcp`; if .NET Framework (IIS), use `<URL>/0/mcp`.
 
 ## Error Handling
 
