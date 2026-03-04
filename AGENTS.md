@@ -12,6 +12,25 @@ You do NOT implement anything directly. You coordinate 5 agents in sequence:
 4. **Implementation** → generates package files via skills and templates
 5. **Deploy & Verification** → pushes, compiles, restarts, verifies
 
+## Mandatory Planning Start
+
+Run planning mode once at the beginning of each new app workflow, before Agent 1.
+
+Gate P is mandatory:
+- Developer must reply with exact token `APPROVE_PLAN`.
+- Gate P is a one-time gate for the workflow. Do not repeat it between Agent 1 → Agent 5.
+
+Before Gate P approval, forbidden:
+- Do not run Agent 1/2/3/4/5.
+- Do not run `clio` commands.
+- Do not create or modify files in `output/<AppName>/`.
+
+Planning step outcome:
+- Present a concise execution plan for all upcoming phases.
+- List key assumptions and risks.
+- Ask for exact approval token `APPROVE_PLAN`.
+- If token is not provided, continue planning refinement only.
+
 ## Source of Truth
 
 The canonical references for generation are:
@@ -30,6 +49,11 @@ Any legacy docs under `context/archived/` are reference-only and must not overri
 Developer request + Creatio URL
         │
         ▼
+┌─────────────────────────┐
+│ Gate P: Planning Start  │  Interactive planning response
+│ (APPROVE_PLAN)          │  Output: approved execution approach
+└────────────┬────────────┘
+             ▼
 ┌─────────────────────────┐
 │ Agent 1: Environment    │  Read: agents/01-environment-setup.md
 │ Setup                   │  Context: context/essentials.md
@@ -81,28 +105,30 @@ Developer request + Creatio URL
 
 ## Orchestration Rules
 
-1. Execute agents sequentially (1 → 2 → 3 → 4 → 5).
-2. Agents 1/3/4/5 run in background mode with `task(..., mode: "background")`.
-3. After launching a background agent, wait with `read_agent(agent_id, wait: true)`.
-4. Verify expected outputs exist and are non-empty before moving to the next agent.
-5. Agent 2 is interactive only. Never delegate it.
-6. Agent 4 implementation order:
+1. Start with Gate P planning step and get exact token `APPROVE_PLAN` once per workflow.
+2. Do not re-enter planning gate between agents after Gate P is approved.
+3. Execute agents sequentially (1 → 2 → 3 → 4 → 5).
+4. Agents 1/3/4/5 run in background mode with `task(..., mode: "background")`.
+5. After launching a background agent, wait with `read_agent(agent_id, wait: true)`.
+6. Verify expected outputs exist and are non-empty before moving to the next agent.
+7. Agent 2 is interactive only. Never delegate it.
+8. Agent 4 implementation order:
    - Step A: package descriptor via `skills/package-descriptor-creation/SKILL.md`
    - Group 1 (parallel): entity schemas via `skills/entity-creation/SKILL.md` (lookups first, then main entities)
    - Group 2 (parallel): page schemas via `skills/page-creation/SKILL.md`
    - Group 3 (parallel): addon schemas (from `templates/addons/`) + data bindings via `skills/data-bindings-creation/SKILL.md`
-7. On failure, decide: retry, fix, or report blocker.
-8. Do NOT proceed to Agent 5 if Agent 4 validation fails.
-9. Approval gates have priority over autonomy.
-10. Gate R is mandatory:
+9. On failure, decide: retry, fix, or report blocker.
+10. Do NOT proceed to Agent 5 if Agent 4 validation fails.
+11. Approval gates have priority over autonomy.
+12. Gate R is mandatory:
    - Developer must reply with exact token `APPROVE_REQUIREMENTS`.
-11. Persist gate state immediately after approval in `output/<AppName>/workflow-state.json` using:
+13. Persist gate state immediately after approval in `output/<AppName>/workflow-state.json` using:
    - `scripts/write-approval-state.sh <AppName> "<approvedBy>"`
-12. Before Gate R approval, forbidden:
+14. Before Gate R approval, forbidden:
    - Do not create/modify `output/<AppName>/plan.md`
    - Do not create/modify `output/<AppName>/packages/**`
    - Do not run Agent 3/4/5
-13. Agent 3/4/5 precondition:
+15. Agent 3/4/5 precondition:
    - Run `scripts/check-approval-gate.sh <AppName>`
    - On failure, hard-stop and report blocker
 
@@ -183,11 +209,12 @@ ai-driven-app-creation/
 
 When developer says "Create a <AppName> app on <URL>":
 
-1. Run Agent 1 in background → wait → verify `.creatio-env.json`.
-2. Run Agent 2 interactively → collect requirements → get exact `APPROVE_REQUIREMENTS`.
-3. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify package files.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 5 → verify deployment.
+1. Start with planning response and get exact `APPROVE_PLAN`.
+2. Run Agent 1 in background → wait → verify `.creatio-env.json`.
+3. Run Agent 2 interactively → collect requirements → get exact `APPROVE_REQUIREMENTS`.
+4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
+5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify package files.
+6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 5 → verify deployment.
 
 ## Example
 

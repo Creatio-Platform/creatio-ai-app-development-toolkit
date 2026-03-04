@@ -28,13 +28,16 @@ Do not use `context/archived/**` as primary guidance.
 ## Execution Rules
 
 1. Read `AGENTS.md` first.
-2. Run phases in order: setup → requirements → plan → implementation → deploy.
-3. Agents 1/3/4/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`.
-4. Agent 2 is interactive only and must not be delegated.
-5. Enforce Gate R token: `APPROVE_REQUIREMENTS`.
-6. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
-7. Generate entities only via MCP tools `entity.create_lookup` / `entity.create`.
-8. Use `clio push-pkg` for deployment.
+2. Start planning mode only at the beginning of a new app workflow and get exact token `APPROVE_PLAN`.
+3. Before `APPROVE_PLAN`: do not run agents, do not run `clio`, do not write `output/<AppName>/`.
+4. After `APPROVE_PLAN`, do not re-enter planning gate between agents.
+5. Run phases in order: setup → requirements → plan → implementation → deploy.
+6. Agents 1/3/4/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`.
+7. Agent 2 is interactive only and must not be delegated.
+8. Enforce Gate R token: `APPROVE_REQUIREMENTS`.
+9. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
+10. Generate entities only via MCP tools `entity.create_lookup` / `entity.create`.
+11. Use `clio push-pkg` for deployment.
 
 ## Agent 4 Skills
 
