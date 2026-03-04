@@ -2,16 +2,16 @@
 
 ## Role
 
-Push package to Creatio, compile, verify.
+Push generated package(s) to Creatio, compile, restart, and verify.
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/packages/<PkgName>/`, `.creatio-env.json`, `output/<AppName>/workflow-state.json`
+- **Input:** `output/<AppName>/packages/**`, `.creatio-env.json`, `output/<AppName>/workflow-state.json`
 - **Output:** Deployment status report (pass/fail per step)
 
 ## Context
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
+Read `AGENTS.md` and `context/essentials.md` for clio commands.
 
 ---
 
@@ -24,136 +24,106 @@ Run:
 scripts/check-approval-gate.sh <AppName>
 ```
 
-The check validates:
-- `requirementsApproved` is `true`
-- `approvalToken` is exactly `APPROVE_REQUIREMENTS`
-- `appName` matches `<AppName>`
-- `requirementsSha256` matches current `requirements.md`
-
-If command fails, **stop immediately** and report blocker. Do not deploy.
+If command fails, stop immediately and report blocker.
 
 ### 1. Read Environment
 
-Parse `.creatio-env.json` → extract `environment` name.
+Parse `.creatio-env.json` and extract:
+- `environment`
+- `url`
 
-### 2. Push Package
+### 2. Discover package paths
 
+Find package directories under:
+- `output/<AppName>/packages/`
+
+Rules:
+1. Include only directories containing root `descriptor.json`.
+2. Sort paths lexicographically for deterministic deploy order.
+3. If no package found, stop with blocker.
+
+### 3. First Push (all packages)
+
+For each package path:
 ```bash
-clio push-pkg "<absolute_path>" -e <env_name>
+clio push-pkg "<absolute_package_path>" -e <env_name>
 ```
 
-Expected: `"Package installed successfully"`  
-⚠️ Warning `"Sample cannot be built for virtual workspace item"` is **NORMAL** (ignore).
+Expected:
+- success message for each package
+- warnings about virtual workspace items are acceptable on first push
 
-### 3. Compile
+### 4. Compile
 
 ```bash
 clio compile-configuration -e <env_name>
 ```
 
-May take 1-5 min. On error → get log:
+On error:
 ```bash
 clio last-compilation-log -e <env_name>
 ```
+Stop and report blocker.
 
-### 4. Restart Application
+### 5. Restart Application
 
 ```bash
 clio restart-web-app -e <env_name>
 ```
 
-Wait for the restart to complete.
+Wait for restart completion.
 
-### 5. Healthcheck
+### 6. Healthcheck
 
 ```bash
 clio healthcheck -e <env_name>
 ```
 
-Verify the instance is healthy after restart.
+If failed, stop and report blocker.
 
-### 6. Second Push — Seed Data
+### 7. Second Push (seed/data stabilization)
 
+Repeat push for each package path:
 ```bash
-clio push-pkg "<absolute_path_to_package>" -e <env_name>
+clio push-pkg "<absolute_package_path>" -e <env_name>
 ```
 
-- After compilation, the database tables exist, so seed data (lookup values) should install without errors.
-- **Expected output**: `"Package installed successfully"` with no warnings about virtual workspace items.
+Goal:
+- ensure data objects and seed records are applied after compilation
 
-### 7. Verification
+### 8. Verification
 
-Perform all verification checks:
+Perform:
+1. Verify section URL(s) for generated app pages from requirements/plan.
+2. Verify lookup seed data via SQL checks for expected lookup entities.
+3. Confirm no failed package in push results.
 
-#### Section Visibility
-Check that the new section is accessible:
-```
-<base_url>/Shell#<MainEntityName>_ListPage
-```
-Report the full URL to the developer.
+### 9. Report Results
 
-#### Seed Data
-For each lookup entity, verify data was loaded:
-```bash
-clio execute-sql-script "SELECT Id, Name FROM <LookupEntityName>" -e <env_name>
-```
+Return a report:
+- package push status per package
+- compile status
+- restart status
+- healthcheck status
+- section URL checks
+- lookup data checks
 
-Confirm all expected records exist.
-
-### 8. Report Results
-
-Present a clear status report:
-
-```
-Deployment Report — <AppName>
-================================
-✅ Package pushed successfully
-✅ Compilation successful
-✅ Application restarted
-✅ Healthcheck passed
-✅ Seed data loaded
-✅ Section accessible at: <base_url>/Shell#<EntityName>_ListPage
-
-Lookup Data:
-  UsrTaskStatus: New, In Progress, Done ✅
-  UsrTaskPriority: Low, Medium, High, Critical ✅
-```
-
-If any step failed, use ❌ and include the error details.
-
-## Known Issues
-
-### Addon InvalidNameException on re-push
-**Symptom**: `InvalidNameException` when pushing a package that was previously deployed.  
-**Cause**: Addon `descriptor.json` contains `Parent: { Name: "" }` which Creatio rejects on update.  
-**Workaround**: Remove the `Parent` field entirely from addon `descriptor.json` before re-pushing.
-
-### Seed data fails on first push
-**Symptom**: Warnings about virtual workspace items, seed data records not created.  
-**Cause**: Database tables for new entities don't exist until after compilation.  
-**Solution**: This is handled by the two-push strategy (Steps 2 + 6). The first push installs schemas, compilation creates tables, the second push installs seed data.
-
-### Package dependency mismatch
-**Symptom**: `"Missing dependencies"` error during push.  
-**Cause**: `DependsOn` in `descriptor.json` references packages not present on the target instance.  
-**Solution**: Set `DependsOn: []` in the package `descriptor.json` (done during implementation phase).
+Use `✅`/`❌` per step.
 
 ## Troubleshooting
 
 | Problem | Diagnosis | Solution |
 |---------|-----------|----------|
-| Push fails | Check path — must be absolute. Verify `descriptor.json` exists at package root. | Fix path or regenerate package skeleton. |
-| Compilation fails | Run `clio last-compilation-log -e <env>`. | Check schema names match cross-references. Fix entity/page name mismatches. |
-| Section not visible | Check `SysModuleEntity.SysEntitySchemaUId` matches entity. Check `SysModule.SectionSchemaUId` and `CardSchemaUId` match pages. | Fix data binding GUIDs and re-push. |
-| Seed data missing after second push | Run SQL query to check table exists. | If table missing, compilation failed. Fix and recompile. |
-| Need full re-deploy | Delete and start fresh. | `clio delete-pkg-remote <PkgName> -e <env>`, then repeat from Step 2. |
+| No package folders found | Materialization failed in Agent 4 | Check `mcp-application-preview.json` and `mcp-application-report.md` |
+| Push fails | Invalid package path or descriptor | Verify package directory and `descriptor.json` |
+| Compilation fails | Schema/reference issue | Use `clio last-compilation-log` and fix generated artifacts |
+| Section not visible | Binding/page mismatch | Inspect generated Data schemas and page names |
+| Seed data missing | Data scripts not applied | Re-run second push after successful compile |
 
 ## Completion Criteria
 
-✅ `workflow-state.json` exists and confirms Gate R approval  
-✅ Package pushed successfully (both pushes)  
+✅ `workflow-state.json` confirms Gate R approval  
+✅ At least one package is discovered and pushed  
 ✅ Compilation completed without errors  
 ✅ Application restarted and healthy  
-✅ Section accessible via URL  
-✅ All seed data records present in database  
-✅ Status report delivered to developer  
+✅ Verification checks completed and reported  

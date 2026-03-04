@@ -109,6 +109,7 @@ Inspector запустить два сервери:
 | `entity.create` | Створення entity з колонками, повертає файли у відповіді |
 | `entity.create_lookup` | Створення lookup entity, повертає файли у відповіді |
 | `entity.check_name` | Перевірка чи ім'я entity вільне |
+| `application.create` | Генерація preview повного застосунку (packages + files) без запису в БД |
 
 ```
 ┌─ Tools ──────────────────────┐  ┌─ Select a tool ────────────┐
@@ -119,6 +120,7 @@ Inspector запустить два сервери:
 │ entity.create               ›│  │                            │
 │ entity.create_lookup        ›│  │                            │
 │ entity.check_name           ›│  │                            │
+│ application.create          ›│  │                            │
 └───────────────────────────────┘  └────────────────────────────┘
 ```
 
@@ -252,6 +254,28 @@ Tool Result: Success
    ```
 
 > 💡 Якщо outputPath не вказано — файли повертаються ТІЛЬКИ у JSON відповіді, на диск нічого не пишеться.
+
+---
+
+## Крок 11: Тестування application.create (preview)
+
+Цей tool повертає згенеровані пакети у JSON (без DB persistence).
+
+1. У списку tools натисніть **application.create**
+2. Заповніть поля:
+   - `name`: `Test App`
+   - `code`: `UsrTestApp`
+   - `templateCode`: `AppFreedomUI`
+   - `iconId`: валідний GUID з вашого `SysAppIcons`
+   - `iconBackground`: `#1F5F8B`
+   - `optionalTemplateDataJson`: `{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}`
+3. Натисніть **Run Tool**
+4. Очікуваний результат:
+   - у відповіді поле `content[0].text` містить JSON з `packages` і `meta.success=true`
+5. Типові помилки:
+   - `ERROR: iconId must be a valid GUID`
+   - `ERROR: Icon with id '...' was not found`
+   - `ERROR: useAIContentGeneration=true is not supported in preview mode`
 
 ---
 

@@ -1,58 +1,78 @@
 # TodoList — Requirements
 
 ## App Overview
-A simple task management application. Users can create, view, and manage tasks with statuses and priorities.
 
-## Package
-- Name: `UsrTodoList`
-- Dependencies: CrtBase, CrtCoreBase, CrtUIv2
+A simple task management application where users create tasks, assign status and priority, and manage tasks in list and form pages.
+
+## MCP Application Create Input
+
+- name: `Todo List`
+- code: `UsrTodoList`
+- templateCode: `AppFreedomUI`
+- description: `Simple task management application`
+- clientTypeId: `null`
+- optionalTemplateData:
+  - useExistingEntitySchema: `false`
+  - entitySchemaName: `""`
+  - appSectionDescription: `Manage todo tasks with statuses and priorities`
+  - useAIContentGeneration: `false`
+- icon:
+  - iconId: `auto`
+  - iconBackground: `auto`
 
 ## Entities
 
 ### UsrTodoTaskStatus (extends BaseLookup)
-Lookup for task statuses. Inherited columns: Name, Description.
 
-**Seed Data:**
-| Name | Description |
-|------|-------------|
-| New | Default status for new tasks |
-| In Progress | Task is being worked on |
-| Done | Task is completed |
+**Purpose**: Task status lookup.
+
+**Seed Data**:
+| Name |
+|------|
+| New |
+| In Progress |
+| Done |
 
 ### UsrTodoTaskPriority (extends BaseLookup)
-Lookup for task priorities. Inherited columns: Name, Description.
 
-**Seed Data:**
-| Name | Description |
-|------|-------------|
-| Low | Low priority |
-| Medium | Medium priority |
-| High | High priority |
+**Purpose**: Task priority lookup.
+
+**Seed Data**:
+| Name |
+|------|
+| Low |
+| Medium |
+| High |
 
 ### UsrTodoTask (extends BaseEntity)
-Primary entity for tasks.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| UsrTitle | Text (250) | Yes | Task title |
-| UsrDescription | Text (500) | No | Task description |
-| UsrStatus | Lookup → UsrTodoTaskStatus | No | Current status |
-| UsrPriority | Lookup → UsrTodoTaskPriority | No | Priority level |
-| UsrDueDate | DateTime | No | Due date |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| UsrTitle | Text (250) | Yes | — | Task title |
+| UsrDescription | Text (500) | No | — | Task description |
+| UsrStatus | Lookup → UsrTodoTaskStatus | Yes | New | Current status |
+| UsrPriority | Lookup → UsrTodoTaskPriority | No | Medium | Priority |
+| UsrDueDate | DateTime | No | — | Due date |
 
 ## Pages
 
 ### UsrTodoTask List Page
-Columns to display: UsrTitle, UsrStatus, UsrPriority, UsrDueDate, CreatedOn
+
+Columns: `UsrTitle`, `UsrStatus`, `UsrPriority`, `UsrDueDate`, `CreatedOn`
 
 ### UsrTodoTask Form Page
-Fields layout:
-1. UsrTitle (Text input)
-2. UsrStatus (ComboBox)
-3. UsrPriority (ComboBox)
-4. UsrDueDate (DateTimePicker)
-5. UsrDescription (Multiline text input)
+
+- Header: `UsrTitle`
+- Fields: `UsrTitle`, `UsrDescription`, `UsrStatus`, `UsrPriority`, `UsrDueDate`
+- Layout notes: single-column general tab
 
 ## Relationships
-- UsrTodoTask.UsrStatus → UsrTodoTaskStatus (Lookup)
-- UsrTodoTask.UsrPriority → UsrTodoTaskPriority (Lookup)
+
+- `UsrTodoTask.UsrStatus` → `UsrTodoTaskStatus`
+- `UsrTodoTask.UsrPriority` → `UsrTodoTaskPriority`
+
+## Business Rules
+
+- `UsrTitle` is required.
+- Default status is `New`.
+- `UsrDueDate` cannot be in the past for newly created tasks.

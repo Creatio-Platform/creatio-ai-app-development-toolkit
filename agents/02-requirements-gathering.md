@@ -2,7 +2,7 @@
 
 ## Role
 
-Analyze developer's app description, ask questions, produce structured requirements.
+Analyze developer's app description, ask questions, produce structured requirements including MCP `application.create` inputs.
 
 ## ⛔ INTERACTIVE — DO NOT DELEGATE
 
@@ -15,7 +15,7 @@ Analyze developer's app description, ask questions, produce structured requireme
 
 ## Context
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for platform capabilities).
+Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for platform capabilities and app-create flow).
 
 ---
 
@@ -23,45 +23,78 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.m
 
 ### 1. Challenge the Idea
 
-Analyze request, present full feature list:
+Analyze request, present full feature list and expected section scope:
 
 > "Based on your description, I see:
 > - Main entity: X with fields A, B, C
 > - Lookups: Status, Priority
 > - Pages: List + Form
-> 
+> - App creation via MCP `application.create`
+>
 > Does this match your vision?"
 
 Wait for confirmation before proceeding.
 
 ### 2. Ask Mandatory Questions
 
-Group logically, don't dump all at once:
+Group logically, do not dump all at once.
 
-**Entities:** "What are main objects? (I see: X, Y — anything else?)"
+Business scope:
+- Entities: "What are main objects? (I see: X, Y — anything else?)"
+- Fields: "What fields for main entity? Data types?"
+- Lookups: "Initial status values? Priority levels? Other dropdowns?"
+- Pages: "List view columns? Form page organization?"
+- Rules: "Required fields? Defaults? Validation?"
 
-**Fields:** "What fields for main entity? Data types?"
-
-**Lookups:** "Initial status values? Priority levels? Other dropdowns?"
-
-**Pages:** "List view columns? Form page organization?"
-
-**Rules:** "Required fields? Defaults? Validation?"
+MCP app-create inputs:
+- `name`: app display name
+- `code`: app code (must start with `Usr`)
+- `templateCode`: default `AppFreedomUI` unless developer requests another template
+- `description`: optional text
+- `clientTypeId`: optional GUID
+- `optionalTemplateData`:
+  - `useExistingEntitySchema` (bool)
+  - `entitySchemaName` (required if `useExistingEntitySchema=true`)
+  - `appSectionDescription` (optional)
+  - `useAIContentGeneration` (bool, preview mode does not support `true`)
+- `iconId` strategy:
+  - explicit `iconId` from developer, or
+  - auto-selection from `SysAppIcons` during implementation
+- `iconBackground` strategy:
+  - explicit value from developer, or
+  - deterministic palette pick during implementation
 
 ### 3. Iterate Until Clear
 
-Keep asking until complete picture. If vague → ask specifics.
+Keep asking until complete picture.
+If vague, ask specifics.
 
 ### 4. Generate requirements.md
 
-Write the requirements document in the following format:
+Write requirements document in this format:
 
 ```markdown
 # <AppName> — Requirements
 
 ## App Overview
 
-<2-3 sentence description of the app's purpose>
+<2-3 sentence description>
+
+## MCP Application Create Input
+
+- name: <Display Name>
+- code: <Usr...>
+- templateCode: <AppFreedomUI|...>
+- description: <optional>
+- clientTypeId: <optional GUID>
+- optionalTemplateData:
+  - useExistingEntitySchema: <true|false>
+  - entitySchemaName: <name or empty>
+  - appSectionDescription: <optional>
+  - useAIContentGeneration: <true|false>
+- icon:
+  - iconId: <GUID or `auto`>
+  - iconBackground: <hex or `auto`>
 
 ## Entities
 
@@ -71,11 +104,10 @@ Write the requirements document in the following format:
 |-------|------|----------|---------|-------------|
 | UsrName | Text (250) | Yes | — | Display name |
 | UsrStatus | Lookup → UsrEntityStatus | Yes | New | Current status |
-| ... | ... | ... | ... | ... |
 
 ### <LookupName> (extends BaseLookup)
 
-**Purpose**: <what this lookup represents>
+**Purpose**: <description>
 
 **Seed Data**:
 | Name |
@@ -91,7 +123,7 @@ Columns: UsrName, UsrStatus, UsrPriority, CreatedOn
 ### <EntityName> Form Page
 - Header: UsrName
 - Fields: UsrDescription, UsrStatus, UsrPriority, UsrDueDate
-- Layout notes: <any specific layout preferences>
+- Layout notes: <notes>
 
 ## Relationships
 
@@ -106,16 +138,12 @@ Columns: UsrName, UsrStatus, UsrPriority, CreatedOn
 
 ### 5. Get Approval
 
-Present the full `requirements.md` content to the developer and ask:
+Present full `requirements.md` content to developer and ask for exact token:
 
-> Here are the final requirements. Please review:
-> [requirements content]
->
-> Is everything correct? If approved, reply with exact token: `APPROVE_REQUIREMENTS`
+`APPROVE_REQUIREMENTS`
 
-- If the developer requests changes — update and re-present.
-- **Do NOT proceed to the next phase without explicit developer approval token `APPROVE_REQUIREMENTS`.**
-- Do not infer approval from other wording.
+- If developer requests changes, update and re-present.
+- Do not proceed without explicit token.
 
 ### 6. Persist Approval State (MANDATORY)
 
@@ -128,33 +156,23 @@ Use:
 scripts/write-approval-state.sh <AppName> "<approvedBy>"
 ```
 
-```json
-{
-  "requirementsApproved": true,
-  "approvalToken": "APPROVE_REQUIREMENTS",
-  "appName": "<AppName>",
-  "requirementsSha256": "<sha256(requirements.md)>",
-  "approvedBy": "<developer-identifier>",
-  "approvedAtUtc": "<ISO-8601 UTC timestamp>"
-}
-```
-
 ## Critical Rules
 
-1. **Output is ONLY business requirements** — NO GUIDs, NO technical schema details, NO file paths. Just entities, fields, lookups, seed data, pages, and rules.
-2. **All entity and field names must start with `Usr` prefix** (e.g., `UsrTask`, `UsrName`, `UsrStatus`).
-3. **Do NOT add inherited columns** — `Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy` come from `BaseEntity` automatically. Never list them as fields.
-4. **Enum-like fields must be separate lookup entities** — extends `BaseLookup`. Do not use hardcoded string enums.
-5. **One package per app** — all entities, pages, and lookups go into a single package named `Usr<AppName>`.
-6. **BaseLookup entities** already have `Name` column — do not re-add it. Only list `Name` values in the Seed Data section.
+1. Output is business requirements only. No GUID matrices, no generated file content.
+2. All entity and field names must start with `Usr`.
+3. Do not add inherited columns from `BaseEntity`.
+4. Enum-like fields must be separate lookup entities.
+5. One package per app (`Usr<AppName>`).
+6. `BaseLookup` already has `Name`; do not re-add it.
+7. If `useAIContentGeneration=true`, mark it as unsupported for preview mode and require change to `false` before implementation.
+8. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
 
 ## Completion Criteria
 
-✅ Developer has approved the requirements  
+✅ Developer approved with exact token  
 ✅ `output/<AppName>/requirements.md` exists  
 ✅ `output/<AppName>/workflow-state.json` exists with `requirementsApproved: true`  
 ✅ `workflow-state.json.appName` equals `<AppName>`  
 ✅ `workflow-state.json.requirementsSha256` matches `requirements.md`  
-✅ Every entity has clear fields, types, and required/default info  
-✅ Every lookup has seed data values  
-✅ Pages have defined column/field layouts  
+✅ Requirements include MCP app-create input section  
+✅ Entities/lookups/pages/rules are defined clearly  

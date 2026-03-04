@@ -1,138 +1,64 @@
 # TodoList — Implementation Plan
 
-## Package
+## App Summary
 
-```
-Package: UsrTodoList
-UId: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-DependsOn: CrtBase, CrtCoreBase, CrtUIv2
-```
+Generate Todo List application package(s) through MCP `application.create` and materialize preview files to local `output`.
 
-## Generation Order
+## Resolved MCP Payload
 
-1. Lookups: UsrTodoTaskStatus, UsrTodoTaskPriority
-2. Entities: UsrTodoTask
-3. Pages: UsrTodoTask_ListPage, UsrTodoTask_FormPage
-4. Addons: UsrTodoTask_FormPage_Addon
-5. Data Bindings: SysModuleEntity, SysModule, Lookup seed data
-
----
-
-## Entities
-
-### UsrTodoTaskStatus (extends BaseLookup)
-```
-UId: 11111111-aaaa-bbbb-cccc-000000000001
-Parent: BaseLookup (11ab4bcb-9b23-4b6d-9c86-520fae925d75)
-Columns: none (Name, Description inherited from BaseLookup)
+```json
+{
+  "name": "Todo List",
+  "code": "UsrTodoList",
+  "templateCode": "AppFreedomUI",
+  "iconId": "auto",
+  "iconBackground": "auto",
+  "description": "Simple task management application",
+  "optionalTemplateDataJson": "{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"Manage todo tasks with statuses and priorities\",\"useAIContentGeneration\":false}"
+}
 ```
 
-### UsrTodoTaskPriority (extends BaseLookup)
-```
-UId: 11111111-aaaa-bbbb-cccc-000000000002
-Parent: BaseLookup (11ab4bcb-9b23-4b6d-9c86-520fae925d75)
-Columns: none (Name, Description inherited from BaseLookup)
-```
+## Runtime Resolution Strategy
 
-### UsrTodoTask (extends BaseEntity)
-```
-UId: 22222222-aaaa-bbbb-cccc-000000000001
-Parent: BaseEntity (1bab9dcf-17d5-49f8-9536-8e0064f1dce0)
+### iconId
 
-Columns:
-  - UsrTitle
-    UId: 33333333-aaaa-0001-cccc-000000000001
-    DataValueType: Text (ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd) [DVT: 1]
+1. Query `SysAppIcons` with non-empty `Data`.
+2. Select deterministic first row ordered by `Name ASC`, tie-break `CreatedOn ASC`.
+3. If no record found, fallback to:
+   - `1205b66c-e5f8-4d90-a9db-02c5fe30d367`
 
-  - UsrDescription
-    UId: 33333333-aaaa-0001-cccc-000000000002
-    DataValueType: Text (ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd) [DVT: 1]
+### iconBackground
 
-  - UsrStatus
-    UId: 33333333-aaaa-0001-cccc-000000000003
-    DataValueType: Lookup (b295071f-7ea9-4e62-8d1a-919bf3732ff2) [DVT: 10]
-    ReferenceSchema: UsrTodoTaskStatus (11111111-aaaa-bbbb-cccc-000000000001)
+Deterministic pseudo-random by `code` over palette:
 
-  - UsrPriority
-    UId: 33333333-aaaa-0001-cccc-000000000004
-    DataValueType: Lookup (b295071f-7ea9-4e62-8d1a-919bf3732ff2) [DVT: 10]
-    ReferenceSchema: UsrTodoTaskPriority (11111111-aaaa-bbbb-cccc-000000000002)
+- `#1F5F8B`
+- `#2D8CFF`
+- `#16A085`
+- `#27AE60`
+- `#F39C12`
+- `#E67E22`
+- `#C0392B`
+- `#8E44AD`
 
-  - UsrDueDate
-    UId: 33333333-aaaa-0001-cccc-000000000005
-    DataValueType: DateTime (d21e9ef4-c064-4012-b286-fa1a8171da44) [DVT: 8]
-```
+## Expected Output Artifacts
 
----
+- `output/TodoList/packages/**`
+- `output/TodoList/mcp-application-preview.json`
+- `output/TodoList/mcp-application-report.md`
 
-## Pages
+## Validation Rules
 
-### UsrTodoTask_ListPage
-```
-UId: 44444444-aaaa-bbbb-cccc-000000000001
-Parent: ListPageV3Template (b7b898d0-8c77-4953-c097-23fa6800da02)
-Entity: UsrTodoTask
-DataGrid columns: UsrTitle, UsrStatus, UsrPriority, UsrDueDate, CreatedOn
-```
+1. MCP `tools/list` contains `application.create`.
+2. `application.create` response is successful and parseable.
+3. At least one package is returned.
+4. Every package has root `descriptor.json`.
+5. Generated JSON files parse successfully.
+6. Path traversal and absolute paths are rejected during materialization.
 
-### UsrTodoTask_FormPage
-```
-UId: 44444444-aaaa-bbbb-cccc-000000000002
-Parent: PageWithTabsFreedomTemplate (3b2e117f-8c6b-4ca5-80a2-7ebb497cddf9)
-Entity: UsrTodoTask
-Fields:
-  Row 1: UsrTitle (crt.Input)
-  Row 2: UsrStatus (crt.ComboBox)
-  Row 3: UsrPriority (crt.ComboBox)
-  Row 4: UsrDueDate (crt.DateTimePicker)
-  Row 5: UsrDescription (crt.Input)
-```
+## Blocker Conditions
 
----
-
-## Addons
-
-### UsrTodoTask_FormPage_Addon
-```
-UId: 55555555-aaaa-bbbb-cccc-000000000001
-TargetEntity: UsrTodoTask (22222222-aaaa-bbbb-cccc-000000000001)
-FormPage: UsrTodoTask_FormPage (44444444-aaaa-bbbb-cccc-000000000002)
-```
-
----
-
-## Data Bindings
-
-### SysModuleEntity_UsrTodoTask
-```
-RecordId: 66666666-aaaa-bbbb-cccc-000000000001
-EntitySchemaUId: 22222222-aaaa-bbbb-cccc-000000000001
-```
-
-### SysModule_UsrTodoTask
-```
-RecordId: 77777777-aaaa-bbbb-cccc-000000000001
-SysModuleEntityId: 66666666-aaaa-bbbb-cccc-000000000001
-Code: UsrTodoTask
-ListPageUId: 44444444-aaaa-bbbb-cccc-000000000001
-FormPageUId: 44444444-aaaa-bbbb-cccc-000000000002
-SectionModuleSchemaUId: 12244568-6d4f-f201-ed26-ac3913021080
-CardModuleUId: c3382be3-6619-9256-2260-93d87cf0d9b5
-IconBackground: #7848EE
-```
-
-### Lookup Seed Data
-
-**UsrTodoTaskStatus_Lookup:**
-| Id | Name |
-|----|------|
-| 88888888-aaaa-0001-cccc-000000000001 | New |
-| 88888888-aaaa-0001-cccc-000000000002 | In Progress |
-| 88888888-aaaa-0001-cccc-000000000003 | Done |
-
-**UsrTodoTaskPriority_Lookup:**
-| Id | Name |
-|----|------|
-| 88888888-aaaa-0002-cccc-000000000001 | Low |
-| 88888888-aaaa-0002-cccc-000000000002 | Medium |
-| 88888888-aaaa-0002-cccc-000000000003 | High |
+- MCP endpoint unavailable.
+- `application.create` missing in tools list.
+- `application.create` returns `ERROR:` text.
+- `meta.success=false` in preview payload.
+- No packages generated after preview.

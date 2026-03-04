@@ -8,8 +8,8 @@ You do NOT implement anything directly. You coordinate 5 agents in sequence:
 
 1. **Environment Setup** → configures clio connection
 2. **Requirements Gathering** → interactive Q&A with the developer (do NOT delegate to sub-agent)
-3. **Implementation Plan** → generates `plan.md` with GUIDs
-4. **Implementation** → generates package files via skills and templates
+3. **Implementation Plan** → generates MCP execution plan
+4. **Implementation** → generates package files via MCP `application.create`
 5. **Deploy & Verification** → pushes, compiles, restarts, verifies
 
 ## Mandatory Planning Start
@@ -68,21 +68,17 @@ Developer request + Creatio URL
              ▼
 ┌─────────────────────────┐
 │ Agent 3: Implementation │  Read: agents/03-implementation-plan.md
-│ Plan                    │  Context: context/schema-reference.md,
-│                         │           context/essentials.md
+│ Plan                    │  Context: context/essentials.md
 │                         │  Output: output/<App>/plan.md
 └────────────┬────────────┘
              ▼
 ┌─────────────────────────┐
 │ Agent 4: Implementation │  Read: agents/04-implementation.md
-│                         │  Skills: entity-creation, page-creation,
-│                         │          data-bindings-creation,
-│                         │          package-descriptor-creation
-│                         │  Context: schema-reference, ui-reference,
-│                         │           data-bindings-reference,
-│                         │           bindings-lookup
-│                         │  Templates: templates/
-│                         │  Output: output/<App>/packages/<Pkg>/**
+│                         │  Skill: application-creation
+│                         │  Context: essentials, ui, bindings
+│                         │  Output: output/<App>/packages/**
+│                         │          + mcp-application-preview.json
+│                         │          + mcp-application-report.md
 └────────────┬────────────┘
              ▼
 ┌─────────────────────────┐
@@ -100,7 +96,7 @@ Developer request + Creatio URL
 | 1. Environment Setup | Developer request (URL optional) | `output/<App>/.creatio-env.json` |
 | 2. Requirements Gathering | Developer app description | `output/<App>/requirements.md` + `output/<App>/workflow-state.json` |
 | 3. Implementation Plan | `requirements.md` + `workflow-state.json` | `output/<App>/plan.md` |
-| 4. Implementation | `plan.md` + `workflow-state.json` | `output/<App>/packages/<Pkg>/` |
+| 4. Implementation | `plan.md` + `workflow-state.json` + `.creatio-env.json` | `output/<App>/packages/**` + MCP preview artifacts |
 | 5. Deploy & Verification | `.creatio-env.json` + `packages/` + `workflow-state.json` | Deployment status report |
 
 ## Orchestration Rules
@@ -113,10 +109,11 @@ Developer request + Creatio URL
 6. Verify expected outputs exist and are non-empty before moving to the next agent.
 7. Agent 2 is interactive only. Never delegate it.
 8. Agent 4 implementation order:
-   - Step A: package descriptor via `skills/package-descriptor-creation/SKILL.md`
-   - Group 1 (parallel): entity schemas via `skills/entity-creation/SKILL.md` (lookups first, then main entities)
-   - Group 2 (parallel): page schemas via `skills/page-creation/SKILL.md`
-   - Group 3 (parallel): addon schemas (from `templates/addons/`) + data bindings via `skills/data-bindings-creation/SKILL.md`
+   - Step A: prepare and validate `application.create` payload from `plan.md`
+   - Step B: call MCP `tools/list` and verify `application.create` is available
+   - Step C: call MCP `tools/call` for `application.create`
+   - Step D: persist raw preview and materialize returned package files
+   - Step E: validate package structure and JSON integrity
 9. On failure, decide: retry, fix, or report blocker.
 10. Do NOT proceed to Agent 5 if Agent 4 validation fails.
 11. Approval gates have priority over autonomy.
@@ -135,36 +132,30 @@ Developer request + Creatio URL
 ## Global Rules
 
 1. All entity/page/package names start with `Usr` prefix.
-2. Every GUID must be unique.
-3. Entities must inherit from BaseEntity or BaseLookup.
-4. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`).
-5. Enum-like fields must be separate lookup entities (BaseLookup).
+2. Use MCP `application.create` as the primary generation path for full app creation.
+3. Entity-level MCP tools (`entity.create`, `entity.create_lookup`, `entity.update`) are not the primary path for full app generation.
+4. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
+5. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
 6. Use `clio push-pkg` for deploy. Do not use OData for schema creation.
 7. Generate files only in `output/<AppName>/`.
-8. Use `clio new-pkg` to create skeleton, then update descriptor.
-9. Entity schemas must be generated only via MCP tools `entity.create_lookup` and `entity.create`.
-10. Manual generation or manual editing of entity schema files is forbidden.
-11. If MCP is unavailable or entity generation fails after retries, stop and report blocker.
-12. Agent 4 must persist MCP evidence:
-   - `output/<AppName>/mcp-entity-report.md`
-   - `output/<AppName>/mcp-logs/<EntityName>.json`
+8. If MCP endpoint is unavailable or `application.create` is missing, stop and report blocker.
+9. Agent 4 must persist MCP evidence:
+   - `output/<AppName>/mcp-application-preview.json`
+   - `output/<AppName>/mcp-application-report.md`
 
 ## Context Files Reference
 
 | File | Contains | When to Read |
 |------|----------|--------------|
-| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always |
-| `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 |
+| `context/essentials.md` | Platform basics, naming, package structure, clio commands, MCP app create flow | Always |
+| `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
 | `context/ui-reference.md` | Freedom UI page structure and controls | Agent 4 |
 | `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |
 | `context/data-bindings-reference.md` | Binding logic and standard values | Agent 4 |
 
 ## Skills (Agent 4)
 
-- `skills/entity-creation/SKILL.md`
-- `skills/page-creation/SKILL.md`
-- `skills/data-bindings-creation/SKILL.md`
-- `skills/package-descriptor-creation/SKILL.md`
+- `skills/application-creation/SKILL.md`
 
 ## Templates
 
@@ -186,6 +177,7 @@ ai-driven-app-creation/
 │   ├── 04-implementation.md
 │   └── 05-deploy-verification.md
 ├── skills/
+│   ├── application-creation/SKILL.md
 │   ├── entity-creation/SKILL.md
 │   ├── page-creation/SKILL.md
 │   ├── data-bindings-creation/SKILL.md
@@ -211,9 +203,9 @@ When developer says "Create a <AppName> app on <URL>":
 
 1. Start with planning response and get exact `APPROVE_PLAN`.
 2. Run Agent 1 in background → wait → verify `.creatio-env.json`.
-3. Run Agent 2 interactively → collect requirements → get exact `APPROVE_REQUIREMENTS`.
+3. Run Agent 2 interactively → collect requirements (including MCP app-create inputs) → get exact `APPROVE_REQUIREMENTS`.
 4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify package files.
+5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify package files and MCP preview artifacts.
 6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 5 → verify deployment.
 
 ## Example

@@ -36,15 +36,14 @@ Do not use `context/archived/**` as primary guidance.
 7. Agent 2 is interactive only and must not be delegated.
 8. Enforce Gate R token: `APPROVE_REQUIREMENTS`.
 9. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
-10. Generate entities only via MCP tools `entity.create_lookup` / `entity.create`.
-11. Use `clio push-pkg` for deployment.
+10. For full app creation, use MCP `application.create` as the primary generation path.
+11. Validate `application.create` presence via `tools/list` before implementation.
+12. Persist implementation evidence to `mcp-application-preview.json` and `mcp-application-report.md`.
+13. Use `clio push-pkg` for deployment.
 
 ## Agent 4 Skills
 
-- `skills/package-descriptor-creation/SKILL.md`
-- `skills/entity-creation/SKILL.md`
-- `skills/page-creation/SKILL.md`
-- `skills/data-bindings-creation/SKILL.md`
+- `skills/application-creation/SKILL.md`
 
 Addons are generated from `templates/addons/` during implementation (no separate addon skill file).
 

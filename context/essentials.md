@@ -11,6 +11,11 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - Packages can depend on other packages (via `DependsOn` in descriptor.json)
 - Deploy via `clio push-pkg` command
 
+**MCP Application Preview**
+- Primary generation path is MCP tool `application.create`
+- Tool returns package preview JSON (files + encoding), without database persistence
+- Generated preview must be materialized to `output/<AppName>/packages/**` before deploy
+
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)
 - UI described via `viewConfigDiff` — array of operations (merge, insert, remove, move)
@@ -115,14 +120,62 @@ packages/<PackageName>/
 
 ### Generation Order
 
-Generate in this order for referential integrity:
+Primary generation flow:
 
-1. **Package descriptor** — root `descriptor.json`
-2. **Lookup entities** — extends BaseLookup
-3. **Main entities** — with lookup columns
-4. **Pages** — List + Form pages
-5. **Addons** — Link entities to forms
-6. **Data bindings** — SysModule, SysModuleEntity, seed data
+1. Build MCP payload for `application.create`
+2. Initialize MCP session and validate tool availability (`tools/list`)
+3. Execute `application.create`
+4. Persist raw preview
+5. Materialize preview files into `output/<AppName>/packages/**`
+6. Validate generated package structure and JSON integrity
+
+### MCP `application.create` Input
+
+Required:
+- `name`
+- `code` (must start with `Usr`)
+- `templateCode`
+- `iconId` (GUID)
+- `iconBackground` (hex color)
+
+Optional:
+- `description`
+- `clientTypeId` (GUID)
+- `optionalTemplateDataJson` with:
+  - `useExistingEntitySchema`
+  - `entitySchemaName`
+  - `appSectionDescription`
+  - `useAIContentGeneration`
+
+Validation notes:
+- `iconId` and `clientTypeId` must be valid GUIDs
+- preview mode does not support `useAIContentGeneration=true`
+- tool must exist in `tools/list` before execution
+
+### MCP Request Example
+
+```bash
+curl -s "$MCP_URL" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":2,
+    "method":"tools/call",
+    "params":{
+      "name":"application.create",
+      "arguments":{
+        "name":"Task App",
+        "code":"UsrTaskApp",
+        "templateCode":"AppFreedomUI",
+        "iconId":"1205b66c-e5f8-4d90-a9db-02c5fe30d367",
+        "iconBackground":"#1F5F8B",
+        "optionalTemplateDataJson":"{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"\",\"useAIContentGeneration\":false}"
+      }
+    }
+  }'
+```
 
 ---
 
@@ -221,7 +274,7 @@ clio install-gate -e myenv
 ## Deploy Flow Diagram
 
 ```
-Generate files → clio push-pkg → compile-configuration → restart-web-app → verify
+MCP application.create → materialize files → clio push-pkg → compile-configuration → restart-web-app → verify
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 ## Role
 
-Transform approved requirements into a technical implementation plan with all GUIDs pre-generated.
+Transform approved requirements into a deterministic MCP execution plan for `application.create`.
 
 ## Input/Output
 
@@ -12,8 +12,8 @@ Transform approved requirements into a technical implementation plan with all GU
 ## Context
 
 Read:
-- `context/schema-reference.md`
 - `context/essentials.md`
+- `context/ui-reference.md`
 - `context/data-bindings-reference.md`
 
 ## Steps
@@ -30,94 +30,67 @@ If this fails, stop immediately and report blocker.
 ### 1. Parse requirements
 
 Extract:
-- Package name
-- Lookup entities and seed values
-- Main entities and columns
-- Pages (list/form)
-- Business rules affecting required/default fields
+- app overview and business scope
+- entities/lookups/pages/rules
+- MCP `application.create` input block
 
-### 2. Generate GUID set
+### 2. Resolve MCP payload
 
-Generate unique lowercase GUIDs for:
-- Package UId
-- Entity UIds
-- Entity column UIds
-- Page UIds
-- Addon UIds
-- Data-binding descriptor UIds
-- Data-binding record Ids
-- Grid column ids in list page JS
-- Seed data record Ids
+Build final payload fields for Agent 4:
+- `name`
+- `code`
+- `templateCode`
+- `iconId`
+- `iconBackground`
+- `description` (nullable)
+- `clientTypeId` (nullable)
+- `optionalTemplateDataJson` (JSON string)
 
-### 3. Define generation order
+Resolution rules:
+1. `code` must start with `Usr`.
+2. If `templateCode` is empty, use `AppFreedomUI`.
+3. If `optionalTemplateData.useExistingEntitySchema=true`, require `entitySchemaName`.
+4. `optionalTemplateData.useAIContentGeneration` must be `false` for preview mode.
+5. `iconId`:
+   - use explicit value if provided in requirements,
+   - otherwise mark as `auto` and document runtime selection strategy for Agent 4.
+6. `iconBackground`:
+   - use explicit value if provided in requirements,
+   - otherwise mark as `auto` and document deterministic palette selection strategy for Agent 4.
 
-Use this strict order:
-1. Lookup entities (BaseLookup)
-2. Main entities (BaseEntity)
-3. List pages
-4. Form pages
-5. Addons
-6. Data bindings (SysModuleEntity, SysModule)
-7. Seed data
+### 3. Build plan sections
 
-### 4. Build plan sections
+Create `plan.md` with sections:
+- App Summary
+- MCP Payload (resolved and validated)
+- Runtime Resolution Strategy (`iconId` and `iconBackground`)
+- Expected Output Artifacts
+- Validation Rules
+- Blocker Conditions
 
-Create `plan.md` with these sections:
-- Package
-- Generation Order
-- Entities
-- Pages
-- Addons
-- Data Bindings
-- Lookup Seed Data
-
-For each entity include:
-- Name, UId, parent name and parent UId
-- Columns with: name, UId, DVT name, DVT GUID, numeric DVT
-- For lookup columns: referenced schema name + UId
-
-For each page include:
-- Name, UId
-- Parent template + parent UId
-- Target entity
-- Grid columns (list page) or field layout (form page)
-
-For addons include:
-- Addon schema name + UId
-- Target entity UId
-- Form page UId
-
-For bindings include:
-- `SysModuleEntity_<Entity>` record Id + entity UId
-- `SysModule_<Entity>` record Id + refs to module entity/form/list page
-- Standard values from `context/data-bindings-reference.md`
-
-### 5. Validate plan consistency
+### 4. Validation checks
 
 Check:
-- All GUIDs unique
-- All references resolvable
-- Lookup entities appear before entities that reference them
-- DVT GUIDs come only from `context/schema-reference.md`
-- Parent UIds come only from `context/schema-reference.md`
+- required payload fields are present
+- GUID format validity for explicit `iconId` and explicit `clientTypeId`
+- `optionalTemplateDataJson` is valid JSON
+- no unsupported values remain (`useAIContentGeneration=true`)
 
-### 6. Save `plan.md`
+### 5. Save `plan.md`
 
 Write final plan to:
 - `output/<AppName>/plan.md`
 
 ## Rules
 
-1. Do not add inherited columns.
-2. All custom names start with `Usr`.
-3. Do not invent parent UIds or DVT GUIDs.
-4. Use `ListPageV3Template` for list pages and `PageWithTabsFreedomTemplate` for form pages.
-5. Keep plan deterministic and implementation-ready.
+1. Keep plan deterministic and execution-ready.
+2. Do not create GUID matrices manually for all schemas.
+3. Do not include generated file bodies in plan.
+4. Plan must be sufficient for a single MCP call + local materialization.
 
 ## Completion Criteria
 
-- `workflow-state.json` confirms Gate R approval
-- `output/<AppName>/plan.md` exists
-- Every artifact has a unique GUID
-- DVT GUIDs and parent UIds match `context/schema-reference.md`
-- Cross-references are consistent across entities/pages/addons/bindings
+✅ Gate R passed  
+✅ `output/<AppName>/plan.md` exists  
+✅ MCP payload is fully resolved or has explicit runtime resolution rules  
+✅ Explicit validations and blocker conditions are documented  
