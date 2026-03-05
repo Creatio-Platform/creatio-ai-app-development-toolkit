@@ -1,6 +1,6 @@
 ---
 name: application-creation
-description: Generate full Creatio application package previews via MCP tool application.create and materialize files locally.
+description: Create a full Creatio application via MCP tool application.create and persist normalized result artifacts.
 compatibility: Requires running Creatio MCP endpoint with application.create tool available.
 metadata:
   version: "1.0"
@@ -9,12 +9,11 @@ metadata:
 
 # Application Creation via MCP
 
-Use MCP `application.create` as the primary generation flow for a full app package preview.
+Use MCP `application.create` as the primary DB-first flow for full app creation, with fallback parsing for legacy preview responses.
 
 ## Outputs
 
-- `output/<AppName>/packages/**`
-- `output/<AppName>/mcp-application-preview.json`
+- `output/<AppName>/mcp-application-result.json`
 - `output/<AppName>/mcp-application-report.md`
 
 ## Required Inputs
@@ -76,36 +75,40 @@ curl -s "<mcpUrl>" \
 
 `tools/call` response content is text.
 
-Possible cases:
-1. Text starts with `ERROR:` → fail.
-2. Text is JSON preview payload:
-   - parse as `GeneratedApplicationPreview`
-   - require `meta.success=true`
-   - require non-empty `packages`
+Expected text payload can be one of:
 
-## Materialization Rules
+1. `short` contract:
+   - `success` (boolean)
+   - `message` (string)
+   - `appId` (GUID when success=true)
+   - `error` object when success=false
 
-For each package in preview:
-- create `output/<AppName>/packages/<packageName>/`
-- iterate `files` dictionary
+2. `preview` contract:
+   - `meta.success` (boolean)
+   - `packages` (array)
+   - optional `meta.message`, `meta.appId`
 
-For each file:
-- if `encoding=utf-8`: write text as UTF-8
-- if `encoding=base64`: decode and write bytes
-- reject absolute paths
-- reject `..` path traversal
+Normalize parsed result and persist:
+- `success`
+- `message`
+- `appId`
+- `error`
+- `contractType` (`short` or `preview`)
+- `previewPackages` and `previewMeta` for preview contract
 
 ## Validation Checklist
 
-- at least one package materialized
-- each package has root `descriptor.json`
-- generated JSON files parse successfully
-- no unsafe path was written
-- preview persisted to `mcp-application-preview.json`
+- response text parses as JSON
+- `success` field exists
+- if `contractType=short` and `success=true`, `appId` is non-empty GUID
+- if `contractType=preview` and `success=true`, `previewPackages` is non-empty
+- if `success=false`, `message` is non-empty
+- result persisted to `mcp-application-result.json`
 - summary persisted to `mcp-application-report.md`
 
 ## Retry and Failure Policy
 
 - Retry MCP calls up to 3 times with 10s delay for transient failures.
 - If `application.create` is missing in `tools/list`, stop with blocker.
-- If icon cannot be resolved and fallback also fails in runtime, stop with blocker.
+- If result has `success=false`, stop with blocker and surface `message`.
+- For `ERROR:` plain-text responses, stop with blocker and persist raw response in report.

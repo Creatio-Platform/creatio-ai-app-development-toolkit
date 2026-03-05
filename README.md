@@ -39,8 +39,8 @@ Orchestrator flow:
 2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
 3. Requirements gathering: builds `requirements.md`, `request-spec.json`, and `workflow-state.json`.
 4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
-5. Implementation: uses MCP `application.create` to generate preview, then materializes files to `output/<AppName>/packages/**`.
-6. Deploy and verify (or skip by policy): deployment report.
+5. Implementation: uses MCP `application.create`, parses short or preview contract, and persists normalized result artifacts.
+6. Deploy and verify (or skip by policy): preview contracts run package push first, then compilation/restart/healthcheck.
 
 All generated artifacts are under `output/<AppName>/`.
 
@@ -51,7 +51,7 @@ Orchestrator (AGENTS.md)
 ├── Agent 1: Environment Setup           -> .creatio-env.json
 ├── Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
 ├── Agent 3: Implementation Plan         -> plan.md
-├── Agent 4: Implementation              -> packages/** + MCP preview artifacts
+├── Agent 4: Implementation              -> mcp-application-result.json + report
 │   └── Skill: application-creation
 └── Agent 5: Deploy & Verification       -> deployment or skip report
 ```

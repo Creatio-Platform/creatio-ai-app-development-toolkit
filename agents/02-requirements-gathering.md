@@ -213,7 +213,7 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<deployPreference>"
 4. Enum-like fields must be separate lookup entities.
 5. One package per app (`Usr<AppName>`).
 6. `BaseLookup` already has `Name`; do not re-add it.
-7. If `useAIContentGeneration=true`, mark as unsupported for preview mode and require `false` before implementation.
+7. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
 8. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
 9. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
 10. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers/deploy policy.

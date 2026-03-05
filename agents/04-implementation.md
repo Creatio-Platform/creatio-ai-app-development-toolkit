@@ -2,14 +2,13 @@
 
 ## Role
 
-Read `plan.md`, call MCP `application.create`, materialize preview files into `output/<AppName>/packages/**`, and validate output.
+Read `plan.md`, call MCP `application.create` (DB-first), parse short or legacy preview response, persist normalized result artifacts, and validate output.
 
 ## Input/Output
 
 - Input: `output/<AppName>/plan.md`, `output/<AppName>/workflow-state.json`, `output/<AppName>/.creatio-env.json`
 - Output:
-  - `output/<AppName>/packages/**`
-  - `output/<AppName>/mcp-application-preview.json`
+  - `output/<AppName>/mcp-application-result.json`
   - `output/<AppName>/mcp-application-report.md`
 
 ## Context
@@ -92,65 +91,57 @@ Call MCP `tools/call` with:
 
 Retry up to 3 times with 10s delay on transient failures.
 
-If response contains:
-- `ERROR: ...` text, or
-- JSON error payload with `success=false`,
+Parse `tools/call` response text from `result.content[0].text` and detect contract:
+- `short` contract:
+  - top-level JSON contains `success`, `message`, optional `appId`, optional `error`
+- `preview` contract:
+  - JSON contains `meta.success` and `packages` array
 
-stop and report blocker.
+Stop and report blocker when:
+- text is plain `ERROR: ...`
+- payload is not parseable JSON
+- `short` contract has `success=false`
+- `preview` contract has `meta.success=false`
 
-### 6. Persist raw preview
+### 6. Persist result
 
-Write full raw MCP response to:
-- `output/<AppName>/mcp-application-preview.json`
+Write normalized MCP result to:
+- `output/<AppName>/mcp-application-result.json`
 
-### 7. Materialize packages
+Normalized result shape:
+- `success` (boolean)
+- `message` (string)
+- `appId` (GUID when available)
+- `error` (object when available)
+- `contractType` (`short` or `preview`)
+- `previewPackages` (array, only for preview contract)
+- `previewMeta` (object, only for preview contract)
 
-Parse `GeneratedApplicationPreview` and write files:
-- root: `output/<AppName>/packages/<packageName>/`
-- each file from `files[relativePath]`
+### 7. Validate output contract
 
-Encoding rules:
-- `utf-8` → write text content as-is
-- `base64` → decode and write bytes
+Validate result payload:
+1. top-level `success` exists and is boolean
+2. when `contractType=short` and `success=true`, `appId` is non-empty GUID
+3. when `contractType=preview` and `success=true`, `previewPackages` is non-empty
+4. when `success=false`, `message` is non-empty
 
-Path safety rules:
-- reject absolute paths
-- reject paths containing `..`
-- normalize path separators to `/`
-
-### 8. Validate output
-
-Validate:
-1. at least one package directory exists
-2. each package has root `descriptor.json`
-3. all generated `.json` files parse successfully
-4. no unsafe paths were written
-5. no empty critical files:
-   - `descriptor.json`
-   - `metadata.json`
-   - `properties.json`
-   - `data.json`
-
-### 9. Write summary report
+### 8. Write summary report
 
 Create:
 - `output/<AppName>/mcp-application-report.md`
 
 Include:
-- resolved template code
-- package count and names
-- generated file count
+- resolved payload fields
 - icon resolution details
-- encoding stats (`utf-8` vs `base64`)
-- validation results
+- MCP result (`contractType`, `success`, `message`, `appId` if present)
+- preview package count when contractType is `preview`
+- validation results for normalized contract
 
 ## Completion Criteria
 
 - Gate R passed
 - MCP initialize and tools/list succeeded
 - `application.create` executed successfully
-- Preview persisted to `mcp-application-preview.json`
-- Files materialized under `output/<AppName>/packages/**`
+- Result persisted to `mcp-application-result.json`
 - Validation passed
 - Summary persisted to `mcp-application-report.md`
-- Packages are ready for `clio push-pkg`

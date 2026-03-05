@@ -70,7 +70,7 @@ Resolution rules:
 1. `code` must start with `Usr`.
 2. If `templateCode` is empty, use `AppFreedomUI`.
 3. If `optionalTemplateData.useExistingEntitySchema=true`, require `entitySchemaName`.
-4. `optionalTemplateData.useAIContentGeneration` must be `false` for preview mode.
+4. `optionalTemplateData.useAIContentGeneration` must be `false` for this MCP flow.
 5. `iconId`:
    - use explicit value if provided,
    - otherwise mark as `auto` and document runtime selection strategy.
@@ -110,7 +110,7 @@ Write final plan to:
 1. Keep plan deterministic and execution-ready.
 2. Do not create GUID matrices manually for all schemas.
 3. Do not include generated file bodies in plan.
-4. Plan must be sufficient for a single MCP call + local materialization.
+4. Plan must be sufficient for a single MCP call and result/report artifact persistence.
 5. Plan must not leave deploy behavior ambiguous.
 
 ## Completion Criteria

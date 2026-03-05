@@ -2,11 +2,13 @@
 
 ## Role
 
-Push generated package(s) to Creatio, compile, restart, and verify when deploy policy requires deployment.
+Run deploy verification for application creation:
+- short DB-first contract: compile, restart, healthcheck
+- legacy preview contract: materialize packages, push packages, compile, restart, healthcheck
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/packages/**`, `.creatio-env.json`, `output/<AppName>/workflow-state.json`
+- **Input:** `output/<AppName>/.creatio-env.json`, `output/<AppName>/workflow-state.json`, `output/<AppName>/mcp-application-result.json`
 - **Output:** Deployment status report (pass/fail/skip per step)
 
 ## Context
@@ -26,7 +28,7 @@ scripts/check-approval-gate.sh <AppName>
 
 If command fails, stop immediately and report blocker.
 
-### 1. Read Environment and Deploy Policy
+### 1. Read Environment, Policy, and MCP Result
 
 Parse:
 - `.creatio-env.json`:
@@ -34,40 +36,50 @@ Parse:
   - `url`
 - `workflow-state.json`:
   - `deployPreference`
+- `mcp-application-result.json`:
+  - `success`
+  - `message`
+  - `contractType`
+  - `appId` (for short contract)
+  - `previewPackages` (for preview contract)
 
-If `deployPreference` is missing, stop and report blocker.
+If any required field is missing, stop and report blocker.
 
 ### 2. Handle `generate_only`
 
 If `deployPreference="generate_only"`:
-- Do not run `push-pkg`, compile, restart, or healthcheck.
+- Do not run compile, restart, or healthcheck.
 - Return skip report with:
-  - artifact availability (`packages/**`, preview/report files)
-  - deploy steps marked as skipped
+  - artifact availability (`mcp-application-result.json`, `mcp-application-report.md`)
+  - runtime steps marked as skipped
   - clear note that deployment was intentionally skipped by policy
 
 Then finish Agent 5 successfully.
 
-### 3. Discover Package Paths (`deploy_now` only)
+### 3. Validate Create Result (`deploy_now` only)
 
-Find package directories under:
-- `output/<AppName>/packages/`
+Before runtime checks, verify:
+1. `mcp-application-result.json.success=true`
+2. if `contractType=short`, `appId` is a non-empty GUID
+3. if `contractType=preview`, `previewPackages` is non-empty
 
-Rules:
-1. Include only directories containing root `descriptor.json`.
-2. Sort paths lexicographically for deterministic deploy order.
-3. If no package found, stop with blocker.
+If validation fails, stop with blocker.
 
-### 4. First Push (all packages)
+### 4. Compatibility Package Push (`deploy_now` + `contractType=preview`)
 
-For each package path:
+If contract type is preview:
+
+1. Materialize preview packages into:
+   - `output/<AppName>/packages/<PackageName>/...`
+2. For each generated package run:
+
 ```bash
-clio push-pkg "<absolute_package_path>" -e <env_name>
+clio push-pkg output/<AppName>/packages/<PackageName> -e <env_name>
 ```
 
-Expected:
-- success message for each package
-- warnings about virtual workspace items are acceptable on first push
+On first push error, stop and report blocker.
+
+If contract type is short, skip this step.
 
 ### 5. Compile
 
@@ -97,33 +109,15 @@ clio healthcheck -e <env_name>
 
 If failed, stop and report blocker.
 
-### 8. Second Push (seed/data stabilization)
-
-Repeat push for each package path:
-```bash
-clio push-pkg "<absolute_package_path>" -e <env_name>
-```
-
-Goal:
-- ensure data objects and seed records are applied after compilation
-
-### 9. Verification
-
-Perform:
-1. Verify section URL(s) for generated app pages from requirements/plan.
-2. Verify lookup seed data via SQL checks for expected lookup entities.
-3. Confirm no failed package in push results.
-
-### 10. Report Results
+### 8. Report Results
 
 Return a report:
 - deploy policy used
-- package push status per package
+- `application.create` result summary (`contractType`, `success`, `appId`, `message`)
+- package push status (`applied`/`skipped`) and package count
 - compile status
 - restart status
 - healthcheck status
-- section URL checks
-- lookup data checks
 
 Use `✅`/`❌`/`⏭` per step.
 
@@ -131,21 +125,22 @@ Use `✅`/`❌`/`⏭` per step.
 
 | Problem | Diagnosis | Solution |
 |---------|-----------|----------|
-| No package folders found | Materialization failed in Agent 4 | Check `mcp-application-preview.json` and `mcp-application-report.md` |
-| Push fails | Invalid package path or descriptor | Verify package directory and `descriptor.json` |
-| Compilation fails | Schema/reference issue | Use `clio last-compilation-log` and fix generated artifacts |
-| Section not visible | Binding/page mismatch | Inspect generated Data schemas and page names |
-| Seed data missing | Data scripts not applied | Re-run second push after successful compile |
+| `mcp-application-result.json` missing | Agent 4 failed before persisting result | Check Agent 4 output and rerun |
+| `success=false` in result | `application.create` failed | Fix payload/env issue and rerun Agent 4 |
+| Preview contract without `previewPackages` | Agent 4 normalization is incomplete | Regenerate Agent 4 result with preview payload |
+| `push-pkg` fails | Invalid materialized package content or environment issue | Inspect generated package folder and clio error |
+| Compilation fails | Schema/reference issue in created artifacts | Use `clio last-compilation-log` and fix source issue |
+| Healthcheck fails | App restart/runtime issue | Re-run restart, inspect environment health |
 
 ## Completion Criteria
 
 For `generate_only`:
 - ✅ Deploy policy recognized as skip
-- ✅ Artifacts verified
-- ✅ Deploy steps explicitly marked skipped
+- ✅ Result/report artifacts verified
+- ✅ Runtime steps explicitly marked skipped
 
 For `deploy_now`:
-- ✅ At least one package is discovered and pushed
+- ✅ `application.create` result is successful (`success=true`) with contract-specific validation
+- ✅ if preview contract is used, packages were materialized and pushed
 - ✅ Compilation completed without errors
 - ✅ Application restarted and healthy
-- ✅ Verification checks completed and reported

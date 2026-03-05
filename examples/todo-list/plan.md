@@ -2,7 +2,7 @@
 
 ## App Summary
 
-Generate Todo List application package(s) through MCP `application.create` and materialize preview files to local `output`.
+Create Todo List application in DB through MCP `application.create` and persist normalized result artifacts to local `output`.
 
 ## Resolved MCP Payload
 
@@ -42,23 +42,20 @@ Deterministic pseudo-random by `code` over palette:
 
 ## Expected Output Artifacts
 
-- `output/TodoList/packages/**`
-- `output/TodoList/mcp-application-preview.json`
+- `output/TodoList/mcp-application-result.json`
 - `output/TodoList/mcp-application-report.md`
 
 ## Validation Rules
 
 1. MCP `tools/list` contains `application.create`.
-2. `application.create` response is successful and parseable.
-3. At least one package is returned.
-4. Every package has root `descriptor.json`.
-5. Generated JSON files parse successfully.
-6. Path traversal and absolute paths are rejected during materialization.
+2. `application.create` response is successful and parseable (`short` or `preview`).
+3. `success=true` and contract-specific validation passes:
+   - short contract: non-empty `appId`
+   - preview contract: non-empty `previewPackages`
+4. `mcp-application-result.json` and report are persisted.
 
 ## Blocker Conditions
 
 - MCP endpoint unavailable.
 - `application.create` missing in tools list.
-- `application.create` returns `ERROR:` text.
-- `meta.success=false` in preview payload.
-- No packages generated after preview.
+- `application.create` result has `success=false`.

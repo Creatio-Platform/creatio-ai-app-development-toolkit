@@ -8,7 +8,7 @@ Reference example for the business-first, natural-language workflow.
 - `requirements.md` — Locked business decisions + assumptions + implementation requirements
 - `request-spec.json` — Normalized prompt data, checklist completeness, technical inputs, assumptions
 - `plan.md` — Execution plan with resolved MCP payload
-- `output/` — Materialized package files from preview response
+- `output/` — MCP result/report artifacts for DB-first creation
 
 ## Conversation Pattern
 
@@ -71,19 +71,19 @@ Users should manage tasks through a list and form page and track task lifecycle.
 
 1. Build `application.create` payload from requirements and request spec
 2. Call MCP tool `application.create`
-3. Save raw preview response
-4. Materialize returned package files locally
-5. Deploy generated package with `clio push-pkg` (or skip by policy)
+3. Save normalized result (`short` or `preview`) and report
+4. For `deploy_now`: preview contract runs package push first, then compile/restart/healthcheck
 
 ## Example Deploy
 
 ```bash
-clio push-pkg "path/to/output/packages/UsrTodoList" -e <your_env>
 clio compile-configuration -e <your_env>
 clio restart-web-app -e <your_env>
+clio healthcheck -e <your_env>
 ```
 
 ## Notes
 
-- Preview generation itself does not persist data to DB.
-- Deployment phase applies generated schemas and data to the target environment.
+- `application.create` persists generated artifacts in DB.
+- Current environments may still return legacy preview contract (`meta` + `packages`).
+- Runtime verification checks are executed in deploy phase.

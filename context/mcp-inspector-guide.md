@@ -110,7 +110,7 @@ Inspector запустить два сервери:
 | `entity.create` | Створення entity з колонками, повертає файли у відповіді |
 | `entity.create_lookup` | Створення lookup entity, повертає файли у відповіді |
 | `entity.check_name` | Перевірка чи ім'я entity вільне |
-| `application.create` | Генерація preview повного застосунку (packages + files) без запису в БД |
+| `application.create` | DB-first створення повного застосунку, short або preview JSON контракт |
 
 ```
 ┌─ Tools ──────────────────────┐  ┌─ Select a tool ────────────┐
@@ -258,9 +258,11 @@ Tool Result: Success
 
 ---
 
-## Крок 11: Тестування application.create (preview)
+## Крок 11: Тестування application.create (DB-first)
 
-Цей tool повертає згенеровані пакети у JSON (без DB persistence).
+Цей tool створює застосунок у БД і може повернути:
+- короткий JSON статус (новий контракт)
+- preview JSON (`meta` + `packages`) у старому контракті
 
 1. У списку tools натисніть **application.create**
 2. Заповніть поля:
@@ -272,11 +274,13 @@ Tool Result: Success
    - `optionalTemplateDataJson`: `{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}`
 3. Натисніть **Run Tool**
 4. Очікуваний результат:
-   - у відповіді поле `content[0].text` містить JSON з `packages` і `meta.success=true`
+   - у відповіді поле `content[0].text` містить:
+     - або JSON з `success=true` і `appId`
+     - або JSON з `meta.success=true` і `packages`
 5. Типові помилки:
-   - `ERROR: iconId must be a valid GUID`
-   - `ERROR: Icon with id '...' was not found`
-   - `ERROR: useAIContentGeneration=true is not supported in preview mode`
+   - `{"success":false,"message":"iconId must be a valid GUID...","error":{...}}`
+   - `{"success":false,"message":"Icon with id '...' was not found","error":{...}}`
+   - `{"success":false,"message":"useAIContentGeneration=true is not supported...","error":{...}}`
 
 ---
 

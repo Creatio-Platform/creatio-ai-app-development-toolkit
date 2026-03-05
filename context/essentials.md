@@ -9,12 +9,15 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 **Composable Applications**
 - Built from self-contained **packages** containing: entity schemas, page schemas, data bindings, business processes, source code
 - Packages can depend on other packages (via `DependsOn` in descriptor.json)
-- Deploy via `clio push-pkg` command
+- Runtime verification via `clio compile-configuration`, `clio restart-web-app`, `clio healthcheck`
 
-**MCP Application Preview**
+**MCP Application Creation (DB-first)**
 - Primary generation path is MCP tool `application.create`
-- Tool returns package preview JSON (files + encoding), without database persistence
-- Generated preview must be materialized to `output/<AppName>/packages/**` before deploy
+- Tool creates application artifacts directly in Creatio DB
+- Tool can return:
+  - short status JSON (`success`, `message`, `appId`/`error`)
+  - legacy preview JSON (`meta.success`, `packages`)
+- Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
 
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)
@@ -125,9 +128,12 @@ Primary generation flow:
 1. Build MCP payload for `application.create`
 2. Initialize MCP session and validate tool availability (`tools/list`)
 3. Execute `application.create`
-4. Persist raw preview
-5. Materialize preview files into `output/<AppName>/packages/**`
-6. Validate generated package structure and JSON integrity
+4. Persist MCP result to `output/<AppName>/mcp-application-result.json`
+5. Normalize response contract (`short` or `preview`) and validate `success=true`
+6. For `deploy_now`:
+   - preview contract: materialize packages and run `clio push-pkg`
+   - short contract: skip package push
+   - then run compile/restart/healthcheck
 
 ### MCP `application.create` Input
 
@@ -149,7 +155,7 @@ Optional:
 
 Validation notes:
 - `iconId` and `clientTypeId` must be valid GUIDs
-- preview mode does not support `useAIContentGeneration=true`
+- this flow does not support `useAIContentGeneration=true`
 - tool must exist in `tools/list` before execution
 
 ### MCP Request Example
@@ -196,12 +202,9 @@ clio reg-web-app -a myenv
 clio healthcheck myenv
 ```
 
-### Package Deployment
+### Runtime Verification
 
 ```bash
-# Push package (primary method)
-clio push-pkg <path-to-package> -e myenv
-
 # Compile configuration
 clio compile-configuration -e myenv
 
@@ -218,19 +221,16 @@ clio last-compilation-log -e myenv
 # 1. Verify environment
 clio healthcheck -e myenv
 
-# 2. Push package
-clio push-pkg "C:\path\to\package" -e myenv
-
-# 3. Compile
+# 2. Compile
 clio compile-configuration -e myenv
 
-# 4. Restart
+# 3. Restart
 clio restart-web-app myenv
 
-# 5. Verify
+# 4. Verify
 clio healthcheck -e myenv
 
-# 6. Check errors (if any)
+# 5. Check errors (if any)
 clio last-compilation-log -e myenv
 ```
 
@@ -274,7 +274,7 @@ clio install-gate -e myenv
 ## Deploy Flow Diagram
 
 ```
-MCP application.create → materialize files → clio push-pkg → compile-configuration → restart-web-app → verify
+MCP application.create → normalize result (short|preview) → [preview only: materialize + push-pkg] → compile-configuration → restart-web-app → verify
 ```
 
 ---
