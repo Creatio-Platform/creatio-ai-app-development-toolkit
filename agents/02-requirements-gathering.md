@@ -2,7 +2,7 @@
 
 ## Role
 
-Analyze developer's app description, ask questions, produce structured requirements including MCP `application.create` inputs.
+Analyze developer's natural-language request, run business-first clarification, and produce structured requirements plus normalized request spec.
 
 ## ⛔ INTERACTIVE — DO NOT DELEGATE
 
@@ -11,65 +11,96 @@ Analyze developer's app description, ask questions, produce structured requireme
 ## Input/Output
 
 - **Input:** Natural language app description, `<AppName>`
-- **Output:** `output/<AppName>/requirements.md`, `output/<AppName>/workflow-state.json`
+- **Output:**
+  - `output/<AppName>/requirements.md`
+  - `output/<AppName>/request-spec.json`
+  - `output/<AppName>/workflow-state.json`
 
 ## Context
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for platform capabilities and app-create flow).
+Read:
+- `AGENTS.md`
+- `context/essentials.md`
+- `context/business-checklist.md`
 
 ---
 
 ## Steps
 
-### 1. Challenge the Idea
+### 1. Parse Prompt and Show Understanding
 
-Analyze request, present full feature list and expected section scope:
+From developer's free-form prompt, derive:
+- app intent and expected section scope
+- candidate entities/lookups/pages
+- potential lifecycle/status model
 
-> "Based on your description, I see:
-> - Main entity: X with fields A, B, C
-> - Lookups: Status, Priority
-> - Pages: List + Form
-> - App creation via MCP `application.create`
->
-> Does this match your vision?"
+Return a short summary:
+- “What I understood”
+- “What still needs clarification”
 
-Wait for confirmation before proceeding.
+### 2. Run Business Clarification Checklist (MANDATORY)
 
-### 2. Ask Mandatory Questions
+Use `context/business-checklist.md` as canonical checklist.
 
-Group logically, do not dump all at once.
+Clarification rules:
+- Ask in themed batches (not one giant questionnaire).
+- Keep focus on business requirements.
+- Re-ask ambiguous answers until concrete.
+- If developer asks to start implementation before completion, return only missing checklist items and ask only-missing questions.
 
-Business scope:
-- Entities: "What are main objects? (I see: X, Y — anything else?)"
-- Fields: "What fields for main entity? Data types?"
-- Lookups: "Initial status values? Priority levels? Other dropdowns?"
-- Pages: "List view columns? Form page organization?"
-- Rules: "Required fields? Defaults? Validation?"
+Mandatory checklist groups:
+- business outcome
+- actors and roles
+- domain model
+- lifecycle and statuses
+- business rules
+- UX expectations (list/form)
+- edge cases
+- acceptance criteria
 
-MCP app-create inputs:
-- `name`: app display name
-- `code`: app code (must start with `Usr`)
-- `templateCode`: default `AppFreedomUI` unless developer requests another template
-- `description`: optional text
-- `clientTypeId`: optional GUID
-- `optionalTemplateData`:
-  - `useExistingEntitySchema` (bool)
-  - `entitySchemaName` (required if `useExistingEntitySchema=true`)
-  - `appSectionDescription` (optional)
-  - `useAIContentGeneration` (bool, preview mode does not support `true`)
-- `iconId` strategy:
-  - explicit `iconId` from developer, or
-  - auto-selection from `SysAppIcons` during implementation
-- `iconBackground` strategy:
-  - explicit value from developer, or
-  - deterministic palette pick during implementation
+Do not proceed until checklist is complete.
 
-### 3. Iterate Until Clear
+### 3. Ask Minimal Technical Questions
 
-Keep asking until complete picture.
-If vague, ask specifics.
+Ask only:
+- blocker technical inputs (for example: Creatio URL, credentials/access if missing)
+- deployment preference (mandatory):
+  - `deploy_now`
+  - `generate_only`
 
-### 4. Generate requirements.md
+Do not ask for MCP/template/icon details if defaults can be resolved deterministically.
+
+### 4. Build `request-spec.json`
+
+Create normalized request spec:
+
+```json
+{
+  "sourcePrompt": "<original developer prompt>",
+  "businessChecklist": {
+    "businessOutcome": {"complete": true, "value": "..."},
+    "actorsAndRoles": {"complete": true, "value": "..."},
+    "domainModel": {"complete": true, "value": "..."},
+    "lifecycleAndStatuses": {"complete": true, "value": "..."},
+    "businessRules": {"complete": true, "value": "..."},
+    "uxExpectations": {"complete": true, "value": "..."},
+    "edgeCases": {"complete": true, "value": "..."},
+    "acceptanceCriteria": {"complete": true, "value": "..."},
+    "complete": true
+  },
+  "technicalInputs": {
+    "creatioUrl": "<url>",
+    "deployPreference": "deploy_now",
+    "credentialsStatus": "provided|missing|existing_env"
+  },
+  "assumptions": [
+    "<explicit assumption 1>",
+    "<explicit assumption 2>"
+  ]
+}
+```
+
+### 5. Generate `requirements.md`
 
 Write requirements document in this format:
 
@@ -79,6 +110,13 @@ Write requirements document in this format:
 ## App Overview
 
 <2-3 sentence description>
+
+## Business Decisions Locked
+
+- Goal/KPI: ...
+- Roles: ...
+- Lifecycle: ...
+- Acceptance criteria: ...
 
 ## MCP Application Create Input
 
@@ -134,27 +172,38 @@ Columns: UsrName, UsrStatus, UsrPriority, CreatedOn
 
 - <rule 1>
 - <rule 2>
+
+## Assumptions
+
+- <assumption 1>
+- <assumption 2>
 ```
 
-### 5. Get Approval
+### 6. Natural-Language Approval
 
-Present full `requirements.md` content to developer and ask for exact token:
+Present:
+- short “What I understood” summary
+- final `requirements.md` content
+- explicit “Starting implementation” message after approval
 
-`APPROVE_REQUIREMENTS`
+Ask for natural-language approval (no token request).
 
-- If developer requests changes, update and re-present.
-- Do not proceed without explicit token.
+Examples of valid confirmation:
+- “Так, все вірно, запускай”
+- “Approved, proceed”
 
-### 6. Persist Approval State (MANDATORY)
+If developer requests changes, update and re-present.
 
-After receiving `APPROVE_REQUIREMENTS`, create:
+### 7. Persist Workflow State (MANDATORY)
 
-`output/<AppName>/workflow-state.json`
+After natural-language approval:
 
-Use:
+1. Persist internal Gate R approval and UX fields with:
 ```bash
-scripts/write-approval-state.sh <AppName> "<approvedBy>"
+scripts/write-approval-state.sh <AppName> "<approvedBy>" "<deployPreference>"
 ```
+
+2. Write `output/<AppName>/request-spec.json`.
 
 ## Critical Rules
 
@@ -164,15 +213,19 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>"
 4. Enum-like fields must be separate lookup entities.
 5. One package per app (`Usr<AppName>`).
 6. `BaseLookup` already has `Name`; do not re-add it.
-7. If `useAIContentGeneration=true`, mark it as unsupported for preview mode and require change to `false` before implementation.
+7. If `useAIContentGeneration=true`, mark as unsupported for preview mode and require `false` before implementation.
 8. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
+9. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
+10. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers/deploy policy.
 
 ## Completion Criteria
 
-✅ Developer approved with exact token  
+✅ Developer approved in natural language  
 ✅ `output/<AppName>/requirements.md` exists  
-✅ `output/<AppName>/workflow-state.json` exists with `requirementsApproved: true`  
-✅ `workflow-state.json.appName` equals `<AppName>`  
-✅ `workflow-state.json.requirementsSha256` matches `requirements.md`  
-✅ Requirements include MCP app-create input section  
-✅ Entities/lookups/pages/rules are defined clearly  
+✅ `output/<AppName>/request-spec.json` exists  
+✅ `output/<AppName>/workflow-state.json` exists with:
+- `requirementsApproved: true`
+- `interactionMode: "nl-business-first"`
+- `businessChecklistComplete: true`
+- `deployPreference` set to `deploy_now` or `generate_only`  
+✅ Requirements include “Business Decisions Locked” and “Assumptions” sections  

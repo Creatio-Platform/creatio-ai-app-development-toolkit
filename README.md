@@ -8,6 +8,7 @@ Supported agents: GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code.
 
 Use these files as canonical:
 - `AGENTS.md`
+- `context/business-checklist.md`
 - `context/essentials.md`
 - `context/schema-reference.md`
 - `context/ui-reference.md`
@@ -17,15 +18,29 @@ Use these files as canonical:
 
 `context/archived/**` is reference-only.
 
+## Developer UX
+
+Primary workflow is natural language:
+1. Developer sends one free-form prompt.
+2. Agent returns a short “What I understood”.
+3. Agent asks business clarifications in batches until checklist is complete.
+4. Agent asks minimal technical questions only (blockers + deploy preference).
+5. Agent runs the pipeline and returns final artifacts/results.
+6. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
+
+Default deploy preference values:
+- `deploy_now`
+- `generate_only`
+
 ## Workflow
 
 Orchestrator flow:
-1. Planning start (Gate P): developer provides target Creatio URL and confirms with `APPROVE_PLAN`.
+1. Planning start with natural-language confirmation.
 2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
-3. Requirements gathering (interactive): confirms scope and gets `APPROVE_REQUIREMENTS` (Gate R).
+3. Requirements gathering: builds `requirements.md`, `request-spec.json`, and `workflow-state.json`.
 4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
 5. Implementation: uses MCP `application.create` to generate preview, then materializes files to `output/<AppName>/packages/**`.
-6. Deploy and verify: `clio push-pkg`, compile/restart checks, deployment report.
+6. Deploy and verify (or skip by policy): deployment report.
 
 All generated artifacts are under `output/<AppName>/`.
 
@@ -34,11 +49,11 @@ All generated artifacts are under `output/<AppName>/`.
 ```
 Orchestrator (AGENTS.md)
 ├── Agent 1: Environment Setup           -> .creatio-env.json
-├── Agent 2: Requirements (interactive)  -> requirements.md + workflow-state.json
+├── Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
 ├── Agent 3: Implementation Plan         -> plan.md
 ├── Agent 4: Implementation              -> packages/** + MCP preview artifacts
 │   └── Skill: application-creation
-└── Agent 5: Deploy & Verification       -> deployment report
+└── Agent 5: Deploy & Verification       -> deployment or skip report
 ```
 
 ## Repository Structure
@@ -59,6 +74,7 @@ skills/
   data-bindings-creation/SKILL.md
   package-descriptor-creation/SKILL.md
 context/
+  business-checklist.md
   essentials.md
   schema-reference.md
   ui-reference.md
@@ -78,10 +94,11 @@ output/
 
 ## Example Prompt
 
-```
-Create a Todo List application with tasks that have title, description,
-status (New/In Progress/Done), priority (Low/Medium/High), and due date
-on <CREATIO_URL>.
+```text
+Generate with a code agent an Events composable app with all required schema types.
+A simple Events app is a lightweight tool for managing events in Creatio.
+It allows users to create and maintain a list of events, see them in a structured list view,
+update their status, and manage event details throughout their lifecycle.
 ```
 
 See `examples/todo-list/` for an end-to-end reference.

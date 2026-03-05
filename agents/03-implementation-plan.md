@@ -6,13 +6,17 @@ Transform approved requirements into a deterministic MCP execution plan for `app
 
 ## Input/Output
 
-- Input: `output/<AppName>/requirements.md`, `output/<AppName>/workflow-state.json`
+- Input:
+  - `output/<AppName>/requirements.md`
+  - `output/<AppName>/request-spec.json`
+  - `output/<AppName>/workflow-state.json`
 - Output: `output/<AppName>/plan.md`
 
 ## Context
 
 Read:
 - `context/essentials.md`
+- `context/business-checklist.md`
 - `context/ui-reference.md`
 - `context/data-bindings-reference.md`
 
@@ -27,14 +31,30 @@ scripts/check-approval-gate.sh <AppName>
 
 If this fails, stop immediately and report blocker.
 
-### 1. Parse requirements
+### 1. Validate Business Completeness
 
-Extract:
-- app overview and business scope
+Parse `request-spec.json` and verify:
+- `businessChecklist.complete=true`
+- `technicalInputs.deployPreference` is set (`deploy_now` or `generate_only`)
+- `technicalInputs.creatioUrl` is present
+- `technicalInputs.credentialsStatus` is present
+
+Parse `workflow-state.json` and verify:
+- `businessChecklistComplete=true`
+- `interactionMode="nl-business-first"`
+
+If any check fails, stop with blocker and return missing checklist items.
+
+### 2. Parse Inputs
+
+Extract from requirements + request spec:
+- app overview and locked business decisions
 - entities/lookups/pages/rules
+- assumptions
 - MCP `application.create` input block
+- deploy preference
 
-### 2. Resolve MCP payload
+### 3. Resolve MCP Payload
 
 Build final payload fields for Agent 4:
 - `name`
@@ -52,31 +72,35 @@ Resolution rules:
 3. If `optionalTemplateData.useExistingEntitySchema=true`, require `entitySchemaName`.
 4. `optionalTemplateData.useAIContentGeneration` must be `false` for preview mode.
 5. `iconId`:
-   - use explicit value if provided in requirements,
-   - otherwise mark as `auto` and document runtime selection strategy for Agent 4.
+   - use explicit value if provided,
+   - otherwise mark as `auto` and document runtime selection strategy.
 6. `iconBackground`:
-   - use explicit value if provided in requirements,
-   - otherwise mark as `auto` and document deterministic palette selection strategy for Agent 4.
+   - use explicit value if provided,
+   - otherwise mark as `auto` and document deterministic palette strategy.
 
-### 3. Build plan sections
+### 4. Build `plan.md`
 
 Create `plan.md` with sections:
 - App Summary
+- Business Decisions Locked
+- Assumptions
+- Deployment Preference (`deploy_now` or `generate_only`)
 - MCP Payload (resolved and validated)
 - Runtime Resolution Strategy (`iconId` and `iconBackground`)
 - Expected Output Artifacts
 - Validation Rules
 - Blocker Conditions
 
-### 4. Validation checks
+### 5. Validation Checks
 
 Check:
 - required payload fields are present
 - GUID format validity for explicit `iconId` and explicit `clientTypeId`
 - `optionalTemplateDataJson` is valid JSON
 - no unsupported values remain (`useAIContentGeneration=true`)
+- deploy preference is valid and propagated from request spec
 
-### 5. Save `plan.md`
+### 6. Save `plan.md`
 
 Write final plan to:
 - `output/<AppName>/plan.md`
@@ -87,10 +111,13 @@ Write final plan to:
 2. Do not create GUID matrices manually for all schemas.
 3. Do not include generated file bodies in plan.
 4. Plan must be sufficient for a single MCP call + local materialization.
+5. Plan must not leave deploy behavior ambiguous.
 
 ## Completion Criteria
 
 ✅ Gate R passed  
+✅ `businessChecklist.complete=true` in `request-spec.json`  
 ✅ `output/<AppName>/plan.md` exists  
 ✅ MCP payload is fully resolved or has explicit runtime resolution rules  
+✅ Deploy preference is explicit in plan  
 ✅ Explicit validations and blocker conditions are documented  

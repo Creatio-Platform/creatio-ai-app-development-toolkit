@@ -6,9 +6,14 @@ if [ "$#" -ne 1 ]; then
 fi
 app_name="$1"
 requirements_file="output/${app_name}/requirements.md"
+request_spec_file="output/${app_name}/request-spec.json"
 state_file="output/${app_name}/workflow-state.json"
 if [ ! -f "$requirements_file" ]; then
   echo "Gate failed: requirements.md not found: $requirements_file" >&2
+  exit 1
+fi
+if [ ! -f "$request_spec_file" ]; then
+  echo "Gate failed: request-spec.json not found: $request_spec_file" >&2
   exit 1
 fi
 if [ ! -f "$state_file" ]; then
@@ -33,6 +38,10 @@ state_app_name="$(jq -r '.appName // empty' "$state_file")"
 state_requirements_sha256="$(jq -r '.requirementsSha256 // empty' "$state_file")"
 approved_by="$(jq -r '.approvedBy // empty' "$state_file")"
 approved_at_utc="$(jq -r '.approvedAtUtc // empty' "$state_file")"
+interaction_mode="$(jq -r '.interactionMode // empty' "$state_file")"
+business_checklist_complete="$(jq -r '.businessChecklistComplete // empty' "$state_file")"
+deploy_preference="$(jq -r '.deployPreference // empty' "$state_file")"
+request_business_complete="$(jq -r '.businessChecklist.complete // empty' "$request_spec_file")"
 if [ "$requirements_approved" != "true" ]; then
   echo "Gate failed: requirementsApproved must be true" >&2
   exit 1
@@ -55,6 +64,22 @@ if [ -z "$approved_by" ]; then
 fi
 if [ -z "$approved_at_utc" ]; then
   echo "Gate failed: approvedAtUtc is empty" >&2
+  exit 1
+fi
+if [ "$interaction_mode" != "nl-business-first" ]; then
+  echo "Gate failed: interactionMode must be nl-business-first" >&2
+  exit 1
+fi
+if [ "$business_checklist_complete" != "true" ]; then
+  echo "Gate failed: businessChecklistComplete must be true" >&2
+  exit 1
+fi
+if [ "$deploy_preference" != "deploy_now" ] && [ "$deploy_preference" != "generate_only" ]; then
+  echo "Gate failed: deployPreference must be deploy_now or generate_only" >&2
+  exit 1
+fi
+if [ "$request_business_complete" != "true" ]; then
+  echo "Gate failed: request-spec businessChecklist.complete must be true" >&2
   exit 1
 fi
 echo "GATE_OK ${app_name}"
