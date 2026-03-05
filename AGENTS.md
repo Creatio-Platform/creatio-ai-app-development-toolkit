@@ -28,6 +28,7 @@ Before Gate P approval, forbidden:
 Planning step outcome:
 - Present a concise execution plan for all upcoming phases.
 - List key assumptions and risks.
+- Collect required runtime inputs from developer, including Creatio base URL. Do not assume any default host.
 - Ask for exact approval token `APPROVE_PLAN`.
 - If token is not provided, continue planning refinement only.
 

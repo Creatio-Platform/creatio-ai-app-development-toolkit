@@ -14,7 +14,7 @@ Clio is the command-line tool for managing Creatio platform environments, packag
 
 ```bash
 # Register environment
-clio reg-web-app myenv -u https://mysite.creatio.com -l administrator -p password
+clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
 
 # Set active environment
 clio reg-web-app -a myenv

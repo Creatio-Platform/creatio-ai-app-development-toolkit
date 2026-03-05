@@ -5,10 +5,10 @@ MCP Inspector — офіційний візуальний інструмент �
 ## Передумови
 
 - **Node.js** >= 18 та **npx** (входить до Node.js)
-- **Запущений Creatio** з MCP ендпоінтом (наприклад `http://localhost:5001/mcp`)
+- **Запущений Creatio** з MCP ендпоінтом (`<MCP_URL>`, отриманим від користувача під час планування)
 - Перевірити що сервер відповідає:
   ```bash
-  curl -s http://localhost:5001/mcp \
+  curl -s "<MCP_URL>" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
@@ -20,7 +20,8 @@ MCP Inspector — офіційний візуальний інструмент �
 Відкрийте термінал і виконайте команду з параметром `--url`:
 
 ```bash
-npx @modelcontextprotocol/inspector --url http://localhost:5001/mcp
+MCP_URL="<creatio-mcp-url-from-planning>"
+npx @modelcontextprotocol/inspector --url "$MCP_URL"
 ```
 
 > ⚠️ **Важливо:** Запускайте саме з `--url`, а не без параметрів. Це автоматично:
@@ -30,24 +31,24 @@ npx @modelcontextprotocol/inspector --url http://localhost:5001/mcp
 
 Inspector виведе в консолі:
 ```
-⚙️ Proxy server listening on localhost:6277
+⚙️ Proxy server listening on <proxy-host>:<proxy-port>
 🔑 Session token: abc123...
 🚀 MCP Inspector is up and running at:
-   http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=abc123...
+   <inspector-ui-url>/?MCP_PROXY_AUTH_TOKEN=abc123...
 ```
 
 Inspector запустить два сервери:
-- **Web UI** — `http://localhost:6274` (відкрийте у браузері)
-- **Proxy** — `http://localhost:6277` (проксі-сервер що обходить CORS обмеження браузера)
+- **Web UI** — URL буде виведений у консолі Inspector
+- **Proxy** — URL буде виведений у консолі Inspector
 
 > Можна змінити порти через змінні середовища:
 > ```bash
-> CLIENT_PORT=8080 SERVER_PORT=9090 npx @modelcontextprotocol/inspector --url http://localhost:5001/mcp
+> CLIENT_PORT=8080 SERVER_PORT=9090 npx @modelcontextprotocol/inspector --url "$MCP_URL"
 > ```
 
 ## Крок 2: Відкрийте Inspector у браузері
 
-Скопіюйте повну URL з консолі (з `?MCP_PROXY_AUTH_TOKEN=...`) і відкрийте у браузері. Або просто відкрийте `http://localhost:6274` — браузер може відкритись автоматично.
+Скопіюйте повну URL з консолі (з `?MCP_PROXY_AUTH_TOKEN=...`) і відкрийте у браузері.
 
 Ви побачите інтерфейс MCP Inspector:
 
@@ -57,7 +58,7 @@ Inspector запустить два сервери:
 │ [Streamable HTTP ▾] │  │  Connect to an MCP server to start   │
 │                     │  │  inspecting                          │
 │ URL                 │  │                                      │
-│ [http://localhost:5001/mcp]│                                      │
+│ [<MCP_URL>]               │                                      │
 │                     │  │                                      │
 │ Connection Type     │  │                                      │
 │ [Via Proxy ▾]       │  │                                      │
@@ -69,7 +70,7 @@ Inspector запустить два сервери:
 
 Переконайтесь що:
 1. **Transport Type** = `Streamable HTTP` (не STDIO, не SSE!)
-2. **URL** = адреса вашого Creatio MCP ендпоінту (наприклад `http://localhost:5001/mcp`)
+2. **URL** = адреса вашого Creatio MCP ендпоінту (`<MCP_URL>`)
 3. **Connection Type** = `Via Proxy` (проксі обходить CORS)
 
 ## Крок 3: Підключення до MCP сервера
@@ -302,13 +303,13 @@ Inspector запущений без `--url` параметра або без aut
 
 **Рішення:** Перезапустіть Inspector з `--url`:
 ```bash
-npx @modelcontextprotocol/inspector --url http://localhost:5001/mcp
+npx @modelcontextprotocol/inspector --url "$MCP_URL"
 ```
-І відкрийте URL з токеном з консолі: `http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=...`
+І відкрийте URL з токеном, який Inspector вивів у консолі.
 
 ### "Failed to fetch" (Connection Type = Direct)
 
-CORS блокує прямий запит з браузера. Браузер не дозволяє cross-origin запити з `localhost:6274` до `localhost:5001`.
+CORS блокує прямий запит з браузера. Браузер не дозволяє cross-origin запити між origin Inspector UI та origin MCP endpoint.
 
 **Рішення:** Змініть Connection Type на **Via Proxy**. Проксі-сервер Inspector (порт 6277) обходить CORS.
 
@@ -322,7 +323,7 @@ CORS блокує прямий запит з браузера. Браузер н
 
 MCP сервер не запущений. Перевірте:
 ```bash
-curl -s http://localhost:5001/mcp \
+curl -s "<MCP_URL>" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
@@ -337,7 +338,7 @@ curl -s http://localhost:5001/mcp \
 # Знайти та зупинити процес
 lsof -i :6277 -t | xargs kill
 # Перезапустити Inspector
-npx @modelcontextprotocol/inspector --url http://localhost:5001/mcp
+npx @modelcontextprotocol/inspector --url "$MCP_URL"
 ```
 
 ### Inspector не показує tools після підключення

@@ -1,7 +1,7 @@
 ---
 name: entity-creation
 description: Generate and update Creatio entity schema files via MCP tools (entity.create / entity.create_lookup / entity.update). Connects to running Creatio MCP endpoint to produce correct descriptor.json, metadata.json, properties.json with DSL diff format, parent inheritance, and all required GUIDs.
-compatibility: Requires running Creatio with MCP endpoint (http://localhost:5001/mcp)
+compatibility: Requires running Creatio with MCP endpoint provided by the developer during planning.
 metadata:
   version: "4.0"
   category: creatio-schema-generation
@@ -30,8 +30,8 @@ Use this skill when:
 
 ## Prerequisites
 
-1. Creatio running with MCP endpoint (default: `http://localhost:5001/mcp`)
-2. Read `.creatio-env.json` for actual endpoint URL if different
+1. Creatio running with MCP endpoint provided by the developer during planning
+2. Read `.creatio-env.json` for endpoint URL
 3. MCP endpoint must respond to `initialize` handshake
 
 ## Hard Fail Policy
@@ -61,8 +61,8 @@ From `plan.md`, for each entity:
 ### Step 1: Initialize MCP Session
 
 ```bash
-# Get MCP endpoint from .creatio-env.json, default: http://localhost:5001/mcp
-MCP_URL="http://localhost:5001/mcp"
+# Get MCP endpoint from .creatio-env.json
+MCP_URL="<mcpUrl-from-creatio-env-json>"
 
 # Initialize and capture Mcp-Session-Id header
 SESSION_ID=$(curl -s -D- "$MCP_URL" \

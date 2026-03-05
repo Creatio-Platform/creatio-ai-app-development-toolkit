@@ -29,17 +29,18 @@ Do not use `context/archived/**` as primary guidance.
 
 1. Read `AGENTS.md` first.
 2. Start planning mode only at the beginning of a new app workflow and get exact token `APPROVE_PLAN`.
-3. Before `APPROVE_PLAN`: do not run agents, do not run `clio`, do not write `output/<AppName>/`.
-4. After `APPROVE_PLAN`, do not re-enter planning gate between agents.
-5. Run phases in order: setup → requirements → plan → implementation → deploy.
-6. Agents 1/3/4/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`.
-7. Agent 2 is interactive only and must not be delegated.
-8. Enforce Gate R token: `APPROVE_REQUIREMENTS`.
-9. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
-10. For full app creation, use MCP `application.create` as the primary generation path.
-11. Validate `application.create` presence via `tools/list` before implementation.
-12. Persist implementation evidence to `mcp-application-preview.json` and `mcp-application-report.md`.
-13. Use `clio push-pkg` for deployment.
+3. During planning, collect Creatio URL from developer and use it as the only source for endpoint resolution; never assume default hosts.
+4. Before `APPROVE_PLAN`: do not run agents, do not run `clio`, do not write `output/<AppName>/`.
+5. After `APPROVE_PLAN`, do not re-enter planning gate between agents.
+6. Run phases in order: setup → requirements → plan → implementation → deploy.
+7. Agents 1/3/4/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`.
+8. Agent 2 is interactive only and must not be delegated.
+9. Enforce Gate R token: `APPROVE_REQUIREMENTS`.
+10. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
+11. For full app creation, use MCP `application.create` as the primary generation path.
+12. Validate `application.create` presence via `tools/list` before implementation.
+13. Persist implementation evidence to `mcp-application-preview.json` and `mcp-application-report.md`.
+14. Use `clio push-pkg` for deployment.
 
 ## Agent 4 Skills
 
