@@ -1,12 +1,12 @@
 # No-Code Assistant for Creatio
 
-Self-contained toolkit for AI-driven generation of Creatio composable apps from natural language.
+Self-contained toolkit for AI-driven generation and deployment of Creatio composable apps from natural-language requests.
 
 Supported agents: GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code.
 
 ## Source of Truth
 
-Use these files as canonical project documentation:
+Use these files as canonical:
 - `AGENTS.md`
 - `context/essentials.md`
 - `context/schema-reference.md`
@@ -15,28 +15,30 @@ Use these files as canonical project documentation:
 - `context/bindings-lookup.json`
 - `templates/**`
 
-`context/archived/**` contains legacy material and is not canonical.
+`context/archived/**` is reference-only.
 
-## Quick Start
+## Workflow
 
-1. Open this repo with your AI coding agent.
-2. Ask: `Create a Todo List app with tasks, statuses, priorities on http://mysite.creatio.com`.
-3. The orchestrator runs 5 phases: setup → requirements → planning → implementation → deploy.
-4. Output is generated under `output/<AppName>/`.
+Orchestrator flow:
+1. Planning start (Gate P): developer provides target Creatio URL and confirms with `APPROVE_PLAN`.
+2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
+3. Requirements gathering (interactive): confirms scope and gets `APPROVE_REQUIREMENTS` (Gate R).
+4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
+5. Implementation: uses MCP `application.create` to generate preview, then materializes files to `output/<AppName>/packages/**`.
+6. Deploy and verify: `clio push-pkg`, compile/restart checks, deployment report.
+
+All generated artifacts are under `output/<AppName>/`.
 
 ## Architecture
 
 ```
 Orchestrator (AGENTS.md)
-├── Agent 1: Environment Setup      -> .creatio-env.json
-├── Agent 2: Requirements (interactive) -> requirements.md + workflow-state.json
-├── Agent 3: Implementation Plan    -> plan.md
-├── Agent 4: Implementation         -> packages/**
-│   ├── Skill: package-descriptor-creation
-│   ├── Skill: entity-creation (MCP)
-│   ├── Skill: page-creation
-│   └── Skill: data-bindings-creation
-└── Agent 5: Deploy & Verification  -> deployment report
+├── Agent 1: Environment Setup           -> .creatio-env.json
+├── Agent 2: Requirements (interactive)  -> requirements.md + workflow-state.json
+├── Agent 3: Implementation Plan         -> plan.md
+├── Agent 4: Implementation              -> packages/** + MCP preview artifacts
+│   └── Skill: application-creation
+└── Agent 5: Deploy & Verification       -> deployment report
 ```
 
 ## Repository Structure
@@ -51,6 +53,7 @@ agents/
   04-implementation.md
   05-deploy-verification.md
 skills/
+  application-creation/SKILL.md
   entity-creation/SKILL.md
   page-creation/SKILL.md
   data-bindings-creation/SKILL.md
@@ -70,16 +73,15 @@ output/
 ## Prerequisites
 
 - AI code agent
-- [clio](https://github.com/Advance-Technologies-Foundation/clio):
-  - `dotnet tool install clio -g`
-- Access to a Creatio instance
+- [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
+- Access to a running Creatio instance
 
 ## Example Prompt
 
 ```
 Create a Todo List application with tasks that have title, description,
-status (New/In Progress/Done), priority (Low/Medium/High), and due date.
-Deploy to http://mysite.creatio.com
+status (New/In Progress/Done), priority (Low/Medium/High), and due date
+on <CREATIO_URL>.
 ```
 
-See `examples/todo-list/` for a complete reference output.
+See `examples/todo-list/` for an end-to-end reference.
