@@ -1,0 +1,103 @@
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.mcp_context_adapter import ContextError, normalize_result_document
+
+
+def build_short_context():
+    return {
+        "success": True,
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "code": "UsrMyApp"
+        },
+        "packages": {
+            "UsrMyPkg": {
+                "uId": "22222222-2222-2222-2222-222222222222",
+                "isPrimary": True,
+                "entities": {
+                    "UsrMyEntity": {
+                        "uId": "33333333-3333-3333-3333-333333333333",
+                        "caption": "My Entity",
+                        "columns": {
+                            "UsrName": {
+                                "uId": "66666666-6666-6666-6666-666666666666",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        }
+                    },
+                    "UsrMyEntityType": {
+                        "uId": "55555555-5555-5555-5555-555555555555",
+                        "caption": "My Entity Type",
+                        "columns": {
+                            "Name": {
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+def build_short_error_context():
+    return {
+        "success": False,
+        "error": {
+            "message": "Validation failed"
+        }
+    }
+
+
+def build_preview_context():
+    return {
+        "meta": {
+            "success": True
+        },
+        "packages": []
+    }
+
+
+class McpContextAdapterTests(unittest.TestCase):
+    def test_normalize_result_document_builds_editable_package_entity_context(self):
+        normalized = normalize_result_document(build_short_context())
+        self.assertEqual(normalized["contractType"], "short")
+        self.assertIn("editableContext", normalized)
+        editable_context = normalized["editableContext"]
+        self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
+        self.assertEqual(len(editable_context["packages"]), 1)
+        package = editable_context["packages"][0]
+        self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")
+        entity_names = [entity["name"] for entity in package["entities"]]
+        self.assertEqual(entity_names, ["UsrMyEntity", "UsrMyEntityType"])
+        root_entity = package["entities"][0]
+        lookup_entity = package["entities"][1]
+        self.assertEqual(root_entity["kind"], "entity")
+        self.assertEqual(root_entity["columns"][0]["name"], "UsrName")
+        self.assertEqual(root_entity["columns"][0]["uId"], "66666666-6666-6666-6666-666666666666")
+        self.assertEqual(lookup_entity["kind"], "entity")
+        self.assertEqual(lookup_entity["columns"][0]["name"], "Name")
+        self.assertNotIn("uId", lookup_entity["columns"][0])
+
+    def test_normalize_result_document_keeps_short_error_without_editable_context(self):
+        normalized = normalize_result_document(build_short_error_context())
+        self.assertEqual(normalized["contractType"], "short")
+        self.assertIsNone(normalized["editableContext"])
+        self.assertFalse(normalized["success"])
+        self.assertEqual(normalized["error"]["message"], "Validation failed")
+
+    def test_normalize_result_document_rejects_legacy_preview_contract(self):
+        with self.assertRaises(ContextError):
+            normalize_result_document(build_preview_context())
+
+
+if __name__ == "__main__":
+    unittest.main()
