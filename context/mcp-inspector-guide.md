@@ -107,10 +107,15 @@ Inspector запустить два сервери:
 |------|------|
 | `entity.get_schema_info` | Отримати UId та деталі існуючої entity схеми за іменем |
 | `entity.list_parents` | Список доступних батьківських схем для наслідування |
-| `entity.create` | Створення entity з колонками, повертає файли у відповіді |
-| `entity.create_lookup` | Створення lookup entity, повертає файли у відповіді |
+| `entity.create` | DB-first створення entity з колонками, повертає persisted snapshot |
+| `entity.create_lookup` | DB-first створення lookup entity, повертає persisted snapshot |
 | `entity.check_name` | Перевірка чи ім'я entity вільне |
-| `application.create` | DB-first створення повного застосунку, short або preview JSON контракт |
+| `entity.update` | DB-first оновлення entity через explicit operations |
+| `application.create` | DB-first створення повного застосунку, повертає compact short context |
+| `application.get_list` | Список існуючих applications для discovery перед update flow |
+| `application.get_info` | Поточний compact application context з БД для існуючого application |
+| `binding.get_columns` | Повертає колонки, UId та data value types для існуючої schema |
+| `binding.create` | Генерує `descriptor/data/filter` для binding records, підтримує `rawSchemaJson` |
 
 ```
 ┌─ Tools ──────────────────────┐  ┌─ Select a tool ────────────┐
@@ -122,6 +127,10 @@ Inspector запустить два сервери:
 │ entity.create_lookup        ›│  │                            │
 │ entity.check_name           ›│  │                            │
 │ application.create          ›│  │                            │
+│ application.get_list        ›│  │                            │
+│ application.get_info        ›│  │                            │
+│ binding.get_columns         ›│  │                            │
+│ binding.create              ›│  │                            │
 └───────────────────────────────┘  └────────────────────────────┘
 ```
 
@@ -169,15 +178,15 @@ Tool Result: Success
 
 1. У списку tools зліва натисніть на **entity.create_lookup**
 2. Праворуч відкриється форма з полями:
-   - **packageUId*** — GUID пакету (обов'язкове)
-   - **name*** — ім'я entity (обов'язкове, має починатись з `Usr`)
-   - **caption*** — відображуване ім'я (обов'язкове)
-   - **outputPath** — шлях для запису файлів на диск (необов'язкове)
+   - **packageUId*** — GUID пакету
+   - **name*** — ім'я entity
+   - **caption*** — відображуване ім'я
+   - **outputPath** — deprecated, ігнорується
 3. Заповніть:
    - **packageUId**: `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`
    - **name**: `UsrTestLookup`
    - **caption**: `Test Lookup`
-   - **outputPath**: _(залиште порожнім — файли повернуться тільки у відповіді)_
+   - **outputPath**: _(залиште порожнім — параметр ігнорується)_
 4. Натисніть **Run Tool**
 5. Результат:
 
@@ -185,16 +194,17 @@ Tool Result: Success
 Tool Result: Success
 
 {
-  entityName: "UsrTestLookup"
-  files: {
-    descriptor: "{ \"Descriptor\": { \"UId\": \"...\", ... } }"
-    metadata: "= MetaData.Schema.UId \"...\" ..."
-    properties: "{ \"Properties\": { ... } }"
+  success: true
+  packageUId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  entity: {
+    uId: "..."
+    name: "UsrTestLookup"
+    caption: "Test Lookup"
+    parentSchemaName: "BaseLookup"
+    columns: [...]
   }
 }
 ```
-
-> Кожне поле `files` містить повний вміст відповідного файлу: `descriptor.json`, `metadata.json`, `properties.json`.
 
 ## Крок 7: Тестування entity.create з колонками
 
@@ -205,9 +215,9 @@ Tool Result: Success
    - **packageUId*** — GUID пакету
    - **name*** — ім'я entity
    - **caption*** — відображуване ім'я
-   - **parentSchemaName** — батьківська схема (за замовчуванням BaseEntity)
+   - **parentSchemaName** — батьківська схема
    - **columnsJson** — JSON масив визначень колонок
-   - **outputPath** — шлях для запису на диск (необов'язкове)
+   - **outputPath** — deprecated, ігнорується
 3. Заповніть:
    - **packageUId**: `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`
    - **name**: `UsrTestOrder`
@@ -219,7 +229,7 @@ Tool Result: Success
      ```
    - **outputPath**: _(залиште порожнім)_
 4. Натисніть **Run Tool**
-5. Результат — JSON з трьома файлами. У metadata будуть всі 4 колонки.
+5. Результат — persisted entity snapshot з усіма колонками після save в БД.
 
 > ⚠️ **columnsJson** — це рядок з JSON масивом. Вставляйте його в одну строку без переносів.
 
@@ -240,29 +250,57 @@ Tool Result: Success
 3. Натисніть **Run Tool**
 4. Побачите UId та деталі схеми Contact
 
-## Крок 10: Тестування з outputPath (запис на диск серверу)
+## Крок 10: Тестування entity.update
 
-Якщо хочете перевірити що файли також записуються на диск серверу:
-
-1. Оберіть `entity.create_lookup`
-2. Заповніть ті ж параметри + додайте **outputPath**: `/tmp/test-mcp/UsrTestLookup`
+1. Оберіть `entity.update`
+2. Заповніть:
+   - `entityUId`: GUID існуючої entity
+   - `packageUId`: GUID пакету
+   - `name`: існуюче ім'я entity
+   - `caption`: поточний caption
+   - `parentSchemaName`: поточний parent
+   - `operationsJson`:
+     ```json
+     [{"operation":"addColumn","column":{"name":"UsrStatus","caption":"Status","referenceSchemaName":"UsrTestLookup"}}]
+     ```
 3. Натисніть **Run Tool**
-4. Результат міститиме ті ж файли у відповіді + файли будуть записані на диск серверу
-5. Перевірте на сервері:
-   ```bash
-   ls -la /tmp/test-mcp/UsrTestLookup/
-   # descriptor.json  metadata.json  properties.json
-   ```
-
-> 💡 Якщо outputPath не вказано — файли повертаються ТІЛЬКИ у JSON відповіді, на диск нічого не пишеться.
+4. Очікуваний результат:
+   - `success=true`
+   - `entity.columns` уже містить нову колонку
+   - `appliedOperations` повертає виконані дії
 
 ---
 
-## Крок 11: Тестування application.create (DB-first)
+## Крок 11: Тестування binding.get_columns
 
-Цей tool створює застосунок у БД і може повернути:
-- короткий JSON статус (новий контракт)
-- preview JSON (`meta` + `packages`) у старому контракті
+1. Оберіть `binding.get_columns`
+2. У полі `entityName` введіть `SysModule`
+3. Натисніть **Run Tool**
+4. Очікуваний результат:
+   - JSON масив колонок
+   - для кожної колонки є `name`, `uId`, `dataValueTypeName`
+
+## Крок 12: Тестування binding.create
+
+1. Оберіть `binding.create`
+2. Заповніть:
+   - `entityName`: `UsrTestLookup`
+   - `bindingName`: `UsrTestLookup_Lookup`
+   - `rowsJson`:
+     ```json
+     [[{"columnName":"Id","value":"11111111-0000-0000-0000-000000000001"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]
+     ```
+3. Якщо schema ще не задеплоєна і ви щойно створили її через `entity.create_lookup`, додайте `rawSchemaJson` з `schemaUId`, `parentSchemaName` і колонками з MCP відповіді.
+4. Натисніть **Run Tool**
+5. Очікуваний результат:
+   - `bindingName`
+   - `files.descriptor`
+   - `files.data`
+   - `files.filter`
+
+## Крок 13: Тестування application.create (DB-first)
+
+Цей tool створює застосунок у БД і повертає compact short context.
 
 1. У списку tools натисніть **application.create**
 2. Заповніть поля:
@@ -274,13 +312,11 @@ Tool Result: Success
    - `optionalTemplateDataJson`: `{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}`
 3. Натисніть **Run Tool**
 4. Очікуваний результат:
-   - у відповіді поле `content[0].text` містить:
-     - або JSON з `success=true` і `appId`
-     - або JSON з `meta.success=true` і `packages`
+   - у відповіді поле `content[0].text` містить JSON з `success=true`, `app`, `packages`
 5. Типові помилки:
-   - `{"success":false,"message":"iconId must be a valid GUID...","error":{...}}`
-   - `{"success":false,"message":"Icon with id '...' was not found","error":{...}}`
-   - `{"success":false,"message":"useAIContentGeneration=true is not supported...","error":{...}}`
+   - `{"success":false,"error":{"message":"iconId must be a valid GUID..."}}`
+   - `{"success":false,"error":{"message":"Icon with id '...' was not found"}}`
+   - `{"success":false,"error":{"message":"useAIContentGeneration=true is not supported..."}}`
 
 ---
 

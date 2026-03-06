@@ -1,15 +1,15 @@
 ---
 name: application-creation
-description: Create a full Creatio application via MCP tool application.create and persist normalized result artifacts.
-compatibility: Requires running Creatio MCP endpoint with application.create tool available.
+description: Create or refresh a Creatio application context via MCP short-contract application tools and synchronize approved schema changes via DB-first entity tools.
+compatibility: Requires running Creatio MCP endpoint with `application.create`, `application.get_list`, `application.get_info`, `entity.create`, `entity.create_lookup`, `entity.update`, `binding.get_columns`, and `binding.create` available.
 metadata:
-  version: "1.0"
+  version: "2.1"
   category: creatio-schema-generation
 ---
 
 # Application Creation via MCP
 
-Use MCP `application.create` as the primary DB-first flow for full app creation, with fallback parsing for legacy preview responses.
+Use MCP `application.create` as the primary DB-first flow for full app creation. Use `application.get_list` and `application.get_info` for existing-app discovery and canonical DB refresh. `output/<AppName>/mcp-application-result.json` must always be overwritten by the latest compact short application context.
 
 ## Outputs
 
@@ -19,96 +19,99 @@ Use MCP `application.create` as the primary DB-first flow for full app creation,
 ## Required Inputs
 
 From `plan.md`:
-- `name`
-- `code`
-- `templateCode`
-- `iconId` (or runtime `auto` strategy)
-- `iconBackground` (or runtime `auto` strategy)
-- `description` (optional)
-- `clientTypeId` (optional)
-- `optionalTemplateDataJson` (optional)
+- resolved `application.create` payload
+- ordered schema sync steps, if any
 
 From env:
 - `.creatio-env.json` → `mcpUrl`
 
 ## MCP Protocol Flow
 
-1. `initialize`:
+1. `initialize`
+2. extract `Mcp-Session-Id`
+3. `tools/list` and verify `application.create`, `application.get_list`, `application.get_info`
+4. for new app flow: `tools/call` → `application.create`
+5. for existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
+6. parse `result.content[0].text` as the short contract
+7. initialize `mcp-application-result.json`
+8. if needed, execute ordered:
+   - `entity.create_lookup`
+   - `entity.create`
+   - `entity.update`
+9. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
+
+## Orchestration Scripts
+
+Run:
+
 ```bash
-curl -s -D- "<mcpUrl>" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agent","version":"1.0"}}}'
+python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json
 ```
 
-2. Extract `Mcp-Session-Id` header.
+This adds `editableContext` with:
+- `packages[] { packageUId, name, isPrimary, entities[] }`
+- `entities[] { entityUId, name, caption, kind, parentSchemaName?, columns[] }`
 
-3. `tools/list` and verify `application.create` exists.
+When approved edits exist, save the edited package/entity projection and run:
 
-4. `tools/call`:
 ```bash
-curl -s "<mcpUrl>" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: <session-id>" \
-  -d '{
-    "jsonrpc":"2.0",
-    "id":2,
-    "method":"tools/call",
-    "params":{
-      "name":"application.create",
-      "arguments":{
-        "name":"<name>",
-        "code":"<code>",
-        "templateCode":"<templateCode>",
-        "iconId":"<iconId>",
-        "iconBackground":"<iconBackground>",
-        "description":"<description>",
-        "clientTypeId":"<clientTypeId>",
-        "optionalTemplateDataJson":"<json-string>"
-      }
-    }
-  }'
+python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json
 ```
+
+The script computes the diff, calls ordered entity tools, and refreshes canonical context through `application.get_info` after each successful mutation.
 
 ## Response Handling
 
 `tools/call` response content is text.
 
-Expected text payload can be one of:
-
-1. `short` contract:
-   - `success` (boolean)
-   - `message` (string)
-   - `appId` (GUID when success=true)
-   - `error` object when success=false
-
-2. `preview` contract:
-   - `meta.success` (boolean)
-   - `packages` (array)
-   - optional `meta.message`, `meta.appId`
-
-Normalize parsed result and persist:
+Expected contract:
 - `success`
-- `message`
-- `appId`
+- `app { id, code }`
+- `packages { <PackageName>: { uId, isPrimary, entities { <EntityName>: { uId, caption, columns { <ColumnName>: { uId?, caption, dataValueTypeName, referenceSchemaName? } } } } } }`
 - `error`
-- `contractType` (`short` or `preview`)
-- `previewPackages` and `previewMeta` for preview contract
+
+Normalize and persist:
+- `contractType`
+- `success`
+- `app`
+- `packages`
+- `error`
+- `schemaSync`
+- `editableContext`
+
+Persist the compact context from MCP and set `contractType=short`.
+
+## Schema Sync Rules
+
+- Create new lookup entities first with `entity.create_lookup`.
+- Use `entity.create` only for new entities not already created by the application template.
+- Use `entity.update` for template-created entities and pass only `operationsJson`.
+- `entity.update` operations are explicit:
+  - `addColumn`
+  - `updateColumn`
+  - `removeColumn`
+- Omission never implies deletion.
+
+## Related Binding Tools
+
+- `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
+- `binding.create` generates `descriptor.json`, `data.json`, and `filter.json` for binding records and lookup seed data.
+- Use `rawSchemaJson` with `binding.create` when a target schema was created earlier in the same flow and is not yet queryable through `binding.get_columns`.
 
 ## Validation Checklist
 
 - response text parses as JSON
-- `success` field exists
-- if `contractType=short` and `success=true`, `appId` is non-empty GUID
-- if `contractType=preview` and `success=true`, `previewPackages` is non-empty
-- if `success=false`, `message` is non-empty
-- result persisted to `mcp-application-result.json`
-- summary persisted to `mcp-application-report.md`
+- `contractType=short`
+- `success` exists
+- if `success=true`, `app.id` is non-empty
+- if `success=true`, `packages` is non-empty
+- if `success=false`, `error.message` is non-empty
+- each successful entity tool call is followed by a successful `application.get_info` refresh
+- result and report are persisted
 
 ## Retry and Failure Policy
 
 - Retry MCP calls up to 3 times with 10s delay for transient failures.
-- If `application.create` is missing in `tools/list`, stop with blocker.
-- If result has `success=false`, stop with blocker and surface `message`.
-- For `ERROR:` plain-text responses, stop with blocker and persist raw response in report.
+- If required application tools are missing in `tools/list`, stop with blocker.
+- If any tool returns `success=false`, stop with blocker and surface `error.message`.
+- For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.

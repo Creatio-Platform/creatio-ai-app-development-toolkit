@@ -13,11 +13,23 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 
 **MCP Application Creation (DB-first)**
 - Primary generation path is MCP tool `application.create`
+- Discovery path for existing apps is `application.get_list`
+- Canonical DB refresh path is `application.get_info`
 - Tool creates application artifacts directly in Creatio DB
-- Tool can return:
-  - short status JSON (`success`, `message`, `appId`/`error`)
-  - legacy preview JSON (`meta.success`, `packages`)
+- Tool returns short compact context JSON (`success`, `app`, `packages` dict, `error`)
 - Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
+- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application.create` or `application.get_info`
+
+**Entity Schema Sync (DB-first)**
+- Secondary generation path is MCP `entity.create`, `entity.create_lookup`, `entity.update`
+- These tools mutate entity schemas in Creatio DB and return persisted schema snapshots
+- `entity.update` accepts explicit `operationsJson` entries: `addColumn`, `updateColumn`, `removeColumn`
+- New lookup entities must be created before entities or updates that reference them
+
+**Data Binding Generation (MCP-assisted)**
+- `binding.get_columns` returns column names, UIds, and data value types for deployed schemas
+- `binding.create` generates descriptor/data/filter JSON for SysModule, SysModuleEntity, lookup seed data, and other package data rows
+- `binding.create` supports `rawSchemaJson` for entities not yet deployed and optional `outputPath` when files must also be written on the server
 
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)
@@ -129,11 +141,10 @@ Primary generation flow:
 2. Initialize MCP session and validate tool availability (`tools/list`)
 3. Execute `application.create`
 4. Persist MCP result to `output/<AppName>/mcp-application-result.json`
-5. Normalize response contract (`short` or `preview`) and validate `success=true`
-6. For `deploy_now`:
-   - preview contract: materialize packages and run `clio push-pkg`
-   - short contract: skip package push
-   - then run compile/restart/healthcheck
+5. Normalize the short response contract and validate `success=true`
+6. If approved schema changes exist, execute ordered entity sync and refresh canonical context with `application.get_info`
+7. If explicit data bindings are required, use `binding.get_columns` and `binding.create` after schema changes as needed
+8. For `deploy_now`, run compile/restart/healthcheck
 
 ### MCP `application.create` Input
 
@@ -274,7 +285,7 @@ clio install-gate -e myenv
 ## Deploy Flow Diagram
 
 ```
-MCP application.create → normalize result (short|preview) → [preview only: materialize + push-pkg] → compile-configuration → restart-web-app → verify
+MCP application.create or application.get_info → initialize canonical context → [optional] entity.create_lookup/entity.create/entity.update → application.get_info refresh → [optional] binding.get_columns/binding.create → compile-configuration → restart-web-app → verify
 ```
 
 ---

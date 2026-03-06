@@ -92,7 +92,7 @@ Create the file `output/<AppName>/.creatio-env.json`:
 ```
 
 Replace `true` with `false` if .NET Framework was detected in Step 4.
-For `mcpUrl`: if .NET Core, use `<URL>/mcp`; if .NET Framework (IIS), use `<URL>/0/mcp`.
+For the current MCP integration, use `<URL>/mcp` for `mcpUrl`.
 
 ### 7. Verify MCP endpoint (MANDATORY)
 

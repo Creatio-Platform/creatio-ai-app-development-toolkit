@@ -2,7 +2,7 @@
 
 ## Role
 
-Read `plan.md`, call MCP `application.create` (DB-first), parse short or legacy preview response, persist normalized result artifacts, and validate output.
+Read `plan.md`, call MCP application tools, initialize canonical context in `mcp-application-result.json`, execute ordered entity sync calls when required, refresh context via `application.get_info`, and validate output.
 
 ## Input/Output
 
@@ -34,7 +34,7 @@ If this fails, stop immediately.
 
 ### 1. Parse `plan.md`
 
-Extract resolved MCP payload and runtime resolution strategy.
+Extract resolved MCP payload, runtime resolution strategy, and ordered schema sync steps.
 
 ### 2. Initialize MCP session
 
@@ -46,7 +46,10 @@ If initialize fails, stop and report blocker.
 
 ### 3. Verify tool availability
 
-Call `tools/list` and verify `application.create` exists.
+Call `tools/list` and verify required application tools exist:
+- `application.create`
+- `application.get_info`
+- `application.get_list`
 
 If missing, stop and report blocker.
 
@@ -77,55 +80,80 @@ If payload has `iconBackground=auto`:
   - `#C0392B`
   - `#8E44AD`
 
-### 5. Call `application.create`
+### 5. Initialize application context
 
-Call MCP `tools/call` with:
-- `name`
-- `code`
-- `templateCode`
-- `iconId`
-- `iconBackground`
-- `description` (if present)
-- `clientTypeId` (if present)
-- `optionalTemplateDataJson` (if present)
+For new app flow:
+- call MCP `tools/call` with `application.create`
+- pass `name`, `code`, `templateCode`, `iconId`, `iconBackground`
+- include `description`, `clientTypeId`, `optionalTemplateDataJson` when present
+
+For existing app flow:
+1. call `application.get_list`
+2. validate the target app is discoverable
+3. call `application.get_info` with the chosen `appId` or `appCode`
 
 Retry up to 3 times with 10s delay on transient failures.
 
-Parse `tools/call` response text from `result.content[0].text` and detect contract:
-- `short` contract:
-  - top-level JSON contains `success`, `message`, optional `appId`, optional `error`
-- `preview` contract:
-  - JSON contains `meta.success` and `packages` array
+Parse `tools/call` response text from `result.content[0].text` and validate the short contract:
+- top-level JSON contains `success`
+- when `success=true`, JSON contains `app` and non-empty `packages`
+- when `success=false`, JSON contains `error.message`
 
 Stop and report blocker when:
 - text is plain `ERROR: ...`
 - payload is not parseable JSON
-- `short` contract has `success=false`
-- `preview` contract has `meta.success=false`
+- `success=false`
+- successful response is missing `app.id` or `packages`
 
-### 6. Persist result
+### 6. Initialize canonical context
 
 Write normalized MCP result to:
 - `output/<AppName>/mcp-application-result.json`
 
-Normalized result shape:
-- `success` (boolean)
-- `message` (string)
-- `appId` (GUID when available)
-- `error` (object when available)
-- `contractType` (`short` or `preview`)
-- `previewPackages` (array, only for preview contract)
-- `previewMeta` (object, only for preview contract)
+Run:
 
-### 7. Validate output contract
+```bash
+python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json
+```
+
+Normalized result shape:
+- `contractType` (`short`)
+- `success` (boolean)
+- `app` (object)
+- `packages` (dict keyed by package name and merged sync state)
+- `error` (object when available)
+- `schemaSync` (array of executed entity tool operations with tool name, target, and status)
+- `editableContext` (package/entity-oriented projection for approved edits)
+
+Persist the compact tree response as-is and add `contractType=short`.
+
+### 7. Execute schema sync steps
+
+If `plan.md` contains approved schema sync:
+1. save the approved package/entity edits to `output/<AppName>/editable-context.json`
+2. run:
+   ```bash
+   python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json
+   ```
+3. let the script compute and execute ordered MCP calls:
+   - `entity.create_lookup`
+   - `entity.create`
+   - `entity.update`
+4. after every successful entity mutation, execute `application.get_info` for the current app and overwrite `mcp-application-result.json`
+5. append an entry to `schemaSync`
+
+Stop and report blocker on first failed entity tool call.
+
+### 8. Validate output contract
 
 Validate result payload:
 1. top-level `success` exists and is boolean
-2. when `contractType=short` and `success=true`, `appId` is non-empty GUID
-3. when `contractType=preview` and `success=true`, `previewPackages` is non-empty
-4. when `success=false`, `message` is non-empty
+2. `contractType=short`
+3. when `success=true`, `app.id` is a non-empty GUID
+4. when `success=true`, `packages` is non-empty
+5. when `success=false`, `error.message` is non-empty
 
-### 8. Write summary report
+### 9. Write summary report
 
 Create:
 - `output/<AppName>/mcp-application-report.md`
@@ -133,8 +161,8 @@ Create:
 Include:
 - resolved payload fields
 - icon resolution details
-- MCP result (`contractType`, `success`, `message`, `appId` if present)
-- preview package count when contractType is `preview`
+- MCP result (`contractType=short`, `success`, `app.id` if present)
+- schema sync steps executed and refreshed through `application.get_info`
 - validation results for normalized contract
 
 ## Completion Criteria
@@ -143,5 +171,6 @@ Include:
 - MCP initialize and tools/list succeeded
 - `application.create` executed successfully
 - Result persisted to `mcp-application-result.json`
+- All required schema sync steps executed and canonical context refreshed
 - Validation passed
 - Summary persisted to `mcp-application-report.md`

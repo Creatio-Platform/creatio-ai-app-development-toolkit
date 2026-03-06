@@ -39,10 +39,18 @@ Orchestrator flow:
 2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
 3. Requirements gathering: builds `requirements.md`, `request-spec.json`, and `workflow-state.json`.
 4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
-5. Implementation: uses MCP `application.create`, parses short or preview contract, and persists normalized result artifacts.
-6. Deploy and verify (or skip by policy): preview contracts run package push first, then compilation/restart/healthcheck.
+5. Implementation: uses MCP `application.create`, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts.
+6. Deploy and verify (or skip by policy): short DB-first contract runs compilation/restart/healthcheck.
 
 All generated artifacts are under `output/<AppName>/`.
+
+## Runtime Scripts
+
+- `python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json`
+- `python3 scripts/mcp_schema_sync.py plan --current-result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json`
+- `python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json`
+
+`mcp-application-result.json` now stores the compact short MCP response plus `editableContext`, which is the package/entity-oriented model intended for LLM or HITL edits before schema synchronization.
 
 ## Architecture
 
@@ -73,6 +81,11 @@ skills/
   page-creation/SKILL.md
   data-bindings-creation/SKILL.md
   package-descriptor-creation/SKILL.md
+scripts/
+  check-approval-gate.sh
+  write-approval-state.sh
+  mcp_context_adapter.py
+  mcp_schema_sync.py
 context/
   business-checklist.md
   essentials.md

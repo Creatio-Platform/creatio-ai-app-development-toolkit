@@ -2,7 +2,7 @@
 
 ## App Summary
 
-Create Todo List application in DB through MCP `application.create` and persist normalized result artifacts to local `output`.
+Create Todo List application in DB through MCP `application.create`, initialize canonical context in `mcp-application-result.json`, and use DB-first entity sync if approved columns or lookups require follow-up mutations.
 
 ## Resolved MCP Payload
 
@@ -48,10 +48,8 @@ Deterministic pseudo-random by `code` over palette:
 ## Validation Rules
 
 1. MCP `tools/list` contains `application.create`.
-2. `application.create` response is successful and parseable (`short` or `preview`).
-3. `success=true` and contract-specific validation passes:
-   - short contract: non-empty `appId`
-   - preview contract: non-empty `previewPackages`
+2. `application.create` response is successful and parseable as the short contract.
+3. `success=true`, `app.id` is non-empty, and `packages` is non-empty.
 4. `mcp-application-result.json` and report are persisted.
 
 ## Blocker Conditions

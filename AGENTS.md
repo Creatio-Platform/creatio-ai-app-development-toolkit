@@ -30,7 +30,7 @@ You do NOT implement anything directly. You coordinate 5 agents in sequence:
 1. **Environment Setup** → configures clio connection
 2. **Requirements Gathering** → interactive Q&A with the developer (do NOT delegate to sub-agent)
 3. **Implementation Plan** → generates MCP execution plan
-4. **Implementation** → creates application in DB via MCP `application.create`
+4. **Implementation** → creates or refreshes application context in DB via MCP application tools and synchronizes approved entity schemas via MCP entity tools
 5. **Deploy & Verification** → compiles, restarts, verifies
 
 ## Mandatory Planning Start
@@ -161,10 +161,12 @@ Developer prompt (natural language)
 8. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
 9. Agent 4 implementation order:
    - Step A: prepare and validate `application.create` payload from `plan.md`
-   - Step B: call MCP `tools/list` and verify `application.create` is available
+   - Step B: call MCP `tools/list` and verify required application tools are available
    - Step C: call MCP `tools/call` for `application.create`
-   - Step D: parse `short` or `preview` response contract and persist normalized MCP result JSON and execution report
-   - Step E: validate normalized `success=true` with contract-specific checks
+   - Step D: parse the verified `short` contract and initialize `output/<AppName>/mcp-application-result.json`
+   - Step E: if plan contains approved schema changes, execute ordered `entity.create_lookup`, `entity.create`, `entity.update` calls
+   - Step F: after each successful entity tool call, refresh canonical context via `application.get_info` and overwrite `mcp-application-result.json`
+   - Step G: validate normalized `success=true` with short-contract checks
 10. On failure, decide: retry, fix, or report blocker.
 11. Do NOT proceed to Agent 5 if Agent 4 validation fails.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
@@ -181,15 +183,17 @@ Developer prompt (natural language)
 
 1. All entity/page/package names start with `Usr` prefix.
 2. Use MCP `application.create` as the primary generation path for full app creation.
-3. Entity-level MCP tools (`entity.create`, `entity.create_lookup`, `entity.update`) are not the primary path for full app generation.
-4. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
-5. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
-6. For `deploy_now`, run compatibility deploy flow:
-   - if contract is `preview`, materialize and `push-pkg` generated packages first
+3. Use MCP `application.get_list` to discover existing applications before update flows.
+4. Use MCP `application.get_info` as the canonical DB refresh for current application context.
+5. Entity-level MCP tools (`entity.create`, `entity.create_lookup`, `entity.update`) are the secondary DB-first sync path after `application.create` or `application.get_info` when approved columns or lookup dependencies must be applied.
+6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
+7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
+8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
+9. For `deploy_now`, run the DB-first deploy flow:
    - run `compile-configuration`, `restart-web-app`, `healthcheck`
-7. Generate files only in `output/<AppName>/`.
-8. If MCP endpoint is unavailable or `application.create` is missing, stop and report blocker.
-9. Agent 4 must persist MCP evidence:
+10. Generate files only in `output/<AppName>/`.
+11. If MCP endpoint is unavailable or required application tools are missing, stop and report blocker.
+12. Agent 4 must persist MCP evidence:
    - `output/<AppName>/mcp-application-result.json`
    - `output/<AppName>/mcp-application-report.md`
 
@@ -224,9 +228,10 @@ When developer provides a natural-language request (for example: “Generate an 
 2. Run Agent 1 in background → wait → verify `.creatio-env.json`.
 3. Run Agent 2 interactively → complete business checklist + collect deploy policy → persist `request-spec.json` and `workflow-state.json`.
 4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify MCP result artifacts.
-6. If deploy policy is `deploy_now`: run `scripts/check-approval-gate.sh <AppName>` → run Agent 5.
-7. If deploy policy is `generate_only`: return generated artifacts and skip deploy phase.
+5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify MCP result artifacts and synchronized schema context.
+6. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
+7. If deploy policy is `deploy_now`: run `scripts/check-approval-gate.sh <AppName>` → run Agent 5.
+8. If deploy policy is `generate_only`: return generated artifacts and skip deploy phase.
 
 ## Example
 

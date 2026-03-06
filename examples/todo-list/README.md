@@ -71,8 +71,9 @@ Users should manage tasks through a list and form page and track task lifecycle.
 
 1. Build `application.create` payload from requirements and request spec
 2. Call MCP tool `application.create`
-3. Save normalized result (`short` or `preview`) and report
-4. For `deploy_now`: preview contract runs package push first, then compile/restart/healthcheck
+3. Initialize canonical context in `mcp-application-result.json`
+4. Apply ordered entity sync via `entity.create_lookup`, `entity.create`, `entity.update` when required
+5. For `deploy_now`: run compile/restart/healthcheck
 
 ## Example Deploy
 
@@ -85,5 +86,5 @@ clio healthcheck -e <your_env>
 ## Notes
 
 - `application.create` persists generated artifacts in DB.
-- Current environments may still return legacy preview contract (`meta` + `packages`).
+- Short contract returns compact context with `app` and `packages`.
 - Runtime verification checks are executed in deploy phase.
