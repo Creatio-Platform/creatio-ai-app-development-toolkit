@@ -101,6 +101,7 @@ Canonical context rule:
 - initialize from `application.create` for new apps
 - initialize from `application.get_info` for existing apps
 - after every successful entity mutation, refresh context via `application.get_info`
+- treat `entity.create_lookup`, `entity.create`, and `entity.update` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
 
 ### 5. Build `plan.md`
 
@@ -126,6 +127,7 @@ Check:
 - deploy preference is valid and propagated from request spec
 - lookup creation steps are ordered before updates that reference them
 - every `entity.update` step uses explicit `operationsJson`
+- the implementation phase is described as synchronous, not a detached/background write phase
 
 ### 7. Save `plan.md`
 

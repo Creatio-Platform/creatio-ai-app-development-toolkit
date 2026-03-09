@@ -34,7 +34,7 @@ Do not use `context/archived/**` as primary guidance.
 4. Ask technical questions only for blockers and deploy policy.
 5. Never expose internal gate tokens or script names in user-facing dialogue.
 6. Run phases in order: setup → requirements → plan → implementation → deploy/skip.
-7. Agents 1/3/4/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`.
+7. Agents 1/3/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`. Agent 4 runs synchronously.
 8. Agent 2 is interactive only and must not be delegated.
 9. Persist workflow artifacts:
    - `requirements.md`
@@ -43,10 +43,11 @@ Do not use `context/archived/**` as primary guidance.
 10. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
 11. For full app creation, use MCP `application.create` as primary generation path.
 12. Validate `application.create` presence via `tools/list` before implementation.
-13. Persist implementation evidence to `mcp-application-preview.json` and `mcp-application-report.md`.
+13. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
 14. Respect deploy policy:
    - `deploy_now` → run Agent 5 deploy flow
    - `generate_only` → skip deploy and report artifacts only
+15. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 
 ## Agent 4 Skill
 

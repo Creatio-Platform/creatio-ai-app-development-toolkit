@@ -39,7 +39,7 @@ Orchestrator flow:
 2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
 3. Requirements gathering: builds `requirements.md`, `request-spec.json`, and `workflow-state.json`.
 4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
-5. Implementation: uses MCP `application.create`, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts.
+5. Implementation: runs synchronously, uses MCP `application.create`, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
 6. Deploy and verify (or skip by policy): short DB-first contract runs compilation/restart/healthcheck.
 
 All generated artifacts are under `output/<AppName>/`.

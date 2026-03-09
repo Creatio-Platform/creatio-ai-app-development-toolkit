@@ -40,6 +40,8 @@ From env:
    - `entity.update`
 9. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
 
+Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
+
 ## Orchestration Scripts
 
 Run:
@@ -86,6 +88,7 @@ Persist the compact context from MCP and set `contractType=short`.
 - Create new lookup entities first with `entity.create_lookup`.
 - Use `entity.create` only for new entities not already created by the application template.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
+- Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
 - `entity.update` operations are explicit:
   - `addColumn`
   - `updateColumn`
@@ -115,3 +118,4 @@ Persist the compact context from MCP and set `contractType=short`.
 - If required application tools are missing in `tools/list`, stop with blocker.
 - If any tool returns `success=false`, stop with blocker and surface `error.message`.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
+- If `application.get_info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.

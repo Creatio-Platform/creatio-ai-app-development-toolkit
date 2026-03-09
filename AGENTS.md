@@ -154,8 +154,8 @@ Developer prompt (natural language)
 1. Start with Gate P planning and natural-language confirmation once per workflow.
 2. Do not re-enter planning gate between agents after Gate P is approved.
 3. Execute agents sequentially (1 → 2 → 3 → 4 → 5).
-4. Agents 1/3/4/5 run in background mode with `task(..., mode: "background")`.
-5. After launching a background agent, wait with `read_agent(agent_id, wait: true)`.
+4. Agents 1/3/5 run in background mode with `task(..., mode: "background")`. Agent 4 runs synchronously.
+5. After launching a background agent, wait with `read_agent(agent_id, wait: true)`. For Agent 4, surface an explicit “Starting implementation” status and keep execution in the foreground.
 6. Verify expected outputs exist and are non-empty before moving to the next agent.
 7. Agent 2 is interactive only. Never delegate it.
 8. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
@@ -165,8 +165,10 @@ Developer prompt (natural language)
    - Step C: call MCP `tools/call` for `application.create`
    - Step D: parse the verified `short` contract and initialize `output/<AppName>/mcp-application-result.json`
    - Step E: if plan contains approved schema changes, execute ordered `entity.create_lookup`, `entity.create`, `entity.update` calls
-   - Step F: after each successful entity tool call, refresh canonical context via `application.get_info` and overwrite `mcp-application-result.json`
-   - Step G: validate normalized `success=true` with short-contract checks
+   - Step F: entity tool success is valid only when the schema is fully materialized, not left in `Database update required`, and immediately refreshable through `application.get_info`
+   - Step G: after each successful entity tool call, refresh canonical context via `application.get_info` and overwrite `mcp-application-result.json`
+   - Step H: if a post-mutation refresh fails with missing server metadata, stop with a core MCP blocker instead of retrying silently in the repo workflow
+   - Step I: validate normalized `success=true` with short-contract checks
 10. On failure, decide: retry, fix, or report blocker.
 11. Do NOT proceed to Agent 5 if Agent 4 validation fails.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
@@ -196,6 +198,7 @@ Developer prompt (natural language)
 12. Agent 4 must persist MCP evidence:
    - `output/<AppName>/mcp-application-result.json`
    - `output/<AppName>/mcp-application-report.md`
+13. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 
 ## Context Files Reference
 
@@ -228,7 +231,7 @@ When developer provides a natural-language request (for example: “Generate an 
 2. Run Agent 1 in background → wait → verify `.creatio-env.json`.
 3. Run Agent 2 interactively → complete business checklist + collect deploy policy → persist `request-spec.json` and `workflow-state.json`.
 4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 → verify MCP result artifacts and synchronized schema context.
+5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts and synchronized schema context.
 6. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
 7. If deploy policy is `deploy_now`: run `scripts/check-approval-gate.sh <AppName>` → run Agent 5.
 8. If deploy policy is `generate_only`: return generated artifacts and skip deploy phase.

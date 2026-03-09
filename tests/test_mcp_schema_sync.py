@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
-from scripts.mcp_schema_sync import WorkflowError, apply_sync_plan, build_sync_plan
+from scripts.mcp_schema_sync import WorkflowError, apply_sync_plan, build_create_action, build_sync_plan
 
 
 def build_current_result_document():
@@ -200,7 +200,60 @@ class FakeMcpClient:
         raise AssertionError(tool_name)
 
 
+class FakeMcpClientRefreshFailure(FakeMcpClient):
+    def call_tool_json(self, tool_name, arguments):
+        self.calls.append((tool_name, arguments))
+        if tool_name == "entity.create_lookup":
+            return {
+                "success": True,
+                "packageUId": arguments["packageUId"],
+                "entity": {
+                    "uId": "66666666-6666-6666-6666-666666666666",
+                    "name": arguments["name"],
+                    "caption": arguments["caption"],
+                    "parentSchemaName": "BaseLookup",
+                    "columns": []
+                }
+            }
+        if tool_name == "application.get_info":
+            raise WorkflowError(
+                'Instance of workspace item with type "Terrasoft.Configuration.UsrMyEntityTypeSchema" cannot be obtained from server metadata'
+            )
+        raise AssertionError(tool_name)
+
+
 class McpSchemaSyncTests(unittest.TestCase):
+    def test_build_create_action_skips_inherited_lookup_columns(self):
+        action = build_create_action({
+            "packageUId": "22222222-2222-2222-2222-222222222222",
+            "name": "UsrMyEntityType",
+            "caption": "My Entity Type",
+            "kind": "lookup",
+            "columns": [
+                {
+                    "name": "Name",
+                    "caption": "Name",
+                    "dataValueTypeName": "Text"
+                },
+                {
+                    "name": "UsrColor",
+                    "caption": "Color",
+                    "dataValueTypeName": "Text"
+                }
+            ]
+        })
+        self.assertEqual(action["toolName"], "entity.create_lookup")
+        self.assertEqual(
+            json.loads(action["arguments"]["columnsJson"]),
+            [
+                {
+                    "name": "UsrColor",
+                    "caption": "Color",
+                    "dataValueTypeName": "Text"
+                }
+            ]
+        )
+
     def test_build_sync_plan_orders_lookup_creation_before_entity_update(self):
         current_context = build_current_result_document()["editableContext"]
         sync_plan = build_sync_plan(current_context, build_edited_context())
@@ -237,6 +290,17 @@ class McpSchemaSyncTests(unittest.TestCase):
             [call[0] for call in fake_client.calls],
             ["entity.create_lookup", "application.get_info", "entity.update", "application.get_info"]
         )
+
+    def test_apply_sync_plan_raises_actionable_error_when_metadata_refresh_fails(self):
+        result_document = build_current_result_document()
+        fake_client = FakeMcpClientRefreshFailure(build_current_result_document())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result_path = Path(temp_dir) / "mcp-application-result.json"
+            with self.assertRaisesRegex(
+                WorkflowError,
+                "application.get_info failed after entity.create_lookup for UsrMyEntityType"
+            ):
+                apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
 
 
 if __name__ == "__main__":

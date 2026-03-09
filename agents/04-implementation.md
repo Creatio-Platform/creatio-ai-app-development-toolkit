@@ -4,6 +4,8 @@
 
 Read `plan.md`, call MCP application tools, initialize canonical context in `mcp-application-result.json`, execute ordered entity sync calls when required, refresh context via `application.get_info`, and validate output.
 
+Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts during app generation.
+
 ## Input/Output
 
 - Input: `output/<AppName>/plan.md`, `output/<AppName>/workflow-state.json`, `output/<AppName>/.creatio-env.json`
@@ -141,6 +143,8 @@ If `plan.md` contains approved schema sync:
    - `entity.update`
 4. after every successful entity mutation, execute `application.get_info` for the current app and overwrite `mcp-application-result.json`
 5. append an entry to `schemaSync`
+6. treat a created/updated schema as valid only when it is immediately queryable through `application.get_info` and not left in a `Database update required` state
+7. if post-mutation refresh fails with missing server metadata, stop with a core MCP blocker instead of mutating repo helper files in the same run
 
 Stop and report blocker on first failed entity tool call.
 
@@ -172,5 +176,6 @@ Include:
 - `application.create` executed successfully
 - Result persisted to `mcp-application-result.json`
 - All required schema sync steps executed and canonical context refreshed
+- No created or updated schema is left in `Database update required`
 - Validation passed
 - Summary persisted to `mcp-application-report.md`

@@ -20,6 +20,7 @@ KIND_PRIORITY = {
     "detail": 2,
     "entity": 3
 }
+CUSTOM_COLUMN_PREFIX = "Usr"
 
 
 class WorkflowError(RuntimeError):
@@ -211,6 +212,15 @@ def extract_editable_context(document):
     raise WorkflowError("Unable to extract editable context")
 
 
+def filter_mutable_columns(columns):
+    filtered = []
+    for raw_column in columns or []:
+        column = normalize_column(raw_column)
+        if column["name"].startswith(CUSTOM_COLUMN_PREFIX):
+            filtered.append(column)
+    return filtered
+
+
 def build_entity_index(editable_context):
     index = {}
     for package in editable_context.get("packages", []):
@@ -225,7 +235,7 @@ def build_entity_index(editable_context):
             indexed_entity["packageName"] = package_name
             indexed_entity["caption"] = indexed_entity.get("caption") or name
             indexed_entity["kind"] = indexed_entity.get("kind") or "entity"
-            indexed_entity["columns"] = [normalize_column(column) for column in indexed_entity.get("columns", [])]
+            indexed_entity["columns"] = filter_mutable_columns(indexed_entity.get("columns", []))
             index[(package_u_id, name)] = indexed_entity
     return index
 
@@ -286,14 +296,15 @@ def build_column_operations(current_entity, edited_entity, available_names):
 
 def build_create_action(entity):
     tool_name = "entity.create_lookup" if entity.get("kind") == "lookup" else "entity.create"
+    create_columns = json.dumps(filter_mutable_columns(entity.get("columns", [])), ensure_ascii=True, separators=(",", ":"))
     arguments = {
         "packageUId": entity["packageUId"],
         "name": entity["name"],
-        "caption": entity.get("caption") or entity["name"]
+        "caption": entity.get("caption") or entity["name"],
+        "columnsJson": create_columns
     }
     if tool_name == "entity.create":
         arguments["parentSchemaName"] = entity.get("parentSchemaName") or "BaseEntity"
-        arguments["columnsJson"] = json.dumps(entity.get("columns", []), ensure_ascii=True, separators=(",", ":"))
     return {
         "toolName": tool_name,
         "target": entity["name"],
@@ -399,6 +410,20 @@ def ensure_required_tools(client):
         raise WorkflowError(f"Required MCP tools are missing: {', '.join(missing)}")
 
 
+def build_refresh_failure(action, error):
+    message = str(error)
+    if "cannot be obtained from server metadata" in message:
+        return WorkflowError(
+            f"application.get_info failed after {action['toolName']} for {action['target']}: "
+            f"the schema is still missing from server metadata after a successful mutation. "
+            f"This usually means the MCP entity tool did not fully materialize database/runtime metadata. "
+            f"Original error: {message}"
+        )
+    return WorkflowError(
+        f"application.get_info failed after {action['toolName']} for {action['target']}: {message}"
+    )
+
+
 def apply_sync_plan(client, result_document, edited_context, result_path):
     current_document = normalize_result_document(result_document)
     current_context = extract_editable_context(current_document)
@@ -420,7 +445,10 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
             "packageUId": action["packageUId"],
             "status": "success"
         })
-        refreshed_context = client.call_tool_json("application.get_info", app_selector)
+        try:
+            refreshed_context = client.call_tool_json("application.get_info", app_selector)
+        except WorkflowError as error:
+            raise build_refresh_failure(action, error)
         normalized_context = normalize_result_document(refreshed_context)
         normalized_context["schemaSync"] = list(schema_sync)
         current_document = normalized_context
