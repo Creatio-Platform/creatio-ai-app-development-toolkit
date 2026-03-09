@@ -152,10 +152,10 @@ Required:
 - `name`
 - `code` (must start with `Usr`)
 - `templateCode`
-- `iconId` (GUID)
 - `iconBackground` (hex color)
 
 Optional:
+- `iconId` (GUID) — if omitted, random icon from SysAppIcons is selected automatically
 - `description`
 - `clientTypeId` (GUID)
 - `optionalTemplateDataJson` with:
@@ -165,7 +165,8 @@ Optional:
   - `useAIContentGeneration`
 
 Validation notes:
-- `iconId` and `clientTypeId` must be valid GUIDs
+- if `iconId` provided, must reference existing record in `SysAppIcons` table
+- `clientTypeId` must be valid GUID if provided
 - this flow does not support `useAIContentGeneration=true`
 - tool must exist in `tools/list` before execution
 
@@ -185,14 +186,15 @@ curl -s "$MCP_URL" \
       "arguments":{
         "name":"Task App",
         "code":"UsrTaskApp",
-        "templateCode":"AppFreedomUI",
-        "iconId":"1205b66c-e5f8-4d90-a9db-02c5fe30d367",
+        "templateCode":"AppFreedomUIv2",
         "iconBackground":"#1F5F8B",
         "optionalTemplateDataJson":"{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"\",\"useAIContentGeneration\":false}"
       }
     }
   }'
 ```
+
+> 💡 **Note:** `iconId` is optional. If omitted, a random icon from `SysAppIcons` is selected automatically.
 
 ---
 

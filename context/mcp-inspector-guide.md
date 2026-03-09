@@ -302,18 +302,20 @@ Tool Result: Success
 
 Цей tool створює застосунок у БД і повертає compact short context.
 
+> 💡 **Підказка:** Параметр `iconId` необов'язковий — якщо не вказати, система автоматично обере випадкову іконку з `SysAppIcons`.
+
 1. У списку tools натисніть **application.create**
-2. Заповніть поля:
+2. Заповніть обов'язкові поля:
    - `name`: `Test App`
    - `code`: `UsrTestApp`
-   - `templateCode`: `AppFreedomUI`
-   - `iconId`: валідний GUID з вашого `SysAppIcons`
+   - `templateCode`: `AppFreedomUIv2`
    - `iconBackground`: `#1F5F8B`
    - `optionalTemplateDataJson`: `{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}`
-3. Натисніть **Run Tool**
-4. Очікуваний результат:
+3. Опціонально можна вказати `iconId` якщо потрібна конкретна іконка
+4. Натисніть **Run Tool**
+5. Очікуваний результат:
    - у відповіді поле `content[0].text` містить JSON з `success=true`, `app`, `packages`
-5. Типові помилки:
+6. Типові помилки:
    - `{"success":false,"error":{"message":"iconId must be a valid GUID..."}}`
    - `{"success":false,"error":{"message":"Icon with id '...' was not found"}}`
    - `{"success":false,"error":{"message":"useAIContentGeneration=true is not supported..."}}`
