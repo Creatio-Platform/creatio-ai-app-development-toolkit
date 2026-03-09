@@ -209,10 +209,6 @@ Developer prompt (natural language)
 | `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |
 | `context/data-bindings-reference.md` | Binding logic and standard values | Agent 4 |
 
-## Skills (Agent 4)
-
-- `skills/application-creation/SKILL.md`
-
 ## Templates
 
 - `templates/entity/`
