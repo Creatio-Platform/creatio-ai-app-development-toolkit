@@ -16,8 +16,6 @@ Treat these as canonical:
 - `context/bindings-lookup.json`
 - `templates/**`
 
-Do not use `context/archived/**` as primary guidance.
-
 ## Architecture
 
 - Orchestrator: `AGENTS.md`

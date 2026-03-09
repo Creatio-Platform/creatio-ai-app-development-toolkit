@@ -308,7 +308,7 @@ Tool Result: Success
 2. Заповніть обов'язкові поля:
    - `name`: `Test App`
    - `code`: `UsrTestApp`
-   - `templateCode`: `AppFreedomUIv2`
+   - `templateCode`: `AppFreedomUI` (core розв'яже в v1 або v2 за feature flags)
    - `iconBackground`: `#1F5F8B`
    - `optionalTemplateDataJson`: `{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}`
 3. Опціонально можна вказати `iconId` якщо потрібна конкретна іконка

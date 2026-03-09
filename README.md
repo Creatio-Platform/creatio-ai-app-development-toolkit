@@ -16,8 +16,6 @@ Use these files as canonical:
 - `context/bindings-lookup.json`
 - `templates/**`
 
-`context/archived/**` is reference-only.
-
 ## Developer UX
 
 Primary workflow is natural language:
@@ -93,9 +91,7 @@ context/
   ui-reference.md
   data-bindings-reference.md
   bindings-lookup.json
-  archived/
 templates/
-examples/todo-list/
 output/
 ```
 
@@ -113,5 +109,3 @@ A simple Events app is a lightweight tool for managing events in Creatio.
 It allows users to create and maintain a list of events, see them in a structured list view,
 update their status, and manage event details throughout their lifecycle.
 ```
-
-See `examples/todo-list/` for an end-to-end reference.

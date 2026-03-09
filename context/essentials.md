@@ -186,7 +186,7 @@ curl -s "$MCP_URL" \
       "arguments":{
         "name":"Task App",
         "code":"UsrTaskApp",
-        "templateCode":"AppFreedomUIv2",
+        "templateCode":"AppFreedomUI",
         "iconBackground":"#1F5F8B",
         "optionalTemplateDataJson":"{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"\",\"useAIContentGeneration\":false}"
       }
@@ -195,6 +195,7 @@ curl -s "$MCP_URL" \
 ```
 
 > 💡 **Note:** `iconId` is optional. If omitted, a random icon from `SysAppIcons` is selected automatically.
+> 💡 **Note:** Use `"AppFreedomUI"` for templateCode. Core resolves it dynamically to v1 or v2 based on feature flags (`UseListPageV3Template` and `FreedomUIDashboardsEnabled`).
 
 ---
 

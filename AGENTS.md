@@ -93,8 +93,6 @@ The canonical references for generation are:
 - `context/bindings-lookup.json`
 - `templates/**`
 
-Any legacy docs under `context/archived/` are reference-only and must not override current rules.
-
 ## Pipeline
 
 ```
@@ -235,7 +233,3 @@ When developer provides a natural-language request (for example: “Generate an 
 6. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
 7. If deploy policy is `deploy_now`: run `scripts/check-approval-gate.sh <AppName>` → run Agent 5.
 8. If deploy policy is `generate_only`: return generated artifacts and skip deploy phase.
-
-## Example
-
-See `examples/todo-list/` for a complete end-to-end reference.
