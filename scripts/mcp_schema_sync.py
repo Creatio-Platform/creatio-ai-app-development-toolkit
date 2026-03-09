@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import http.cookiejar
 import json
+import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -31,8 +34,51 @@ class McpHttpClient:
         self.retry_delay_seconds = retry_delay_seconds
         self.session_id = None
         self.request_id = 0
+        self.base_url = self._resolve_base_url(mcp_url)
+        self.auth_login = os.getenv("CREATIO_LOGIN")
+        self.auth_password = os.getenv("CREATIO_PASSWORD")
+        self.cookie_jar = None
+        self.opener = urllib.request.build_opener()
+        self.csrf_token = None
+
+    @staticmethod
+    def _resolve_base_url(mcp_url):
+        parts = urllib.parse.urlsplit(mcp_url)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    def authenticate(self):
+        if not self.auth_login or not self.auth_password or self.csrf_token:
+            return
+        self.cookie_jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
+        body = json.dumps({
+            "UserName": self.auth_login,
+            "UserPassword": self.auth_password
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/ServiceModel/AuthService.svc/Login",
+            data=body,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json"
+            },
+            method="POST"
+        )
+        with self.opener.open(request, timeout=self.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("Code") not in (0, None):
+            raise WorkflowError(payload.get("Message") or "Creatio login failed")
+        preferred_cookie_names = ["BPMCSRF", "CRT_CSRF", "CsrfToken"]
+        cookies_by_name = {cookie.name: cookie.value for cookie in self.cookie_jar}
+        for cookie_name in preferred_cookie_names:
+            if cookies_by_name.get(cookie_name):
+                self.csrf_token = cookies_by_name[cookie_name]
+                break
+        if not self.csrf_token:
+            raise WorkflowError("Creatio login did not return BPMCSRF cookie")
 
     def initialize(self):
+        self.authenticate()
         payload, headers, _ = self.request_rpc("initialize", {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
@@ -86,10 +132,12 @@ class McpHttpClient:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream"
         }
+        if self.csrf_token:
+            headers["BPMCSRF"] = self.csrf_token
         if use_session and self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
         request = urllib.request.Request(self.mcp_url, data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self.opener.open(request, timeout=self.timeout) as response:
             raw_text = response.read().decode("utf-8")
             payload = parse_rpc_payload(raw_text)
             if "error" in payload:

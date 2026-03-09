@@ -2,7 +2,7 @@
 
 ## Role
 
-Transform approved requirements into a deterministic MCP execution plan for `application.create`.
+Transform approved requirements into a deterministic MCP execution plan for `application.create`, `application.get_list`, `application.get_info`, and follow-up DB-first schema sync.
 
 ## Input/Output
 
@@ -49,9 +49,11 @@ If any check fails, stop with blocker and return missing checklist items.
 
 Extract from requirements + request spec:
 - app overview and locked business decisions
+- whether the flow creates a new app or updates an existing app
 - entities/lookups/pages/rules
 - assumptions
 - MCP `application.create` input block
+- entity schema changes that cannot be expressed by `application.create` template defaults
 - deploy preference
 
 ### 3. Resolve MCP Payload
@@ -78,7 +80,29 @@ Resolution rules:
    - use explicit value if provided,
    - otherwise mark as `auto` and document deterministic palette strategy.
 
-### 4. Build `plan.md`
+### 4. Build schema sync plan
+
+For each approved entity:
+- determine whether `application.create` template output is sufficient
+- if extra custom columns are required, prepare explicit sync steps
+- if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
+- create new lookup entities first via `entity.create_lookup`
+- create non-template entities via `entity.create` when needed
+- update existing template-created entities via `entity.update`
+
+For `entity.update`, prepare `operationsJson` only:
+- `addColumn`
+- `updateColumn`
+- `removeColumn`
+
+Never treat omission as deletion.
+
+Canonical context rule:
+- initialize from `application.create` for new apps
+- initialize from `application.get_info` for existing apps
+- after every successful entity mutation, refresh context via `application.get_info`
+
+### 5. Build `plan.md`
 
 Create `plan.md` with sections:
 - App Summary
@@ -86,12 +110,13 @@ Create `plan.md` with sections:
 - Assumptions
 - Deployment Preference (`deploy_now` or `generate_only`)
 - MCP Payload (resolved and validated)
+- Schema Sync Plan
 - Runtime Resolution Strategy (`iconId` and `iconBackground`)
 - Expected Output Artifacts
 - Validation Rules
 - Blocker Conditions
 
-### 5. Validation Checks
+### 6. Validation Checks
 
 Check:
 - required payload fields are present
@@ -99,8 +124,10 @@ Check:
 - `optionalTemplateDataJson` is valid JSON
 - no unsupported values remain (`useAIContentGeneration=true`)
 - deploy preference is valid and propagated from request spec
+- lookup creation steps are ordered before updates that reference them
+- every `entity.update` step uses explicit `operationsJson`
 
-### 6. Save `plan.md`
+### 7. Save `plan.md`
 
 Write final plan to:
 - `output/<AppName>/plan.md`
@@ -110,7 +137,7 @@ Write final plan to:
 1. Keep plan deterministic and execution-ready.
 2. Do not create GUID matrices manually for all schemas.
 3. Do not include generated file bodies in plan.
-4. Plan must be sufficient for a single MCP call and result/report artifact persistence.
+4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, and result/report artifact persistence.
 5. Plan must not leave deploy behavior ambiguous.
 
 ## Completion Criteria
