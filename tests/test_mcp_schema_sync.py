@@ -63,6 +63,35 @@ def build_current_flat_result_document():
     })
 
 
+def build_current_result_document_with_name():
+    return normalize_result_document({
+        "success": True,
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "code": "UsrMyApp"
+        },
+        "packages": {
+            "UsrMyPkg": {
+                "uId": "22222222-2222-2222-2222-222222222222",
+                "isPrimary": True,
+                "entities": {
+                    "UsrMyEntity": {
+                        "uId": "33333333-3333-3333-3333-333333333333",
+                        "caption": "My Entity",
+                        "columns": {
+                            "Name": {
+                                "uId": "77777777-7777-7777-7777-777777777777",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+
+
 def build_edited_context():
     return {
         "app": {
@@ -103,6 +132,43 @@ def build_edited_context():
                             {
                                 "name": "Name",
                                 "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def build_edited_context_with_duplicate_usrname():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "entityUId": "33333333-3333-3333-3333-333333333333",
+                        "name": "UsrMyEntity",
+                        "caption": "My Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "Name",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            },
+                            {
+                                "name": "UsrName",
+                                "caption": "Custom Name",
                                 "dataValueTypeName": "Text"
                             }
                         ]
@@ -275,6 +341,25 @@ class McpSchemaSyncTests(unittest.TestCase):
             ]
         )
 
+    def test_build_create_action_rejects_usrname_for_lookup(self):
+        with self.assertRaisesRegex(
+            WorkflowError,
+            "Lookup UsrMyEntityType must use inherited Name as PrimaryDisplayColumn"
+        ):
+            build_create_action({
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyEntityType",
+                "caption": "My Entity Type",
+                "kind": "lookup",
+                "columns": [
+                    {
+                        "name": "UsrName",
+                        "caption": "Custom Name",
+                        "dataValueTypeName": "Text"
+                    }
+                ]
+            })
+
     def test_build_sync_plan_orders_lookup_creation_before_entity_update(self):
         current_context = build_current_result_document()["editableContext"]
         sync_plan = build_sync_plan(current_context, build_edited_context())
@@ -293,6 +378,14 @@ class McpSchemaSyncTests(unittest.TestCase):
         current_context = build_current_result_document()["editableContext"]
         with self.assertRaises(WorkflowError):
             build_sync_plan(current_context, build_invalid_edited_context())
+
+    def test_build_sync_plan_rejects_duplicate_usrname_when_name_exists(self):
+        current_context = build_current_result_document_with_name()["editableContext"]
+        with self.assertRaisesRegex(
+            WorkflowError,
+            "Entity UsrMyEntity already contains Name; do not add duplicate UsrName"
+        ):
+            build_sync_plan(current_context, build_edited_context_with_duplicate_usrname())
 
     def test_apply_sync_plan_refreshes_canonical_result_after_each_mutation(self):
         result_document = build_current_result_document()

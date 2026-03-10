@@ -173,6 +173,10 @@ Developer prompt (natural language)
    - On failure, hard-stop and report blocker
 16. If `application.create` reports that the app or configuration schema already exists, stop the create flow, surface an explicit update-flow status, and continue only through documented existing-app discovery (`application.get_list` → `application.get_info`).
 17. Final user-facing summaries must be generated from the final `mcp-application-result.json` state. If planned pages, entities, or bindings are not materialized, report them as not implemented rather than as completed.
+18. Schema display-field guardrails:
+   - BaseLookup entities rely on inherited `Name`; it must remain the lookup `PrimaryDisplayColumn`, otherwise lookup values will appear blank in UI controls.
+   - Never add custom `Name` or `UsrName` columns to lookup schemas.
+   - Before updating any existing or template-created entity, inspect the refreshed schema snapshot. If `Name` already exists, reuse it as the record title and never add a duplicate `UsrName`.
 
 ## Global Rules
 
@@ -184,14 +188,16 @@ Developer prompt (natural language)
 6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
 7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
 8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
-9. **MCP tools work DB-first:** Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required after MCP tool execution.
-10. Generate files only in `output/<AppName>/`.
-11. If MCP endpoint is unavailable or required application tools are missing, stop and report blocker.
-12. Agent 4 must persist MCP evidence:
+9. BaseLookup already provides `Name` and `Description`. `Name` must stay the lookup `PrimaryDisplayColumn`; do not re-add `Name`, `Description`, or `UsrName`.
+10. If the current schema snapshot already contains `Name`, use `Name` in requirements, pages, and entity updates. Do not add `UsrName`.
+11. **MCP tools work DB-first:** Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required after MCP tool execution.
+12. Generate files only in `output/<AppName>/`.
+13. If MCP endpoint is unavailable or required application tools are missing, stop and report blocker.
+14. Agent 4 must persist MCP evidence:
    - `output/<AppName>/mcp-application-result.json`
    - `output/<AppName>/mcp-application-report.md`
-13. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
-14. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
+15. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
+16. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
 
 ## Context Files Reference
 

@@ -49,7 +49,13 @@ Every entity **must extend** one of these parents. Parent UId goes to `metadata.
 | Name | `736c30a7-c0ec-4fa9-b034-2552b319b633` | MediumText |
 | Description | `9e53fd7c-dde4-4502-a64c-b9e34148108b` | MediumText |
 
-`Name` and `Description` come from `BaseLookup`. Do not send them as custom columns in `entity.create_lookup` payloads or editable-context diffs.
+`Name` and `Description` come from `BaseLookup`. Do not send them as custom columns in `entity.create_lookup` payloads or editable-context diffs. `Name` must remain the lookup `PrimaryDisplayColumn`, otherwise selected lookup values will appear blank in UI controls.
+
+### Display Column Guardrails
+
+- BaseLookup entities must use inherited `Name` as the human-readable display field. Do not add `Name`, `Description`, or `UsrName` as custom lookup columns.
+- The raw BaseEntity inherited column list above does not include template-generated columns. In this MCP flow, `application.create` or `application.get_info` can return section entities that already contain `Name`.
+- Always inspect the current schema snapshot before adding a title field. If `Name` already exists, reuse `Name` in requirements, list pages, form headers, and entity updates. Do not add `UsrName`.
 
 A successful MCP `entity.create_lookup` / `entity.create` / `entity.update` call must leave the schema fully materialized: no `Database update required` status in workspace explorer, immediate visibility through `application.get_info`, and usable DB structure for data bindings or inserts. If those conditions are not met, treat it as a core MCP materialization bug rather than a normal transient state.
 

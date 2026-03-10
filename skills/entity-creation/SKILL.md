@@ -25,6 +25,8 @@ Use this skill when approved schema changes must be applied after `application.c
 3. Create new lookup entities before referencing them from other entities.
 4. `entity.update` must use explicit `operationsJson`.
 5. Omission never means delete.
+6. BaseLookup already provides `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so never add `Name`, `Description`, or `UsrName` as custom lookup columns.
+7. If the current entity snapshot already contains `Name`, never add duplicate `UsrName`; reuse `Name` as the record title.
 
 ## Input Expected
 
@@ -127,6 +129,7 @@ After each successful call:
 - `entity.uId` is non-empty
 - `entity.name` matches the requested schema
 - lookup references point to already existing schemas
+- lookup payloads do not redefine inherited `Name`/`Description`, and no duplicate `UsrName` is introduced when `Name` already exists
 - canonical context file was updated
 
 ## Failure Policy

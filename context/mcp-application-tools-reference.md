@@ -569,6 +569,11 @@ entity.create_lookup(
 )
 ```
 
+**Lookup Display Rule:**
+- `BaseLookup` already provides inherited `Name` and `Description`.
+- Never send `Name`, `Description`, or `UsrName` in `columnsJson`.
+- `Name` must remain the lookup `PrimaryDisplayColumn`; otherwise lookup values will appear blank after selection in UI controls.
+
 **Example:**
 
 ```bash
@@ -594,7 +599,7 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
   }" 2>&1 | tee /tmp/mcp-lookup-create-raw.txt
 ```
 
-**After Success:** Immediately call `application.get_info` to refresh context and verify the entity is fully materialized (not in "Database update required" state).
+**After Success:** Immediately call `application.get_info` to refresh context and verify the entity is fully materialized (not in "Database update required" state). Do not report lookup success if the plan or follow-up validation would replace inherited `Name` with a duplicate display column.
 
 ### 7. Update Entity (entity.update)
 
@@ -617,6 +622,7 @@ entity.update(
 - `packageUId` — REQUIRED, must be GUID not package name
 - `schemaName` — Optional but recommended for clarity (e.g., "UsrTodoList")
 - All other parameters optional with defaults
+- Before adding a title field, inspect the current entity snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse it and do not add `UsrName`.
 
 **Critical:** `operationsJson` must use `{operation, column}` structure:
 

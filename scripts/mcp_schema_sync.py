@@ -221,6 +221,14 @@ def filter_mutable_columns(columns):
     return filtered
 
 
+def has_column_named(columns, target_name):
+    for raw_column in columns or []:
+        column = normalize_column(raw_column)
+        if column["name"] == target_name:
+            return True
+    return False
+
+
 def build_entity_index(editable_context):
     index = {}
     for package in editable_context.get("packages", []):
@@ -235,6 +243,7 @@ def build_entity_index(editable_context):
             indexed_entity["packageName"] = package_name
             indexed_entity["caption"] = indexed_entity.get("caption") or name
             indexed_entity["kind"] = indexed_entity.get("kind") or "entity"
+            indexed_entity["hasNameColumn"] = has_column_named(indexed_entity.get("columns", []), "Name")
             indexed_entity["columns"] = filter_mutable_columns(indexed_entity.get("columns", []))
             index[(package_u_id, name)] = indexed_entity
     return index
@@ -260,9 +269,24 @@ def columns_equal(left_column, right_column):
            {k: v for k, v in right_column.items() if k not in skip}
 
 
+def validate_display_field_rules(current_entity, edited_entity, current_columns, edited_columns):
+    entity_name = edited_entity["name"]
+    entity_kind = edited_entity.get("kind") or current_entity.get("kind")
+    is_adding_usr_name = "UsrName" in edited_columns and "UsrName" not in current_columns
+    if entity_kind == "lookup" and is_adding_usr_name:
+        raise WorkflowError(
+            f"Lookup {entity_name} must use inherited Name as PrimaryDisplayColumn; do not add UsrName"
+        )
+    if (current_entity.get("hasNameColumn") or "Name" in current_columns) and is_adding_usr_name:
+        raise WorkflowError(
+            f"Entity {entity_name} already contains Name; do not add duplicate UsrName"
+        )
+
+
 def build_column_operations(current_entity, edited_entity, available_names):
     current_columns = build_column_map(current_entity.get("columns", []))
     edited_columns = build_column_map(edited_entity.get("columns", []))
+    validate_display_field_rules(current_entity, edited_entity, current_columns, edited_columns)
     operations = []
     for name in sorted(edited_columns):
         column = edited_columns[name]
@@ -296,7 +320,12 @@ def build_column_operations(current_entity, edited_entity, available_names):
 
 def build_create_action(entity):
     tool_name = "entity.create_lookup" if entity.get("kind") == "lookup" else "entity.create"
-    create_columns = json.dumps(filter_mutable_columns(entity.get("columns", [])), ensure_ascii=True, separators=(",", ":"))
+    filtered_columns = filter_mutable_columns(entity.get("columns", []))
+    if tool_name == "entity.create_lookup" and any(column["name"] == "UsrName" for column in filtered_columns):
+        raise WorkflowError(
+            f"Lookup {entity['name']} must use inherited Name as PrimaryDisplayColumn; do not add UsrName"
+        )
+    create_columns = json.dumps(filtered_columns, ensure_ascii=True, separators=(",", ":"))
     arguments = {
         "packageUId": entity["packageUId"],
         "name": entity["name"],

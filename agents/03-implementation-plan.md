@@ -56,6 +56,7 @@ Extract from requirements + request spec:
 - app overview and locked business decisions
 - whether the flow creates a new app or updates an existing app
 - entities/lookups/pages/rules
+- record title / display column for each entity and lookup
 - assumptions
 - MCP `application.create` input block
 - entity schema changes that cannot be expressed by `application.create` template defaults
@@ -92,8 +93,10 @@ For each approved entity:
 - if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
 - if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
 - create new lookup entities first via `entity.create_lookup`
+- for every lookup entity, rely on inherited `Name` as the display value, mark it as the required `PrimaryDisplayColumn`, and never plan `Name`/`UsrName` as a custom column
 - for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `binding.create` step immediately after the corresponding `entity.create_lookup` call
 - create non-template entities via `entity.create` when needed
+- before any `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`; if `Name` already exists, reuse `Name` in UX and never plan an `addColumn` for `UsrName`
 - update existing template-created entities via `entity.update`
 
 Execution order for lookups with seed data:
@@ -127,6 +130,8 @@ When generating `entity.create_lookup`, `entity.create`, or `entity.update` payl
 3. ❌ NEVER use `entityName` → always use `name` for create tools, `schemaName` for entity.update
 4. ❌ NEVER use `displayName` or `description` → always use `caption` (string)
 5. ❌ NEVER use flat column structures → always use `{operation, column: {...}}` for `operationsJson`
+6. ❌ NEVER add `Name`, `Description`, or `UsrName` as custom lookup columns → BaseLookup already provides `Name`/`Description`, and `Name` must remain the lookup `PrimaryDisplayColumn`
+7. ❌ NEVER add `UsrName` to an existing/template-created entity if the refreshed schema snapshot already contains `Name`
 
 **For Binding Tools (binding.create):**
 
@@ -147,7 +152,7 @@ curl ... -d "{
     \"packageUId\": \"$PACKAGE_UID\",     # ✅ GUID from application.create
     \"name\": \"UsrStatusLookup\",        # ✅ NOT entityName
     \"caption\": \"Status\",              # ✅ NOT displayName
-    \"columnsJson\": \"[]\"
+    \"columnsJson\": \"[]\"               # ✅ BaseLookup already provides Name/Description; Name stays the lookup PrimaryDisplayColumn
   }
 }"
 ```

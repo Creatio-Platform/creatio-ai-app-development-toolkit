@@ -33,6 +33,7 @@ From developer's free-form prompt, derive:
 - app intent and expected section scope
 - candidate entities/lookups/pages
 - potential lifecycle/status model
+- record title and lookup display semantics
 
 Return a short summary:
 - “What I understood”
@@ -136,14 +137,21 @@ Write requirements document in this format:
 
 ### <EntityName> (extends BaseEntity)
 
+Primary display field:
+- Reuse inherited `Name` when the current/template-created schema already has it.
+- Do not add `UsrName` if `Name` is already present.
+
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| UsrName | Text (250) | Yes | — | Display name |
 | UsrStatus | Lookup → UsrEntityStatus | Yes | New | Current status |
+| UsrDueDate | Date | No | — | Due date |
 
 ### <LookupName> (extends BaseLookup)
 
 **Purpose**: <description>
+
+**Display Field**:
+- `Name` (inherited from `BaseLookup`, must remain `PrimaryDisplayColumn`)
 
 **Seed Data**:
 | Name |
@@ -154,10 +162,10 @@ Write requirements document in this format:
 ## Pages
 
 ### <EntityName> List Page
-Columns: UsrName, UsrStatus, UsrPriority, CreatedOn
+Columns: Name, UsrStatus, UsrPriority, CreatedOn
 
 ### <EntityName> Form Page
-- Header: UsrName
+- Header: Name
 - Fields: UsrDescription, UsrStatus, UsrPriority, UsrDueDate
 - Layout notes: <notes>
 
@@ -208,15 +216,16 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 ## Critical Rules
 
 1. Output is business requirements only. No GUID matrices, no generated file content.
-2. All entity and field names must start with `Usr`.
+2. All custom entity and field names must start with `Usr`.
 3. Do not add inherited columns from `BaseEntity`.
 4. Enum-like fields must be separate lookup entities.
 5. One package per app (`Usr<AppName>`).
-6. `BaseLookup` already has `Name`; do not re-add it.
-7. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
-8. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
-9. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
-10. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
+6. `BaseLookup` already has `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so do not re-add `Name`, `Description`, or `UsrName`.
+7. If the current or template-created entity already contains `Name`, use `Name` as the primary display field and never add `UsrName`.
+8. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
+9. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
+10. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
+11. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
 
 ## Completion Criteria
 

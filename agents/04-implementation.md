@@ -104,8 +104,10 @@ Persist the compact context from MCP and set `contractType=short`.
 ### Schema Sync Rules
 
 - Create new lookup entities first with `entity.create_lookup`.
+- For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or `UsrName` as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
 - After creating each lookup entity that has seed values defined in the plan, call `binding.create` to populate it with seed rows before proceeding to the next entity.
 - Use `entity.create` only for new entities not already created by the application template.
+- Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
 - `entity.update` operations are explicit:
@@ -131,6 +133,8 @@ Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.
 5. ✅ Using `caption` parameter (NOT `displayName` or `description`)
 6. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
 7. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
+8. ✅ For lookup schemas, `columnsJson` does not attempt to add `Name`, `Description`, or `UsrName`
+9. ✅ For existing/template-created entities, `operationsJson` does not add `UsrName` when the refreshed schema already contains `Name`
 
 **Before EVERY binding tool call (`binding.create`), validate:**
 
