@@ -56,13 +56,13 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 | Element | Prefix | Example |
 |---------|--------|---------|
 | Custom entity | `Usr` | `UsrTodoTask` |
-| Custom column | `Usr` | `UsrTitle`, `UsrStatus` |
+| Custom column | `Usr` | `UsrStatus`, `UsrDueDate` |
 | Custom page | `Usr` | `UsrTodoTask_FormPage` |
 | Custom package | `Usr` | `UsrTodoListApp` |
 
 ### Casing
 
-- **Entities/Columns**: PascalCase — `UsrTodoTask`, `UsrTitle`
+- **Entities/Columns**: PascalCase — `UsrTodoTask`, `UsrStatus`
 - **Pages**: PascalCase with underscore — `UsrTodoTask_ListPage`, `UsrTodoTask_FormPage`
 - **Packages**: PascalCase — `UsrTodoListApp`
 

@@ -33,7 +33,8 @@ From developer's free-form prompt, derive:
 - app intent and expected section scope
 - candidate entities/lookups/pages
 - potential lifecycle/status model
-- record title and lookup display semantics
+- record title semantics and whether a separate business title field is truly needed
+- lookup display semantics
 
 Return a short summary:
 - “What I understood”
@@ -139,7 +140,8 @@ Write requirements document in this format:
 
 Primary display field:
 - Reuse inherited `Name` when the current/template-created schema already has it.
-- Do not add `UsrName` if `Name` is already present.
+- Add a separate title field only if the developer explicitly distinguishes it from the record name or the schema snapshot proves `Name` is absent.
+- Do not add duplicate title fields such as `UsrName`, `UsrTitle`, or `UsrCaption` if `Name` is already present.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -220,12 +222,13 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 3. Do not add inherited columns from `BaseEntity`.
 4. Enum-like fields must be separate lookup entities.
 5. One package per app (`Usr<AppName>`).
-6. `BaseLookup` already has `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so do not re-add `Name`, `Description`, or `UsrName`.
-7. If the current or template-created entity already contains `Name`, use `Name` as the primary display field and never add `UsrName`.
-8. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
-9. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
-10. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
-11. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
+6. `BaseLookup` already has `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so do not re-add `Name`, `Description`, or any duplicate title-like column.
+7. If the current or template-created entity already contains `Name`, use `Name` as the primary display field and never add `UsrName`, `UsrTitle`, or `UsrCaption`.
+8. For template-created app section entities, treat a generic business “title/name of record” requirement as `Name` by default. Introduce `UsrTitle` only when the developer explicitly needs a separate field from the record name.
+9. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
+10. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
+11. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
+12. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
 
 ## Completion Criteria
 

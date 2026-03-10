@@ -35,12 +35,12 @@ Array of operations that modify the parent page template:
 ```json
 {
 	"operation": "insert",
-	"name": "UsrTitle",
+	"name": "Name",
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 1, "rowSpan": 1},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrTitle_label",
-		"control": "$PDS_UsrTitle",
+		"label": "$Resources.Strings.PDS_Name_label",
+		"control": "$PDS_Name",
 		"visible": true,
 		"readonly": false
 	},
@@ -82,9 +82,9 @@ Configure visible columns in the DataTable:
 		"columns": [
 			{
 				"id": "f252f582-...",
-				"code": "PDS_UsrTitle",
-				"path": "UsrTitle",
-				"caption": "#ResourceString(PDS_UsrTitle)#",
+				"code": "PDS_Name",
+				"path": "Name",
+				"caption": "#ResourceString(PDS_Name)#",
 				"dataValueType": 1
 			},
 			{
@@ -135,7 +135,7 @@ Binds page attributes to data source:
 		"operation": "merge",
 		"path": ["attributes"],
 		"values": {
-			"PDS_UsrTitle": {"modelConfig": {"path": "PDS.UsrTitle"}},
+			"PDS_Name": {"modelConfig": {"path": "PDS.Name"}},
 			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
 			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
@@ -193,7 +193,7 @@ Fields placed using `layoutConfig`:
 ```json
 {
 	"operation": "insert",
-	"name": "UsrTitle",
+	"name": "Name",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -202,8 +202,8 @@ Fields placed using `layoutConfig`:
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrTitle_label",
-		"control": "$PDS_UsrTitle"
+		"label": "$Resources.Strings.PDS_Name_label",
+		"control": "$PDS_Name"
 	},
 	"parentName": "GeneralInfoTab",
 	"propertyName": "items",

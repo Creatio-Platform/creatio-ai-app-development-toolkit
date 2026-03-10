@@ -410,7 +410,7 @@ echo "Package UId: $PACKAGE_UID"
       "name": "UsrTodoList",
       "caption": "Todo",
       "columns": [
-        {"name": "UsrTitle", "caption": "Title", "dataValueType": "ShortText"}
+        {"name": "Name", "caption": "Name", "dataValueType": "MediumText"}
       ]
     }
   ]
@@ -452,16 +452,15 @@ entity.create(
 ```json
 [
   {
-    "name": "UsrTitle",
-    "caption": "Title",
-    "dataValueTypeName": "ShortText",
-    "isRequired": true,
-    "size": 250
-  },
-  {
     "name": "UsrDueDate",
     "caption": "Due Date",
     "dataValueTypeName": "Date",
+    "isRequired": false
+  },
+  {
+    "name": "UsrDescription",
+    "caption": "Description",
+    "dataValueTypeName": "LongText",
     "isRequired": false
   },
   {
@@ -508,7 +507,7 @@ curl -s http://localhost:5001/mcp \
         \"name\": \"UsrTodoList\",
         \"caption\": \"Todo\",
         \"parentSchemaName\": \"BaseEntity\",
-        \"columnsJson\": \"[{\\\"name\\\":\\\"UsrTitle\\\",\\\"caption\\\":\\\"Title\\\",\\\"dataValueTypeName\\\":\\\"ShortText\\\",\\\"isRequired\\\":true,\\\"size\\\":250}]\"
+        \"columnsJson\": \"[{\\\"name\\\":\\\"UsrDescription\\\",\\\"caption\\\":\\\"Description\\\",\\\"dataValueTypeName\\\":\\\"LongText\\\",\\\"isRequired\\\":false}]\"
       }
     }
   }" 2>&1 | tee /tmp/mcp-entity-create-raw.txt
@@ -535,12 +534,11 @@ echo "Entity UId: $ENTITY_UID"
   "parentSchemaName": "BaseEntity",
   "columns": [
     {
-      "name": "UsrTitle",
+      "name": "UsrDescription",
       "uId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-      "caption": "Title",
-      "dataValueType": "ShortText",
-      "size": 250,
-      "isRequired": true
+      "caption": "Description",
+      "dataValueType": "LongText",
+      "isRequired": false
     }
   ]
 }
@@ -571,8 +569,12 @@ entity.create_lookup(
 
 **Lookup Display Rule:**
 - `BaseLookup` already provides inherited `Name` and `Description`.
-- Never send `Name`, `Description`, or `UsrName` in `columnsJson`.
+- Never send `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in `columnsJson`.
 - `Name` must remain the lookup `PrimaryDisplayColumn`; otherwise lookup values will appear blank after selection in UI controls.
+
+**Lookup Validation Rule:**
+- Parse the `entity.create_lookup` response and verify `.entity.columns` contains inherited `Name` before moving to `binding.create`.
+- If the persisted snapshot does not expose `Name`, stop with blocker instead of assuming the lookup is usable.
 
 **Example:**
 
@@ -622,7 +624,7 @@ entity.update(
 - `packageUId` — REQUIRED, must be GUID not package name
 - `schemaName` — Optional but recommended for clarity (e.g., "UsrTodoList")
 - All other parameters optional with defaults
-- Before adding a title field, inspect the current entity snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse it and do not add `UsrName`.
+- Before adding a title field, inspect the current entity snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse it and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly call for a separate business field.
 
 **Critical:** `operationsJson` must use `{operation, column}` structure:
 

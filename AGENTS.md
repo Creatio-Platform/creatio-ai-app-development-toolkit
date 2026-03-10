@@ -175,8 +175,10 @@ Developer prompt (natural language)
 17. Final user-facing summaries must be generated from the final `mcp-application-result.json` state. If planned pages, entities, or bindings are not materialized, report them as not implemented rather than as completed.
 18. Schema display-field guardrails:
    - BaseLookup entities rely on inherited `Name`; it must remain the lookup `PrimaryDisplayColumn`, otherwise lookup values will appear blank in UI controls.
-   - Never add custom `Name` or `UsrName` columns to lookup schemas.
-   - Before updating any existing or template-created entity, inspect the refreshed schema snapshot. If `Name` already exists, reuse it as the record title and never add a duplicate `UsrName`.
+   - Never add custom `Name` or duplicate title-like columns to lookup schemas.
+   - Before updating any existing or template-created entity, inspect the refreshed schema snapshot. If `Name` already exists, reuse it as the record title across requirements, pages, and entity sync payloads.
+   - Do not add duplicate title-like columns such as `UsrName`, `UsrTitle`, or `UsrCaption` when `Name` already exists, unless the developer explicitly requires a separate business field distinct from the record name.
+   - Treat it as a validation failure when a plan says `Name` is the record title but still adds or references duplicate title-like columns.
 
 ## Global Rules
 
@@ -188,8 +190,8 @@ Developer prompt (natural language)
 6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
 7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
 8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
-9. BaseLookup already provides `Name` and `Description`. `Name` must stay the lookup `PrimaryDisplayColumn`; do not re-add `Name`, `Description`, or `UsrName`.
-10. If the current schema snapshot already contains `Name`, use `Name` in requirements, pages, and entity updates. Do not add `UsrName`.
+9. BaseLookup already provides `Name` and `Description`. `Name` must stay the lookup `PrimaryDisplayColumn`; do not re-add `Name`, `Description`, or duplicate title-like columns.
+10. If the current schema snapshot already contains `Name`, use `Name` in requirements, pages, form headers, and entity updates. Do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
 11. **MCP tools work DB-first:** Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required after MCP tool execution.
 12. Generate files only in `output/<AppName>/`.
 13. If MCP endpoint is unavailable or required application tools are missing, stop and report blocker.

@@ -20,7 +20,7 @@ define("UsrTodoTask_FormPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SC
 			},
 			{
 				"operation": "insert",
-				"name": "UsrTitle",
+				"name": "Name",
 				"values": {
 					"layoutConfig": {
 						"column": 1,
@@ -29,8 +29,8 @@ define("UsrTodoTask_FormPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SC
 						"rowSpan": 1
 					},
 					"type": "crt.Input",
-					"label": "$Resources.Strings.PDS_UsrTitle_label",
-					"control": "$PDS_UsrTitle",
+					"label": "$Resources.Strings.PDS_Name_label",
+					"control": "$PDS_Name",
 					"visible": true,
 					"readonly": false,
 					"placeholder": "",
@@ -54,9 +54,9 @@ define("UsrTodoTask_FormPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SC
 					"attributes"
 				],
 				"values": {
-					"PDS_UsrTitle": {
+					"PDS_Name": {
 						"modelConfig": {
-							"path": "PDS.UsrTitle"
+							"path": "PDS.Name"
 						}
 					}
 					/* REPLACE: add more attribute bindings for each field */

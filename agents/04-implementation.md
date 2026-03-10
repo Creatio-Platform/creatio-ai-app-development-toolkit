@@ -104,10 +104,11 @@ Persist the compact context from MCP and set `contractType=short`.
 ### Schema Sync Rules
 
 - Create new lookup entities first with `entity.create_lookup`.
-- For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or `UsrName` as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
+- For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or duplicate title-like columns as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
+- After every `entity.create_lookup`, validate the tool response contains inherited `Name` in the persisted schema snapshot. If `Name` is missing, stop with blocker instead of assuming the lookup is usable.
 - After creating each lookup entity that has seed values defined in the plan, call `binding.create` to populate it with seed rows before proceeding to the next entity.
 - Use `entity.create` only for new entities not already created by the application template.
-- Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`.
+- Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
 - `entity.update` operations are explicit:
@@ -133,8 +134,8 @@ Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.
 5. ✅ Using `caption` parameter (NOT `displayName` or `description`)
 6. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
 7. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
-8. ✅ For lookup schemas, `columnsJson` does not attempt to add `Name`, `Description`, or `UsrName`
-9. ✅ For existing/template-created entities, `operationsJson` does not add `UsrName` when the refreshed schema already contains `Name`
+8. ✅ For lookup schemas, `columnsJson` does not attempt to add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption`
+9. ✅ For existing/template-created entities, `operationsJson` does not add `UsrName`, `UsrTitle`, or `UsrCaption` when the refreshed schema already contains `Name`, unless the plan explicitly documents a separate business field
 
 **Before EVERY binding tool call (`binding.create`), validate:**
 
@@ -242,7 +243,9 @@ Always verify against C# source files:
 - if `success=true`, `packageUId` is non-empty
 - if `success=true`, `entities` is non-empty
 - if `success=false`, `error.message` is non-empty
+- each lookup creation response confirms inherited `Name` exists before seed data is installed
 - each successful entity tool call is followed by a successful `application.get_info` refresh
+- no duplicate title-like columns are added when the refreshed main entity snapshot already contains `Name`
 - result and report are persisted
 - final report matches the materialized entity names and implemented artifacts in `mcp-application-result.json`
 

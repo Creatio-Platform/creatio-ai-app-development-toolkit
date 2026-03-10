@@ -32,9 +32,9 @@ define("UsrTodoTask_ListPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SC
 					"columns": [
 						{
 							"id": "/* REPLACE: new GUID for column definition */",
-							"code": "PDS_UsrTitle",
-							"path": "UsrTitle",
-							"caption": "#ResourceString(PDS_UsrTitle)#",
+							"code": "PDS_Name",
+							"path": "Name",
+							"caption": "#ResourceString(PDS_Name)#",
 							"dataValueType": 1
 						}
 						/* REPLACE: add more column definitions here */
@@ -53,9 +53,9 @@ define("UsrTodoTask_ListPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SC
 					"attributes"
 				],
 				"values": {
-					"PDS_UsrTitle": {
+					"PDS_Name": {
 						"modelConfig": {
-							"path": "PDS.UsrTitle"
+							"path": "PDS.Name"
 						}
 					}
 					/* REPLACE: add more attribute bindings */

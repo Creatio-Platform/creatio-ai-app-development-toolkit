@@ -26,6 +26,7 @@ Required:
 - main entities
 - lookup entities for enum-like fields
 - key relationships
+- record title / primary display field for each entity and lookup
 
 ## 4. Lifecycle and Statuses
 
@@ -46,6 +47,7 @@ Required:
 Required:
 - list page columns
 - form page field groups/layout notes
+- which field is shown as the record title in lists and forms
 - sorting/filtering expectations if important
 
 ## 7. Edge Cases and Exceptions
@@ -81,3 +83,9 @@ Technical questions are allowed only for:
 - execution blockers (URL, access, credentials)
 
 All other technical values should use deterministic defaults and be documented later in plan artifacts.
+
+## Display Field Defaulting
+
+- For `BaseLookup`, default the display field to inherited `Name`.
+- For template-created app section entities, default the record title to `Name` when the schema snapshot already contains it.
+- Add a separate title-like column such as `UsrTitle` only when the developer explicitly needs a business field that is different from the record name.
