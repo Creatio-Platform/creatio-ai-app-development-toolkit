@@ -58,7 +58,7 @@ Orchestrator (AGENTS.md)
 ├── Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
 ├── Agent 3: Implementation Plan         -> plan.md
 ├── Agent 4: Implementation              -> mcp-application-result.json + report
-│   └── Skill: application-creation
+│   └── Direct MCP tools via curl (see context/mcp-application-tools-reference.md)
 └── Agent 5: Deploy & Verification       -> deployment or skip report
 ```
 
@@ -74,7 +74,6 @@ agents/
   04-implementation.md
   05-deploy-verification.md
 skills/
-  application-creation/SKILL.md
   entity-creation/SKILL.md
   page-creation/SKILL.md
   data-bindings-creation/SKILL.md
@@ -87,6 +86,7 @@ scripts/
 context/
   business-checklist.md
   essentials.md
+  mcp-application-tools-reference.md  (✨ Complete MCP tools guide)
   schema-reference.md
   ui-reference.md
   data-bindings-reference.md

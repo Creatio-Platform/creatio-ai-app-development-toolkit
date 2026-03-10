@@ -135,16 +135,58 @@ packages/<PackageName>/
 
 ### Generation Order
 
+**For complete MCP workflow with detailed curl examples, see `context/mcp-application-tools-reference.md`**
+
 Primary generation flow:
 
-1. Build MCP payload for `application.create`
-2. Initialize MCP session and validate tool availability (`tools/list`)
-3. Execute `application.create`
-4. Persist MCP result to `output/<AppName>/mcp-application-result.json`
-5. Normalize the short response contract and validate `success=true`
-6. If approved schema changes exist, execute ordered entity sync and refresh canonical context with `application.get_info`
-7. If explicit data bindings are required, use `binding.get_columns` and `binding.create` after schema changes as needed
+1. Initialize MCP session (`initialize` → extract `Mcp-Session-Id`)
+2. Validate tool availability (`tools/list`)
+3. Build and execute `application.create` payload
+4. Parse SSE response and validate short contract (`success`, `app`, `packages`)
+5. Persist result to `output/<AppName>/mcp-application-result.json`
+6. If approved schema changes exist:
+   - Execute ordered entity sync (`entity.create_lookup` → `entity.create` → `entity.update`)
+   - After EACH mutation, refresh context with `application.get_info`
+   - Overwrite `mcp-application-result.json` with updated state
+7. If explicit data bindings required, use `binding.get_columns` and `binding.create`
 8. For `deploy_now`, run compile/restart/healthcheck
+
+**Critical pattern:** Always call `application.get_info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
+
+### Working with MCP Tools
+
+**Endpoint:** `http://localhost:5001/mcp`
+**Authentication:** HTTP Basic Auth (`-u Supervisor:Supervisor`)
+
+**Required Headers:**
+```bash
+-H "Content-Type: application/json"
+-H "Accept: application/json, text/event-stream"  # Both required!
+-H "Mcp-Session-Id: $SESSION_ID"  # After initialize
+```
+
+**Response Format:** Server-Sent Events (SSE)
+```
+event: message
+data: {"result":{"content":[{"type":"text","text":"..."}]},"id":1,"jsonrpc":"2.0"}
+```
+
+**Standard Parsing Pattern:**
+```bash
+curl ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text'
+```
+
+**Available Tools:**
+- `application.create` — Create new app with initial package/entity
+- `application.get_info` — Refresh application context (canonical DB refresh)
+- `application.get_list` — Discover existing apps
+- `entity.create_lookup` — Create BaseLookup entity
+- `entity.create` — Create BaseEntity entity
+- `entity.update` — Add/update columns on existing entity
+- `binding.get_columns` — Query deployed schema metadata
+- `binding.create` — Generate data binding artifacts
+
+**Complete reference with curl examples:** `context/mcp-application-tools-reference.md`
 
 ### MCP `application.create` Input
 

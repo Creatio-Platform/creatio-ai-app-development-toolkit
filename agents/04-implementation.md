@@ -17,13 +17,47 @@ Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts dur
 
 Read:
 - `context/essentials.md`
+- `context/mcp-application-tools-reference.md` — Complete curl examples and patterns
 - `context/ui-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
 
-## MCP Workflow (Direct Execution)
+## MCP Workflow (Direct curl Execution)
 
-Use MCP `application.create` as the primary DB-first flow for full app creation. Use `application.get_list` and `application.get_info` for existing-app discovery and canonical DB refresh. `output/<AppName>/mcp-application-result.json` must always be overwritten by the latest compact short application context.
+**Reference:** See `context/mcp-application-tools-reference.md` for complete curl examples, response parsing patterns, and error handling.
+
+Use MCP `application.create` as the primary DB-first flow for full app creation. Use `application.get_list` and `application.get_info` for existing-app discovery and canonical DB refresh.
+
+### Quick Start Pattern
+
+```bash
+# 1. Initialize and get session ID
+curl -s http://localhost:5001/mcp \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}' \
+  -D /tmp/headers.txt > /tmp/init.txt
+
+SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/headers.txt | sed 's/.*: //' | tr -d '\r')
+
+# 2. Call application.create
+curl -s http://localhost:5001/mcp \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"application.create","arguments":{...}}}' \
+  | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text'
+
+# 3. After entity mutations, refresh context
+curl -s ... "application.get_info" ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text' \
+  | jq '. + {contractType:"short",schemaSync:[...]}' > output/App/mcp-application-result.json
+```
+
+**Critical headers:**
+- `Accept: application/json, text/event-stream` — Both required
+- `Mcp-Session-Id: <session>` — From initialize response header
 
 ### MCP Protocol Flow
 
@@ -116,18 +150,55 @@ Extract resolved MCP payload, runtime resolution strategy, and ordered schema sy
 
 ### 2. Initialize MCP session
 
+**See:** `context/mcp-application-tools-reference.md` section "Initialize Session"
+
 Use `mcpUrl` from `.creatio-env.json`:
-- call `initialize`
-- extract `Mcp-Session-Id`
+
+```bash
+MCP_URL=$(jq -r '.mcpUrl' output/<AppName>/.creatio-env.json)
+
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": {},
+      "clientInfo": {"name": "app-creator", "version": "1.0.0"}
+    }
+  }' -D /tmp/mcp-headers.txt > /tmp/mcp-init.txt
+
+SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/mcp-headers.txt | sed 's/.*: //' | tr -d '\r')
+```
 
 If initialize fails, stop and report blocker.
 
 ### 3. Verify tool availability
 
-Call `tools/list` and verify required application tools exist:
+**See:** `context/mcp-application-tools-reference.md` section "List Available Tools"
+
+```bash
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | grep -A 1000 'event: message' | sed 's/^event: message$//' | sed 's/^data: //' \
+  | jq -r '.result.tools[] | select(.name | startswith("application.") or startswith("entity.")) | .name'
+```
+
+Verify presence of:
 - `application.create`
 - `application.get_info`
 - `application.get_list`
+- `entity.create`
+- `entity.create_lookup`
+- `entity.update`
 
 If missing, stop and report blocker.
 
@@ -160,10 +231,43 @@ If payload has `iconBackground=auto`:
 
 ### 5. Initialize application context
 
+**See:** `context/mcp-application-tools-reference.md` section "Create Application"
+
 For new app flow:
-- call MCP `tools/call` with `application.create`
-- pass `name`, `code`, `templateCode`, `iconId`, `iconBackground`
-- include `description`, `clientTypeId`, `optionalTemplateDataJson` when present
+
+```bash
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "application.create",
+      "arguments": {
+        "name": "'"$APP_NAME"'",
+        "code": "'"$APP_CODE"'",
+        "templateCode": "AppFreedomUI",
+        "iconBackground": "'"$ICON_COLOR"'",
+        "description": "'"$APP_DESCRIPTION"'",
+        "optionalTemplateDataJson": "'"$TEMPLATE_DATA"'"
+      }
+    }
+  }' 2>&1 | tee /tmp/mcp-app-create-raw.txt
+```
+
+Parse and validate:
+
+```bash
+RESPONSE=$(grep 'data: ' /tmp/mcp-app-create-raw.txt | sed 's/^data: //' | jq -r '.result.content[0].text')
+
+# Validate short contract
+echo "$RESPONSE" | jq -e '.success == true and .app.id != null and (.packages | length > 0)' > /dev/null \
+  || { echo "Error: $(echo "$RESPONSE" | jq -r '.error.message')"; exit 1; }
+```
 
 For existing app flow:
 1. call `application.get_list`
@@ -171,11 +275,6 @@ For existing app flow:
 3. call `application.get_info` with the chosen `appId` or `appCode`
 
 Retry up to 3 times with 10s delay on transient failures.
-
-Parse `tools/call` response text from `result.content[0].text` and validate the short contract:
-- top-level JSON contains `success`
-- when `success=true`, JSON contains `app` and non-empty `packages`
-- when `success=false`, JSON contains `error.message`
 
 Stop and report blocker when:
 - text is plain `ERROR: ...`
@@ -185,10 +284,19 @@ Stop and report blocker when:
 
 ### 6. Initialize canonical context
 
-Write normalized MCP result to:
-- `output/<AppName>/mcp-application-result.json`
+**See:** `context/mcp-application-tools-reference.md` section "Initialize Canonical Context File"
 
-Run:
+Write normalized MCP result:
+
+```bash
+echo "$RESPONSE" | jq '. + {
+  contractType: "short",
+  schemaSync: [],
+  editableContext: {}
+}' > output/<AppName>/mcp-application-result.json
+```
+
+Or use Python helper:
 
 ```bash
 python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json
@@ -207,20 +315,75 @@ Persist the compact tree response as-is and add `contractType=short`.
 
 ### 7. Execute schema sync steps
 
+**See:** `context/mcp-application-tools-reference.md` sections:
+- "Create Lookup Entity (entity.create_lookup)"
+- "Update Entity (entity.update)"
+
 If `plan.md` contains approved schema sync:
-1. save the approved package/entity edits to `output/<AppName>/editable-context.json`
-2. run:
-   ```bash
-   python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json
-   ```
-3. let the script compute and execute ordered MCP calls:
-   - `entity.create_lookup`
-   - `entity.create`
-   - `entity.update`
-4. after every successful entity mutation, execute `application.get_info` for the current app and overwrite `mcp-application-result.json`
-5. append an entry to `schemaSync`
-6. treat a created/updated schema as valid only when it is immediately queryable through `application.get_info` and not left in a `Database update required` state
-7. if post-mutation refresh fails with missing server metadata, stop with a core MCP blocker instead of mutating repo helper files in the same run
+
+**Option 1: Manual curl execution**
+
+Example for entity.create_lookup:
+
+```bash
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "entity.create_lookup",
+      "arguments": {
+        "packageName": "UsrEvents",
+        "entityName": "UsrEventStatus",
+        "displayName": "Event Status",
+        "description": "Lookup for event status values"
+      }
+    }
+  }' 2>&1 | tee /tmp/mcp-lookup-raw.txt
+```
+
+**After EACH successful entity mutation:**
+
+```bash
+# Refresh context
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+      "name": "application.get_info",
+      "arguments": {"appCode": "UsrEvents"}
+    }
+  }' | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text' \
+  | jq '. + {
+      contractType: "short",
+      schemaSync: [...existing..., {tool: "entity.create_lookup", target: "UsrEventStatus", status: "success"}]
+    }' > output/<AppName>/mcp-application-result.json
+```
+
+**Option 2: Python helper** (for complex workflows):
+
+```bash
+python3 scripts/mcp_schema_sync.py apply \
+  --result output/<AppName>/mcp-application-result.json \
+  --edited-context output/<AppName>/editable-context.json \
+  --env output/<AppName>/.creatio-env.json
+```
+
+**Critical validation:**
+- Created/updated schema MUST be immediately queryable through `application.get_info`
+- If schema is missing from server metadata after successful entity tool response, this is a core MCP blocker - stop immediately
+- Do NOT proceed if schema is in "Database update required" state
 
 Stop and report blocker on first failed entity tool call.
 

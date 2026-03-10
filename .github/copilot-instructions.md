@@ -47,9 +47,13 @@ Treat these as canonical:
    - `generate_only` → skip deploy and report artifacts only
 15. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 
-## Agent 4 Skill
+## Agent 4 Implementation
 
-- `skills/application-creation/SKILL.md`
+Agent 4 executes MCP tools directly via curl commands. All instructions and examples are in:
+- `agents/04-implementation.md`
+- `context/mcp-application-tools-reference.md`
+
+The `skills/application-creation/SKILL.md` file is **deprecated** and no longer used. All workflow documentation has been consolidated into the agent instructions and MCP reference guide.
 
 ## Critical Conventions
 

@@ -2,31 +2,30 @@
 
 This directory contains **reference documents** that describe workflows and best practices for Creatio composable app generation.
 
-## ⚠️ Important Notice
+## Current Approach
 
-These are **not executable Copilot CLI skills**. The files here (e.g., `SKILL.md`) serve as:
-- Detailed workflow documentation
-- MCP integration patterns
-- Schema sync best practices
-- Validation checklists
+Agent 4 executes MCP `application.create` directly via curl commands documented in:
+- `agents/04-implementation.md` — Agent instructions with curl examples
+- `context/mcp-application-tools-reference.md` — Complete MCP tools guide
 
-## How Agent 4 Uses These Files
+## Skills as Reference Documentation
 
-Agent 4 (Implementation Orchestrator) **reads** `application-creation/SKILL.md` as **instructions** but does **not delegate** through the `skill` tool.
-
-The MCP workflow described in `SKILL.md` has been **inlined directly** into `agents/04-implementation.md` for clarity and maintainability.
-
-## Structure
+These files serve as workflow documentation and best practices:
 
 ```
 skills/
-├── application-creation/      # MCP application.create workflow
-├── data-bindings-creation/   # Data binding generation
-├── entity-creation/          # Entity schema creation
-├── package-descriptor-creation/  # Package metadata
-└── page-creation/            # Freedom UI page generation
+├── entity-creation/          # Entity schema sync via MCP entity tools
+├── page-creation/           # Freedom UI page generation
+├── data-bindings-creation/  # Data binding generation
+└── package-descriptor-creation/  # Package metadata
 ```
 
-## Future
+Each SKILL.md contains:
+- Workflow documentation
+- Input/output specifications
+- Validation checklists
+- Best practices
 
-If Copilot CLI adds native skill registration support, these documents can be converted to executable skills. For now, treat them as canonical documentation referenced by agent instructions.
+## Usage Note
+
+These are **not executable skills**. They are reference documents that may be read by agents during implementation planning and execution.

@@ -124,8 +124,8 @@ Developer prompt (natural language)
              ▼
 ┌─────────────────────────┐
 │ Agent 4: Implementation │  Read: agents/04-implementation.md
-│                         │  Skill: application-creation
-│                         │  Context: essentials, ui, bindings
+│                         │  Context: essentials, ui, bindings, mcp-tools-ref
+│                         │  Direct MCP: curl → application.create/get_info
 │                         │  Output: output/<App>/mcp-application-result.json
 │                         │          + mcp-application-report.md
 └────────────┬────────────┘
@@ -157,16 +157,18 @@ Developer prompt (natural language)
 6. Verify expected outputs exist and are non-empty before moving to the next agent.
 7. Agent 2 is interactive only. Never delegate it.
 8. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
-9. Agent 4 implementation order:
-   - Step A: prepare and validate `application.create` payload from `plan.md`
-   - Step B: call MCP `tools/list` and verify required application tools are available
-   - Step C: call MCP `tools/call` for `application.create`
-   - Step D: parse the verified `short` contract and initialize `output/<AppName>/mcp-application-result.json`
-   - Step E: if plan contains approved schema changes, execute ordered `entity.create_lookup`, `entity.create`, `entity.update` calls
-   - Step F: entity tool success is valid only when the schema is fully materialized, not left in `Database update required`, and immediately refreshable through `application.get_info`
-   - Step G: after each successful entity tool call, refresh canonical context via `application.get_info` and overwrite `mcp-application-result.json`
-   - Step H: if a post-mutation refresh fails with missing server metadata, stop with a core MCP blocker instead of retrying silently in the repo workflow
-   - Step I: validate normalized `success=true` with short-contract checks
+9. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
+   - Step A: initialize MCP session via `initialize` method and extract `Mcp-Session-Id`
+   - Step B: verify tools availability with `tools/list` (check for application.create, application.get_info, entity tools)
+   - Step C: prepare and validate `application.create` payload from `plan.md`
+   - Step D: execute `tools/call` for `application.create` via curl with Basic Auth + Session-Id headers
+   - Step E: parse SSE response (grep data: | sed | jq) and validate `short` contract
+   - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext
+   - Step G: if plan contains approved schema changes, execute ordered entity tool calls (create_lookup → create → update)
+   - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
+   - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
+   - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
+   - Step K: validate final normalized `success=true` with short-contract checks
 10. On failure, decide: retry, fix, or report blocker.
 11. Do NOT proceed to Agent 5 if Agent 4 validation fails.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
@@ -202,7 +204,8 @@ Developer prompt (natural language)
 
 | File | Contains | When to Read |
 |------|----------|--------------|
-| `context/essentials.md` | Platform basics, naming, package structure, clio commands, MCP app create flow | Always |
+| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always |
+| `context/mcp-application-tools-reference.md` | Complete MCP tools guide: curl commands, parsing, error handling | Agent 4 |
 | `context/business-checklist.md` | Mandatory business clarification checklist and completion criteria | Agent 2, 3 |
 | `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
 | `context/ui-reference.md` | Freedom UI page structure and controls | Agent 4 |
