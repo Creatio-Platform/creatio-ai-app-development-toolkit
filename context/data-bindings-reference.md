@@ -16,7 +16,7 @@ Use this first for deployed schemas when you need column names, UIds, and data v
 Request:
 ```json
 {
-  "entityName": "SysModule"
+  "schemaName": "SysModule"
 }
 ```
 
@@ -36,60 +36,45 @@ Response shape:
 
 ### `binding.create`
 
-Generates `descriptor.json`, `data.json`, and `filter.json` for any binding entity. By default the files are returned in the MCP response. If `outputPath` is supplied, the same files are also written on the server.
+Creates or updates a binding in the DB for any deployed entity schema, stores `descriptor.json`, `data.json`, and `filter.json` payloads in `SysPackageSchemaData`, and installs data immediately. If `outputPath` is supplied, the same files are also written on the server.
 
 Request fields:
-- `entityName` — target schema such as `SysModule`, `SysModuleEntity`, or a lookup entity
+- `packageUId` — package GUID that owns the binding
+- `schemaName` — target schema such as `SysModule`, `SysModuleEntity`, or a lookup entity
 - `bindingName` — output folder name such as `SysModule_UsrTodoTask`
 - `rowsJson` — JSON array of rows, each row being an array of `{columnName, value, displayValue?}`
 - `columnsJson` — optional explicit descriptor columns `{columnName, isKey?, isForceUpdate?}`
 - `installType` — optional descriptor install type, default `0`
 - `outputPath` — optional server filesystem destination
-- `rawSchemaJson` — optional raw mode payload for entities that were just created and are not yet deployed
 
 Response shape:
 ```json
 {
-  "bindingName": "SysModule_UsrTodoTask",
-  "files": {
-    "descriptor": "{ \"Descriptor\": { ... } }",
-    "data": "{ \"PackageData\": [ ... ] }",
-    "filter": "\"\""
+  "success": true
+}
+```
+
+Error shape:
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "packageUId must be a valid GUID."
   }
 }
 ```
-
-### `rawSchemaJson`
-
-Use raw mode when the target entity was just created through `entity.create` or `entity.create_lookup` and its schema metadata is not yet discoverable through `binding.get_columns`.
-
-Shape:
-```json
-{
-  "schemaUId": "12345678-1234-1234-1234-123456789012",
-  "parentSchemaName": "BaseLookup",
-  "columns": [
-    {
-      "name": "Name",
-      "uId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      "dataValueTypeUId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-    }
-  ]
-}
-```
-
-Inherited columns such as `Id` and `Name` are resolved from `parentSchemaName`.
 
 ---
 
 ## Binding File Structure
 
-Each generated binding still has the same package layout:
+Each persisted binding still maps to the same package layout:
 - `Data/<BindingName>/descriptor.json`
 - `Data/<BindingName>/data.json`
 - `Data/<BindingName>/filter.json`
 
-Use `templates/data-bindings/` as reference output, not as the primary generation path.
+Use `templates/data-bindings/` as reference output, not as the primary generation path. The MCP success payload does not return these file bodies; they are stored in DB and optionally written to `outputPath`.
 
 ---
 
@@ -166,6 +151,7 @@ Example `rowsJson`:
 ## Practical Guidance
 
 - Prefer `binding.get_columns` for deployed system schemas such as `SysModule` and `SysModuleEntity`.
-- Prefer `rawSchemaJson` when generating bindings immediately after `entity.create` or `entity.create_lookup`.
+- Newly created schemas from `entity.create` or `entity.create_lookup` are DB-first and should be discoverable through `binding.get_columns`; raw mode is not supported.
+- Treat `packageUId + bindingName` as the binding identity for create/update flow.
 - Leave `filter.json` as `""` for standard SysModule, SysModuleEntity, and lookup seed bindings.
-- Treat `outputPath` as optional. Persisting files in the MCP response is sufficient for most repo workflows.
+- Treat `outputPath` as optional. The primary effect is DB persistence plus immediate install; server-side files are only a side effect.

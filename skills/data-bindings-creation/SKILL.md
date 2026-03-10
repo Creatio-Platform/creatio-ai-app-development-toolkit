@@ -1,9 +1,9 @@
 ---
 name: data-bindings-creation
-description: Generate Creatio data binding JSON through MCP `binding.get_columns` and `binding.create` for SysModule, SysModuleEntity, and lookup seed data.
+description: Create or update Creatio data bindings through MCP `binding.get_columns` and `binding.create` for SysModule, SysModuleEntity, and lookup seed data.
 compatibility: Requires Creatio MCP binding tools plus context/bindings-lookup.json and context/data-bindings-reference.md.
 metadata:
-  version: "4.0"
+  version: "4.1"
   category: creatio-schema-generation
 ---
 
@@ -13,14 +13,15 @@ Generate package data bindings that register sections and seed lookup values.
 
 ## Outputs
 
-- MCP response with `bindingName` and `files.descriptor|data|filter`
+- MCP response with `{"success": true}`
+- Binding persisted in Creatio DB and data installed immediately
 - Optional server-side files when `outputPath` is provided to `binding.create`
 
 ## Source Inputs
 
 From MCP and context:
 - `binding.get_columns` for deployed schemas
-- `entity.create` / `entity.create_lookup` response data for `rawSchemaJson` when schema is not yet deployed
+- current app context with `packageUId` and target schema names
 - `context/bindings-lookup.json`
 - `context/data-bindings-reference.md`
 
@@ -37,23 +38,26 @@ From MCP and context:
    - `FolderMode`: `b659d704-3955-e011-981f-00155d043204`
 7. `filter.json` for standard bindings is `""`.
 8. For lookup seed data, create one row per seed value.
-9. Use `rawSchemaJson` when the target schema was created earlier in the same flow and is not yet discoverable through `binding.get_columns`.
+9. `binding.create` requires `packageUId` and works only with deployed schema metadata. After `entity.create` or `entity.create_lookup`, use the persisted schema name and `binding.get_columns` if column discovery is needed.
 
 ## Typical MCP Flow
 
 1. Call `binding.get_columns` for deployed targets such as `SysModule` or `SysModuleEntity`.
 2. Build `rowsJson` and optional `columnsJson`.
-3. Call `binding.create`.
-4. Persist the returned file bodies or write them on the server through `outputPath`.
+3. Call `binding.create` with `packageUId`, `schemaName`, `bindingName`, and `rowsJson`.
+4. Validate `{"success": true}` and use `outputPath` only when server-side files are needed.
 
 ## Validation Checklist
 
 - MCP response parses successfully
-- `files.descriptor`, `files.data`, and `files.filter` are present
+- `success` is `true`
+- Binding and seed data are installed in Creatio
+- If `outputPath` is used, `descriptor.json`, `data.json`, and `filter.json` are written on the server
 - All references (entity/page/module ids) match the current app context
 - Lookup data contains all seed values
 
 ## Notes
 
 - `outputPath` is optional and writes files on the Creatio server, not into this repository.
+- `binding.create` does not return generated file bodies on success; the main result is DB persistence and immediate install.
 - Use `templates/data-bindings/` as reference examples, not as the primary generation path.

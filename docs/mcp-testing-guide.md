@@ -134,7 +134,7 @@ result = json.loads(text)  # {"success": true, "app": {...}}
 | `entity.list_parents` | Список батьківських схем |
 | `entity.check_name` | Перевірка унікальності імені |
 | `binding.get_columns` | Колонки та UId для існуючої schema |
-| `binding.create` | Генерація binding records |
+| `binding.create` | DB-first створення або оновлення binding records з негайною інсталяцією даних |
 
 ## Приклади тестових скриптів
 

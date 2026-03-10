@@ -125,9 +125,10 @@ When generating `entity.create_lookup`, `entity.create`, or `entity.update` payl
 
 1. ❌ NEVER use `dataName` or `bindingFolder` → always use `bindingName`
 2. ❌ NEVER use `dataJson` or `data` → always use `rowsJson`
-3. ❌ NEVER pass `packageName` or `packageUId` → binding tools don't require them
-4. ✅ ALWAYS use `schemaName` for entity reference
-5. ✅ `rowsJson` must be array of rows: `[[{columnName, value}, ...], ...]`
+3. ❌ NEVER use `packageName` → always use `packageUId`
+4. ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
+5. ✅ ALWAYS use `schemaName` for entity reference
+6. ✅ `rowsJson` must be array of rows: `[[{columnName, value}, ...], ...]`
 
 **Correct Payload Templates:**
 
@@ -163,6 +164,7 @@ curl ... -d "{
 curl ... -d "{
   \"name\": \"binding.create\",
   \"arguments\": {
+    \"packageUId\": \"$PACKAGE_UID\",             # ✅ REQUIRED from application.create
     \"schemaName\": \"UsrStatusLookup\",        # ✅ Entity schema name
     \"bindingName\": \"UsrStatusLookup_Seed\",  # ✅ NOT dataName or bindingFolder
     \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"}]]\",  # ✅ NOT dataJson
@@ -175,7 +177,9 @@ curl ... -d "{
 **CRITICAL for binding.create:**
 - ❌ NEVER use `dataName` → always use `bindingName`
 - ❌ NEVER use `dataJson` → always use `rowsJson`
-- ❌ NEVER pass `packageName` or `packageUId` (not required)
+- ❌ NEVER use `packageName` → always use `packageUId`
+- ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
+- ✅ Success response is only `{\"success\": true}`
 - ✅ `rowsJson` format: array of rows, each row is array of `{columnName, value}` objects
 - ✅ Example: `[[{"columnName":"Id","value":"guid-1"},{"columnName":"Name","value":"New"}]]`
 

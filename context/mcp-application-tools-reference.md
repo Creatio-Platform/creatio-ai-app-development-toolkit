@@ -667,8 +667,7 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 **Tool Signature:**
 ```
 binding.get_columns(
-  schemaName: string,       // REQUIRED: Entity schema name (e.g., "Contact", "UsrTodoList")
-  rawSchemaJson: string     // Optional: For undeployed entities (from entity.create response)
+  schemaName: string        // REQUIRED: Entity schema name (e.g., "Contact", "UsrTodoList")
 )
 ```
 
@@ -720,18 +719,18 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 
 ### 9. Create Data Binding (binding.create)
 
-**Purpose:** Generate descriptor.json, data.json, and filter.json for binding records (SysModule/SysModuleEntity) or lookup seed data.
+**Purpose:** Create or update a binding in the DB for binding records (SysModule/SysModuleEntity) or lookup seed data, then install the data immediately.
 
 **Tool Signature:**
 ```
 binding.create(
+  packageUId: string,       // REQUIRED: Package GUID that owns the binding
   schemaName: string,       // REQUIRED: Entity schema name (e.g., "SysModule", "UsrTodoStatus")
   bindingName: string,      // REQUIRED: Binding folder name (e.g., "SysModule_UsrTodoTask")
   rowsJson: string,         // REQUIRED: JSON array of rows with columnName/value pairs
   columnsJson: string,      // Optional: Column definitions with isKey/isForceUpdate flags
   installType: string,      // Optional: Default "0", use "3" for schema admin unit rights
-  outputPath: string,       // Optional: Filesystem path to write files on server
-  rawSchemaJson: string     // Optional: For undeployed entities (schema UId + columns)
+  outputPath: string        // Optional: Filesystem path to write files on server
 )
 ```
 
@@ -776,6 +775,7 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
     "params": {
       "name": "binding.create",
       "arguments": {
+        "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
         "schemaName": "UsrTodoStatus",
         "bindingName": "UsrTodoStatus_Lookup",
         "rowsJson": "[[{\"columnName\":\"Id\",\"value\":\"a1b2c3d4-e5f6-4789-a012-3456789abcde\"},{\"columnName\":\"Name\",\"value\":\"New\"}],[{\"columnName\":\"Id\",\"value\":\"b2c3d4e5-f6a7-4890-b123-456789abcdef\"},{\"columnName\":\"Name\",\"value\":\"In Progress\"}]]"
@@ -787,16 +787,15 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 **Response Format:**
 ```json
 {
-  "descriptor": "{...descriptor.json content...}",
-  "data": "{...data.json content...}",
-  "filter": "{...filter.json content...}",
-  "filesWritten": ["/path/to/descriptor.json", "/path/to/data.json"]
+  "success": true
 }
 ```
 
 **Important Notes:**
 - Use `binding.get_columns` first to discover column UIds for deployed entities
-- For undeployed entities (just created in same flow), pass `rawSchemaJson` with schema UId and columns from `entity.create` response
+- `binding.create` requires `packageUId`
+- Newly created schemas from `entity.create` or `entity.create_lookup` are DB-first and should already be queryable through `binding.get_columns`
+- `outputPath` is optional and only writes server-side file copies; success response still stays `{"success": true}`
 - Lookup seed data typically needs only `Id` and `Name` columns
 
 ## Error Handling

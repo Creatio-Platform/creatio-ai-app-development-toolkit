@@ -139,7 +139,7 @@ Inspector запустить два сервери:
 | `application.get_list` | Список існуючих applications для discovery перед update flow |
 | `application.get_info` | Поточний compact application context з БД для існуючого application |
 | `binding.get_columns` | Повертає колонки, UId та data value types для існуючої schema |
-| `binding.create` | Генерує `descriptor/data/filter` для binding records, підтримує `rawSchemaJson` |
+| `binding.create` | DB-first створює або оновлює binding, одразу інсталює дані, `outputPath` лишається опційним side effect |
 
 ```
 ┌─ Tools ──────────────────────┐  ┌─ Select a tool ────────────┐
@@ -298,7 +298,7 @@ Tool Result: Success
 ## Крок 12: Тестування binding.get_columns
 
 1. Оберіть `binding.get_columns`
-2. У полі `entityName` введіть `SysModule`
+2. У полі `schemaName` введіть `SysModule`
 3. Натисніть **Run Tool**
 4. Очікуваний результат:
    - JSON масив колонок
@@ -308,19 +308,19 @@ Tool Result: Success
 
 1. Оберіть `binding.create`
 2. Заповніть:
-   - `entityName`: `UsrTestLookup`
+   - `packageUId`: `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`
+   - `schemaName`: `UsrTestLookup`
    - `bindingName`: `UsrTestLookup_Lookup`
    - `rowsJson`:
      ```json
      [[{"columnName":"Id","value":"11111111-0000-0000-0000-000000000001"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]
      ```
-3. Якщо schema ще не задеплоєна і ви щойно створили її через `entity.create_lookup`, додайте `rawSchemaJson` з `schemaUId`, `parentSchemaName` і колонками з MCP відповіді.
+3. Опціонально можна вказати `outputPath`, якщо потрібні `descriptor.json`, `data.json` і `filter.json` на сервері.
 4. Натисніть **Run Tool**
 5. Очікуваний результат:
-   - `bindingName`
-   - `files.descriptor`
-   - `files.data`
-   - `files.filter`
+   - `{"success": true}`
+   - binding створений або оновлений у БД
+   - seed data одразу встановлені в target schema
 
 ## Крок 14: Тестування application.create (DB-first)
 
