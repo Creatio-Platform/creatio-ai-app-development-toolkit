@@ -249,33 +249,135 @@ grep 'data: ' /tmp/mcp-get-info-raw.txt | \
 
 **Critical Pattern:** Always call `application.get_info` after each successful entity mutation (`entity.create_lookup`, `entity.create`, `entity.update`) and overwrite `mcp-application-result.json`.
 
+### 3.1. Extract Package UId for Entity Operations
+
+**CRITICAL:** Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) require `packageUId` parameter as a GUID string, NOT package name.
+
+**New Flat Format (Recommended):** Since core version 8.3.4.802, MCP tools return simplified flat format with top-level `packageUId` and `packageName` fields.
+
+#### Ultra-Simple Extraction (No jq Required)
+
+Use the helper script `~/scripts/mcp-response-to-env.sh` to convert MCP response to shell variables:
+
+```bash
+# Parse and save response
+curl ... | grep 'data: ' | sed 's/^data: //' | \
+  jq -r '.result.content[0].text' > /tmp/mcp-response.json
+
+# Generate .env file with all UIds
+bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
+
+# Load variables into shell
+source /tmp/.mcp-env
+
+# Use variables directly (no jq needed!)
+echo "Package UId: $PACKAGE_UID"
+echo "Package Name: $PACKAGE_NAME"
+echo "Main Entity UId: $MAIN_ENTITY_UID"
+echo "Main Entity Name: $MAIN_ENTITY_NAME"
+echo "All Entities: $ALL_ENTITY_NAMES"
+```
+
+**Generated .env file example:**
+```bash
+# Auto-generated from MCP response
+PACKAGE_UID='597944b2-c71f-4cdb-9510-0216c1e214a6'
+PACKAGE_NAME='UsrTodoList'
+
+MAIN_ENTITY_UID='32ccd416-a6c7-4eeb-bae0-46403f18c457'
+MAIN_ENTITY_NAME='UsrTodoList'
+
+ALL_ENTITY_UIDS='32ccd416-a6c7-4eeb-bae0-46403f18c457,ed3ea989-abd2-4fef-9e03-d66b62210dd2'
+ALL_ENTITY_NAMES='UsrTodoList,UsrTodoPriority,UsrTodoStatus'
+```
+
+#### Simple Extraction (jq Only)
+
+For direct jq extraction without helper script:
+
+```bash
+# Parse application.create response
+grep 'data: ' /tmp/mcp-app-create-raw.txt | \
+  sed 's/^data: //' | \
+  jq -r '.result.content[0].text' | \
+  jq '.' > /tmp/mcp-app-create-parsed.json
+
+# Extract from flat format (simple!)
+PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-app-create-parsed.json)
+PACKAGE_NAME=$(jq -r '.packageName' /tmp/mcp-app-create-parsed.json)
+MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-app-create-parsed.json)
+MAIN_ENTITY_NAME=$(jq -r '.entities[0].name' /tmp/mcp-app-create-parsed.json)
+
+echo "Package UId: $PACKAGE_UID"
+# Output: 597944b2-c71f-4cdb-9510-0216c1e214a6
+```
+
+**Response Format Structure:**
+```json
+{
+  "success": true,
+  "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
+  "packageName": "UsrTodoList",
+  "entities": [
+    {
+      "uId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
+      "name": "UsrTodoList",
+      "caption": "Todo",
+      "columns": [
+        {"name": "UsrTitle", "caption": "Title", "dataValueType": "ShortText"}
+      ]
+    }
+  ]
+}
+```
+
+**Use these UIds in all subsequent entity tool calls:**
+- `packageUId` → use `$PACKAGE_UID` variable
+- `entityUId` → use `$MAIN_ENTITY_UID` variable (for entity.update)
+
+**Never use:**
+- ❌ `packageName` as parameter (tools require UId, not name)
+- ❌ `entitySchemaUId` (wrong parameter name, should be `entityUId`)
+- ❌ `entityName` as parameter for entity.update (wrong, use `name` instead)
+
 ### 5. Create Lookup Entity (entity.create_lookup)
 
 **Purpose:** Create lookup (BaseLookup-based) entity in specified package.
 
+**Tool Signature:**
+```
+entity.create_lookup(
+  packageUId: string,    // GUID, NOT packageName!
+  name: string,          // Entity schema name (e.g., "UsrEventStatus")
+  caption: string,       // Display name
+  columnsJson: string    // Optional, default "[]"
+)
+```
+
+**Example:**
+
 ```bash
+# Use extracted PACKAGE_UID from application.create
 SESSION_ID="..." && curl -s http://localhost:5001/mcp \
   -u Supervisor:Supervisor \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 5,
-    "method": "tools/call",
-    "params": {
-      "name": "entity.create_lookup",
-      "arguments": {
-        "packageName": "UsrEvents",
-        "entityName": "UsrEventStatus",
-        "displayName": "Event Status",
-        "description": "Lookup for event status values"
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 5,
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"entity.create_lookup\",
+      \"arguments\": {
+        \"packageUId\": \"$PACKAGE_UID\",
+        \"name\": \"UsrEventStatus\",
+        \"caption\": \"Event Status\",
+        \"columnsJson\": \"[]\"
       }
     }
-  }' 2>&1 | tee /tmp/mcp-lookup-create-raw.txt
+  }" 2>&1 | tee /tmp/mcp-lookup-create-raw.txt
 ```
-
-**Note:** Use `packageName` (not `packageUId`) as argument.
 
 **After Success:** Immediately call `application.get_info` to refresh context and verify the entity is fully materialized (not in "Database update required" state).
 
@@ -283,66 +385,56 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 
 **Purpose:** Add columns to existing entity.
 
-First, get the tool signature to understand column format:
-
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 8,
-    "method": "tools/list",
-    "params": {}
-  }' | grep -A 1000 'event: message' | \
-  sed 's/^event: message$//' | \
-  sed 's/^data: //' | \
-  jq '.result.tools[] | select(.name == "entity.update")'
+**Tool Signature:**
+```
+entity.update(
+  entityUId: string,       // Entity GUID, NOT entitySchemaUId!
+  packageUId: string,      // Package GUID, NOT packageName!
+  name: string,            // Optional, entity schema name
+  caption: string,         // Optional, display name
+  parentSchemaName: string,// Optional, parent schema
+  operationsJson: string   // JSON array of operations
+)
 ```
 
-**Update with Columns:**
+**Critical:** `operationsJson` must use `{operation, column}` structure:
+
+```json
+[{
+  "operation": "addColumn",   // NOT "type"!
+  "column": {                 // Nested object!
+    "name": "UsrField",
+    "caption": "Field",
+    "dataValueTypeName": "ShortText",
+    "isRequired": true,
+    "size": 250
+  }
+}]
+```
+
+**Example:**
 
 ```bash
+# Use extracted ENTITY_UID and PACKAGE_UID
 SESSION_ID="..." && curl -s http://localhost:5001/mcp \
   -u Supervisor:Supervisor \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 9,
-    "method": "tools/call",
-    "params": {
-      "name": "entity.update",
-      "arguments": {
-        "packageName": "UsrEvents",
-        "entityName": "UsrEvents",
-        "columnsToAdd": [
-          {
-            "name": "UsrDescription",
-            "displayName": "Description",
-            "dataValueTypeName": "MaxSizeText",
-            "isRequired": false
-          },
-          {
-            "name": "UsrStartDate",
-            "displayName": "Start Date",
-            "dataValueTypeName": "DateTime",
-            "isRequired": true
-          },
-          {
-            "name": "UsrStatus",
-            "displayName": "Status",
-            "dataValueTypeName": "Lookup",
-            "referenceSchemaName": "UsrEventStatus",
-            "isRequired": false
-          }
-        ]
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 9,
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"entity.update\",
+      \"arguments\": {
+        \"entityUId\": \"$ENTITY_UID\",
+        \"packageUId\": \"$PACKAGE_UID\",
+        \"caption\": \"Events\",
+        \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrDescription\\\",\\\"caption\\\":\\\"Description\\\",\\\"dataValueTypeName\\\":\\\"MaxSizeText\\\",\\\"isRequired\\\":false}},{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStartDate\\\",\\\"caption\\\":\\\"Start Date\\\",\\\"dataValueTypeName\\\":\\\"DateTime\\\",\\\"isRequired\\\":true}},{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStatus\\\",\\\"caption\\\":\\\"Status\\\",\\\"dataValueTypeName\\\":\\\"Lookup\\\",\\\"referenceSchemaName\\\":\\\"UsrEventStatus\\\",\\\"isRequired\\\":false}}]\"
       }
     }
-  }' 2>&1 | tee /tmp/mcp-entity-update-raw.txt
+  }" 2>&1 | tee /tmp/mcp-entity-update-raw.txt
 ```
 
 **After Success:** Call `application.get_info` and update context.
@@ -380,9 +472,126 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 
 **Fix:** Check tool signature with `tools/list` and verify argument names/types.
 
+**Important:** Generic error messages hide actual exceptions. Always check tmux core session logs for detailed error:
+
+```bash
+# Attach to core tmux session and check recent logs
+tmux attach -t core
+# Or capture logs
+tmux capture-pane -t core -p -S -1000 | grep -A5 "ArgumentException\|Error\|Exception"
+```
+
+Look for patterns like:
+- `ArgumentException: missing value for required parameter 'packageUId'` → using wrong parameter name
+- `Unsupported operation ''` → wrong JSON structure in operationsJson
+
 **3. Session Expired**
 
 After inactivity, session may expire. Re-initialize with `initialize` method.
+
+## Common Pitfalls
+
+### ❌ Wrong Parameter Names
+
+**Problem:** `ArgumentException: missing value for required parameter 'packageUId'`
+
+**Causes:**
+- Using `packageName` instead of `packageUId` (GUID required!)
+- Using `entitySchemaUId` instead of `entityUId`
+- Using `entityName` instead of `name`
+- Using `displayName` instead of `caption`
+
+**Solution:** Always verify parameter names against C# tool signatures in `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/`:
+- `EntityCreateLookupTool.cs` (line 13-23)
+- `EntityCreateTool.cs`
+- `EntityUpdateTool.cs` (line 13-26)
+
+**Correct Parameters:**
+```json
+{
+  "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",  // ✅ GUID!
+  "name": "UsrEventStatus",                             // ✅ not entityName
+  "caption": "Event Status",                            // ✅ not displayName
+  "columnsJson": "[]"                                   // ✅
+}
+```
+
+### ❌ Wrong JSON Structure for Operations
+
+**Problem:** `Unsupported operation ''. Allowed values: addColumn, updateColumn, removeColumn`
+
+**Cause:** Using flat structure instead of nested `{operation, column}`:
+
+```json
+// ❌ WRONG
+{
+  "type": "addColumn",
+  "name": "UsrField",
+  "caption": "Field",
+  "dataValueTypeName": "ShortText"
+}
+
+// ✅ CORRECT
+{
+  "operation": "addColumn",
+  "column": {
+    "name": "UsrField",
+    "caption": "Field",
+    "dataValueTypeName": "ShortText"
+  }
+}
+```
+
+**Solution:** Use correct structure from `EntityColumnOperation.cs` model:
+
+```bash
+entity.update(
+  entityUId: "...",
+  packageUId: "...",
+  operationsJson: '[{"operation":"addColumn","column":{...}}]'
+)
+```
+
+### ❌ Missing UId Extraction
+
+**Problem:** Using package/entity names instead of UIds
+
+**Solution:** Extract UIds from `application.create` / `application.get_info` responses using new flat format:
+
+```bash
+# Method 1: Ultra-simple with helper script (recommended)
+bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
+source /tmp/.mcp-env
+
+# Method 2: Direct jq extraction
+PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-response.json)
+MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-response.json)
+
+# Validate extraction
+if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
+  echo "ERROR: Failed to extract package UId"
+  exit 1
+fi
+
+echo "Package UId: $PACKAGE_UID"
+echo "Entity UId: $MAIN_ENTITY_UID"
+```
+
+### ❌ Not Refreshing Context After Mutations
+
+**Problem:** Schema exists in DB but not visible in `application.get_info`
+
+**Cause:** Not calling `application.get_info` after each successful entity mutation
+
+**Solution:** Always refresh context:
+
+```bash
+# After entity.create_lookup or entity.update
+curl ... application.get_info | ... > output/App/mcp-application-result.json
+
+# Verify entity is present
+jq '.packages.UsrApp.entities.UsrNewEntity' output/App/mcp-application-result.json
+```
 
 ### Validation Checklist
 
@@ -458,17 +667,18 @@ curl -s http://localhost:5001/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc":"2.0","id":4,"method":"tools/call",
-    "params":{
-      "name":"entity.create_lookup",
-      "arguments":{
-        "packageName":"UsrMyApp",
-        "entityName":"UsrMyStatus",
-        "displayName":"My Status"
+  -d "{
+    \"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",
+    \"params\":{
+      \"name\":\"entity.create_lookup\",
+      \"arguments\":{
+        \"packageUId\":\"$PACKAGE_UID\",
+        \"name\":\"UsrMyStatus\",
+        \"caption\":\"My Status\",
+        \"columnsJson\":\"[]\"
       }
     }
-  }'
+  }"
 
 # 5. Refresh context
 curl -s http://localhost:5001/mcp \

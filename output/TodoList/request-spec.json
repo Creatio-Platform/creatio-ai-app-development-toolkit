@@ -1,0 +1,50 @@
+{
+  "sourcePrompt": "Generate with a code agent Todo List composable app with all required schema types. A simple Todo List app is a lightweight tool for managing everyday tasks in Creatio. It allows users to create and maintain a list of tasks, see them in a structured list view, update their status, and manage task details throughout their lifecycle.",
+  "businessChecklist": {
+    "businessOutcome": {
+      "complete": true,
+      "value": "Personal task tracking tool enabling users to create, view, and manage tasks with status visibility and priority management"
+    },
+    "actorsAndRoles": {
+      "complete": true,
+      "value": "Individual users managing their own personal tasks"
+    },
+    "domainModel": {
+      "complete": true,
+      "value": "UsrTodo (main entity with Title, Description, Status, Priority, DueDate), UsrTodoStatus lookup (New, In Progress, Completed), UsrTodoPriority lookup (Low, Medium, High)"
+    },
+    "lifecycleAndStatuses": {
+      "complete": true,
+      "value": "Status transitions: New → In Progress → Completed (no restrictions on transitions)"
+    },
+    "businessRules": {
+      "complete": true,
+      "value": "Title mandatory, Status defaults to New, Priority defaults to Medium, standard CRUD permissions, no transition restrictions"
+    },
+    "uxExpectations": {
+      "complete": true,
+      "value": "List page shows Title, Status, Priority, DueDate. Form page shows all fields with standard vertical layout."
+    },
+    "edgeCases": {
+      "complete": true,
+      "value": "No special edge cases - standard validation applies (required fields, valid lookups)"
+    },
+    "acceptanceCriteria": {
+      "complete": true,
+      "value": "Users can create tasks with title/description/priority/due date, view tasks in list, update status and details in form, see all fields properly displayed"
+    },
+    "complete": true
+  },
+  "technicalInputs": {
+    "creatioUrl": "http://localhost:5001",
+    "deployPreference": "deploy_now",
+    "credentialsStatus": "existing_env"
+  },
+  "assumptions": [
+    "Single-user personal tracking (no collaboration)",
+    "No task categories needed",
+    "No recurring tasks or reminders",
+    "Tasks remain in system indefinitely",
+    "Standard Creatio permissions sufficient"
+  ]
+}

@@ -103,6 +103,63 @@ Canonical context rule:
 - after every successful entity mutation, refresh context via `application.get_info`
 - treat `entity.create_lookup`, `entity.create`, and `entity.update` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
 
+### 4.1. Entity Tool Payload Validation
+
+When generating `entity.create_lookup`, `entity.create`, or `entity.update` payloads in the plan, follow these rules to prevent parameter name errors:
+
+**CRITICAL Parameter Names:**
+
+1. ❌ NEVER use `packageName` → always use `packageUId` (GUID string)
+2. ❌ NEVER use `entitySchemaUId` → always use `entityUId` (GUID string)
+3. ❌ NEVER use `entityName` → always use `name` (string)
+4. ❌ NEVER use `displayName` or `description` → always use `caption` (string)
+5. ❌ NEVER use flat column structures → always use `{operation, column: {...}}` for `operationsJson`
+
+**Correct Payload Templates:**
+
+**entity.create_lookup:**
+```bash
+curl ... -d "{
+  \"name\": \"entity.create_lookup\",
+  \"arguments\": {
+    \"packageUId\": \"$PACKAGE_UID\",     # ✅ GUID from application.create
+    \"name\": \"UsrStatusLookup\",        # ✅ NOT entityName
+    \"caption\": \"Status\",              # ✅ NOT displayName
+    \"columnsJson\": \"[]\"
+  }
+}"
+```
+
+**entity.update:**
+```bash
+curl ... -d "{
+  \"name\": \"entity.update\",
+  \"arguments\": {
+    \"entityUId\": \"$ENTITY_UID\",      # ✅ NOT entitySchemaUId
+    \"packageUId\": \"$PACKAGE_UID\",
+    \"caption\": \"Main Entity\",
+    \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{...}}]\"  # ✅ Nested structure
+  }
+}"
+```
+
+**UId Variable Strategy:**
+
+Document in plan that UIds will be extracted from `application.create` response using the new flat format:
+
+```bash
+# Method 1: Ultra-simple with helper script (recommended)
+bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
+source /tmp/.mcp-env
+# Variables: $PACKAGE_UID, $MAIN_ENTITY_UID, $PACKAGE_NAME, etc.
+
+# Method 2: Direct jq extraction from flat format
+PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-response.json)
+MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-response.json)
+```
+
+Always show correct JSON structure in plan examples. Never show wrong parameter names.
+
 ### 5. Build `plan.md`
 
 Create `plan.md` with sections:

@@ -41,7 +41,30 @@ Parse:
   - `app.id`
   - `packages`
 
-If any required field is missing, stop and report blocker.
+**Agent 5 Purpose:**
+
+MCP `application.create` creates **DB-first metadata only**:
+- ✅ Application record (SysAppEntitySchemaModel)
+- ✅ Package with entity schemas (DB records)
+- ✅ Entity schemas with columns
+- ❌ NO sections (SysModule/SysModuleEntity)
+- ❌ NO workspaces (SysModuleFolderConfig)
+- ❌ NO Freedom UI pages (ClientUnitSchema)
+
+Agent 5 makes these DB schemas **runtime-accessible** through:
+1. **Compilation** → generates C# code from DB schemas
+2. **Restart** → loads new assemblies into application
+3. **Healthcheck** → validates runtime availability
+
+Without Agent 5:
+- Schemas exist in DB but no C# code generated
+- Entities not accessible via API or UI
+- No section/page generation possible
+
+**After Agent 5:**
+- Schemas are runtime-accessible for manual section/page creation
+- Ready for UI configuration in Creatio Studio
+- Foundation for full application development
 
 ### 2. Handle `generate_only`
 

@@ -113,7 +113,106 @@ Persist the compact context from MCP and set `contractType=short`.
 
 - `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
 - `binding.create` generates `descriptor.json`, `data.json`, and `filter.json` for binding records and lookup seed data.
-- Use `rawSchemaJson` with `binding.create` when a target schema was created earlier in the same flow and is not yet queryable through `binding.get_columns`.
+- `rawSchemaJson` with `binding.create` when a target schema was created earlier in the same flow and is not yet queryable through `binding.get_columns`.
+
+### Parameter Validation Checklist
+
+Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.update`), validate:
+
+1. ✅ Using `packageUId` (GUID) extracted from `application.create` response
+2. ✅ Using `entityUId` (GUID) extracted from `entity.create` or `application.get_info` response
+3. ✅ Using `name` parameter (NOT `entityName`)
+4. ✅ Using `caption` parameter (NOT `displayName` or `description`)
+5. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
+6. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
+
+**Pre-execution validation script:**
+
+```bash
+# Before entity.create_lookup or entity.create
+if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
+  echo "ERROR: PACKAGE_UID not set or invalid"
+  exit 1
+fi
+
+# Before entity.update
+if [[ -z "$ENTITY_UID" || "$ENTITY_UID" == "null" ]]; then
+  echo "ERROR: ENTITY_UID not set or invalid"
+  exit 1
+fi
+if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
+  echo "ERROR: PACKAGE_UID not set or invalid"
+  exit 1
+fi
+```
+
+**UId Extraction Pattern (New Flat Format):**
+
+Since core 8.3.4.802, MCP tools return simplified flat format. Use the helper script for zero-dependency extraction:
+
+```bash
+# Method 1: Ultra-simple with helper script (recommended)
+bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-app-create-parsed.json > /tmp/.mcp-env
+source /tmp/.mcp-env
+
+echo "Extracted Package UId: $PACKAGE_UID"
+echo "Extracted Package Name: $PACKAGE_NAME"
+echo "Extracted Main Entity UId: $MAIN_ENTITY_UID"
+echo "Extracted Main Entity Name: $MAIN_ENTITY_NAME"
+
+# Validate extraction succeeded
+if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
+  echo "BLOCKER: Failed to extract package UId from application.create response"
+  exit 1
+fi
+```
+
+**Alternative: Direct jq extraction (simple paths):**
+
+```bash
+# Method 2: Direct jq (no helper script)
+PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-app-create-parsed.json)
+PACKAGE_NAME=$(jq -r '.packageName' /tmp/mcp-app-create-parsed.json)
+MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-app-create-parsed.json)
+MAIN_ENTITY_NAME=$(jq -r '.entities[0].name' /tmp/mcp-app-create-parsed.json)
+
+echo "Extracted Package UId: $PACKAGE_UID"
+echo "Extracted Entity UId: $MAIN_ENTITY_UID"
+```
+
+**New Response Format Structure:**
+```json
+{
+  "success": true,
+  "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
+  "packageName": "UsrTodoList",
+  "entities": [
+    {"uId": "...", "name": "UsrTodoList", "caption": "Todo", "columns": [...]}
+  ]
+}
+```
+
+**Error Diagnosis from tmux Logs:**
+
+If MCP call returns generic "An error occurred invoking..." message:
+
+```bash
+# Check core tmux session logs for actual exception
+tmux capture-pane -t core -p -S -1000 | grep -A5 "ArgumentException\|Error\|Exception"
+```
+
+Look for diagnostic patterns:
+- `ArgumentException: missing value for required parameter 'packageUId'` → using wrong parameter name (e.g., `packageName`)
+- `ArgumentException: missing value for required parameter 'entityUId'` → using wrong parameter name (e.g., `entitySchemaUId`)
+- `Unsupported operation ''` → wrong JSON structure in `operationsJson` (flat instead of nested)
+
+**Correct Tool Signatures Reference:**
+
+Always verify against C# source files:
+- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/EntityCreateLookupTool.cs` (line 13-23)
+- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/EntityCreateTool.cs`
+- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/EntityUpdateTool.cs` (line 13-26)
+- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Models/EntityColumnOperation.cs`
 
 ### Validation Checklist
 

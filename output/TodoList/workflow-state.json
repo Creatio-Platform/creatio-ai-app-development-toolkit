@@ -1,0 +1,11 @@
+{
+  "requirementsApproved": true,
+  "approvalToken": "APPROVE_REQUIREMENTS",
+  "appName": "TodoList",
+  "requirementsSha256": "cee2c546d8c67cebfe5f0d24e83be1f407d1f83a96cf084c4c1c90ab6d29db48",
+  "approvedBy": "user",
+  "approvedAtUtc": "2026-03-10T16:00:23Z",
+  "interactionMode": "nl-business-first",
+  "businessChecklistComplete": true,
+  "deployPreference": "deploy_now"
+}

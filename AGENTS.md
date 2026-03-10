@@ -31,7 +31,9 @@ You do NOT implement anything directly. You coordinate 5 agents in sequence:
 2. **Requirements Gathering** → interactive Q&A with the developer (do NOT delegate to sub-agent)
 3. **Implementation Plan** → generates MCP execution plan
 4. **Implementation** → creates or refreshes application context in DB via MCP application tools and synchronizes approved entity schemas via MCP entity tools
-5. **Deploy & Verification** → compiles, restarts, verifies
+5. **Deploy & Verification** → compiles DB schemas to C# code, restarts app to load assemblies, verifies runtime availability
+
+**Note:** MCP `application.create` creates DB-first metadata only (application record, package, entity schemas). Agent 5 is required to make these schemas runtime-accessible through compilation and restart. Without Agent 5, entities exist in DB but are not usable in API/UI.
 
 ## Mandatory Planning Start
 
