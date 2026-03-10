@@ -329,9 +329,8 @@ def build_update_action(current_entity, edited_entity, available_names):
         "arguments": {
             "entityUId": entity_u_id,
             "packageUId": edited_entity["packageUId"],
-            "name": edited_entity["name"],
+            "schemaName": edited_entity["name"],
             "caption": edited_entity.get("caption") or edited_entity["name"],
-            "parentSchemaName": edited_entity.get("parentSchemaName") or current_entity.get("parentSchemaName") or "BaseEntity",
             "operationsJson": json.dumps(operations, ensure_ascii=True, separators=(",", ":"))
         }
     }
@@ -392,6 +391,18 @@ def resolve_app_selector(result_document):
     if app.get("code"):
         return {
             "appCode": app["code"]
+        }
+    if result_document.get("appId"):
+        return {
+            "appId": result_document["appId"]
+        }
+    if result_document.get("appCode"):
+        return {
+            "appCode": result_document["appCode"]
+        }
+    if result_document.get("packageName"):
+        return {
+            "appCode": result_document["packageName"]
         }
     raise WorkflowError("Application identifier is missing in current result document")
 

@@ -42,7 +42,7 @@ Gate P is mandatory (internal control):
 - collect required runtime inputs from developer, including Creatio URL
 - provide short “What I understood” summary
 - obtain natural-language confirmation from developer
-- persist internal Gate P approved state
+- persist Gate P approved state in `.workflow-state/<AppName>/planning-state.json`
 
 Before Gate P approval, forbidden:
 - Do not run Agent 1/2/3/4.
@@ -145,11 +145,12 @@ Developer prompt (natural language)
 2. Do not re-enter planning gate between agents after Gate P is approved.
 3. Execute agents sequentially (1 → 2 → 3 → 4 → 5).
 4. Agents 1/3/5 run in background mode with `task(..., mode: "background")`. Agent 4 runs synchronously.
-5. After launching a background agent, wait with `read_agent(agent_id, wait: true)`. For Agent 4, surface an explicit “Starting implementation” status and keep execution in the foreground.
-6. Verify expected outputs exist and are non-empty before moving to the next agent.
-7. Agent 2 is interactive only. Never delegate it.
-8. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
-9. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
+5. Before Agent 1, run `scripts/check-planning-gate.sh <AppName>`. On failure, hard-stop and report blocker.
+6. After launching a background agent, wait with `read_agent(agent_id, wait: true)`. For Agent 4, surface an explicit “Starting implementation” status and keep execution in the foreground.
+7. Verify expected outputs exist and are non-empty before moving to the next agent.
+8. Agent 2 is interactive only. Never delegate it.
+9. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
+10. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
    - Step A: initialize MCP session via `initialize` method and extract `Mcp-Session-Id`
    - Step B: verify tools availability with `tools/list` (check for application.create, application.get_info, entity tools)
    - Step C: prepare and validate `application.create` payload from `plan.md`
@@ -161,13 +162,17 @@ Developer prompt (natural language)
    - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
    - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
    - Step K: validate final normalized `success=true` with short-contract checks
-10. On failure, decide: retry, fix, or report blocker.
-11. Approval gates remain internal controls and must be persisted in workflow artifacts.
-12. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
-   - `scripts/write-approval-state.sh <AppName> "<approvedBy>"`
-13. Agent 3/4 precondition:
+11. On failure, decide: retry, fix, or report blocker.
+12. Approval gates remain internal controls and must be persisted in workflow artifacts.
+13. Persist Gate P state in `.workflow-state/<AppName>/planning-state.json` via:
+   - `scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
+14. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
+   - `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
+15. Agent 3/4 precondition:
    - Run `scripts/check-approval-gate.sh <AppName>`
    - On failure, hard-stop and report blocker
+16. If `application.create` reports that the app or configuration schema already exists, stop the create flow, surface an explicit update-flow status, and continue only through documented existing-app discovery (`application.get_list` → `application.get_info`).
+17. Final user-facing summaries must be generated from the final `mcp-application-result.json` state. If planned pages, entities, or bindings are not materialized, report them as not implemented rather than as completed.
 
 ## Global Rules
 
@@ -186,6 +191,7 @@ Developer prompt (natural language)
    - `output/<AppName>/mcp-application-result.json`
    - `output/<AppName>/mcp-application-report.md`
 13. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
+14. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
 
 ## Context Files Reference
 
@@ -212,8 +218,9 @@ Developer prompt (natural language)
 When developer provides a natural-language request (for example: “Generate an Events composable app ...”):
 
 1. Start with planning response and collect blocker technical inputs only.
-2. Run Agent 1 in background → wait → verify `.creatio-env.json`.
-3. Run Agent 2 interactively → complete business checklist → persist `request-spec.json` and `workflow-state.json`.
-4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts and synchronized schema context.
-6. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
+2. After natural-language confirmation, persist Gate P with `scripts/write-planning-state.sh ...` and run `scripts/check-planning-gate.sh <AppName>`.
+3. Run Agent 1 in background → wait → verify `.creatio-env.json`.
+4. Run Agent 2 interactively → complete business checklist → persist full `request-spec.json` and approved `workflow-state.json`.
+5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
+6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts and synchronized schema context.
+7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.

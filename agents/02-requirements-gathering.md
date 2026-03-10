@@ -96,6 +96,8 @@ Create normalized request spec:
 }
 ```
 
+Do not use a shortened request spec. Every key shown above is mandatory when `businessChecklist.complete=true`.
+
 ### 5. Generate `requirements.md`
 
 Write requirements document in this format:
@@ -189,6 +191,7 @@ Examples of valid confirmation:
 - “Approved, proceed”
 
 If developer requests changes, update and re-present.
+Persist the exact approval text verbatim and use it when writing Gate R state.
 
 ### 7. Persist Workflow State (MANDATORY)
 
@@ -196,10 +199,11 @@ After natural-language approval:
 
 1. Persist internal Gate R approval and UX fields with:
 ```bash
-scripts/write-approval-state.sh <AppName> "<approvedBy>"
+scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 ```
 
 2. Write `output/<AppName>/request-spec.json`.
+3. Do not create or edit `workflow-state.json` manually.
 
 ## Critical Rules
 
@@ -223,4 +227,6 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>"
 - `requirementsApproved: true`
 - `interactionMode: "nl-business-first"`
 - `businessChecklistComplete: true`
+- `approvalSource: "natural-language"`
+- `approvalText: "<verbatim developer confirmation>"`
 ✅ Requirements include “Business Decisions Locked” and “Assumptions” sections  

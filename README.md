@@ -21,29 +21,35 @@ Use these files as canonical:
 Primary workflow is natural language:
 1. Developer sends one free-form prompt.
 2. Agent returns a short “What I understood”.
-3. Agent asks business clarifications in batches until checklist is complete.
-4. Agent asks minimal technical questions only (blockers).
-5. Agent runs the pipeline and returns final artifacts/results.
-6. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
+3. Agent persists Gate P only after natural-language confirmation and a concrete Creatio URL.
+4. Agent asks business clarifications in batches until checklist is complete.
+5. Agent asks minimal technical questions only (blockers).
+6. Agent runs the pipeline and returns final artifacts/results.
+7. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
 
 ## Workflow
 
 Orchestrator flow:
-1. Planning start with natural-language confirmation.
+1. Planning start with natural-language confirmation and persisted Gate P in `.workflow-state/<AppName>/planning-state.json`.
 2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
-3. Requirements gathering: builds `requirements.md`, `request-spec.json`, and `workflow-state.json`.
+3. Requirements gathering: builds a full `request-spec.json`, then writes approved `workflow-state.json`.
 4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
-5. Implementation: runs synchronously, uses MCP `application.create`, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
+5. Implementation: runs synchronously, uses MCP `application.create`, or branches explicitly into `application.get_list` → `application.get_info` for existing apps, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
 
 All generated artifacts are under `output/<AppName>/`.
 
 ## Runtime Scripts
 
+- `bash scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
+- `bash scripts/check-planning-gate.sh <AppName>`
+- `bash scripts/validate-request-spec.sh output/<AppName>/request-spec.json`
+- `bash scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
+- `bash scripts/check-approval-gate.sh <AppName>`
 - `python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json`
 - `python3 scripts/mcp_schema_sync.py plan --current-result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json`
 - `python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json`
 
-`mcp-application-result.json` now stores the compact short MCP response plus `editableContext`, which is the package/entity-oriented model intended for LLM or HITL edits before schema synchronization.
+`mcp-application-result.json` stores the compact short MCP response in flat runtime form (`packageUId`, `packageName`, `entities`) plus `editableContext`, which is the package/entity-oriented model intended for LLM or HITL edits before schema synchronization.
 
 ## Architecture
 
@@ -72,10 +78,14 @@ skills/
   data-bindings-creation/SKILL.md
   package-descriptor-creation/SKILL.md
 scripts/
+  check-planning-gate.sh
   check-approval-gate.sh
+  validate-request-spec.sh
+  write-planning-state.sh
   write-approval-state.sh
   mcp_context_adapter.py
   mcp_schema_sync.py
+.workflow-state/
 context/
   business-checklist.md
   essentials.md

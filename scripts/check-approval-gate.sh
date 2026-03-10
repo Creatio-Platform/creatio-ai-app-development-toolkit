@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "$#" -ne 1 ]; then
   echo "Usage: scripts/check-approval-gate.sh <AppName>" >&2
   exit 1
 fi
+workflow_root="${WORKFLOW_ROOT_DIR:-.}"
 app_name="$1"
-requirements_file="output/${app_name}/requirements.md"
-request_spec_file="output/${app_name}/request-spec.json"
-state_file="output/${app_name}/workflow-state.json"
+"${script_dir}/check-planning-gate.sh" "$app_name" >/dev/null
+requirements_file="${workflow_root}/output/${app_name}/requirements.md"
+request_spec_file="${workflow_root}/output/${app_name}/request-spec.json"
+state_file="${workflow_root}/output/${app_name}/workflow-state.json"
 if [ ! -f "$requirements_file" ]; then
   echo "Gate failed: requirements.md not found: $requirements_file" >&2
   exit 1
@@ -24,6 +27,7 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "Gate failed: jq is required" >&2
   exit 1
 fi
+"${script_dir}/validate-request-spec.sh" "$request_spec_file" >/dev/null
 if command -v shasum >/dev/null 2>&1; then
   requirements_sha256="$(shasum -a 256 "$requirements_file" | awk '{print $1}')"
 elif command -v sha256sum >/dev/null 2>&1; then
@@ -38,9 +42,10 @@ state_app_name="$(jq -r '.appName // empty' "$state_file")"
 state_requirements_sha256="$(jq -r '.requirementsSha256 // empty' "$state_file")"
 approved_by="$(jq -r '.approvedBy // empty' "$state_file")"
 approved_at_utc="$(jq -r '.approvedAtUtc // empty' "$state_file")"
+approval_source="$(jq -r '.approvalSource // empty' "$state_file")"
+approval_text="$(jq -r '.approvalText // empty' "$state_file")"
 interaction_mode="$(jq -r '.interactionMode // empty' "$state_file")"
 business_checklist_complete="$(jq -r '.businessChecklistComplete // empty' "$state_file")"
-request_business_complete="$(jq -r '.businessChecklist.complete // empty' "$request_spec_file")"
 if [ "$requirements_approved" != "true" ]; then
   echo "Gate failed: requirementsApproved must be true" >&2
   exit 1
@@ -65,16 +70,20 @@ if [ -z "$approved_at_utc" ]; then
   echo "Gate failed: approvedAtUtc is empty" >&2
   exit 1
 fi
+if [ "$approval_source" != "natural-language" ]; then
+  echo "Gate failed: approvalSource must be natural-language" >&2
+  exit 1
+fi
+if [ -z "$approval_text" ]; then
+  echo "Gate failed: approvalText is empty" >&2
+  exit 1
+fi
 if [ "$interaction_mode" != "nl-business-first" ]; then
   echo "Gate failed: interactionMode must be nl-business-first" >&2
   exit 1
 fi
 if [ "$business_checklist_complete" != "true" ]; then
   echo "Gate failed: businessChecklistComplete must be true" >&2
-  exit 1
-fi
-if [ "$request_business_complete" != "true" ]; then
-  echo "Gate failed: request-spec businessChecklist.complete must be true" >&2
   exit 1
 fi
 echo "GATE_OK ${app_name}"

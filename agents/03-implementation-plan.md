@@ -26,6 +26,7 @@ Read:
 
 Run:
 ```bash
+scripts/check-planning-gate.sh <AppName>
 scripts/check-approval-gate.sh <AppName>
 ```
 
@@ -35,12 +36,17 @@ If this fails, stop immediately and report blocker.
 
 Parse `request-spec.json` and verify:
 - `businessChecklist.complete=true`
+- every required business checklist section has `complete=true` and non-empty `value`
+- `sourcePrompt` is present
 - `technicalInputs.creatioUrl` is present
 - `technicalInputs.credentialsStatus` is present
+- `assumptions` is present as an array
 
 Parse `workflow-state.json` and verify:
 - `businessChecklistComplete=true`
 - `interactionMode="nl-business-first"`
+- `approvalSource="natural-language"`
+- `approvalText` is non-empty
 
 If any check fails, stop with blocker and return missing checklist items.
 
@@ -84,6 +90,7 @@ For each approved entity:
 - determine whether `application.create` template output is sufficient
 - if extra custom columns are required, prepare explicit sync steps
 - if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
+- if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
 - create new lookup entities first via `entity.create_lookup`
 - for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `binding.create` step immediately after the corresponding `entity.create_lookup` call
 - create non-template entities via `entity.create` when needed

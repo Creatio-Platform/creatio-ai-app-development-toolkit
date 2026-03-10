@@ -41,6 +41,28 @@ def build_current_result_document():
     })
 
 
+def build_current_flat_result_document():
+    return normalize_result_document({
+        "success": True,
+        "packageUId": "22222222-2222-2222-2222-222222222222",
+        "packageName": "UsrMyApp",
+        "entities": [
+            {
+                "uId": "33333333-3333-3333-3333-333333333333",
+                "name": "UsrMyEntity",
+                "caption": "My Entity",
+                "columns": [
+                    {
+                        "name": "UsrName",
+                        "caption": "Name",
+                        "dataValueType": "Text"
+                    }
+                ]
+            }
+        ]
+    })
+
+
 def build_edited_context():
     return {
         "app": {
@@ -188,9 +210,8 @@ class FakeMcpClient:
                 "packageUId": arguments["packageUId"],
                 "entity": {
                     "uId": arguments["entityUId"],
-                    "name": arguments["name"],
+                    "name": arguments["schemaName"],
                     "caption": arguments["caption"],
-                    "parentSchemaName": arguments["parentSchemaName"],
                     "columns": entity["columns"]
                 },
                 "appliedOperations": operations
@@ -301,6 +322,16 @@ class McpSchemaSyncTests(unittest.TestCase):
                 "application.get_info failed after entity.create_lookup for UsrMyEntityType"
             ):
                 apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
+
+    def test_apply_sync_plan_supports_flat_result_document(self):
+        result_document = build_current_flat_result_document()
+        fake_client = FakeMcpClient(build_current_result_document())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result_path = Path(temp_dir) / "mcp-application-result.json"
+            apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
+        refresh_calls = [call for call in fake_client.calls if call[0] == "application.get_info"]
+        self.assertTrue(refresh_calls)
+        self.assertEqual(refresh_calls[0][1], {"appCode": "UsrMyApp"})
 
 
 if __name__ == "__main__":

@@ -57,6 +57,34 @@ def build_short_error_context():
     }
 
 
+def build_flat_short_context():
+    return {
+        "success": True,
+        "packageUId": "22222222-2222-2222-2222-222222222222",
+        "packageName": "UsrMyApp",
+        "entities": [
+            {
+                "uId": "33333333-3333-3333-3333-333333333333",
+                "name": "UsrMyEntity",
+                "caption": "My Entity",
+                "columns": [
+                    {
+                        "name": "UsrName",
+                        "caption": "Name",
+                        "dataValueType": "Text"
+                    },
+                    {
+                        "name": "UsrType",
+                        "caption": "Type",
+                        "dataValueType": "Lookup",
+                        "referenceSchema": "UsrMyEntityType"
+                    }
+                ]
+            }
+        ]
+    }
+
+
 def build_preview_context():
     return {
         "meta": {
@@ -93,6 +121,19 @@ class McpContextAdapterTests(unittest.TestCase):
         self.assertIsNone(normalized["editableContext"])
         self.assertFalse(normalized["success"])
         self.assertEqual(normalized["error"]["message"], "Validation failed")
+
+    def test_normalize_result_document_supports_flat_short_contract(self):
+        normalized = normalize_result_document(build_flat_short_context())
+        self.assertEqual(normalized["contractType"], "short")
+        editable_context = normalized["editableContext"]
+        self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
+        self.assertEqual(len(editable_context["packages"]), 1)
+        package = editable_context["packages"][0]
+        self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")
+        entity = package["entities"][0]
+        self.assertEqual(entity["name"], "UsrMyEntity")
+        self.assertEqual(entity["columns"][1]["dataValueTypeName"], "Lookup")
+        self.assertEqual(entity["columns"][1]["referenceSchemaName"], "UsrMyEntityType")
 
     def test_normalize_result_document_rejects_legacy_preview_contract(self):
         with self.assertRaises(ContextError):

@@ -28,24 +28,26 @@ Treat these as canonical:
 
 1. Read `AGENTS.md` first.
 2. Use natural-language interaction as primary UX.
-3. Ask business clarifications until checklist is complete.
-4. Ask technical questions only for blockers and deploy policy.
-5. Never expose internal gate tokens or script names in user-facing dialogue.
-6. Run phases in order: setup → requirements → plan → implementation → deploy/skip.
-7. Agents 1/3/5 run in background (`task(..., mode: "background")`) and wait with `read_agent`. Agent 4 runs synchronously.
-8. Agent 2 is interactive only and must not be delegated.
-9. Persist workflow artifacts:
+3. Before Agent 1, persist Gate P with `scripts/write-planning-state.sh` and verify it with `scripts/check-planning-gate.sh`.
+4. Never create `output/<AppName>/` artifacts before Gate P passes.
+5. Ask business clarifications until checklist is complete.
+6. Ask technical questions only for blockers only.
+7. Never expose internal gate tokens or script names in user-facing dialogue.
+8. Run phases in order: setup → requirements → plan → implementation.
+9. Agents 1/3 run in background (`task(..., mode: "background")`) and wait with `read_agent`. Agent 4 runs synchronously.
+10. Agent 2 is interactive only and must not be delegated.
+11. Persist workflow artifacts:
    - `requirements.md`
    - `request-spec.json`
    - `workflow-state.json`
-10. Before Agent 3/4/5 run: `scripts/check-approval-gate.sh <AppName>`.
-11. For full app creation, use MCP `application.create` as primary generation path.
-12. Validate `application.create` presence via `tools/list` before implementation.
-13. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
-14. Respect deploy policy:
-   - `deploy_now` → run Agent 5 deploy flow
-   - `generate_only` → skip deploy and report artifacts only
-15. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
+12. Before Agent 3/4 run: `scripts/check-approval-gate.sh <AppName>`.
+13. Gate R must be written with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
+14. For full app creation, use MCP `application.create` as primary generation path.
+15. If create collides with an existing app, branch only through documented existing-app discovery (`application.get_list` → `application.get_info`) and report the branch explicitly.
+16. Validate `application.create` presence via `tools/list` before implementation.
+17. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
+18. Final summaries must reflect the materialized result, not only the planned request spec.
+19. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 
 ## Agent 4 Implementation
 

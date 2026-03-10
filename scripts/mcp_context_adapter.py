@@ -24,6 +24,8 @@ def infer_contract_type(document):
         return contract_type
     if "app" in document and "packages" in document:
         return "short"
+    if document.get("success") is True and "packageUId" in document and "entities" in document:
+        return "short"
     if "success" in document and "error" in document:
         return "short"
     if "meta" in document and "packages" in document:
@@ -40,8 +42,8 @@ def normalize_column(column, name=None):
     normalized = {
         "name": name,
         "caption": column.get("caption") or column.get("Caption") or name,
-        "dataValueTypeName": column.get("dataValueTypeName") or column.get("DataValueTypeName"),
-        "referenceSchemaName": column.get("referenceSchemaName") or column.get("ReferenceSchemaName")
+        "dataValueTypeName": column.get("dataValueTypeName") or column.get("DataValueTypeName") or column.get("dataValueType") or column.get("DataValueType"),
+        "referenceSchemaName": column.get("referenceSchemaName") or column.get("ReferenceSchemaName") or column.get("referenceSchema") or column.get("ReferenceSchema")
     }
     u_id = column.get("uId") or column.get("UId")
     if u_id:
@@ -127,24 +129,53 @@ def collect_package_entities(package):
     return sorted(entity_map.values(), key=lambda entity: (KIND_PRIORITY.get(entity.get("kind"), 99), entity.get("name", "")))
 
 
+def build_app_context(document):
+    if isinstance(document.get("app"), dict) and document["app"]:
+        return copy.deepcopy(document["app"])
+    app = {}
+    app_id = document.get("appId")
+    app_name = document.get("appName")
+    app_code = document.get("appCode") or document.get("packageName")
+    if app_id:
+        app["id"] = app_id
+    if app_name:
+        app["name"] = app_name
+    if app_code:
+        app["code"] = app_code
+    return app
+
+
 def build_editable_context(document):
     packages = []
-    raw_packages = document.get("packages") or {}
-    if isinstance(raw_packages, dict):
-        items = raw_packages.items()
+    raw_packages = document.get("packages")
+    if raw_packages:
+        if isinstance(raw_packages, dict):
+            items = raw_packages.items()
+        else:
+            items = [(pkg.get("packageName") or pkg.get("name"), pkg) for pkg in raw_packages]
+    elif document.get("packageUId") and isinstance(document.get("entities"), list):
+        items = [(
+            document.get("packageName"),
+            {
+                "packageUId": document.get("packageUId"),
+                "packageName": document.get("packageName"),
+                "isPrimary": True,
+                "entities": document.get("entities", [])
+            }
+        )]
     else:
-        items = [(pkg.get("packageName") or pkg.get("name"), pkg) for pkg in raw_packages]
+        items = []
     for pkg_name, package in items:
         package_u_id = package.get("packageUId") or package.get("uId")
         packages.append({
             "packageUId": package_u_id,
-            "name": pkg_name,
+            "name": pkg_name or package.get("packageName") or package.get("name"),
             "isPrimary": bool(package.get("isPrimary")),
             "entities": collect_package_entities(package)
         })
     packages.sort(key=lambda package: (0 if package.get("isPrimary") else 1, package.get("name") or "", package.get("packageUId") or ""))
     return {
-        "app": copy.deepcopy(document.get("app") or {}),
+        "app": build_app_context(document),
         "packages": packages
     }
 

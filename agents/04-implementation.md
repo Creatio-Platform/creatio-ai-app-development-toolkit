@@ -65,15 +65,16 @@ curl -s ... "application.get_info" ... | grep 'data: ' | sed 's/^data: //' | jq 
 2. extract `Mcp-Session-Id`
 3. `tools/list` and verify `application.create`, `application.get_list`, `application.get_info`
 4. for new app flow: `tools/call` → `application.create`
-5. for existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
-6. parse `result.content[0].text` as the short contract
-7. initialize `mcp-application-result.json`
-8. if needed, execute ordered:
+5. if `application.create` returns an existing-app collision, stop the create flow, surface the branch, then continue only through documented existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
+6. for explicit existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
+7. parse `result.content[0].text` as the short contract
+8. initialize `mcp-application-result.json`
+9. if needed, execute ordered:
    - `entity.create_lookup`
    - `binding.create` (seed data for each lookup with values defined in plan)
    - `entity.create`
    - `entity.update`
-9. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
+10. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
 
 Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
 
@@ -83,15 +84,17 @@ Implementation execution is synchronous. Do not background Agent 4, and do not m
 
 Expected contract:
 - `success`
-- `app { id, code }`
-- `packages { <PackageName>: { uId, isPrimary, entities { <EntityName>: { uId, caption, columns { <ColumnName>: { uId?, caption, dataValueTypeName, referenceSchemaName? } } } } } }`
-- `error`
+- flat runtime fields: `packageUId`, `packageName`, `entities[]`
+- optional selectors: `app`, `appId`, or `appCode`
+- optional `error`
 
 Normalize and persist:
 - `contractType`
 - `success`
-- `app`
-- `packages`
+- `app` when available or inferable
+- `packageUId`
+- `packageName`
+- `entities`
 - `error`
 - `schemaSync`
 - `editableContext`
@@ -232,19 +235,22 @@ Always verify against C# source files:
 - response text parses as JSON
 - `contractType=short`
 - `success` exists
-- if `success=true`, `app.id` is non-empty
-- if `success=true`, `packages` is non-empty
+- if `success=true`, `packageUId` is non-empty
+- if `success=true`, `entities` is non-empty
 - if `success=false`, `error.message` is non-empty
 - each successful entity tool call is followed by a successful `application.get_info` refresh
 - result and report are persisted
+- final report matches the materialized entity names and implemented artifacts in `mcp-application-result.json`
 
 ### Retry and Failure Policy
 
 - Retry MCP calls up to 3 times with 10s delay for transient failures.
 - If required application tools are missing in `tools/list`, stop with blocker.
 - If any tool returns `success=false`, stop with blocker and surface `error.message`.
+- If `application.create` returns an existing-app collision and the plan does not explicitly allow update flow, stop with blocker.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
 - If `application.get_info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
+- Never synthesize success for `binding.create`; if the response cannot be parsed or does not contain `success=true`, stop with blocker.
 
 ## Steps
 
@@ -377,7 +383,7 @@ Parse and validate:
 RESPONSE=$(grep 'data: ' /tmp/mcp-app-create-raw.txt | sed 's/^data: //' | jq -r '.result.content[0].text')
 
 # Validate short contract
-echo "$RESPONSE" | jq -e '.success == true and .app.id != null and (.packages | length > 0)' > /dev/null \
+echo "$RESPONSE" | jq -e '.success == true and .packageUId != null and (.entities | length > 0)' > /dev/null \
   || { echo "Error: $(echo "$RESPONSE" | jq -r '.error.message')"; exit 1; }
 ```
 
@@ -385,6 +391,7 @@ For existing app flow:
 1. call `application.get_list`
 2. validate the target app is discoverable
 3. call `application.get_info` with the chosen `appId` or `appCode`
+4. log the branch explicitly in the report and final status
 
 Retry up to 3 times with 10s delay on transient failures.
 
@@ -392,7 +399,7 @@ Stop and report blocker when:
 - text is plain `ERROR: ...`
 - payload is not parseable JSON
 - `success=false`
-- successful response is missing `app.id` or `packages`
+- successful response is missing `packageUId` or `entities`
 
 ### 6. Initialize canonical context
 
@@ -417,8 +424,10 @@ python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-applicatio
 Normalized result shape:
 - `contractType` (`short`)
 - `success` (boolean)
-- `app` (object)
-- `packages` (dict keyed by package name and merged sync state)
+- `app` (object when available or inferable)
+- `packageUId` (GUID)
+- `packageName` (string)
+- `entities` (array)
 - `error` (object when available)
 - `schemaSync` (array of executed entity tool operations with tool name, target, and status)
 - `editableContext` (package/entity-oriented projection for approved edits)
@@ -462,7 +471,7 @@ Example for entity.update:
 
 ```bash
 # Extract entity UId from application.get_info response
-ENTITY_UID=$(jq -r '.packages.UsrEvents.entities.UsrEvent.uId' /tmp/mcp-app-context.json)
+ENTITY_UID=$(jq -r '.entities[] | select(.name=="UsrEvent") | .uId' /tmp/mcp-app-context.json)
 
 curl -s "$MCP_URL" \
   -u Supervisor:Supervisor \
@@ -556,8 +565,8 @@ Stop and report blocker on first failed entity tool call.
 Validate result payload:
 1. top-level `success` exists and is boolean
 2. `contractType=short`
-3. when `success=true`, `app.id` is a non-empty GUID
-4. when `success=true`, `packages` is non-empty
+3. when `success=true`, `packageUId` is a non-empty GUID
+4. when `success=true`, `entities` is non-empty
 5. when `success=false`, `error.message` is non-empty
 
 ### 9. Write summary report
@@ -568,9 +577,10 @@ Create:
 Include:
 - resolved payload fields
 - icon resolution details
-- MCP result (`contractType=short`, `success`, `app.id` if present)
+- MCP result (`contractType=short`, `success`, `packageUId`, `packageName`)
 - schema sync steps executed and refreshed through `application.get_info`
 - validation results for normalized contract
+- whether the run completed via create flow or existing-app update flow
 
 ## Completion Criteria
 
