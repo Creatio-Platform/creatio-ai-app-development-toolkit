@@ -1,33 +1,17 @@
-# Generated output
-/output/
-
-# Dependencies
-node_modules/
-
-# Build output
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
 dist/
-
-# Environment variables
-.env
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-Thumbs.db
+build/
+.pytest_cache/
+.coverage
+htmlcov/
 .DS_Store
-
-# Creatio credentials
-.creatio-env.json
-
-# Copilot session files
+.idea/
+*.log
 copilot-session-*.md
