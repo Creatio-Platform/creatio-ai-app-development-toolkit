@@ -1,6 +1,0 @@
-{
-  "environment": "dev",
-  "url": "http://localhost:5001",
-  "isNetCore": true,
-  "mcpUrl": "http://localhost:5001/mcp"
-}
