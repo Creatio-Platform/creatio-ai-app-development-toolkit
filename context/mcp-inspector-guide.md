@@ -22,14 +22,22 @@ MCP Inspector — офіційний візуальний інструмент �
 Відкрийте термінал і виконайте команду з параметром `--url`:
 
 ```bash
-MCP_URL="<creatio-mcp-url-from-planning>"
-npx @modelcontextprotocol/inspector --url "$MCP_URL"
+npx @modelcontextprotocol/inspector --url "http://localhost:5001/mcp"
 ```
 
-> ⚠️ **Важливо:** Запускайте саме з `--url`, а не без параметрів. Це автоматично:
-> - Встановить Transport Type на **Streamable HTTP**
-> - Підставить правильну URL адресу
-> - Згенерує auth токен для проксі
+Або в tmux сесії для фонового запуску:
+```bash
+# Створити tmux сесію
+tmux new -s mcp-inspector
+
+# Запустити Inspector
+npx @modelcontextprotocol/inspector --url "http://localhost:5001/mcp"
+
+# Відключитись (Ctrl+B, потім D)
+# Підключитись назад: tmux attach -t mcp-inspector
+```
+
+> ⚠️ **Важливо:** Параметр `--url` автоматично встановлює Transport Type на **Streamable HTTP**
 
 Inspector виведе в консолі:
 ```
@@ -72,10 +80,24 @@ Inspector запустить два сервери:
 
 Переконайтесь що:
 1. **Transport Type** = `Streamable HTTP` (не STDIO, не SSE!)
-2. **URL** = адреса вашого Creatio MCP ендпоінту (`<MCP_URL>`)
+2. **URL** = `http://localhost:5001/mcp`
 3. **Connection Type** = `Via Proxy` (проксі обходить CORS)
 
-## Крок 3: Підключення до MCP сервера
+## Крок 3: Налаштування автентифікації
+
+⚠️ **КРИТИЧНО:** Creatio MCP endpoint вимагає HTTP Basic Auth!
+
+1. Натисніть на **▶ Authentication** щоб розкрити секцію
+2. В секції буде поле для додавання custom headers
+3. Додайте заголовок:
+   - **Header Name:** `Authorization`
+   - **Header Value:** `Basic U3VwZXJ2aXNvcjpTdXBlcnZpc29y`
+   
+   > 💡 **Підказка:** `U3VwZXJ2aXNvcjpTdXBlcnZpc29y` = Base64 кодування `Supervisor:Supervisor`
+
+4. Переконайтесь що header збережений
+
+## Крок 4: Підключення до MCP сервера
 
 Натисніть кнопку **Connect**.
 
@@ -99,7 +121,7 @@ Inspector запустить два сервери:
 └─────────────────────┘  └──────────────────────────────────────┘
 ```
 
-## Крок 4: Перегляд доступних Tools
+## Крок 5: Перегляд доступних Tools
 
 1. Переконайтесь що вкладка **Tools** активна (вгорі)
 2. Натисніть кнопку **List Tools**
@@ -138,7 +160,7 @@ Inspector запустить два сервери:
 
 4. У History внизу з'явиться запис `3. tools/list`
 
-## Крок 5: Тестування entity.check_name
+## Крок 6: Тестування entity.check_name
 
 Найпростіший тест — перевірка унікальності імені entity:
 
@@ -174,7 +196,7 @@ Tool Result: Success
 
 > 💡 В History внизу кожен виклик з'являється як `tools/call`. Клікніть ▶ щоб побачити повний JSON запит/відповідь.
 
-## Крок 6: Тестування entity.create_lookup
+## Крок 7: Тестування entity.create_lookup
 
 Створення lookup entity (довідника):
 
@@ -208,7 +230,7 @@ Tool Result: Success
 }
 ```
 
-## Крок 7: Тестування entity.create з колонками
+## Крок 8: Тестування entity.create з колонками
 
 Створення entity з кастомними колонками — повний тест:
 
@@ -235,7 +257,7 @@ Tool Result: Success
 
 > ⚠️ **columnsJson** — це рядок з JSON масивом. Вставляйте його в одну строку без переносів.
 
-## Крок 8: Тестування entity.list_parents
+## Крок 9: Тестування entity.list_parents
 
 Перегляд доступних батьківських схем:
 
@@ -243,7 +265,7 @@ Tool Result: Success
 2. Форма не має параметрів — просто натисніть **Run Tool**
 3. Побачите список parent schemas (BaseEntity, BaseLookup, тощо) з їх UId
 
-## Крок 9: Тестування entity.get_schema_info
+## Крок 10: Тестування entity.get_schema_info
 
 Отримання інформації про існуючу entity:
 
@@ -252,7 +274,7 @@ Tool Result: Success
 3. Натисніть **Run Tool**
 4. Побачите UId та деталі схеми Contact
 
-## Крок 10: Тестування entity.update
+## Крок 11: Тестування entity.update
 
 1. Оберіть `entity.update`
 2. Заповніть:
@@ -273,7 +295,7 @@ Tool Result: Success
 
 ---
 
-## Крок 11: Тестування binding.get_columns
+## Крок 12: Тестування binding.get_columns
 
 1. Оберіть `binding.get_columns`
 2. У полі `entityName` введіть `SysModule`
@@ -282,7 +304,7 @@ Tool Result: Success
    - JSON масив колонок
    - для кожної колонки є `name`, `uId`, `dataValueTypeName`
 
-## Крок 12: Тестування binding.create
+## Крок 13: Тестування binding.create
 
 1. Оберіть `binding.create`
 2. Заповніть:
@@ -300,7 +322,7 @@ Tool Result: Success
    - `files.data`
    - `files.filter`
 
-## Крок 13: Тестування application.create (DB-first)
+## Крок 14: Тестування application.create (DB-first)
 
 Цей tool створює застосунок у БД і повертає compact short context.
 
@@ -340,6 +362,19 @@ Tool Result: Success
 ---
 
 ## Розв'язання проблем
+
+### "Authentication required" або "Streamable HTTP error: Error POSTing to endpoint"
+
+**Причина:** MCP endpoint вимагає HTTP Basic Auth, але заголовок `Authorization` не налаштовано
+
+**Рішення:** 
+1. Розкрийте секцію **▶ Authentication** в UI Inspector
+2. Додайте custom header:
+   - Name: `Authorization`
+   - Value: `Basic U3VwZXJ2aXNvcjpTdXBlcnZpc29y`
+3. Натисніть **Connect** знову
+
+> ⚠️ **Важливо:** CLI параметр `--header` НЕ працює через проксі. Налаштування потрібно робити через UI!
 
 ### "Connection Error - Did you add the proxy session token in Configuration?"
 
