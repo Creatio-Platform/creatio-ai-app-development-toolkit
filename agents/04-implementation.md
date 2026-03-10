@@ -120,11 +120,21 @@ Persist the compact context from MCP and set `contractType=short`.
 Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.update`), validate:
 
 1. ✅ Using `packageUId` (GUID) extracted from `application.create` response
-2. ✅ Using `entityUId` (GUID) extracted from `entity.create` or `application.get_info` response
-3. ✅ Using `name` parameter (NOT `entityName`)
-4. ✅ Using `caption` parameter (NOT `displayName` or `description`)
-5. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
-6. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
+2. ✅ Using `entityUId` (GUID) extracted from `entity.create` or `application.get_info` response (REQUIRED for `entity.update`)
+3. ✅ Using `schemaName` parameter for `entity.update` (optional, can read from DB if empty)
+4. ✅ Using `name` parameter for `entity.create`/`entity.create_lookup` (NOT `entityName` or `schemaName`)
+5. ✅ Using `caption` parameter (NOT `displayName` or `description`)
+6. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
+7. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
+
+**Before EVERY binding tool call (`binding.create`), validate:**
+
+1. ✅ Using `schemaName` (entity schema name, e.g. "UsrTodoStatus")
+2. ✅ Using `bindingName` (NOT `dataName` or `bindingFolder`)
+3. ✅ Using `rowsJson` (NOT `dataJson` or `data`)
+4. ✅ Each row in `rowsJson` is array of `{columnName, value}` objects
+5. ✅ Optional `columnsJson` with `{columnName, isKey?, isForceUpdate?}` structure
+6. ✅ NOT passing `packageName` or `packageUId` (not required for binding tools)
 
 **Pre-execution validation script:**
 
@@ -430,20 +440,69 @@ curl -s "$MCP_URL" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 5,
-    "method": "tools/call",
-    "params": {
-      "name": "entity.create_lookup",
-      "arguments": {
-        "packageName": "UsrEvents",
-        "entityName": "UsrEventStatus",
-        "displayName": "Event Status",
-        "description": "Lookup for event status values"
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 5,
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"entity.create_lookup\",
+      \"arguments\": {
+        \"packageUId\": \"$PACKAGE_UID\",
+        \"name\": \"UsrEventStatus\",
+        \"caption\": \"Event Status\"
       }
     }
-  }' 2>&1 | tee /tmp/mcp-lookup-raw.txt
+  }" 2>&1 | tee /tmp/mcp-lookup-raw.txt
+```
+
+Example for entity.update:
+
+```bash
+# Extract entity UId from application.get_info response
+ENTITY_UID=$(jq -r '.packages.UsrEvents.entities.UsrEvent.uId' /tmp/mcp-app-context.json)
+
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 6,
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"entity.update\",
+      \"arguments\": {
+        \"entityUId\": \"$ENTITY_UID\",
+        \"packageUId\": \"$PACKAGE_UID\",
+        \"schemaName\": \"UsrEvent\",
+        \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrLocation\\\",\\\"caption\\\":\\\"Location\\\",\\\"dataValueTypeName\\\":\\\"MediumText\\\"}}]\"
+      }
+    }
+  }" 2>&1 | tee /tmp/mcp-update-raw.txt
+```
+
+Example for binding.create:
+
+```bash
+curl -s "$MCP_URL" \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 10,
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"binding.create\",
+      \"arguments\": {
+        \"schemaName\": \"UsrEventStatus\",
+        \"bindingName\": \"UsrEventStatus_Lookup\",
+        \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"}],[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"In Progress\\\"}]]\"
+      }
+    }
+  }" 2>&1 | tee /tmp/mcp-binding-raw.txt
 ```
 
 **After EACH successful entity mutation:**

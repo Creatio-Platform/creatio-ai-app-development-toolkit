@@ -9,7 +9,7 @@ Primary interaction mode is natural language.
 Developer experience must be:
 - one free-form prompt to start
 - active business clarification before implementation
-- minimal technical questions (only blockers + deploy policy)
+- minimal technical questions (only blockers)
 - no exposure of internal tokens or script names in user-facing dialogue
 
 Do not ask developer to provide `APPROVE_*` tokens directly.
@@ -19,21 +19,20 @@ Dialogue contract in user-facing flow:
 1. one free-form developer prompt
 2. short “What I understood”
 3. business clarification loop (structured, no technical noise)
-4. one technical checkpoint for blockers + deploy preference
+4. one technical checkpoint for blockers only
 5. explicit “Starting implementation” and short phase statuses
 6. final result with artifacts and next actions if blocker exists
 
 ## Your Role
 
-You do NOT implement anything directly. You coordinate 5 agents in sequence:
+You do NOT implement anything directly. You coordinate 4 agents in sequence:
 
 1. **Environment Setup** → configures clio connection
 2. **Requirements Gathering** → interactive Q&A with the developer (do NOT delegate to sub-agent)
 3. **Implementation Plan** → generates MCP execution plan
 4. **Implementation** → creates or refreshes application context in DB via MCP application tools and synchronizes approved entity schemas via MCP entity tools
-5. **Deploy & Verification** → compiles DB schemas to C# code, restarts app to load assemblies, verifies runtime availability
 
-**Note:** MCP `application.create` creates DB-first metadata only (application record, package, entity schemas). Agent 5 is required to make these schemas runtime-accessible through compilation and restart. Without Agent 5, entities exist in DB but are not usable in API/UI.
+**Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `entity.create_lookup`, `entity.create`, and `entity.update` tools execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
 
 ## Mandatory Planning Start
 
@@ -46,7 +45,7 @@ Gate P is mandatory (internal control):
 - persist internal Gate P approved state
 
 Before Gate P approval, forbidden:
-- Do not run Agent 1/2/3/4/5.
+- Do not run Agent 1/2/3/4.
 - Do not run `clio` commands.
 - Do not create or modify files in `output/<AppName>/`.
 
@@ -75,14 +74,12 @@ Stop condition to proceed:
 
 Technical question policy:
 - ask only execution blockers (URL/access/credentials)
-- always collect deploy policy: `deploy_now` or `generate_only`
 - do not ask for MCP/template/icon details when deterministic defaults exist
 
 Decision rules:
 - if business data is missing, ask in themed batches
 - if an answer is ambiguous, rephrase and request concrete values
 - if developer says “start” before checklist completion, show missing items and ask only for missing fields
-- if deploy preference is not captured earlier, ask before Agent 5
 
 ## Source of Truth
 
@@ -129,13 +126,7 @@ Developer prompt (natural language)
 │                         │  Context: essentials, ui, bindings, mcp-tools-ref
 │                         │  Direct MCP: curl → application.create/get_info
 │                         │  Output: output/<App>/mcp-application-result.json
-│                         │          + mcp-application-report.md
-└────────────┬────────────┘
-             ▼
-┌─────────────────────────┐
-│ Agent 5: Deploy &       │  Read: agents/05-deploy-verification.md
-│ Verification            │  Input: deployPreference from workflow-state
-│                         │  Output: Deployment/skip report
+│                         │          + mcp-application-report.md (FINAL)
 └─────────────────────────┘
 ```
 
@@ -146,8 +137,7 @@ Developer prompt (natural language)
 | 1. Environment Setup | Developer request (URL optional) | `output/<App>/.creatio-env.json` |
 | 2. Requirements Gathering | Natural-language app prompt | `output/<App>/requirements.md` + `output/<App>/request-spec.json` + `output/<App>/workflow-state.json` |
 | 3. Implementation Plan | `requirements.md` + `request-spec.json` + `workflow-state.json` | `output/<App>/plan.md` |
-| 4. Implementation | `plan.md` + `workflow-state.json` + `.creatio-env.json` | `output/<App>/mcp-application-result.json` + `mcp-application-report.md` |
-| 5. Deploy & Verification | `.creatio-env.json` + `workflow-state.json` + `mcp-application-result.json` | Deployment status report |
+| 4. Implementation | `plan.md` + `workflow-state.json` + `.creatio-env.json` | `output/<App>/mcp-application-result.json` + `mcp-application-report.md` (FINAL) |
 
 ## Orchestration Rules
 
@@ -180,8 +170,6 @@ Developer prompt (natural language)
    - Run `scripts/check-approval-gate.sh <AppName>`
    - On failure, hard-stop and report blocker
 15. Agent 5 must respect deploy policy from workflow state:
-   - `deploy_now` → run deploy flow
-   - `generate_only` → skip deploy and return skip report
 
 ## Global Rules
 
@@ -193,8 +181,7 @@ Developer prompt (natural language)
 6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
 7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
 8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
-9. For `deploy_now`, run the DB-first deploy flow:
-   - run `compile-configuration`, `restart-web-app`, `healthcheck`
+9. **MCP tools work DB-first:** Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required after MCP tool execution.
 10. Generate files only in `output/<AppName>/`.
 11. If MCP endpoint is unavailable or required application tools are missing, stop and report blocker.
 12. Agent 4 must persist MCP evidence:
@@ -232,5 +219,3 @@ When developer provides a natural-language request (for example: “Generate an 
 4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
 5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts and synchronized schema context.
 6. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
-7. If deploy policy is `deploy_now`: run `scripts/check-approval-gate.sh <AppName>` → run Agent 5.
-8. If deploy policy is `generate_only`: return generated artifacts and skip deploy phase.

@@ -26,6 +26,26 @@ For production environments, use appropriate credentials stored in `.creatio-env
 
 **Important:** The `Accept` header MUST include both `application/json` and `text/event-stream`. Missing either will result in "Not Acceptable" error.
 
+## Parameter Naming Convention
+
+**CRITICAL:** All MCP entity and schema tools use `schemaName` parameter for entity schema references.
+
+```
+✅ Correct:  "schemaName": "UsrTodoList"
+❌ Wrong:    "name": "UsrTodoList"
+❌ Wrong:    "entityName": "UsrTodoList"
+```
+
+**Tools following this convention:**
+- `entity.update` — `schemaName` parameter (optional)
+- `binding.get_columns` — `schemaName` parameter (required)
+- `binding.create` — `schemaName` parameter (required)
+
+**Why this matters:** MCP SDK uses reflection to map JSON argument names to C# method parameters. Parameter names must match **exactly** (case-sensitive). Mismatch causes:
+```
+ArgumentException: The arguments dictionary is missing a value for the required parameter '<param>'
+```
+
 ## Response Format
 
 All responses use Server-Sent Events (SSE) format:
@@ -249,6 +269,72 @@ grep 'data: ' /tmp/mcp-get-info-raw.txt | \
 
 **Critical Pattern:** Always call `application.get_info` after each successful entity mutation (`entity.create_lookup`, `entity.create`, `entity.update`) and overwrite `mcp-application-result.json`.
 
+### 4.1. List Applications (application.get_list)
+
+**Purpose:** Discover existing Creatio applications for update workflows.
+
+**Tool Signature:**
+```
+application.get_list()  // No parameters
+```
+
+**Use Cases:**
+- Discover application IDs before calling `application.get_info`
+- List available applications for user selection
+- Validate application existence before workflows
+
+**Example:**
+
+```bash
+SESSION_ID="..." && curl -s http://localhost:5001/mcp \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "application.get_list",
+      "arguments": {}
+    }
+  }' 2>&1 | grep 'data: ' | sed 's/^data: //' | \
+  jq -r '.result.content[0].text'
+```
+
+**Response Format:**
+```json
+{
+  "applications": [
+    {
+      "id": "7030c825-59bd-49c6-8a6b-5ff260687a87",
+      "code": "UsrEvents",
+      "name": "Events",
+      "description": "Event management tool"
+    },
+    {
+      "id": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
+      "code": "UsrTodoList",
+      "name": "Todo List",
+      "description": null
+    }
+  ]
+}
+```
+
+**Integration with get_info:**
+
+```bash
+# 1. List applications
+APP_CODE=$(curl -s http://localhost:5001/mcp ... | \
+  jq -r '.applications[] | select(.name=="Events") | .code')
+
+# 2. Get full context
+curl -s http://localhost:5001/mcp \
+  -d "{\"method\":\"tools/call\",\"params\":{\"name\":\"application.get_info\",\"arguments\":{\"appCode\":\"$APP_CODE\"}}}"
+```
+
 ### 3.1. Extract Package UId for Entity Operations
 
 **CRITICAL:** Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) require `packageUId` parameter as a GUID string, NOT package name.
@@ -338,9 +424,138 @@ echo "Package UId: $PACKAGE_UID"
 **Never use:**
 - ❌ `packageName` as parameter (tools require UId, not name)
 - ❌ `entitySchemaUId` (wrong parameter name, should be `entityUId`)
-- ❌ `entityName` as parameter for entity.update (wrong, use `name` instead)
+- ❌ `entityName` as parameter for entity.update (wrong, use `schemaName` instead)
 
-### 5. Create Lookup Entity (entity.create_lookup)
+### 5. Create Entity (entity.create)
+
+**Purpose:** Create new BaseEntity-derived (or custom parent) entity schema in Creatio database.
+
+**Tool Signature:**
+```
+entity.create(
+  packageUId: string,              // REQUIRED: Package GUID
+  name: string,                    // REQUIRED: Schema name (e.g., "UsrTodoList")
+  caption: string,                 // REQUIRED: Display name
+  parentSchemaName: string,        // Optional, default "BaseEntity"
+  columnsJson: string,             // Optional, default "[]"
+  outputPath: string               // Optional, deprecated
+)
+```
+
+**When to Use:**
+- Creating entities that inherit from BaseEntity
+- Creating entities with custom parent schemas (e.g., inheriting from BaseFile)
+- For **lookup entities**, use `entity.create_lookup` instead (always inherits from BaseLookup)
+
+**columnsJson Format:**
+
+```json
+[
+  {
+    "name": "UsrTitle",
+    "caption": "Title",
+    "dataValueTypeName": "ShortText",
+    "isRequired": true,
+    "size": 250
+  },
+  {
+    "name": "UsrDueDate",
+    "caption": "Due Date",
+    "dataValueTypeName": "Date",
+    "isRequired": false
+  },
+  {
+    "name": "UsrStatus",
+    "caption": "Status",
+    "dataValueTypeName": "Lookup",
+    "referenceSchemaName": "UsrTodoStatus",
+    "isRequired": true
+  }
+]
+```
+
+**Supported dataValueTypeName Values:**
+- `ShortText` (size: 50-250)
+- `MediumText` (size: 500-1000)
+- `LongText` (size: 2000-5000)
+- `MaxSizeText` (size: max, for large content)
+- `Integer`
+- `Float` (precision: 2-8)
+- `Boolean`
+- `Date`
+- `DateTime`
+- `Time`
+- `Lookup` (requires `referenceSchemaName`)
+
+**Example:**
+
+```bash
+# Use extracted PACKAGE_UID from application.create
+SESSION_ID="..." && PACKAGE_UID="597944b2-c71f-4cdb-9510-0216c1e214a6" && \
+curl -s http://localhost:5001/mcp \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d "{
+    \"jsonrpc\": \"2.0\",
+    \"id\": 5,
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"entity.create\",
+      \"arguments\": {
+        \"packageUId\": \"$PACKAGE_UID\",
+        \"name\": \"UsrTodoList\",
+        \"caption\": \"Todo\",
+        \"parentSchemaName\": \"BaseEntity\",
+        \"columnsJson\": \"[{\\\"name\\\":\\\"UsrTitle\\\",\\\"caption\\\":\\\"Title\\\",\\\"dataValueTypeName\\\":\\\"ShortText\\\",\\\"isRequired\\\":true,\\\"size\\\":250}]\"
+      }
+    }
+  }" 2>&1 | tee /tmp/mcp-entity-create-raw.txt
+```
+
+**Parse Response:**
+
+```bash
+grep 'data: ' /tmp/mcp-entity-create-raw.txt | \
+  sed 's/^data: //' | \
+  jq -r '.result.content[0].text' > /tmp/mcp-entity-create.json
+
+# Extract entity UId for subsequent operations
+ENTITY_UID=$(jq -r '.entityUId' /tmp/mcp-entity-create.json)
+echo "Entity UId: $ENTITY_UID"
+```
+
+**Response Format:**
+```json
+{
+  "entityUId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
+  "schemaName": "UsrTodoList",
+  "caption": "Todo",
+  "parentSchemaName": "BaseEntity",
+  "columns": [
+    {
+      "name": "UsrTitle",
+      "uId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "caption": "Title",
+      "dataValueType": "ShortText",
+      "size": 250,
+      "isRequired": true
+    }
+  ]
+}
+```
+
+**After Success:** 
+1. Save `entityUId` for subsequent `entity.update` calls
+2. Call `application.get_info` to refresh application context
+3. Overwrite `mcp-application-result.json` with updated context
+
+**Difference from entity.create_lookup:**
+- `entity.create` allows custom `parentSchemaName` (BaseEntity, BaseFile, etc.)
+- `entity.create_lookup` hardcodes `parentSchemaName="BaseLookup"` internally
+
+### 6. Create Lookup Entity (entity.create_lookup)
 
 **Purpose:** Create lookup (BaseLookup-based) entity in specified package.
 
@@ -381,21 +596,27 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 
 **After Success:** Immediately call `application.get_info` to refresh context and verify the entity is fully materialized (not in "Database update required" state).
 
-### 6. Update Entity (entity.update)
+### 7. Update Entity (entity.update)
 
 **Purpose:** Add columns to existing entity.
 
 **Tool Signature:**
 ```
 entity.update(
-  entityUId: string,       // Entity GUID, NOT entitySchemaUId!
-  packageUId: string,      // Package GUID, NOT packageName!
-  name: string,            // Optional, entity schema name
+  entityUId: string,       // REQUIRED: Entity GUID from entity.create response
+  packageUId: string,      // REQUIRED: Package GUID, NOT packageName!
+  schemaName: string,      // Optional, entity schema name (use for clarity)
   caption: string,         // Optional, display name
-  parentSchemaName: string,// Optional, parent schema
-  operationsJson: string   // JSON array of operations
+  parentSchemaName: string,// Optional, parent schema (default: BaseEntity)
+  operationsJson: string   // JSON array of operations (default: [])
 )
 ```
+
+**Parameter Notes:**
+- `entityUId` — REQUIRED first parameter, must be GUID from previous `entity.create` or `entity.create_lookup` response
+- `packageUId` — REQUIRED, must be GUID not package name
+- `schemaName` — Optional but recommended for clarity (e.g., "UsrTodoList")
+- All other parameters optional with defaults
 
 **Critical:** `operationsJson` must use `{operation, column}` structure:
 
@@ -438,6 +659,145 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 ```
 
 **After Success:** Call `application.get_info` and update context.
+
+### 8. Get Entity Columns (binding.get_columns)
+
+**Purpose:** Discover column names, UIds, and data types for deployed entities (e.g., Contact, SysModule, SysModuleEntity).
+
+**Tool Signature:**
+```
+binding.get_columns(
+  schemaName: string,       // REQUIRED: Entity schema name (e.g., "Contact", "UsrTodoList")
+  rawSchemaJson: string     // Optional: For undeployed entities (from entity.create response)
+)
+```
+
+**Use Cases:**
+- Query metadata for system entities (Contact, Account, SysModule, etc.)
+- Prepare column mappings for binding.create
+- Validate schema deployment status
+
+**Example:**
+
+```bash
+SESSION_ID="..." && curl -s http://localhost:5001/mcp \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "tools/call",
+    "params": {
+      "name": "binding.get_columns",
+      "arguments": {
+        "schemaName": "Contact"
+      }
+    }
+  }' 2>&1 | tee /tmp/mcp-get-columns-raw.txt
+```
+
+**Response Format:**
+```json
+[
+  {
+    "name": "Id",
+    "uId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+    "dataValueTypeName": "Guid",
+    "dataValueTypeUId": "23018567-a13c-4320-8687-fd6f9e3699bd",
+    "isRequired": true,
+    "referenceSchemaName": null
+  },
+  {
+    "name": "Name",
+    "uId": "a5cca792-47dd-428a-83fb-5c92bdd97ff8",
+    "dataValueTypeName": "MediumText",
+    "isRequired": true
+  }
+]
+```
+
+### 9. Create Data Binding (binding.create)
+
+**Purpose:** Generate descriptor.json, data.json, and filter.json for binding records (SysModule/SysModuleEntity) or lookup seed data.
+
+**Tool Signature:**
+```
+binding.create(
+  schemaName: string,       // REQUIRED: Entity schema name (e.g., "SysModule", "UsrTodoStatus")
+  bindingName: string,      // REQUIRED: Binding folder name (e.g., "SysModule_UsrTodoTask")
+  rowsJson: string,         // REQUIRED: JSON array of rows with columnName/value pairs
+  columnsJson: string,      // Optional: Column definitions with isKey/isForceUpdate flags
+  installType: string,      // Optional: Default "0", use "3" for schema admin unit rights
+  outputPath: string,       // Optional: Filesystem path to write files on server
+  rawSchemaJson: string     // Optional: For undeployed entities (schema UId + columns)
+)
+```
+
+**Parameter Details:**
+
+**rowsJson** format:
+```json
+[
+  [
+    {"columnName": "Id", "value": "guid-here"},
+    {"columnName": "Name", "value": "New"}
+  ],
+  [
+    {"columnName": "Id", "value": "guid-here-2"},
+    {"columnName": "Name", "value": "In Progress"}
+  ]
+]
+```
+
+**columnsJson** format (optional):
+```json
+[
+  {"columnName": "Id", "isKey": true},
+  {"columnName": "Name", "isKey": false},
+  {"columnName": "TypeColumnUId", "isForceUpdate": true}
+]
+```
+**Defaults:** `isKey=true` for "Id" only, `isForceUpdate=false` for all
+
+**Example: Lookup Seed Data**
+
+```bash
+SESSION_ID="..." && curl -s http://localhost:5001/mcp \
+  -u Supervisor:Supervisor \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "tools/call",
+    "params": {
+      "name": "binding.create",
+      "arguments": {
+        "schemaName": "UsrTodoStatus",
+        "bindingName": "UsrTodoStatus_Lookup",
+        "rowsJson": "[[{\"columnName\":\"Id\",\"value\":\"a1b2c3d4-e5f6-4789-a012-3456789abcde\"},{\"columnName\":\"Name\",\"value\":\"New\"}],[{\"columnName\":\"Id\",\"value\":\"b2c3d4e5-f6a7-4890-b123-456789abcdef\"},{\"columnName\":\"Name\",\"value\":\"In Progress\"}]]"
+      }
+    }
+  }' 2>&1 | tee /tmp/mcp-binding-create-raw.txt
+```
+
+**Response Format:**
+```json
+{
+  "descriptor": "{...descriptor.json content...}",
+  "data": "{...data.json content...}",
+  "filter": "{...filter.json content...}",
+  "filesWritten": ["/path/to/descriptor.json", "/path/to/data.json"]
+}
+```
+
+**Important Notes:**
+- Use `binding.get_columns` first to discover column UIds for deployed entities
+- For undeployed entities (just created in same flow), pass `rawSchemaJson` with schema UId and columns from `entity.create` response
+- Lookup seed data typically needs only `Id` and `Name` columns
 
 ## Error Handling
 

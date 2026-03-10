@@ -4,7 +4,7 @@ Use this checklist for natural-language app requests before moving to implementa
 
 ## Goal
 
-Ensure business requirements are complete enough to generate and deploy a usable Creatio composable app without hidden product decisions.
+Ensure business requirements are complete enough to generate a usable Creatio composable app without hidden product decisions.
 
 ## Checklist Items
 
@@ -79,6 +79,5 @@ If not complete, continue clarification and do not proceed to implementation pla
 
 Technical questions are allowed only for:
 - execution blockers (URL, access, credentials)
-- deploy policy (`deploy_now` or `generate_only`)
 
 All other technical values should use deterministic defaults and be documented later in plan artifacts.

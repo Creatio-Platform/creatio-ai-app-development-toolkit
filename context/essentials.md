@@ -9,13 +9,14 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 **Composable Applications**
 - Built from self-contained **packages** containing: entity schemas, page schemas, data bindings, business processes, source code
 - Packages can depend on other packages (via `DependsOn` in descriptor.json)
-- Runtime verification via `clio compile-configuration`, `clio restart-web-app`, `clio healthcheck`
 
 **MCP Application Creation (DB-first)**
 - Primary generation path is MCP tool `application.create`
 - Discovery path for existing apps is `application.get_list`
 - Canonical DB refresh path is `application.get_info`
-- Tool creates application artifacts directly in Creatio DB
+- Tool creates application artifacts directly in Creatio DB (PostgreSQL)
+- Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) execute CREATE TABLE and ALTER TABLE directly
+- Schemas are immediately runtime-accessible — no compilation or deployment step required
 - Tool returns short compact context JSON (`success`, `app`, `packages` dict, `error`)
 - Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
 - `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application.create` or `application.get_info`
@@ -258,8 +259,6 @@ clio reg-web-app -a myenv
 clio healthcheck myenv
 ```
 
-### Runtime Verification
-
 ```bash
 # Compile configuration
 clio compile-configuration -e myenv
@@ -271,23 +270,6 @@ clio restart-web-app myenv
 clio last-compilation-log -e myenv
 ```
 
-### Standard Deploy Workflow
-
-```bash
-# 1. Verify environment
-clio healthcheck -e myenv
-
-# 2. Compile
-clio compile-configuration -e myenv
-
-# 3. Restart
-clio restart-web-app myenv
-
-# 4. Verify
-clio healthcheck -e myenv
-
-# 5. Check errors (if any)
-clio last-compilation-log -e myenv
 ```
 
 ### Package Management
@@ -327,11 +309,13 @@ clio install-gate -e myenv
 
 ---
 
-## Deploy Flow Diagram
+## MCP Workflow (DB-First)
 
 ```
-MCP application.create or application.get_info → initialize canonical context → [optional] entity.create_lookup/entity.create/entity.update → application.get_info refresh → [optional] binding.get_columns/binding.create → compile-configuration → restart-web-app → verify
+MCP application.create or application.get_info → initialize canonical context → [optional] entity.create_lookup/entity.create/entity.update → application.get_info refresh → [optional] binding.get_columns/binding.create → schemas immediately usable
 ```
+
+**Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
 
 ---
 

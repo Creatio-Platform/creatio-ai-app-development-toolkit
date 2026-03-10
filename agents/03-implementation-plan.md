@@ -35,7 +35,6 @@ If this fails, stop immediately and report blocker.
 
 Parse `request-spec.json` and verify:
 - `businessChecklist.complete=true`
-- `technicalInputs.deployPreference` is set (`deploy_now` or `generate_only`)
 - `technicalInputs.creatioUrl` is present
 - `technicalInputs.credentialsStatus` is present
 
@@ -54,7 +53,6 @@ Extract from requirements + request spec:
 - assumptions
 - MCP `application.create` input block
 - entity schema changes that cannot be expressed by `application.create` template defaults
-- deploy preference
 
 ### 3. Resolve MCP Payload
 
@@ -109,11 +107,21 @@ When generating `entity.create_lookup`, `entity.create`, or `entity.update` payl
 
 **CRITICAL Parameter Names:**
 
+**For Entity Tools (entity.create_lookup, entity.create, entity.update):**
+
 1. ❌ NEVER use `packageName` → always use `packageUId` (GUID string)
-2. ❌ NEVER use `entitySchemaUId` → always use `entityUId` (GUID string)
-3. ❌ NEVER use `entityName` → always use `name` (string)
+2. ❌ NEVER use `entitySchemaUId` → always use `entityUId` (GUID string, REQUIRED for entity.update)
+3. ❌ NEVER use `entityName` → always use `name` for create tools, `schemaName` for entity.update
 4. ❌ NEVER use `displayName` or `description` → always use `caption` (string)
 5. ❌ NEVER use flat column structures → always use `{operation, column: {...}}` for `operationsJson`
+
+**For Binding Tools (binding.create):**
+
+1. ❌ NEVER use `dataName` or `bindingFolder` → always use `bindingName`
+2. ❌ NEVER use `dataJson` or `data` → always use `rowsJson`
+3. ❌ NEVER pass `packageName` or `packageUId` → binding tools don't require them
+4. ✅ ALWAYS use `schemaName` for entity reference
+5. ✅ `rowsJson` must be array of rows: `[[{columnName, value}, ...], ...]`
 
 **Correct Payload Templates:**
 
@@ -135,13 +143,35 @@ curl ... -d "{
 curl ... -d "{
   \"name\": \"entity.update\",
   \"arguments\": {
-    \"entityUId\": \"$ENTITY_UID\",      # ✅ NOT entitySchemaUId
-    \"packageUId\": \"$PACKAGE_UID\",
+    \"entityUId\": \"$ENTITY_UID\",      # ✅ REQUIRED from entity.create or application.get_info
+    \"packageUId\": \"$PACKAGE_UID\",    # ✅ REQUIRED from application.create
+    \"schemaName\": \"UsrMainEntity\",   # ✅ Optional (can read from DB if empty)
     \"caption\": \"Main Entity\",
     \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{...}}]\"  # ✅ Nested structure
   }
 }"
 ```
+
+**binding.create:**
+```bash
+curl ... -d "{
+  \"name\": \"binding.create\",
+  \"arguments\": {
+    \"schemaName\": \"UsrStatusLookup\",        # ✅ Entity schema name
+    \"bindingName\": \"UsrStatusLookup_Seed\",  # ✅ NOT dataName or bindingFolder
+    \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"}]]\",  # ✅ NOT dataJson
+    \"columnsJson\": \"[{\\\"columnName\\\":\\\"Id\\\",\\\"isKey\\\":true}]\",  # ✅ Optional descriptor
+    \"installType\": \"0\"                      # ✅ Optional, default 0
+  }
+}"
+```
+
+**CRITICAL for binding.create:**
+- ❌ NEVER use `dataName` → always use `bindingName`
+- ❌ NEVER use `dataJson` → always use `rowsJson`
+- ❌ NEVER pass `packageName` or `packageUId` (not required)
+- ✅ `rowsJson` format: array of rows, each row is array of `{columnName, value}` objects
+- ✅ Example: `[[{"columnName":"Id","value":"guid-1"},{"columnName":"Name","value":"New"}]]`
 
 **UId Variable Strategy:**
 
@@ -166,7 +196,6 @@ Create `plan.md` with sections:
 - App Summary
 - Business Decisions Locked
 - Assumptions
-- Deployment Preference (`deploy_now` or `generate_only`)
 - MCP Payload (resolved and validated)
 - Schema Sync Plan
 - Runtime Resolution Strategy (`iconId` and `iconBackground`)
@@ -181,7 +210,6 @@ Check:
 - GUID format validity for explicit `iconId` and explicit `clientTypeId`
 - `optionalTemplateDataJson` is valid JSON
 - no unsupported values remain (`useAIContentGeneration=true`)
-- deploy preference is valid and propagated from request spec
 - lookup creation steps are ordered before updates that reference them
 - every `entity.update` step uses explicit `operationsJson`
 - the implementation phase is described as synchronous, not a detached/background write phase
@@ -197,7 +225,6 @@ Write final plan to:
 2. Do not create GUID matrices manually for all schemas.
 3. Do not include generated file bodies in plan.
 4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, and result/report artifact persistence.
-5. Plan must not leave deploy behavior ambiguous.
 
 ## Completion Criteria
 

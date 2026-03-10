@@ -64,9 +64,6 @@ Do not proceed until checklist is complete.
 
 Ask only:
 - blocker technical inputs (for example: Creatio URL, credentials/access if missing)
-- deployment preference (mandatory):
-  - `deploy_now`
-  - `generate_only`
 
 Do not ask for MCP/template/icon details if defaults can be resolved deterministically.
 
@@ -90,7 +87,6 @@ Create normalized request spec:
   },
   "technicalInputs": {
     "creatioUrl": "<url>",
-    "deployPreference": "deploy_now",
     "credentialsStatus": "provided|missing|existing_env"
   },
   "assumptions": [
@@ -200,7 +196,7 @@ After natural-language approval:
 
 1. Persist internal Gate R approval and UX fields with:
 ```bash
-scripts/write-approval-state.sh <AppName> "<approvedBy>" "<deployPreference>"
+scripts/write-approval-state.sh <AppName> "<approvedBy>"
 ```
 
 2. Write `output/<AppName>/request-spec.json`.
@@ -216,7 +212,7 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<deployPreference>"
 7. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
 8. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
 9. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
-10. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers/deploy policy.
+10. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
 
 ## Completion Criteria
 
@@ -227,5 +223,4 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<deployPreference>"
 - `requirementsApproved: true`
 - `interactionMode: "nl-business-first"`
 - `businessChecklistComplete: true`
-- `deployPreference` set to `deploy_now` or `generate_only`  
 ✅ Requirements include “Business Decisions Locked” and “Assumptions” sections  
