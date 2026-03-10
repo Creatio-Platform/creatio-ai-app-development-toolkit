@@ -85,8 +85,14 @@ For each approved entity:
 - if extra custom columns are required, prepare explicit sync steps
 - if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
 - create new lookup entities first via `entity.create_lookup`
+- for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `binding.create` step immediately after the corresponding `entity.create_lookup` call
 - create non-template entities via `entity.create` when needed
 - update existing template-created entities via `entity.update`
+
+Execution order for lookups with seed data:
+1. `entity.create_lookup` → create the lookup schema
+2. `binding.create` → populate the lookup with seed rows from requirements
+3. `application.get_info` → refresh context after both operations
 
 For `entity.update`, prepare `operationsJson` only:
 - `addColumn`
@@ -232,5 +238,4 @@ Write final plan to:
 ✅ `businessChecklist.complete=true` in `request-spec.json`  
 ✅ `output/<AppName>/plan.md` exists  
 ✅ MCP payload is fully resolved or has explicit runtime resolution rules  
-✅ Deploy preference is explicit in plan  
 ✅ Explicit validations and blocker conditions are documented  

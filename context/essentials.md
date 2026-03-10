@@ -150,7 +150,6 @@ Primary generation flow:
    - After EACH mutation, refresh context with `application.get_info`
    - Overwrite `mcp-application-result.json` with updated state
 7. If explicit data bindings required, use `binding.get_columns` and `binding.create`
-8. For `deploy_now`, run compile/restart/healthcheck
 
 **Critical pattern:** Always call `application.get_info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
 

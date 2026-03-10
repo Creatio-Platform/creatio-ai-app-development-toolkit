@@ -22,13 +22,9 @@ Primary workflow is natural language:
 1. Developer sends one free-form prompt.
 2. Agent returns a short “What I understood”.
 3. Agent asks business clarifications in batches until checklist is complete.
-4. Agent asks minimal technical questions only (blockers + deploy preference).
+4. Agent asks minimal technical questions only (blockers).
 5. Agent runs the pipeline and returns final artifacts/results.
 6. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
-
-Default deploy preference values:
-- `deploy_now`
-- `generate_only`
 
 ## Workflow
 
@@ -38,7 +34,6 @@ Orchestrator flow:
 3. Requirements gathering: builds `requirements.md`, `request-spec.json`, and `workflow-state.json`.
 4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
 5. Implementation: runs synchronously, uses MCP `application.create`, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
-6. Deploy and verify (or skip by policy): short DB-first contract runs compilation/restart/healthcheck.
 
 All generated artifacts are under `output/<AppName>/`.
 
@@ -57,9 +52,8 @@ Orchestrator (AGENTS.md)
 ├── Agent 1: Environment Setup           -> .creatio-env.json
 ├── Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
 ├── Agent 3: Implementation Plan         -> plan.md
-├── Agent 4: Implementation              -> mcp-application-result.json + report
+├── Agent 4: Implementation              -> mcp-application-result.json + report (FINAL)
 │   └── Direct MCP tools via curl (see context/mcp-application-tools-reference.md)
-└── Agent 5: Deploy & Verification       -> deployment or skip report
 ```
 
 ## Repository Structure
@@ -72,7 +66,6 @@ agents/
   02-requirements-gathering.md
   03-implementation-plan.md
   04-implementation.md
-  05-deploy-verification.md
 skills/
   entity-creation/SKILL.md
   page-creation/SKILL.md

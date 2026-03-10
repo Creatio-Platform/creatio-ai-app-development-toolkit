@@ -156,20 +156,18 @@ Developer prompt (natural language)
    - Step D: execute `tools/call` for `application.create` via curl with Basic Auth + Session-Id headers
    - Step E: parse SSE response (grep data: | sed | jq) and validate `short` contract
    - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext
-   - Step G: if plan contains approved schema changes, execute ordered entity tool calls (create_lookup → create → update)
+   - Step G: if plan contains approved schema changes, execute ordered tool calls (create_lookup → binding.create for seed data → create → update)
    - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
    - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
    - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
    - Step K: validate final normalized `success=true` with short-contract checks
 10. On failure, decide: retry, fix, or report blocker.
-11. Do NOT proceed to Agent 5 if Agent 4 validation fails.
-12. Approval gates remain internal controls and must be persisted in workflow artifacts.
-13. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
-   - `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<deployPreference>"`
-14. Agent 3/4/5 precondition:
+11. Approval gates remain internal controls and must be persisted in workflow artifacts.
+12. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
+   - `scripts/write-approval-state.sh <AppName> "<approvedBy>"`
+13. Agent 3/4 precondition:
    - Run `scripts/check-approval-gate.sh <AppName>`
    - On failure, hard-stop and report blocker
-15. Agent 5 must respect deploy policy from workflow state:
 
 ## Global Rules
 
@@ -215,7 +213,7 @@ When developer provides a natural-language request (for example: “Generate an 
 
 1. Start with planning response and collect blocker technical inputs only.
 2. Run Agent 1 in background → wait → verify `.creatio-env.json`.
-3. Run Agent 2 interactively → complete business checklist + collect deploy policy → persist `request-spec.json` and `workflow-state.json`.
+3. Run Agent 2 interactively → complete business checklist → persist `request-spec.json` and `workflow-state.json`.
 4. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
 5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts and synchronized schema context.
 6. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.

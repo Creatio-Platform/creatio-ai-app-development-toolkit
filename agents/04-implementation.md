@@ -70,6 +70,7 @@ curl -s ... "application.get_info" ... | grep 'data: ' | sed 's/^data: //' | jq 
 7. initialize `mcp-application-result.json`
 8. if needed, execute ordered:
    - `entity.create_lookup`
+   - `binding.create` (seed data for each lookup with values defined in plan)
    - `entity.create`
    - `entity.update`
 9. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
@@ -100,6 +101,7 @@ Persist the compact context from MCP and set `contractType=short`.
 ### Schema Sync Rules
 
 - Create new lookup entities first with `entity.create_lookup`.
+- After creating each lookup entity that has seed values defined in the plan, call `binding.create` to populate it with seed rows before proceeding to the next entity.
 - Use `entity.create` only for new entities not already created by the application template.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.

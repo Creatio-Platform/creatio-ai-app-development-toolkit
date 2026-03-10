@@ -40,7 +40,6 @@ approved_by="$(jq -r '.approvedBy // empty' "$state_file")"
 approved_at_utc="$(jq -r '.approvedAtUtc // empty' "$state_file")"
 interaction_mode="$(jq -r '.interactionMode // empty' "$state_file")"
 business_checklist_complete="$(jq -r '.businessChecklistComplete // empty' "$state_file")"
-deploy_preference="$(jq -r '.deployPreference // empty' "$state_file")"
 request_business_complete="$(jq -r '.businessChecklist.complete // empty' "$request_spec_file")"
 if [ "$requirements_approved" != "true" ]; then
   echo "Gate failed: requirementsApproved must be true" >&2
@@ -72,10 +71,6 @@ if [ "$interaction_mode" != "nl-business-first" ]; then
 fi
 if [ "$business_checklist_complete" != "true" ]; then
   echo "Gate failed: businessChecklistComplete must be true" >&2
-  exit 1
-fi
-if [ "$deploy_preference" != "deploy_now" ] && [ "$deploy_preference" != "generate_only" ]; then
-  echo "Gate failed: deployPreference must be deploy_now or generate_only" >&2
   exit 1
 fi
 if [ "$request_business_complete" != "true" ]; then
