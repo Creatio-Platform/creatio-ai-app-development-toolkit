@@ -125,6 +125,32 @@ Edit the `body` string directly. You can modify multiple sections in a single ed
 3. Ensure all 8 marker pairs are preserved
 4. Ensure braces, brackets, and parentheses are balanced
 
+### Step 3a: Sync New Entity Fields into a Live FormPage
+
+Use this workflow when the entity gained new columns and the live FormPage must surface them:
+
+1. Parse both `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
+2. Collect existing `insert` operations where:
+   - `parentName == "SideAreaProfileContainer"`
+   - `propertyName == "items"`
+3. Find the current maximum `row` and `index` values in `SideAreaProfileContainer`
+4. For each missing entity field:
+   - choose the control recipe from `context/viewconfig-reference.md`
+   - append a new `insert` to `SideAreaProfileContainer`
+   - continue `row` and `index` from the current maximum values
+   - keep the live page naming pattern for the field attribute key
+   - add a matching attribute to `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
+5. Preserve existing inserts and bindings — append only missing fields
+6. Keep `Name` as a special case when it already exists in the page body
+
+Special cases from live schema:
+- Lookup fields need:
+  - the main `crt.ComboBox` insert
+  - a `*_List` collection attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
+  - a child `crt.ComboboxSearchTextAction` insert in `listActions`
+- `crt.ImageInput` binds through `value`, not `control`
+- Most other field controls bind through `control`
+
 ### Step 4: Validate with Dry Run
 
 ```
@@ -155,6 +181,9 @@ page.update(
 5. **Call `await next?.handle(request)`** in every handler to preserve parent chain
 6. **Prefix entity columns with `PDS_`** (e.g., `PDS_UsrName`, `PDS_UsrStatus`)
 7. **Deps ↔ handlers correlation** — if handler uses `@creatio-devkit/common`, ensure deps and args include it
+8. **For runtime entity-field sync, use `SideAreaProfileContainer`** when the live page already follows that pattern
+9. **Every new field insert needs a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute**
+10. **Lookup field sync also needs the `*_List` collection attribute and child `crt.ComboboxSearchTextAction`**
 
 ## Validation Checklist
 
@@ -165,6 +194,9 @@ page.update(
 - [ ] Handler uses correct request type for business intent
 - [ ] `await next?.handle(request)` present in every handler
 - [ ] Entity attributes prefixed with `PDS_`
+- [ ] Every inserted field has a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute
+- [ ] Runtime FormPage field sync appends to `SideAreaProfileContainer`
+- [ ] Lookup sync includes `*_List` binding and child `crt.ComboboxSearchTextAction`
 - [ ] Deps updated if handlers use external modules
 - [ ] `dryRun: "true"` passed first to validate
 - [ ] `success: true` confirmed after save

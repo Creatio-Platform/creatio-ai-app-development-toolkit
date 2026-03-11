@@ -32,14 +32,151 @@ Generate a random 7-character alphanumeric suffix for each new element.
 
 ## Required User Input
 
-When inserting a new element, **always ask the user** for:
+When inserting a new generic element, ask the user for:
 
 1. **Parent container name** (`parentName`) — where to place the element. The user must provide the exact container name from the target page.
 2. **Action** — what the element should do when clicked/activated (e.g., "open AppFeature_ListPage", "create a new Contact record").
 
 Use `page.get` to inspect the current page structure and identify available containers if the user is unsure.
 
+### Exception: Entity-Field Sync on Live Form Pages
+
+When the task is "entity columns were added and the FormPage must surface them", do **not** ask the user for `parentName`. Use this deterministic workflow instead:
+
+1. Call `page.get` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
+2. Append missing field controls to `SideAreaProfileContainer`.
+3. Keep `propertyName: "items"`.
+4. Continue `row` and `index` from the current maximum values already present in `SideAreaProfileContainer`.
+5. Add matching attributes in `SCHEMA_VIEW_MODEL_CONFIG_DIFF` for every inserted field.
+6. Keep the live naming pattern already present in the page body. `Name` is often a special case. Lookup controls may need extra `*_List` attributes and nested actions.
+
 ---
+
+## Runtime FormPage Field Recipes
+
+Use these recipes when syncing entity fields into a live FormPage through `page.update`.
+
+| Field shape | Control type | Binding property | Default properties | Notes |
+|-------------|--------------|------------------|--------------------|-------|
+| Existing record title (`Name`) | `crt.Input` | `control` | `labelPosition: "auto"` | Keep the live `Name` binding when it already exists. |
+| Short/medium/long text | `crt.Input` | `control` | `placeholder: ""`, `tooltip: ""`, `readonly: false`, `multiline: false`, `labelPosition: "auto"` | Use the current page naming pattern for the attribute key. |
+| Integer, float, money | `crt.NumberInput` | `control` | `readonly: false`, `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"` | |
+| Boolean | `crt.Checkbox` | `control` | `disabled: false`, `inversed: false`, `ariaLabel: ""`, `tooltip: ""`, `labelPosition: "auto"` | Only set a static `value` when the page already uses that pattern or a business default requires it. |
+| Date, time, datetime | `crt.DateTimePicker` | `control` | `placeholder: ""`, `readonly: false`, `tooltip: ""`, `labelPosition: "auto"` | |
+| Rich/max-size text | `crt.RichTextEditor` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: true`, `filesStorage` config | Follow the live page pattern for `filesStorage`. |
+| Phone | `crt.PhoneInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | |
+| Email | `crt.EmailInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | |
+| Web URL | `crt.WebInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | |
+| Lookup | `crt.ComboBox` | `control` | `ariaLabel: ""`, `isAddAllowed: true`, `showValueAsLink: true`, `labelPosition: "auto"`, `controlActions: []`, `listActions: []`, `tooltip: ""` | Also add a `*_List` collection attribute and a child `crt.ComboboxSearchTextAction` insert. |
+| Color | `crt.ColorPicker` | `control` | `labelPosition: "auto"`, `pickerMode: "extended"` | |
+| Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. |
+
+### Generic Runtime Field Insert Example
+
+```json
+{
+	"operation": "insert",
+	"name": "Input_ab12cd3",
+	"values": {
+		"layoutConfig": {
+			"column": 1,
+			"colSpan": 1,
+			"row": 2,
+			"rowSpan": 1
+		},
+		"type": "crt.Input",
+		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
+		"control": "$PDS_UsrCode_ab12cd3",
+		"placeholder": "",
+		"tooltip": "",
+		"readonly": false,
+		"multiline": false,
+		"labelPosition": "auto"
+	},
+	"parentName": "SideAreaProfileContainer",
+	"propertyName": "items",
+	"index": 1
+}
+```
+
+### Lookup Insert Example
+
+```json
+{
+	"operation": "insert",
+	"name": "ComboBox_ab12cd3",
+	"values": {
+		"layoutConfig": {
+			"column": 1,
+			"colSpan": 1,
+			"row": 10,
+			"rowSpan": 1
+		},
+		"type": "crt.ComboBox",
+		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"ariaLabel": "",
+		"isAddAllowed": true,
+		"showValueAsLink": true,
+		"labelPosition": "auto",
+		"controlActions": [],
+		"listActions": [],
+		"tooltip": "",
+		"control": "$PDS_UsrStatus_ab12cd3"
+	},
+	"parentName": "SideAreaProfileContainer",
+	"propertyName": "items",
+	"index": 9
+}
+```
+
+```json
+{
+	"operation": "insert",
+	"name": "addRecord_ab12cd3",
+	"values": {
+		"code": "addRecord",
+		"type": "crt.ComboboxSearchTextAction",
+		"icon": "combobox-add-new",
+		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"clicked": {
+			"request": "crt.CreateRecordFromLookupRequest",
+			"params": {}
+		}
+	},
+	"parentName": "ComboBox_ab12cd3",
+	"propertyName": "listActions",
+	"index": 0
+}
+```
+
+### Image Insert Example
+
+```json
+{
+	"operation": "insert",
+	"name": "ImageInput_ab12cd3",
+	"values": {
+		"layoutConfig": {
+			"column": 1,
+			"colSpan": 1,
+			"row": 13,
+			"rowSpan": 1
+		},
+		"type": "crt.ImageInput",
+		"label": "$Resources.Strings.PDS_UsrPhoto_ab12cd3",
+		"value": "$PDS_UsrPhoto_ab12cd3",
+		"readonly": false,
+		"placeholder": "",
+		"labelPosition": "auto",
+		"size": "large",
+		"borderRadius": "medium",
+		"positioning": "cover"
+	},
+	"parentName": "SideAreaProfileContainer",
+	"propertyName": "items",
+	"index": 12
+}
+```
 
 ## Components
 
@@ -152,20 +289,6 @@ See `context/handlers-reference.md` for the full request type reference.
 ```
 
 ---
-
-<!-- 
-## crt.Input
-TODO: Add input field reference
-
-## crt.ComboBox
-TODO: Add combo box reference
-
-## crt.DataGrid
-TODO: Add data grid reference
-
-## crt.FlexContainer
-TODO: Add flex container reference
--->
 
 ---
 

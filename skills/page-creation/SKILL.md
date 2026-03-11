@@ -71,6 +71,7 @@ After generating page files, if `plan.md` specifies handlers, event reactions, o
 1. Deploy the generated page to Creatio (Agent 5)
 2. Use **`skills/page-schema-editing/SKILL.md`** workflow to add handlers via MCP `page.*` tools
 3. The `page.update` tool writes directly to the running DB — no recompile needed
+4. For runtime `page.update` field sync, trust the live page body from `page.get` instead of template container names. A live FormPage can place field inserts in `SideAreaProfileContainer` even when the file template example uses `GeneralInfoTab`.
 
 This keeps page *generation* (file templates) separate from page *customization* (runtime MCP edits).
 

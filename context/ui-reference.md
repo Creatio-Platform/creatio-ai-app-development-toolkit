@@ -39,12 +39,11 @@ Array of operations that modify the parent page template:
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 1, "rowSpan": 1},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_Name_label",
-		"control": "$PDS_Name",
-		"visible": true,
-		"readonly": false
+		"label": "$Resources.Strings.Name",
+		"control": "$Name",
+		"labelPosition": "auto"
 	},
-	"parentName": "GeneralInfoTab",
+	"parentName": "SideAreaProfileContainer",
 	"propertyName": "items",
 	"index": 0
 }
@@ -135,13 +134,50 @@ Binds page attributes to data source:
 		"operation": "merge",
 		"path": ["attributes"],
 		"values": {
-			"PDS_Name": {"modelConfig": {"path": "PDS.Name"}},
-			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
-			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
+			"Name": {"modelConfig": {"path": "PDS.Name"}},
+			"PDS_UsrStatus_ab12cd3": {"modelConfig": {"path": "PDS.UsrStatus"}},
+			"PDS_UsrDueDate_ab12cd3": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
 	}
 ]
 ```
+
+### Runtime Binding Pattern for Live Form Pages
+
+When editing an existing FormPage via `page.update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders.
+
+```json
+{
+	"Name": {
+		"modelConfig": {
+			"path": "PDS.Name"
+		}
+	},
+	"PDS_Column8_qc014wq": {
+		"modelConfig": {
+			"path": "PDS.Column8"
+		}
+	},
+	"PDS_Column16_lcbi4nq_List": {
+		"isCollection": true,
+		"modelConfig": {
+			"sortingConfig": {
+				"default": [
+					{
+						"columnName": "Name",
+						"direction": "asc"
+					}
+				]
+			}
+		}
+	}
+}
+```
+
+Rules:
+- Keep `Name` as the special case when it already exists in the live page.
+- Every new field insert in `SCHEMA_VIEW_CONFIG_DIFF` needs a matching attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
+- Lookup controls need both the main attribute and a `*_List` collection attribute.
 
 ---
 
@@ -188,7 +224,9 @@ Configures primary data source:
 
 ## Form Page Layout
 
-Fields placed using `layoutConfig`:
+### Runtime Field Insertion via `page.update`
+
+Use the current page body from `page.get` as the source of truth. For live FormPage field sync, append new field controls to `SideAreaProfileContainer`.
 
 ```json
 {
@@ -202,37 +240,101 @@ Fields placed using `layoutConfig`:
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_Name_label",
-		"control": "$PDS_Name"
+		"label": "$Resources.Strings.Name",
+		"control": "$Name",
+		"labelPosition": "auto"
 	},
-	"parentName": "GeneralInfoTab",
+	"parentName": "SideAreaProfileContainer",
 	"propertyName": "items",
 	"index": 0
 }
 ```
 
-- `column` — grid column (1-based)
-- `colSpan` — columns to span
-- `row` — grid row (1-based)
-- `rowSpan` — rows to span
+```json
+{
+	"operation": "insert",
+	"name": "Input_ab12cd3",
+	"values": {
+		"layoutConfig": {
+			"column": 1,
+			"colSpan": 1,
+			"row": 2,
+			"rowSpan": 1
+		},
+		"type": "crt.Input",
+		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
+		"control": "$PDS_UsrCode_ab12cd3",
+		"placeholder": "",
+		"tooltip": "",
+		"readonly": false,
+		"multiline": false,
+		"labelPosition": "auto"
+	},
+	"parentName": "SideAreaProfileContainer",
+	"propertyName": "items",
+	"index": 1
+}
+```
 
-### ComboBox for Lookup Fields
+Rules:
+- `parentName` is `SideAreaProfileContainer` for runtime entity-field sync on live FormPages.
+- `propertyName` is `items`.
+- `row` and `index` continue from the current maximum values already present in `SideAreaProfileContainer`.
+- Default grid placement for new fields is `column=1`, `colSpan=1`, `rowSpan=1`.
+- Do not replace existing inserts; append only missing fields.
+
+### Runtime Lookup Special Case
 
 ```json
 {
 	"operation": "insert",
-	"name": "UsrStatus",
+	"name": "ComboBox_ab12cd3",
 	"values": {
-		"layoutConfig": {"column": 1, "colSpan": 1, "row": 3, "rowSpan": 1},
+		"layoutConfig": {"column": 1, "colSpan": 1, "row": 10, "rowSpan": 1},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_label",
-		"control": "$PDS_UsrStatus"
+		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"ariaLabel": "",
+		"isAddAllowed": true,
+		"showValueAsLink": true,
+		"labelPosition": "auto",
+		"controlActions": [],
+		"listActions": [],
+		"tooltip": "",
+		"control": "$PDS_UsrStatus_ab12cd3"
 	},
-	"parentName": "GeneralInfoTab",
+	"parentName": "SideAreaProfileContainer",
 	"propertyName": "items",
-	"index": 2
+	"index": 9
 }
 ```
+
+```json
+{
+	"operation": "insert",
+	"name": "addRecord_ab12cd3",
+	"values": {
+		"code": "addRecord",
+		"type": "crt.ComboboxSearchTextAction",
+		"icon": "combobox-add-new",
+		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"clicked": {
+			"request": "crt.CreateRecordFromLookupRequest",
+			"params": {}
+		}
+	},
+	"parentName": "ComboBox_ab12cd3",
+	"propertyName": "listActions",
+	"index": 0
+}
+```
+
+Lookup rules:
+- Add the base `crt.ComboBox` insert and the child `crt.ComboboxSearchTextAction` insert together.
+- Add both the main lookup attribute and the `*_List` collection attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
+
+### Template Note
+
+`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime `page.update` edits. When editing a live page, trust `page.get` and preserve the current container and binding pattern.
 
 ---
 
@@ -244,6 +346,8 @@ Fields placed using `layoutConfig`:
 | PageWithTabsFreedomTemplate | `3b2e117f-8c6b-4ca5-80a2-7ebb497cddf9` | Form with tabs |
 | PageWithRightAreaAndTabsFreedomTemplate | `5f8dd430-acf2-4e1a-80c8-77cf57e245ce` | Form with right area + tabs |
 | LightFormPage | `ec5fd902-66ce-4139-a241-10ebd8addc40` | Light/mini form |
+
+Do not infer runtime field container names only from the parent template. A live page can still place field inserts in `SideAreaProfileContainer` even when `page.get` reports `PageWithTabsFreedomTemplate`.
 
 ---
 

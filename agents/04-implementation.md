@@ -591,9 +591,14 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
    a. Call `page.get(schemaName)` to get the full JS body
    b. Modify the raw body directly — update multiple sections between their markers
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
-   d. If handlers use `@creatio-devkit/common`, ensure `deps` section includes the import and `args` includes the parameter
-   e. Call `page.update` with `dryRun: "true"` first to validate
-   f. If dry run succeeds, call `page.update` without dryRun to save
+   d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
+   e. For runtime FormPage field sync, append missing field inserts to `SideAreaProfileContainer` and continue `row` and `index` from the current maximum values
+   f. Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field
+   g. For lookup fields, add the `crt.ComboBox` insert, the `*_List` collection attribute, and the child `crt.ComboboxSearchTextAction` insert
+   h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
+   i. If handlers use `@creatio-devkit/common`, ensure `deps` section includes the import and `args` includes the parameter
+   j. Call `page.update` with `dryRun: "true"` first to validate
+   k. If dry run succeeds, call `page.update` without dryRun to save
 3. Update `mcp-application-result.json` with page metadata:
    ```json
    {
@@ -612,6 +617,15 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
    }
    ```
 4. Append page customization results to `schemaSync`
+
+**FormPage field sync rules:**
+- Read the current `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together before adding fields
+- Add an `insert` for every missing entity field to `SideAreaProfileContainer`
+- Continue `row` and `index` from the current maximum values in `SideAreaProfileContainer`
+- Keep `column=1`, `colSpan=1`, and `rowSpan=1` unless the live page already uses a different layout grid
+- Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` bindings for every inserted field
+- Lookup fields also need the `*_List` collection attribute and a child `crt.ComboboxSearchTextAction` insert
+- `crt.ImageInput` binds via `value`; most other field controls bind via `control`
 
 **Handler generation rules:**
 - Map business intents to request types using `handlers-reference.md`
