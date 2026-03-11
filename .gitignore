@@ -16,3 +16,4 @@ htmlcov/
 *.log
 copilot-session-*.md
 .workflow-state/
+output/
