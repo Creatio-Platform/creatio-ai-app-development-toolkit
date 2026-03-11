@@ -596,7 +596,7 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
    f. Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field
    g. For lookup fields, add the `crt.ComboBox` insert, the `*_List` collection attribute, and the child `crt.ComboboxSearchTextAction` insert
    h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
-   i. If handlers use `@creatio-devkit/common`, ensure `deps` section includes the import and `args` includes the parameter
+   i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
    j. Call `page.update` with `dryRun: "true"` first to validate
    k. If dry run succeeds, call `page.update` without dryRun to save
 3. Update `mcp-application-result.json` with page metadata:
@@ -626,10 +626,20 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
 - Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` bindings for every inserted field
 - Lookup fields also need the `*_List` collection attribute and a child `crt.ComboboxSearchTextAction` insert
 - `crt.ImageInput` binds via `value`; most other field controls bind via `control`
+- Match `crt.DateTimePicker.pickerType` to the real field kind and add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
+- Treat `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` as preprocessor-backed controls; avoid manually duplicating generated request wiring such as ComboBox load handlers or ImageInput upload/clear handlers unless the live page body already contains explicit versions
+- `crt.FileInput`, `crt.EncryptedInput`, and `crt.Slider` are supported, but use them only when the approved plan explicitly calls for that UX instead of the default field mapping
 
 **Handler generation rules:**
 - Map business intents to request types using `handlers-reference.md`
-- Always `await next?.handle(request)` to preserve parent handler chain
+- By default `await next?.handle(request)` to preserve the request chain, but omit it intentionally when canceling or overriding the default flow
+- Use `finally` when cleanup must happen even if the main handler logic fails
+- Use `request.$context.executeRequest(...)` for programmatic follow-up requests
+- Use `request.$context.setValue(...)` and `setAttributePropertyValue(...)` for dynamic attribute state and validation
+- `SCHEMA_DEPS` and `SCHEMA_ARGS` are page-body source imports and must still be updated when handler code uses sdk APIs
+- Reuse the live SDK import alias (`sdk`, `devkit`, etc.) and prefer `@creatio-devkit/common` for services such as `HttpClientService`, `SysValuesService`, `SysSettingsService`, `RightsService`, `Model.create(...)`, `FilterGroup`, and `ProcessEngineService`
+- Use `context/devkit-common-reference.md` as the exhaustive source of truth for available `sdk.*` exports and stay within its documented `public/**` surface
+- Prefer handlers, business rules, and attribute-property APIs over `converters` and `validators` unless the live page already uses those object sections explicitly
 - Prefix entity column attributes with `PDS_` (e.g., `PDS_UsrName`)
 - Lookup attribute values are objects with `.value` (GUID) and `.displayValue` (text)
 - Return early (without calling `next`) to cancel save/delete operations

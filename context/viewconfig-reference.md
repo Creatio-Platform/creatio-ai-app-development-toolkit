@@ -49,6 +49,7 @@ When the task is "entity columns were added and the FormPage must surface them",
 4. Continue `row` and `index` from the current maximum values already present in `SideAreaProfileContainer`.
 5. Add matching attributes in `SCHEMA_VIEW_MODEL_CONFIG_DIFF` for every inserted field.
 6. Keep the live naming pattern already present in the page body. `Name` is often a special case. Lookup controls may need extra `*_List` attributes and nested actions.
+7. Prefer minimal raw config for preprocessor-backed components. Do not manually duplicate auto-generated requests or bindings unless the current page body already stores them explicitly.
 
 ---
 
@@ -60,16 +61,16 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 |-------------|--------------|------------------|--------------------|-------|
 | Existing record title (`Name`) | `crt.Input` | `control` | `labelPosition: "auto"` | Keep the live `Name` binding when it already exists. |
 | Short/medium/long text | `crt.Input` | `control` | `placeholder: ""`, `tooltip: ""`, `readonly: false`, `multiline: false`, `labelPosition: "auto"` | Use the current page naming pattern for the attribute key. |
-| Integer, float, money | `crt.NumberInput` | `control` | `readonly: false`, `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"` | |
+| Integer, float, money | `crt.NumberInput` | `control` | `readonly: false`, `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"` | Add `format.decimalPrecision` when the numeric scale is known. |
 | Boolean | `crt.Checkbox` | `control` | `disabled: false`, `inversed: false`, `ariaLabel: ""`, `tooltip: ""`, `labelPosition: "auto"` | Only set a static `value` when the page already uses that pattern or a business default requires it. |
-| Date, time, datetime | `crt.DateTimePicker` | `control` | `placeholder: ""`, `readonly: false`, `tooltip: ""`, `labelPosition: "auto"` | |
+| Date, time, datetime | `crt.DateTimePicker` | `control` | `placeholder: ""`, `readonly: false`, `tooltip: ""`, `labelPosition: "auto"` | Set `pickerType` to match the real field kind. |
 | Rich/max-size text | `crt.RichTextEditor` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: true`, `filesStorage` config | Follow the live page pattern for `filesStorage`. |
-| Phone | `crt.PhoneInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | |
-| Email | `crt.EmailInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | |
-| Web URL | `crt.WebInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | |
-| Lookup | `crt.ComboBox` | `control` | `ariaLabel: ""`, `isAddAllowed: true`, `showValueAsLink: true`, `labelPosition: "auto"`, `controlActions: []`, `listActions: []`, `tooltip: ""` | Also add a `*_List` collection attribute and a child `crt.ComboboxSearchTextAction` insert. |
-| Color | `crt.ColorPicker` | `control` | `labelPosition: "auto"`, `pickerMode: "extended"` | |
-| Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. |
+| Phone | `crt.PhoneInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | Frontend preprocessing can auto-set `phoneAsLink: true` and `displayAsPhone`. |
+| Email | `crt.EmailInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | Frontend preprocessing can auto-set `isFormatValidated`. |
+| Web URL | `crt.WebInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | Often auto-promoted from `crt.Input` when the bound field is `WEB_TEXT`. |
+| Lookup | `crt.ComboBox` | `control` | `ariaLabel: ""`, `isAddAllowed: true`, `showValueAsLink: true`, `labelPosition: "auto"`, `controlActions: []`, `listActions: []`, `tooltip: ""` | Also add a `*_List` collection attribute. Add a child `crt.ComboboxSearchTextAction` when deterministic raw-body output is required. |
+| Color | `crt.ColorPicker` | `control` | `labelPosition: "auto"`, `pickerMode: "extended"` | Supports transparent color and custom `colors` palette. |
+| Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. The frontend can auto-add `bindTo`, `crt.ToImageLink`, `imageSelected`, and `imageClear`. |
 
 ### Generic Runtime Field Insert Example
 
@@ -149,6 +150,8 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 }
 ```
 
+If you omit `listActions` and keep `isAddAllowed: true`, the frontend can generate the default add-record action. Keep the explicit child action when you want deterministic raw-body output that matches already materialized page schemas.
+
 ### Image Insert Example
 
 ```json
@@ -177,6 +180,26 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 	"index": 12
 }
 ```
+
+The frontend image preprocessor can additionally add:
+- `bindTo` for business rules
+- `value | crt.ToImageLink`
+- `imageSelected: crt.UploadImageRequest`
+- `imageClear: crt.ClearImageRequest`
+
+Do not add those manually unless the current page body already contains explicit versions or the scenario explicitly requires them in the raw schema.
+
+### Additional Supported Field Components
+
+These field components are also available in the frontend:
+
+| Component | Type String | Binding property | Typical extras |
+|-----------|-------------|------------------|----------------|
+| File input | `crt.FileInput` | `control` | `accept`, `maxFileSize`, upload/download/preview outputs |
+| Encrypted input | `crt.EncryptedInput` | `control` | `state`, `unmaskingDisabled`, `toggleMaskValue` |
+| Slider | `crt.Slider` | `control` | `minValue`, `maxValue`, `step`, `color` |
+
+Use them only when the business requirements explicitly call for that UX. They are not the default mapping for generic entity-field sync.
 
 ## Components
 

@@ -86,6 +86,7 @@ Decision rules:
 The canonical references for generation are:
 - `context/essentials.md`
 - `context/business-checklist.md`
+- `context/devkit-common-reference.md`
 - `context/schema-reference.md`
 - `context/ui-reference.md`
 - `context/data-bindings-reference.md`
@@ -214,6 +215,7 @@ Developer prompt (natural language)
 | `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always |
 | `context/mcp-application-tools-reference.md` | Complete MCP tools guide: curl commands, parsing, error handling | Agent 4 |
 | `context/business-checklist.md` | Mandatory business clarification checklist and completion criteria | Agent 2, 3 |
+| `context/devkit-common-reference.md` | Exhaustive `@creatio-devkit/common` public API reference for sdk imports, decorators, models, services, and handlers | Agent 4, SDK-related page/frontend tasks |
 | `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
 | `context/ui-reference.md` | Freedom UI page structure and controls | Agent 4 |
 | `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |

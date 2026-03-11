@@ -15,6 +15,7 @@ Edit Freedom UI page schemas by working with the complete JS body. The agent rea
 
 Read before executing:
 - `context/handlers-reference.md` — handler patterns, request types, deps correlation
+- `context/devkit-common-reference.md` — exhaustive `@creatio-devkit/common` public API surface for `sdk.*` imports
 - `context/ui-reference.md` — page structure, control types, section markers
 - `context/viewconfig-reference.md` — viewConfigDiff components (buttons, containers, property values)
 
@@ -100,6 +101,12 @@ The 8 markers and their content shapes:
 | `SCHEMA_CONVERTERS` | converters | Object `{...}` |
 | `SCHEMA_VALIDATORS` | validators | Object `{...}` |
 
+Notes:
+
+- `handlers` is an array section; append or edit individual handler entries without replacing unrelated ones.
+- `converters` and `validators` are object sections; preserve existing keys and edit them conservatively.
+- For new page logic, prefer handlers, business rules, and attribute-property APIs unless the live page already provides concrete `converters` or `validators` usage to extend.
+
 ## Workflow
 
 ### Step 1: Discover Pages
@@ -140,6 +147,7 @@ Use this workflow when the entity gained new columns and the live FormPage must 
    - continue `row` and `index` from the current maximum values
    - keep the live page naming pattern for the field attribute key
    - add a matching attribute to `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
+   - keep raw config minimal for preprocessor-backed controls unless the current page body already contains explicit richer config
 5. Preserve existing inserts and bindings — append only missing fields
 6. Keep `Name` as a special case when it already exists in the page body
 
@@ -150,6 +158,9 @@ Special cases from live schema:
   - a child `crt.ComboboxSearchTextAction` insert in `listActions`
 - `crt.ImageInput` binds through `value`, not `control`
 - Most other field controls bind through `control`
+- Match `crt.DateTimePicker.pickerType` to the field kind when the column is date-only or time-only
+- Add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
+- `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` are preprocessor-backed; avoid hand-writing auto-generated request wiring unless the page body already persists it
 
 ### Step 4: Validate with Dry Run
 
@@ -178,12 +189,16 @@ page.update(
 2. **Preserve all 8 marker pairs** — MCP validates their presence; missing markers = rejection
 3. **Preserve structure outside markers** — don't modify `define(...)` wrapper, `return {`, or `};`
 4. **Balance all delimiters** — `[]`, `{}`, `()` must be balanced within each section
-5. **Call `await next?.handle(request)`** in every handler to preserve parent chain
+5. **By default, call `await next?.handle(request)`** to preserve the request chain, but omit it intentionally when canceling or overriding the default flow
 6. **Prefix entity columns with `PDS_`** (e.g., `PDS_UsrName`, `PDS_UsrStatus`)
-7. **Deps ↔ handlers correlation** — if handler uses `@creatio-devkit/common`, ensure deps and args include it
+7. **Deps ↔ handlers correlation** — if handler uses SDK services, ensure deps and args include the required import and preserve the live alias style (`sdk`, `devkit`, etc.)
 8. **For runtime entity-field sync, use `SideAreaProfileContainer`** when the live page already follows that pattern
 9. **Every new field insert needs a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute**
 10. **Lookup field sync also needs the `*_List` collection attribute and child `crt.ComboboxSearchTextAction`**
+11. **Do not manually duplicate frontend-generated ComboBox/ImageInput request wiring unless the live schema already stores it explicitly**
+12. **Use `request.$context.executeRequest(...)` for secondary programmatic requests and `setValue(...)` / `setAttributePropertyValue(...)` for runtime attribute state changes**
+13. **Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body via `page.update`**
+14. **Treat `converters` and `validators` as conservative object sections, not the default place for new validation logic without live schema evidence**
 
 ## Validation Checklist
 
@@ -192,12 +207,17 @@ page.update(
 - [ ] `define(...)` wrapper and `return {` structure preserved
 - [ ] Braces `{}`, brackets `[]`, parentheses `()` balanced
 - [ ] Handler uses correct request type for business intent
-- [ ] `await next?.handle(request)` present in every handler
+- [ ] Each handler either preserves the chain intentionally, stops it intentionally, or documents cleanup via `finally`
 - [ ] Entity attributes prefixed with `PDS_`
 - [ ] Every inserted field has a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute
 - [ ] Runtime FormPage field sync appends to `SideAreaProfileContainer`
 - [ ] Lookup sync includes `*_List` binding and child `crt.ComboboxSearchTextAction`
-- [ ] Deps updated if handlers use external modules
+- [ ] Numeric/date controls keep scale and picker-type metadata when the column type requires it
+- [ ] Preprocessor-backed controls are not bloated with duplicate auto-generated wiring
+- [ ] Programmatic follow-up requests use `request.$context.executeRequest(...)` when needed
+- [ ] Dynamic validation and UI state updates use `setValue(...)` or `setAttributePropertyValue(...)` when appropriate
+- [ ] `converters` and `validators` were only edited when the live schema already used them or the task provided concrete evidence
+- [ ] Deps and args were updated if handlers use external modules, and the live SDK alias style was preserved
 - [ ] `dryRun: "true"` passed first to validate
 - [ ] `success: true` confirmed after save
 

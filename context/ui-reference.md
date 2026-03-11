@@ -61,8 +61,26 @@ Array of operations that modify the parent page template:
 | Boolean | Checkbox | `crt.Checkbox` |
 | DateTime, Date, Time | DateTimePicker | `crt.DateTimePicker` |
 | Lookup | ComboBox | `crt.ComboBox` |
+| Blob, File | FileInput | `crt.FileInput` |
 | Image, ImageLookup | ImageInput | `crt.ImageInput` |
 | Color | ColorPicker | `crt.ColorPicker` |
+| SecureText | EncryptedInput | `crt.EncryptedInput` |
+| Integer, Float, Money (alternate UI) | Slider | `crt.Slider` |
+
+---
+
+## Frontend-backed Component Notes
+
+The frontend runtime adds a few important rules that are not obvious from raw page examples alone:
+
+- `crt.NumberInput` supports `format.decimalPrecision`; use it when the numeric column scale is known.
+- `crt.DateTimePicker` supports `pickerType`, `useSeconds`, `startView`, `mode`, and `timeInterval`. Match `pickerType` to the real field kind (`date`, `time`, or `datetime`).
+- `crt.PhoneInput`, `crt.EmailInput`, and `crt.WebInput` are backed by preprocessors that can promote a bound text input to a more specific control based on the underlying data value type.
+- `crt.ComboBox` is also preprocessor-backed: it can auto-build lookup loading requests, pagination wiring, and lookup list attributes from the main binding.
+- `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
+- `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
+
+When editing raw page bodies through `page.update`, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output.
 
 ---
 
@@ -281,7 +299,10 @@ Rules:
 - `propertyName` is `items`.
 - `row` and `index` continue from the current maximum values already present in `SideAreaProfileContainer`.
 - Default grid placement for new fields is `column=1`, `colSpan=1`, `rowSpan=1`.
+- For numeric fields, add `format.decimalPrecision` when the target column scale is known.
+- For date and time fields, set `pickerType` to match the underlying data value type.
 - Do not replace existing inserts; append only missing fields.
+- Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
 
 ### Runtime Lookup Special Case
 
@@ -331,6 +352,17 @@ Rules:
 Lookup rules:
 - Add the base `crt.ComboBox` insert and the child `crt.ComboboxSearchTextAction` insert together.
 - Add both the main lookup attribute and the `*_List` collection attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
+- The frontend can auto-wire `showList`, `paginationChange`, and lookup collection metadata from the main binding, so do not invent extra request configs unless the page already uses them.
+
+### Additional Supported Field Components
+
+The frontend also supports these field controls:
+
+| Component | Type String | Typical data value types | Notes |
+|-----------|-------------|--------------------------|-------|
+| File input | `crt.FileInput` | Blob, File, Image, ImageLookup | Supports `accept`, `maxFileSize`, and upload/download/preview events. Use only when the scenario explicitly needs file upload UX. |
+| Encrypted input | `crt.EncryptedInput` | SecureText | Supports masking state and `toggleMaskValue`. Use for secure text, not as a generic text replacement. |
+| Slider | `crt.Slider` | Integer, Float, Money | Supports `minValue`, `maxValue`, `step`, `color`. Use only when the UX explicitly wants a range/slider control. |
 
 ### Template Note
 
@@ -353,25 +385,33 @@ Do not infer runtime field container names only from the parent template. A live
 
 ## Handlers
 
-Event handlers for page logic. See `context/handlers-reference.md` for complete patterns and Creatio client APIs.
+Handlers are stored in the page body as a marker-delimited array and executed at runtime through the Freedom UI request chain. Keep the page-body marker format for MCP editing, but write handler logic with the real runtime model in mind. See `context/handlers-reference.md` for the full execution model, request catalog, and APIs.
 
 ```javascript
 handlers: /**SCHEMA_HANDLERS*/[
 	{
 		request: "crt.HandleViewModelInitRequest",
 		handler: async (request, next) => {
-			// Page initialization logic
-			return next?.handle(request);
+			await next?.handle(request);
+			request.$context.IsReady = true;
 		}
 	}
 ]/**SCHEMA_HANDLERS*/
 ```
 
+Handler rules:
+
+- By default, `await next?.handle(request)` to preserve the request chain.
+- Omit `next` only when intentionally canceling or overriding the default flow.
+- Use `finally` when cleanup must happen even if earlier logic fails.
+- Use `request.$context.executeRequest(...)` for programmatic follow-up requests.
+- Use `setValue(...)` and `setAttributePropertyValue(...)` for dynamic attribute state and validation.
+
 ---
 
 ## Module Dependencies (SCHEMA_DEPS / SCHEMA_ARGS)
 
-When handlers use external APIs (like `@creatio-devkit/common`), add them to the deps and args:
+When page-body handlers use external APIs (like `@creatio-devkit/common`), add them to the source-module deps and args:
 
 ```javascript
 define("UsrMyApp_FormPage",
@@ -381,6 +421,31 @@ define("UsrMyApp_FormPage",
     }
 );
 ```
+
+These source imports are part of the page body edited by MCP. They are not a replacement for the separate frontend TypeScript decorator-based runtime infrastructure.
+
+Rules:
+
+- Prefer `@creatio-devkit/common` for SDK services in page-body handlers.
+- Reuse the live page alias (`sdk`, `devkit`, etc.) instead of renaming it.
+- Common verified SDK use cases include `HttpClientService`, `SysValuesService`, `SysSettingsService`, `RightsService`, `Model.create(...)`, `FilterGroup`, and `ProcessEngineService`.
+- See `context/handlers-reference.md` for concrete SDK recipes.
+- See `context/devkit-common-reference.md` for the exhaustive `@creatio-devkit/common` public export catalog and short API descriptions.
+
+---
+
+## Converters and Validators Status
+
+The page body format includes `converters` and `validators` object sections, but current frontend evidence does not confirm them as the primary Freedom UI mechanism for page-level validation or conversion logic.
+
+For new work, prefer:
+
+1. handlers
+2. business rules
+3. attribute property APIs such as `setAttributePropertyValue(...)`
+4. controlled `setValue(...)` updates
+
+If the live page already contains `converters` or `validators`, preserve them and edit them conservatively as object sections.
 
 ---
 
