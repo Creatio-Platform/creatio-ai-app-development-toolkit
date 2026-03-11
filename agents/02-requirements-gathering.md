@@ -36,6 +36,7 @@ From developer's free-form prompt, derive:
 - potential lifecycle/status model
 - record title semantics and whether a separate business title field is truly needed
 - lookup display semantics
+- whether list/form UX is explicit, partial, or missing and therefore needs deterministic defaults
 
 Return a short summary:
 - “What I understood”
@@ -50,6 +51,7 @@ Clarification rules:
 - Keep focus on business requirements.
 - Re-ask ambiguous answers until concrete.
 - If developer asks to start implementation before completion, return only missing checklist items and ask only-missing questions.
+- If list/form UX is missing or partial, resolve deterministic defaults instead of leaving page surfaces implicit.
 
 Mandatory checklist groups:
 - business outcome
@@ -62,6 +64,13 @@ Mandatory checklist groups:
 - acceptance criteria
 
 Do not proceed until checklist is complete.
+
+Default UX policy when explicit page surfaces are missing or partial:
+- `FormPage`: keep `Name` as header/title when present and include all approved non-inherited business fields from the main entity. Required business fields must always be included.
+- `ListPage`: include `Name`, every required non-inherited business field, then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
+- Cap auto-selected default ListPage columns at 6 total visible columns unless required business fields exceed that number.
+- Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
+- Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
 ### 3. Ask Minimal Technical Questions
 
@@ -169,11 +178,11 @@ Primary display field:
 ## Pages
 
 ### <EntityName> List Page
-Columns: Name, UsrStatus, UsrPriority, CreatedOn
+Columns: Name, UsrStatus, UsrPriority, UsrDueDate
 
 ### <EntityName> Form Page
 - Header: Name
-- Fields: UsrDescription, UsrStatus, UsrPriority, UsrDueDate
+- Fields: Name, UsrDescription, UsrStatus, UsrPriority, UsrDueDate
 - Layout notes: <notes>
 
 ## Relationships
@@ -191,6 +200,8 @@ Columns: Name, UsrStatus, UsrPriority, CreatedOn
 - <assumption 1>
 - <assumption 2>
 ```
+
+When UX expectations are missing or partial, resolve them into explicit page surfaces in `requirements.md`. Do not leave FormPage fields or ListPage columns implicit.
 
 ### 6. Natural-Language Approval
 
@@ -236,6 +247,10 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 12. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
 13. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
 14. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
+15. If list/form UX is missing or partial, write the resolved default `FormPage` fields and `ListPage` columns explicitly into `requirements.md` before handoff.
+16. Required non-inherited business fields must never be omitted from the resolved default `FormPage` or `ListPage`.
+17. Default `ListPage` columns must stay compact: include `Name`, required business fields, then only the highest-priority short operational fields, capped at 6 total visible columns unless required fields exceed that number.
+18. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless explicitly requested or required.
 
 ## Default Classification
 

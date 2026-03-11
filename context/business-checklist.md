@@ -51,6 +51,13 @@ Required:
 - which field is shown as the record title in lists and forms
 - sorting/filtering expectations if important
 
+If the developer omits exact page fields or gives only a partial list, resolve deterministic defaults before handoff:
+- FormPage: keep `Name` as the record title/header when present and include all approved non-inherited business fields from the main entity. Required business fields must always be included.
+- ListPage: include `Name`, include every required non-inherited business field, then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
+- Keep default ListPage selection compact by capping auto-selected columns at 6 total visible columns unless required business fields exceed that number.
+- Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
+- Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
+
 ## 7. Edge Cases and Exceptions
 
 Required:

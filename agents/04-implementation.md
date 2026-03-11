@@ -2,7 +2,7 @@
 
 ## Role
 
-Read `plan.md`, call MCP application tools, initialize canonical context in `mcp-application-result.json`, execute ordered entity sync calls when required, refresh context via `application.get_info`, and validate output.
+Read `plan.md`, call MCP application tools, initialize canonical context in `mcp-application-result.json`, execute ordered entity sync calls when required, synchronize planned FormPage/ListPage updates, refresh context via `application.get_info`, and validate output.
 
 Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts during app generation.
 
@@ -19,6 +19,7 @@ Read:
 - `context/essentials.md`
 - `context/mcp-application-tools-reference.md` — Complete curl examples and patterns
 - `context/ui-reference.md`
+- `context/viewconfig-reference.md`
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
@@ -76,6 +77,8 @@ curl -s ... "application.get_info" ... | grep 'data: ' | sed 's/^data: //' | jq 
    - `entity.create`
    - `entity.update`
 10. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
+11. if the plan creates or extends the main entity for a new app, execute the planned `page.list` → `page.get` → `page.update(dryRun)` → `page.update` page-sync steps for the generated `FormPage` and `ListPage`
+12. re-read synchronized pages with `page.get`, persist page metadata and verification results, and stop with blocker if required fields or resolved grid columns are missing
 
 Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
 
@@ -113,6 +116,8 @@ Persist the compact context from MCP and set `contractType=short`.
 - Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
+- If the run creates a new app or extends the main section entity with approved non-inherited business fields, page sync for the generated `FormPage` and `ListPage` is mandatory before success can be reported.
+- Treat a missing page-sync section in `plan.md` for such a run as a blocker in the plan, not as a reason to silently skip UI sync.
 - `schema default` means the backend/entity schema contract sets the value through `defaultValueSource` and `defaultValue`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
@@ -590,7 +595,9 @@ Stop and report blocker on first failed entity tool call.
 
 Read the skill doc: **`skills/page-schema-editing/SKILL.md`**
 
-If `plan.md` contains page customization requirements (handlers, viewConfigDiff, etc.):
+If `plan.md` contains page customization requirements, or the run creates or extends the main section entity for a new app:
+
+- Stop with blocker if this run requires page sync but `plan.md` does not define explicit `FormPage` and `ListPage` sync steps.
 
 1. Call `page.list` with the app's package name to discover generated pages
 2. For each page that needs customization:
@@ -608,6 +615,7 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
    i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
    j. Call `page.update` with `dryRun: "true"` first to validate
    k. If dry run succeeds, call `page.update` without dryRun to save
+   l. Re-read the page with `page.get` and verify the resolved FormPage fields or ListPage columns are actually present
 3. Update `mcp-application-result.json` with page metadata:
    ```json
    {
@@ -618,26 +626,46 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
              "uId": "...",
              "parentSchemaName": "...",
              "hasHandlers": true,
-             "handlerCount": 2
-           }
-         }
-       }
-     }
-   }
+              "handlerCount": 2,
+              "verification": {
+                "requiredFieldsPresent": true,
+                "resolvedColumnsPresent": true
+              }
+            }
+          }
+        }
+      }
+    }
    ```
 4. Append page customization results to `schemaSync`
+5. Stop with blocker if the plan required page sync but the final verification still shows missing fields or columns
 
 **FormPage field sync rules:**
 - Read the current `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together before adding fields
-- Add an `insert` for every missing entity field to `SideAreaProfileContainer`
+- Use the resolved FormPage field set from `plan.md`; if the plan is partial for a new-app main entity, fill the gaps with the default policy before editing the page
+- Add an `insert` for every missing resolved FormPage field to `SideAreaProfileContainer`
 - Continue `row` and `index` from the current maximum values in `SideAreaProfileContainer`
 - Keep `column=1`, `colSpan=1`, and `rowSpan=1` unless the live page already uses a different layout grid
 - Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` bindings for every inserted field
 - Lookup fields also need the `*_List` collection attribute and a child `crt.ComboboxSearchTextAction` insert
+- Keep `Name` as the record title/header when it already exists and do not duplicate it
+- Required non-inherited business fields must never be omitted from the synchronized FormPage
 - `crt.ImageInput` binds via `value`; most other field controls bind via `control`
 - Match `crt.DateTimePicker.pickerType` to the real field kind and add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
 - Treat `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` as preprocessor-backed controls; avoid manually duplicating generated request wiring such as ComboBox load handlers or ImageInput upload/clear handlers unless the live page body already contains explicit versions
 - `crt.FileInput`, `crt.EncryptedInput`, and `crt.Slider` are supported, but use them only when the approved plan explicitly calls for that UX instead of the default field mapping
+
+**ListPage grid sync rules:**
+- Use the resolved ListPage column set from `plan.md`; if the plan is partial for a new-app main entity, fill the gaps with the default policy before editing the page
+- Always include `Name`
+- Always include every required non-inherited business field
+- For optional defaults, append only the highest-priority short operational fields in this order: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount
+- Keep auto-selected default ListPage columns compact by capping them at 6 total visible columns unless required business fields exceed that number
+- Exclude inherited audit/system fields unless explicitly requested
+- Exclude long/rich/blob fields unless explicitly requested or required
+- Preserve existing DataGrid columns and order unless the requirements explicitly demand reordering
+- Append only the missing resolved columns
+- After persistence, verify that every required field and every resolved selected column exists in the live DataGrid
 
 **ListPage sorting rules:**
 - Use `context/ui-reference.md` as the canonical source of truth for DataGrid sorting metadata
@@ -682,6 +710,7 @@ Include:
 - icon resolution details
 - MCP result (`contractType=short`, `success`, `packageUId`, `packageName`)
 - schema sync steps executed and refreshed through `application.get_info`
+- page sync steps executed and verification results for `FormPage` and `ListPage`
 - validation results for normalized contract
 - whether the run completed via create flow or existing-app update flow
 
@@ -693,6 +722,6 @@ Include:
 - Result persisted to `mcp-application-result.json`
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
-- Page customization steps executed (if plan requires them)
+- Page sync executed and verified for new-app main-entity flows or any run where the plan requires page customization
 - Validation passed
 - Summary persisted to `mcp-application-report.md`

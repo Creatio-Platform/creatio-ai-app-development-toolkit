@@ -53,6 +53,18 @@ When the task is "entity columns were added and the FormPage must surface them",
 6. Keep the live naming pattern already present in the page body. `Name` is often a special case. Lookup controls may need extra `*_List` attributes and nested actions.
 7. Prefer minimal raw config for preprocessor-backed components. Do not manually duplicate auto-generated requests or bindings unless the current page body already stores them explicitly.
 
+### Exception: Main-Entity Grid Sync on Live List Pages
+
+When the task is "main entity columns were added and the ListPage must show the main columns", do **not** ask the user for the DataGrid node name or column order. Use this deterministic workflow instead:
+
+1. Call `page.get` and inspect the live `crt.DataGrid` configuration and its current `columns`.
+2. Resolve the target column set from the explicit plan first. If the plan is partial or missing, use the canonical default policy from `context/ui-reference.md`.
+3. Preserve existing grid columns and their order.
+4. Append only the missing resolved columns.
+5. Keep the live `items` binding, `primaryColumnName`, and collection path intact unless the plan explicitly changes them.
+6. Exclude inherited audit/system fields and long/rich/blob fields from default auto-selection unless they are explicitly requested or required.
+7. After `page.update`, re-read the page and verify the required fields and resolved selected columns are present in the live DataGrid.
+
 ---
 
 ## Runtime FormPage Field Recipes

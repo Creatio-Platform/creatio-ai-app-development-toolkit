@@ -30,7 +30,7 @@ You do NOT implement anything directly. You coordinate 4 agents in sequence:
 1. **Environment Setup** → configures clio connection
 2. **Requirements Gathering** → interactive Q&A with the developer (do NOT delegate to sub-agent)
 3. **Implementation Plan** → generates MCP execution plan
-4. **Implementation** → creates or refreshes application context in DB via MCP application tools and synchronizes approved entity schemas via MCP entity tools
+4. **Implementation** → creates or refreshes application context in DB via MCP application tools, synchronizes approved entity schemas via MCP entity tools, and synchronizes required FormPage/ListPage page schemas via MCP page tools
 
 **Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `entity.create_lookup`, `entity.create`, and `entity.update` tools execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
 
@@ -95,9 +95,12 @@ The canonical references for generation are:
 - `context/devkit-common-reference.md`
 - `context/schema-reference.md`
 - `context/ui-reference.md`
+- `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
 - `templates/**`
+
+Generated artifacts under `output/**` are execution evidence only. They are not canonical sources for generator policy, instruction design, or validation rules.
 
 ## Pipeline
 
@@ -130,8 +133,8 @@ Developer prompt (natural language)
              ▼
 ┌─────────────────────────┐
 │ Agent 4: Implementation │  Read: agents/04-implementation.md
-│                         │  Context: essentials, ui, bindings, mcp-tools-ref
-│                         │  Direct MCP: curl → application.create/get_info
+│                         │  Context: essentials, ui, viewconfig, bindings, mcp-tools-ref
+│                         │  Direct MCP: curl → application.create/get_info/page.list/page.get/page.update
 │                         │  Output: output/<App>/mcp-application-result.json
 │                         │          + mcp-application-report.md (FINAL)
 └─────────────────────────┘
@@ -168,7 +171,9 @@ Developer prompt (natural language)
    - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
    - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
    - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
-   - Step K: validate final normalized `success=true` with short-contract checks
+   - Step K: if the run creates or extends the main entity for a new app, discover the generated FormPage and ListPage and synchronize them via `page.list` → `page.get` → `page.update(dryRun)` → `page.update`
+   - Step L: re-read the updated pages via `page.get`, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
+   - Step M: validate final normalized `success=true` with short-contract checks and planned page-sync materialization
 11. On failure, decide: retry, fix, or report blocker.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
 13. Persist Gate P state in `.workflow-state/<AppName>/planning-state.json` via:
@@ -190,6 +195,12 @@ Developer prompt (natural language)
    - For new apps created through `application.create`, the template-created section entity is the canonical main entity for the app's primary records unless the requirements explicitly describe a different existing schema or multiple distinct business objects.
    - If requirements describe one primary record type, Agent 2/3/4 must map generic nouns and synonyms to that template-created entity instead of inventing a second BaseEntity with a different name.
    - Treat it as a validation failure when a new-app plan creates a second BaseEntity for the same records that the template-created section entity already represents.
+20. Page-sync guardrails:
+   - For a new app or any main-entity extension in the main section entity, Agent 3/4 must synchronize the generated FormPage and ListPage in the same workflow before reporting success.
+   - FormPage default policy: keep `Name` as the record title/header when the schema already contains it, then surface all approved non-inherited business fields from the main entity. Required business fields must never be omitted.
+   - ListPage default policy: include `Name`, include every required non-inherited business field, then append compact short operational fields in this priority order until the grid stays compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
+   - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
+   - Exclude long/rich/blob fields from default ListPage columns unless the field is required or explicitly requested.
 
 ## Global Rules
 
@@ -216,6 +227,12 @@ Developer prompt (natural language)
 19. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
 20. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults.
 21. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
+22. For new apps, or when the main section entity gains approved business fields, synchronize the generated `FormPage` and `ListPage` before the run can be reported as complete.
+23. `FormPage` defaults must keep `Name` as the header/title when present and surface all approved non-inherited business fields from the main entity. Required business fields must always be included.
+24. `ListPage` defaults must include `Name`, all required non-inherited business fields, and then only the highest-priority short operational fields needed for a compact grid.
+25. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless those fields are explicitly requested or required.
+26. Keep auto-selected default `ListPage` columns compact by capping them at 6 total visible columns unless required business fields exceed that number.
+27. Generated artifacts under `output/**` are not normative sources for generator instructions or validation policy.
 
 ## Context Files Reference
 
@@ -227,6 +244,7 @@ Developer prompt (natural language)
 | `context/devkit-common-reference.md` | Exhaustive `@creatio-devkit/common` public API reference for sdk imports, decorators, models, services, and handlers | Agent 4, SDK-related page/frontend tasks |
 | `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
 | `context/ui-reference.md` | Freedom UI page structure and controls | Agent 4 |
+| `context/viewconfig-reference.md` | Runtime `viewConfigDiff` editing patterns for FormPage/ListPage sync | Agent 4 |
 | `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |
 | `context/data-bindings-reference.md` | Binding logic and standard values | Agent 4 |
 
@@ -247,5 +265,5 @@ When developer provides a natural-language request (for example: “Generate an 
 3. Run Agent 1 in background → wait → verify `.creatio-env.json`.
 4. Run Agent 2 interactively → complete business checklist → persist full `request-spec.json` and approved `workflow-state.json`.
 5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts and synchronized schema context.
+6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state.
 7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.

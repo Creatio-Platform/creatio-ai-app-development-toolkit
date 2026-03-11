@@ -125,6 +125,20 @@ Configure visible columns in the DataTable:
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
+### Default ListPage Column Selection for New Apps
+
+Use this policy when a new app is generated or the main section entity gains approved business fields and the requirements do not provide a complete explicit ListPage column list.
+
+- Start from the explicit ListPage columns from the requirements if they exist.
+- Always include `Name`.
+- Always include every required non-inherited business field from the main entity.
+- Then append only short operational fields in this priority order until the default grid stays compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
+- Keep auto-selected default ListPage columns compact by capping them at 6 total visible columns unless required business fields exceed that number.
+- Exclude inherited audit/system fields unless explicitly requested.
+- Exclude long/rich/blob fields unless explicitly requested or required.
+- If the requirements are partial, keep the explicit columns and fill only the missing columns with this default policy.
+- When editing a live page, preserve existing DataGrid columns and order. Append only the missing resolved columns unless the requirements explicitly demand reordering.
+
 ### ListPage DataGrid Sorting via `page.update`
 
 This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through `page.update`.
@@ -394,9 +408,19 @@ Configures primary data source:
 
 ## Form Page Layout
 
+### Default FormPage Field Selection for New Apps
+
+Use this policy when a new app is generated or the main section entity gains approved business fields and the requirements do not provide a complete explicit FormPage field list.
+
+- Keep `Name` as the record title/header when the schema already contains it.
+- Include all approved non-inherited business fields from the main entity.
+- Required business fields must always be included.
+- If the requirements are partial, keep the explicit fields and fill only the missing fields with this default policy.
+- Preserve existing live fields and append only missing resolved fields unless the requirements explicitly demand removal or re-layout.
+
 ### Runtime Field Insertion via `page.update`
 
-Use the current page body from `page.get` as the source of truth. For live FormPage field sync, append new field controls to `SideAreaProfileContainer`.
+Use the current page body from `page.get` as the source of truth. For live FormPage field sync, append missing resolved field controls to `SideAreaProfileContainer`.
 
 ```json
 {
@@ -454,6 +478,8 @@ Rules:
 - For numeric fields, add `format.decimalPrecision` when the target column scale is known.
 - For date and time fields, set `pickerType` to match the underlying data value type.
 - Do not replace existing inserts; append only missing fields.
+- Keep `Name` as the header/title when it already exists and do not duplicate it.
+- Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
 
 ### Runtime Lookup Special Case

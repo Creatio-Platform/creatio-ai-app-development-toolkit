@@ -65,6 +65,8 @@ Extract from requirements + request spec:
 - whether there is a single primary record type that should stay on the template-created section entity or multiple distinct business objects
 - record title / display column for each entity and lookup
 - whether any title-like field is explicitly distinct from the record name or should be normalized to `Name`
+- whether list/form UX is explicit, partial, or missing and therefore requires resolved defaults
+- the resolved FormPage field set and ListPage column set for the main entity
 - assumptions
 - MCP `application.create` input block
 - entity schema changes that cannot be expressed by `application.create` template defaults
@@ -109,6 +111,7 @@ For each approved entity:
 - create non-template entities via `entity.create` only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
 - before any `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`; if `Name` already exists, reuse `Name` in UX and never plan an `addColumn` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
 - update existing template-created entities via `entity.update`
+- if the run creates a new app or extends the main entity with approved non-inherited business fields, emit explicit page-sync steps for the generated `FormPage` and `ListPage`
 
 Execution order for lookups with seed data:
 1. `entity.create_lookup` → create the lookup schema
@@ -135,7 +138,40 @@ Canonical context rule:
 - after every successful entity mutation, refresh context via `application.get_info`
 - treat `entity.create_lookup`, `entity.create`, and `entity.update` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
 
-### 4.1. Entity Tool Payload Validation
+### 4.1. Build Page Sync Plan
+
+When the plan creates a new app or extends the main section entity, page sync is mandatory.
+
+Resolve FormPage fields with this algorithm:
+- if requirements provide a complete explicit FormPage field list, use it as-is and add any missing required non-inherited business fields
+- if requirements are partial, keep the explicit fields and fill the missing fields with defaults
+- if requirements are missing, default to `Name` as header/title when present and include all approved non-inherited business fields from the main entity
+- required non-inherited business fields must never be omitted
+
+Resolve ListPage columns with this algorithm:
+- if requirements provide a complete explicit ListPage column list, use it as-is and add any missing required non-inherited business fields
+- if requirements are partial, keep the explicit columns and fill the missing columns with defaults
+- always include `Name`
+- always include every required non-inherited business field
+- then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount
+- cap auto-selected default ListPage columns at 6 total visible columns unless required business fields exceed that number
+- exclude inherited audit/system fields unless explicitly requested
+- exclude long/rich/blob fields unless explicitly requested or required
+
+For each required page, emit this execution sequence in `plan.md`:
+1. `page.list` to discover the generated page schema in the app package
+2. `page.get` to read the live JS body
+3. `page.update` with `dryRun: "true"` to validate the merged body
+4. `page.update` without dry run to persist the page
+5. `page.get` again to verify required FormPage fields and resolved ListPage columns are materialized
+
+ListPage plan rules:
+- preserve existing DataGrid columns and order unless the requirements explicitly demand reordering
+- append only the missing resolved columns
+- plan deterministic `DataGrid.columns` merge logic
+- plan sorting changes only when requirements explicitly call for supported sortable-column order
+
+### 4.2. Entity Tool Payload Validation
 
 When generating `entity.create_lookup`, `entity.create`, or `entity.update` payloads in the plan, follow these rules to prevent parameter name errors:
 
@@ -246,6 +282,7 @@ Create `plan.md` with sections:
 - Assumptions
 - MCP Payload (resolved and validated)
 - Schema Sync Plan
+- Page Sync Plan
 - Runtime Resolution Strategy (`iconId` and `iconBackground`)
 - Expected Output Artifacts
 - Validation Rules
@@ -263,6 +300,11 @@ Check:
 - every `entity.update` step uses explicit `operationsJson`
 - if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operationsJson` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
 - if the app has one primary record type, the plan does not create a second BaseEntity with the same business meaning as the template-created section entity
+- if the run creates or extends the main entity for a new app, the plan includes explicit `FormPage` and `ListPage` sync steps
+- resolved FormPage fields include every required non-inherited business field
+- resolved ListPage columns include `Name`, every required non-inherited business field, and only compact optional fields selected by the priority rules
+- auto-selected default ListPage columns are capped at 6 total visible columns unless required business fields exceed that number
+- every page sync sequence ends with `page.get` verification after persistence
 - the implementation phase is described as synchronous, not a detached/background write phase
 - every ListPage sorting step is classified as either plain column order or semantic order, and semantic order is not emitted as plain DataGrid sorting without an explicit technical carrier
 
@@ -276,7 +318,7 @@ Write final plan to:
 1. Keep plan deterministic and execution-ready.
 2. Do not create GUID matrices manually for all schemas.
 3. Do not include generated file bodies in plan.
-4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, and result/report artifact persistence.
+4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, ordered page sync calls, and result/report artifact persistence.
 
 ## Completion Criteria
 
