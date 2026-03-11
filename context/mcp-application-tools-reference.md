@@ -773,6 +773,7 @@ binding.create(
 ]
 ```
 **Defaults:** `isKey=true` for "Id" only, `isForceUpdate=false` for all
+**Important:** If `columnsJson` is provided, MCP uses only those descriptor columns. It does not merge omitted row columns back in from `rowsJson`.
 
 **Example: Lookup Seed Data**
 
@@ -792,7 +793,7 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
         "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
         "schemaName": "UsrTodoStatus",
         "bindingName": "UsrTodoStatus_Lookup",
-        "rowsJson": "[[{\"columnName\":\"Id\",\"value\":\"a1b2c3d4-e5f6-4789-a012-3456789abcde\"},{\"columnName\":\"Name\",\"value\":\"New\"}],[{\"columnName\":\"Id\",\"value\":\"b2c3d4e5-f6a7-4890-b123-456789abcdef\"},{\"columnName\":\"Name\",\"value\":\"In Progress\"}]]"
+        "rowsJson": "[[{\"columnName\":\"Id\",\"value\":\"<fresh-guid-1>\"},{\"columnName\":\"Name\",\"value\":\"New\"},{\"columnName\":\"Description\",\"value\":\"\"}],[{\"columnName\":\"Id\",\"value\":\"<fresh-guid-2>\"},{\"columnName\":\"Name\",\"value\":\"In Progress\"},{\"columnName\":\"Description\",\"value\":\"\"}]]"
       }
     }
   }' 2>&1 | tee /tmp/mcp-binding-create-raw.txt
@@ -810,7 +811,9 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 - `binding.create` requires `packageUId`
 - Newly created schemas from `entity.create` or `entity.create_lookup` are DB-first and should already be queryable through `binding.get_columns`
 - `outputPath` is optional and only writes server-side file copies; success response still stays `{"success": true}`
-- Lookup seed data typically needs only `Id` and `Name` columns
+- Generate a fresh GUID for each lookup seed row at execution time; do not reuse decorative placeholder GUIDs from docs in executable payloads
+- Lookup seed data should include `Id` and `Name`, and may include `Description`
+- For lookup seed bindings, prefer omitting `columnsJson` so MCP infers descriptor columns from `rowsJson`; if `columnsJson` is supplied, include every seeded descriptor column such as `Id`, `Name`, and `Description`
 
 ## Error Handling
 

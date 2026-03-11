@@ -32,6 +32,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - `binding.get_columns` returns column names, UIds, and data value types for deployed schemas
 - `binding.create` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately
 - `binding.create` requires `packageUId` and supports optional `outputPath` only when files must also be written on the server
+- If `columnsJson` is supplied to `binding.create`, it becomes the authoritative descriptor column list; omitted row columns are not inferred back from `rowsJson`
 
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)

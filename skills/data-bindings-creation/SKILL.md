@@ -39,11 +39,14 @@ From MCP and context:
 7. `filter.json` for standard bindings is `""`.
 8. For lookup seed data, create one row per seed value.
 9. `binding.create` requires `packageUId` and works only with deployed schema metadata. After `entity.create` or `entity.create_lookup`, use the persisted schema name and `binding.get_columns` if column discovery is needed.
+10. Generate a fresh GUID for every lookup seed row. Do not reuse decorative placeholder GUIDs from docs in executable payloads.
+11. For lookup seed bindings, prefer `rowsJson` with `Id`, `Name`, and optional `Description`, and omit `columnsJson` unless explicit descriptor flags are required.
+12. If `columnsJson` is supplied, it must include every row column that must be persisted in the descriptor.
 
 ## Typical MCP Flow
 
 1. Call `binding.get_columns` for deployed targets such as `SysModule` or `SysModuleEntity`.
-2. Build `rowsJson` and optional `columnsJson`.
+2. Build `rowsJson` and use `columnsJson` only when explicit descriptor flags are needed.
 3. Call `binding.create` with `packageUId`, `schemaName`, `bindingName`, and `rowsJson`.
 4. Validate `{"success": true}` and use `outputPath` only when server-side files are needed.
 
@@ -55,6 +58,8 @@ From MCP and context:
 - If `outputPath` is used, `descriptor.json`, `data.json`, and `filter.json` are written on the server
 - All references (entity/page/module ids) match the current app context
 - Lookup data contains all seed values
+- Lookup seed rows use fresh GUID values
+- If `columnsJson` is present, descriptor columns cover the seeded lookup columns that must persist
 
 ## Notes
 

@@ -25,7 +25,7 @@ Response shape:
 [
   {
     "name": "Id",
-    "uId": "11111111-1111-1111-1111-111111111111",
+    "uId": "<column-uid>",
     "dataValueTypeName": "Guid",
     "dataValueTypeUId": "00000000-0000-0000-0000-000000000000",
     "isRequired": true,
@@ -43,7 +43,7 @@ Request fields:
 - `schemaName` — target schema such as `SysModule`, `SysModuleEntity`, or a lookup entity
 - `bindingName` — output folder name such as `SysModule_UsrTodoTask`
 - `rowsJson` — JSON array of rows, each row being an array of `{columnName, value, displayValue?}`
-- `columnsJson` — optional explicit descriptor columns `{columnName, isKey?, isForceUpdate?}`
+- `columnsJson` — optional explicit descriptor columns `{columnName, isKey?, isForceUpdate?}`; if provided, only these columns are written to the descriptor
 - `installType` — optional descriptor install type, default `0`
 - `outputPath` — optional server filesystem destination
 
@@ -126,12 +126,12 @@ Example `rowsJson`:
 ```json
 [
   [
-    {"columnName": "Id", "value": "11111111-0000-0000-0000-000000000001"},
+    {"columnName": "Id", "value": "<fresh-guid-1>"},
     {"columnName": "Name", "value": "New"},
     {"columnName": "Description", "value": ""}
   ],
   [
-    {"columnName": "Id", "value": "22222222-0000-0000-0000-000000000002"},
+    {"columnName": "Id", "value": "<fresh-guid-2>"},
     {"columnName": "Name", "value": "In Progress"},
     {"columnName": "Description", "value": ""}
   ]
@@ -155,3 +155,5 @@ Example `rowsJson`:
 - Treat `packageUId + bindingName` as the binding identity for create/update flow.
 - Leave `filter.json` as `""` for standard SysModule, SysModuleEntity, and lookup seed bindings.
 - Treat `outputPath` as optional. The primary effect is DB persistence plus immediate install; server-side files are only a side effect.
+- Generate fresh GUID values for lookup seed rows at execution time. Placeholder GUIDs in docs show format only.
+- For lookup seed bindings, prefer omitting `columnsJson` so MCP infers `Id`, `Name`, and optional `Description` from `rowsJson`. If `columnsJson` is supplied, include every seeded descriptor column.

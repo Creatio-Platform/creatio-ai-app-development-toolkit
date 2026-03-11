@@ -123,6 +123,8 @@ Persist the compact context from MCP and set `contractType=short`.
 - `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
 - `binding.create` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. `outputPath` only writes optional server-side file copies.
 - Schemas created earlier in the same flow are DB-first and should be queried through `binding.get_columns`; do not use raw mode.
+- For lookup seed bindings, generate a fresh GUID for every row, include `Name`, and include `Description` when it must be persisted with the lookup value.
+- If `columnsJson` is supplied to `binding.create`, MCP uses only those descriptor columns. Do not pass partial `columnsJson` for lookup seed bindings.
 
 ### Parameter Validation Checklist
 
@@ -147,6 +149,8 @@ Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.
 5. ✅ Each row in `rowsJson` is array of `{columnName, value}` objects
 6. ✅ Optional `columnsJson` with `{columnName, isKey?, isForceUpdate?}` structure
 7. ✅ Target schema is already materialized in DB and queryable through `binding.get_columns`
+8. ✅ Lookup seed rows use fresh GUID values, not decorative placeholders copied from docs
+9. ✅ If `columnsJson` is present, it covers every row column that must exist in the descriptor
 
 **Pre-execution validation script:**
 
@@ -507,6 +511,8 @@ curl -s "$MCP_URL" \
 Example for binding.create:
 
 ```bash
+STATUS_NEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+STATUS_IN_PROGRESS_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
 curl -s "$MCP_URL" \
   -u Supervisor:Supervisor \
   -H "Content-Type: application/json" \
@@ -522,7 +528,7 @@ curl -s "$MCP_URL" \
         \"packageUId\": \"$PACKAGE_UID\",
         \"schemaName\": \"UsrEventStatus\",
         \"bindingName\": \"UsrEventStatus_Lookup\",
-        \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"}],[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"In Progress\\\"}]]\"
+        \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_NEW_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}],[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_IN_PROGRESS_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"In Progress\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}]]\"
       }
     }
   }" 2>&1 | tee /tmp/mcp-binding-raw.txt

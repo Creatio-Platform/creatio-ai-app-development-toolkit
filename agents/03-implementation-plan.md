@@ -146,6 +146,8 @@ When generating `entity.create_lookup`, `entity.create`, or `entity.update` payl
 4. ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
 5. ✅ ALWAYS use `schemaName` for entity reference
 6. ✅ `rowsJson` must be array of rows: `[[{columnName, value}, ...], ...]`
+7. ✅ For lookup seed data, each row must include a fresh `Id` GUID and `Name`; include `Description` when the lookup seed should persist it
+8. ✅ If `columnsJson` is provided, it must include every row column that must be persisted in the descriptor; otherwise omit `columnsJson` and let MCP infer columns from `rowsJson`
 
 **Correct Payload Templates:**
 
@@ -178,14 +180,14 @@ curl ... -d "{
 
 **binding.create:**
 ```bash
+STATUS_NEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
 curl ... -d "{
   \"name\": \"binding.create\",
   \"arguments\": {
     \"packageUId\": \"$PACKAGE_UID\",             # ✅ REQUIRED from application.create
     \"schemaName\": \"UsrStatusLookup\",        # ✅ Entity schema name
     \"bindingName\": \"UsrStatusLookup_Seed\",  # ✅ NOT dataName or bindingFolder
-    \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"}]]\",  # ✅ NOT dataJson
-    \"columnsJson\": \"[{\\\"columnName\\\":\\\"Id\\\",\\\"isKey\\\":true}]\",  # ✅ Optional descriptor
+    \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_NEW_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}]]\",  # ✅ NOT dataJson
     \"installType\": \"0\"                      # ✅ Optional, default 0
   }
 }"
@@ -196,9 +198,12 @@ curl ... -d "{
 - ❌ NEVER use `dataJson` → always use `rowsJson`
 - ❌ NEVER use `packageName` → always use `packageUId`
 - ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
+- ❌ NEVER use decorative placeholder GUIDs such as `11111111-...` in executable payloads; generate fresh GUIDs at runtime
+- ❌ NEVER pass partial `columnsJson`; if `columnsJson` is supplied, MCP uses only those descriptor columns
 - ✅ Success response is only `{\"success\": true}`
 - ✅ `rowsJson` format: array of rows, each row is array of `{columnName, value}` objects
-- ✅ Example: `[[{"columnName":"Id","value":"guid-1"},{"columnName":"Name","value":"New"}]]`
+- ✅ For lookup seed bindings, prefer omitting `columnsJson` so MCP infers `Id`, `Name`, and optional `Description` from `rowsJson`
+- ✅ Example: `[[{"columnName":"Id","value":"<fresh-guid>"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]`
 
 **UId Variable Strategy:**
 

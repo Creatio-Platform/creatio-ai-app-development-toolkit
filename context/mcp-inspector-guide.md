@@ -313,7 +313,7 @@ Tool Result: Success
    - `bindingName`: `UsrTestLookup_Lookup`
    - `rowsJson`:
      ```json
-     [[{"columnName":"Id","value":"11111111-0000-0000-0000-000000000001"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]
+     [[{"columnName":"Id","value":"<fresh-guid>"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]
      ```
 3. Опціонально можна вказати `outputPath`, якщо потрібні `descriptor.json`, `data.json` і `filter.json` на сервері.
 4. Натисніть **Run Tool**
