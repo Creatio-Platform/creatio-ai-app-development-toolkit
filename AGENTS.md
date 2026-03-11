@@ -156,8 +156,8 @@ Developer prompt (natural language)
    - Step C: prepare and validate `application.create` payload from `plan.md`
    - Step D: execute `tools/call` for `application.create` via curl with Basic Auth + Session-Id headers
    - Step E: parse SSE response (grep data: | sed | jq) and validate `short` contract
-   - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext
-   - Step G: if plan contains approved schema changes, execute ordered tool calls (create_lookup → binding.create for seed data → create → update)
+   - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext and identify the template-created section entity returned by `application.create`
+   - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `entity.update`; use `entity.create` only for additional distinct business objects
    - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
    - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
    - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
@@ -179,6 +179,10 @@ Developer prompt (natural language)
    - Before updating any existing or template-created entity, inspect the refreshed schema snapshot. If `Name` already exists, reuse it as the record title across requirements, pages, and entity sync payloads.
    - Do not add duplicate title-like columns such as `UsrName`, `UsrTitle`, or `UsrCaption` when `Name` already exists, unless the developer explicitly requires a separate business field distinct from the record name.
    - Treat it as a validation failure when a plan says `Name` is the record title but still adds or references duplicate title-like columns.
+19. Main-entity guardrails:
+   - For new apps created through `application.create`, the template-created section entity is the canonical main entity for the app's primary records unless the requirements explicitly describe a different existing schema or multiple distinct business objects.
+   - If requirements describe one primary record type, Agent 2/3/4 must map generic nouns and synonyms to that template-created entity instead of inventing a second BaseEntity with a different name.
+   - Treat it as a validation failure when a new-app plan creates a second BaseEntity for the same records that the template-created section entity already represents.
 
 ## Global Rules
 
@@ -200,6 +204,8 @@ Developer prompt (natural language)
    - `output/<AppName>/mcp-application-report.md`
 15. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 16. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
+17. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
+18. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
 
 ## Context Files Reference
 

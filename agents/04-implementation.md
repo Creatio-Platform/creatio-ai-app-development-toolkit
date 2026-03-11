@@ -107,7 +107,8 @@ Persist the compact context from MCP and set `contractType=short`.
 - For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or duplicate title-like columns as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
 - After every `entity.create_lookup`, validate the tool response contains inherited `Name` in the persisted schema snapshot. If `Name` is missing, stop with blocker instead of assuming the lookup is usable.
 - After creating each lookup entity that has seed values defined in the plan, call `binding.create` to populate it with seed rows before proceeding to the next entity.
-- Use `entity.create` only for new entities not already created by the application template.
+- For new-app flows, inspect the entity list returned by `application.create` and treat the template-created section entity as the canonical main entity for the app's primary records.
+- Use `entity.create` only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
 - Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
@@ -246,6 +247,7 @@ Always verify against C# source files:
 - each lookup creation response confirms inherited `Name` exists before seed data is installed
 - each successful entity tool call is followed by a successful `application.get_info` refresh
 - no duplicate title-like columns are added when the refreshed main entity snapshot already contains `Name`
+- no second BaseEntity is created for the same primary record type already covered by the template-created section entity
 - result and report are persisted
 - final report matches the materialized entity names and implemented artifacts in `mcp-application-result.json`
 
@@ -255,6 +257,7 @@ Always verify against C# source files:
 - If required application tools are missing in `tools/list`, stop with blocker.
 - If any tool returns `success=false`, stop with blocker and surface `error.message`.
 - If `application.create` returns an existing-app collision and the plan does not explicitly allow update flow, stop with blocker.
+- If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing `entity.create`.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
 - If `application.get_info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
 - Never synthesize success for `binding.create`; if the response cannot be parsed or does not contain `success=true`, stop with blocker.

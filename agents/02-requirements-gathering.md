@@ -32,6 +32,7 @@ Read:
 From developer's free-form prompt, derive:
 - app intent and expected section scope
 - candidate entities/lookups/pages
+- whether the app has one primary record type or multiple distinct business objects
 - potential lifecycle/status model
 - record title semantics and whether a separate business title field is truly needed
 - lookup display semantics
@@ -138,6 +139,10 @@ Write requirements document in this format:
 
 ### <EntityName> (extends BaseEntity)
 
+For a new app with one primary record collection:
+- Default `<EntityName>` to the template-created app section entity whose schema name matches `code`.
+- Do not replace that entity with a synonymous noun from the prompt unless the developer explicitly describes a separate business object.
+
 Primary display field:
 - Reuse inherited `Name` when the current/template-created schema already has it.
 - Add a separate title field only if the developer explicitly distinguishes it from the record name or the schema snapshot proves `Name` is absent.
@@ -225,10 +230,12 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 6. `BaseLookup` already has `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so do not re-add `Name`, `Description`, or any duplicate title-like column.
 7. If the current or template-created entity already contains `Name`, use `Name` as the primary display field and never add `UsrName`, `UsrTitle`, or `UsrCaption`.
 8. For template-created app section entities, treat a generic business “title/name of record” requirement as `Name` by default. Introduce `UsrTitle` only when the developer explicitly needs a separate field from the record name.
-9. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
-10. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
-11. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
-12. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
+9. For a new app with one primary record type, use the template-created section entity whose schema name matches the app code as the canonical main entity in requirements. Do not invent a parallel entity such as `UsrTodoTask` beside `UsrTodoList` unless it is a separate business object with its own relationships.
+10. Additional BaseEntity schemas are allowed only when the requirements explicitly describe a distinct business object beyond the main section records.
+11. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
+12. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
+13. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
+14. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
 
 ## Completion Criteria
 

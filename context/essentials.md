@@ -15,6 +15,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - Discovery path for existing apps is `application.get_list`
 - Canonical DB refresh path is `application.get_info`
 - Tool creates application artifacts directly in Creatio DB (PostgreSQL)
+- For new Freedom UI apps, `application.create` also materializes the initial section entity whose schema name normally matches the app code
 - Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) execute CREATE TABLE and ALTER TABLE directly
 - Schemas are immediately runtime-accessible — no compilation or deployment step required
 - Tool returns short compact context JSON (`success`, `app`, `packages` dict, `error`)
@@ -144,14 +145,16 @@ Primary generation flow:
 2. Validate tool availability (`tools/list`)
 3. Build and execute `application.create` payload
 4. Parse SSE response and validate short contract (`success`, `app`, `packages`)
-5. Persist result to `output/<AppName>/mcp-application-result.json`
-6. If approved schema changes exist:
+5. Identify the template-created section entity from the response and treat it as the canonical main entity for single-record-type apps
+6. Persist result to `output/<AppName>/mcp-application-result.json`
+7. If approved schema changes exist:
    - Execute ordered entity sync (`entity.create_lookup` → `entity.create` → `entity.update`)
    - After EACH mutation, refresh context with `application.get_info`
    - Overwrite `mcp-application-result.json` with updated state
-7. If explicit data bindings required, use `binding.get_columns` and `binding.create`
+8. If explicit data bindings required, use `binding.get_columns` and `binding.create`
 
 **Critical pattern:** Always call `application.get_info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
+**Critical pattern:** Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity with `entity.update` unless requirements define an additional distinct business object.
 
 ### Working with MCP Tools
 
@@ -211,6 +214,7 @@ Validation notes:
 - `clientTypeId` must be valid GUID if provided
 - this flow does not support `useAIContentGeneration=true`
 - tool must exist in `tools/list` before execution
+- for a new app with one primary record type, the template-created entity named like `code` is the default main entity to update; do not plan a parallel entity for the same records
 
 ### MCP Request Example
 

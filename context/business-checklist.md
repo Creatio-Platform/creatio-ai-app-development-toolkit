@@ -24,6 +24,7 @@ Required:
 
 Required:
 - main entities
+- whether the app has one primary record type or several distinct business objects
 - lookup entities for enum-like fields
 - key relationships
 - record title / primary display field for each entity and lookup
@@ -88,4 +89,5 @@ All other technical values should use deterministic defaults and be documented l
 
 - For `BaseLookup`, default the display field to inherited `Name`.
 - For template-created app section entities, default the record title to `Name` when the schema snapshot already contains it.
+- For a new app with one primary record type, default that record type to the template-created section entity whose schema name matches the app code. Do not invent a second entity name for the same records.
 - Add a separate title-like column such as `UsrTitle` only when the developer explicitly needs a business field that is different from the record name.

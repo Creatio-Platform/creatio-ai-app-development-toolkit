@@ -209,6 +209,11 @@ grep 'data: ' /tmp/mcp-app-create-raw.txt | \
 }
 ```
 
+**Canonical main-entity rule:**
+- For a new Freedom UI app, `application.create` materializes the initial section entity whose schema name normally matches the app code, for example `code=UsrTodoList` → entity `UsrTodoList`.
+- If the app has one primary record type, treat that template-created entity as the canonical main entity and extend it via `entity.update`.
+- Use `entity.create` only for additional business objects that are distinct from the template-created section records. Do not create a synonym entity such as `UsrTodoTask` beside `UsrTodoList` for the same records.
+
 **Initialize Canonical Context File:**
 
 ```bash
@@ -624,6 +629,7 @@ entity.update(
 - `packageUId` — REQUIRED, must be GUID not package name
 - `schemaName` — Optional but recommended for clarity (e.g., "UsrTodoList")
 - All other parameters optional with defaults
+- For new-app flows, the default target for `entity.update` is the template-created section entity returned by `application.create`
 - Before adding a title field, inspect the current entity snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse it and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly call for a separate business field.
 
 **Critical:** `operationsJson` must use `{operation, column}` structure:

@@ -56,6 +56,7 @@ Extract from requirements + request spec:
 - app overview and locked business decisions
 - whether the flow creates a new app or updates an existing app
 - entities/lookups/pages/rules
+- whether there is a single primary record type that should stay on the template-created section entity or multiple distinct business objects
 - record title / display column for each entity and lookup
 - whether any title-like field is explicitly distinct from the record name or should be normalized to `Name`
 - assumptions
@@ -90,6 +91,8 @@ Resolution rules:
 
 For each approved entity:
 - determine whether `application.create` template output is sufficient
+- for new-app flows, treat the template-created section entity returned by `application.create` as the canonical main entity for the app's primary records
+- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns through `entity.update`
 - if extra custom columns are required, prepare explicit sync steps
 - if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
 - if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
@@ -97,7 +100,7 @@ For each approved entity:
 - for every lookup entity, rely on inherited `Name` as the display value, mark it as the required `PrimaryDisplayColumn`, and never plan `Name` or duplicate title-like columns as custom columns
 - after every `entity.create_lookup` step, require response validation that inherited `Name` is present in the persisted schema snapshot before proceeding
 - for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `binding.create` step immediately after the corresponding `entity.create_lookup` call
-- create non-template entities via `entity.create` when needed
+- create non-template entities via `entity.create` only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
 - before any `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`; if `Name` already exists, reuse `Name` in UX and never plan an `addColumn` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
 - update existing template-created entities via `entity.update`
 
@@ -238,6 +241,7 @@ Check:
 - lookup creation steps include validation that inherited `Name` exists in the persisted schema snapshot
 - every `entity.update` step uses explicit `operationsJson`
 - if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operationsJson` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
+- if the app has one primary record type, the plan does not create a second BaseEntity with the same business meaning as the template-created section entity
 - the implementation phase is described as synchronous, not a detached/background write phase
 
 ### 7. Save `plan.md`
