@@ -125,6 +125,156 @@ Configure visible columns in the DataTable:
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
+### ListPage DataGrid Sorting via `page.update`
+
+This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through `page.update`.
+
+The runtime contract is centered on the DataGrid collection attribute, not on the visual `sorting` property stored inside the DataGrid node:
+
+- The DataGrid `items` binding points to a collection attribute such as `Items`.
+- The actual collection attribute name comes from the live DataGrid `items` binding and is not always literally `Items`.
+- That collection attribute remains bound to the primary data source through `Items.modelConfig.path = "PDS"`.
+- `Items.modelConfig.sortingConfig.attributeName` points to a sibling sorting attribute such as `ItemsSorting`.
+- The sorting attribute stores an array of sort options.
+- Each sort option uses entity column names, not attribute keys.
+- Valid sort option shape:
+
+```json
+{
+	"columnName": "CreatedOn",
+	"direction": "desc",
+	"visible": true
+}
+```
+
+- `columnName` must be the entity column name such as `CreatedOn`, `Name`, or `UsrDueDate`.
+- `direction` supports only `asc`, `desc`, and `none`.
+- `visible` is optional.
+- `sortingConfig.default` is a valid way to define default data-source sorting for the ListPage collection.
+
+The frontend preprocessor can auto-inject DataGrid view properties from this metadata:
+
+- `viewConfig.sorting`
+- `viewConfig.sortingChange`
+
+When editing raw page bodies through `page.update`, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
+
+#### Minimal Safe Example
+
+Use this pattern when you need deterministic default sorting and the live page does not already store an explicit sorting attribute change block.
+
+```json
+[
+	{
+		"operation": "merge",
+		"path": ["attributes"],
+		"values": {
+			"Items": {
+				"isCollection": true,
+				"modelConfig": {
+					"path": "PDS",
+					"pagingConfig": {
+						"rowCount": 30
+					},
+					"sortingConfig": {
+						"attributeName": "ItemsSorting",
+						"default": [
+							{
+								"columnName": "CreatedOn",
+								"direction": "desc"
+							}
+						]
+					}
+				}
+			},
+			"ItemsSorting": {}
+		}
+	}
+]
+```
+
+#### Expanded Example with Explicit Sorting Attribute Behavior
+
+Use this pattern when the live page body already materializes a sibling sorting attribute and its reload behavior, and the edit must preserve that explicit shape.
+
+```json
+[
+	{
+		"operation": "merge",
+		"path": ["attributes"],
+		"values": {
+			"Items": {
+				"isCollection": true,
+				"viewModelConfig": {
+					"attributes": {
+						"PDS_Id": {
+							"modelConfig": {
+								"path": "PDS.Id"
+							}
+						},
+						"PDS_Name": {
+							"modelConfig": {
+								"path": "PDS.Name"
+							}
+						},
+						"PDS_UsrDueDate": {
+							"modelConfig": {
+								"path": "PDS.UsrDueDate"
+							}
+						}
+					}
+				},
+				"modelConfig": {
+					"path": "PDS",
+					"pagingConfig": {
+						"rowCount": 30
+					},
+					"sortingConfig": {
+						"attributeName": "ItemsSorting",
+						"default": [
+							{
+								"columnName": "UsrDueDate",
+								"direction": "asc"
+							},
+							{
+								"columnName": "CreatedOn",
+								"direction": "desc"
+							}
+						]
+					}
+				}
+			},
+			"ItemsSorting": {
+				"change": {
+					"request": "crt.LoadDataRequest",
+					"params": {
+						"dataSourceName": "PDS",
+						"parameters": [],
+						"config": {
+							"loadType": "reload"
+						}
+					}
+				}
+			}
+		}
+	}
+]
+```
+
+#### Anti-patterns
+
+- Do not reuse FormPage lookup `*_List` sorting examples as the recipe for ListPage DataGrid row sorting.
+- Do not assume sorting by a lookup column guarantees business lifecycle order.
+- Do not change `Items.modelConfig.path` or paging config unless the task explicitly requires a data-source change.
+- Do not put attribute keys such as `PDS_UsrDueDate_ab12cd3` into `columnName`; use the entity column name `UsrDueDate`.
+- Do not treat a manually added DataGrid `sorting` property as the primary source of truth when the collection metadata already defines sorting.
+
+#### Limitations
+
+- Plain sortable-column ordering such as `CreatedOn desc` or `UsrDueDate asc` is supported by this contract.
+- Semantic order such as "Open first, Done last" is not considered implemented by plain sorting config unless the schema exposes an explicit sortable rank or the page adds separate runtime logic.
+- Agents must not silently replace semantic ordering requirements with heuristics such as lookup sort direction.
+
 ### Add Button Configuration
 
 ```json
@@ -160,9 +310,11 @@ Binds page attributes to data source:
 ]
 ```
 
-### Runtime Binding Pattern for Live Form Pages
+### Runtime Binding Pattern for Live Form Page Lookup Lists
 
 When editing an existing FormPage via `page.update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders.
+
+This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting via page.update` above.
 
 ```json
 {

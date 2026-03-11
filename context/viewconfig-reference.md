@@ -3,6 +3,8 @@
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
 Used by coding agents with `page.update`.
 
+For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
+
 ---
 
 ## Operations

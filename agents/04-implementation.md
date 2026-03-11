@@ -592,6 +592,9 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
    b. Modify the raw body directly — update multiple sections between their markers
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
    d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
+   d1. If the page must change ListPage default sorting, use the canonical `ListPage DataGrid Sorting via page.update` contract from `context/ui-reference.md`
+   d2. Read the live DataGrid `items` binding and identify the real collection attribute before changing sorting metadata
+   d3. Only implement plain sortable-column order through DataGrid sorting metadata; if the requirement is semantic business order without an explicit sort key or approved runtime logic, stop with blocker instead of improvising
    e. For runtime FormPage field sync, append missing field inserts to `SideAreaProfileContainer` and continue `row` and `index` from the current maximum values
    f. Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field
    g. For lookup fields, add the `crt.ComboBox` insert, the `*_List` collection attribute, and the child `crt.ComboboxSearchTextAction` insert
@@ -629,6 +632,14 @@ If `plan.md` contains page customization requirements (handlers, viewConfigDiff,
 - Match `crt.DateTimePicker.pickerType` to the real field kind and add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
 - Treat `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` as preprocessor-backed controls; avoid manually duplicating generated request wiring such as ComboBox load handlers or ImageInput upload/clear handlers unless the live page body already contains explicit versions
 - `crt.FileInput`, `crt.EncryptedInput`, and `crt.Slider` are supported, but use them only when the approved plan explicitly calls for that UX instead of the default field mapping
+
+**ListPage sorting rules:**
+- Use `context/ui-reference.md` as the canonical source of truth for DataGrid sorting metadata
+- Read the live page body and identify the actual DataGrid collection attribute instead of assuming it is always named `Items`
+- Keep the collection `modelConfig.path` bound to the live data source such as `PDS` unless the task explicitly changes the data source
+- Use entity column names in sort options, not attribute keys
+- Treat explicit DataGrid `sorting` and `sortingChange` view properties as secondary to the collection metadata contract
+- Stop with blocker if the requirement describes semantic business order without an explicit technical sort key or separate approved runtime logic
 
 **Handler generation rules:**
 - Map business intents to request types using `handlers-reference.md`

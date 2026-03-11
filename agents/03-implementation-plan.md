@@ -50,6 +50,12 @@ Parse `workflow-state.json` and verify:
 
 If any check fails, stop with blocker and return missing checklist items.
 
+When requirements mention ListPage sorting, classify them before planning:
+- plain column order such as `CreatedOn desc` or `UsrDueDate asc`
+- semantic or business order such as "Open first, Done last"
+
+Only the first category is plan-safe as pure `page.update` sorting metadata. The second category requires an explicit technical sort key, approved additional runtime logic, or a blocker note.
+
 ### 2. Parse Inputs
 
 Extract from requirements + request spec:
@@ -248,6 +254,7 @@ Check:
 - if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operationsJson` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
 - if the app has one primary record type, the plan does not create a second BaseEntity with the same business meaning as the template-created section entity
 - the implementation phase is described as synchronous, not a detached/background write phase
+- every ListPage sorting step is classified as either plain column order or semantic order, and semantic order is not emitted as plain DataGrid sorting without an explicit technical carrier
 
 ### 7. Save `plan.md`
 

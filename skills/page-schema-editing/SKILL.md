@@ -162,6 +162,21 @@ Special cases from live schema:
 - Add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
 - `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` are preprocessor-backed; avoid hand-writing auto-generated request wiring unless the page body already persists it
 
+### Step 3b: Adjust ListPage Sorting
+
+Use this workflow when the task is to change default row sorting on a live ListPage:
+
+1. Read the canonical section `ListPage DataGrid Sorting via page.update` in `context/ui-reference.md`
+2. Parse the live `SCHEMA_VIEW_MODEL_CONFIG_DIFF` and identify the DataGrid collection attribute bound through the grid `items` property
+3. Inspect that collection attribute's `modelConfig.sortingConfig`
+4. Keep the live data-source binding path such as `PDS` unless the task explicitly changes the data source
+5. Use entity column names in sort options such as `CreatedOn` or `UsrDueDate`
+6. Add or update `sortingConfig.default` when the requirement is plain column ordering
+7. Preserve an explicit sibling sorting attribute only when the live page body already materializes it or the task requires deterministic raw-body output
+8. Run `page.update(..., dryRun: "true")` before save
+
+Do not reuse FormPage lookup `*_List` sorting as the pattern for ListPage DataGrid row sorting. If the requested order is semantic or business-specific rather than plain column ordering, stop and treat it as a blocker unless there is an explicit technical sort key or separate runtime logic in scope.
+
 ### Step 4: Validate with Dry Run
 
 ```
@@ -199,6 +214,7 @@ page.update(
 12. **Use `request.$context.executeRequest(...)` for secondary programmatic requests and `setValue(...)` / `setAttributePropertyValue(...)` for runtime attribute state changes**
 13. **Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body via `page.update`**
 14. **Treat `converters` and `validators` as conservative object sections, not the default place for new validation logic without live schema evidence**
+15. **For ListPage sorting, use the canonical contract in `context/ui-reference.md` and do not infer business order from lookup sorting direction**
 
 ## Validation Checklist
 
@@ -212,6 +228,7 @@ page.update(
 - [ ] Every inserted field has a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute
 - [ ] Runtime FormPage field sync appends to `SideAreaProfileContainer`
 - [ ] Lookup sync includes `*_List` binding and child `crt.ComboboxSearchTextAction`
+- [ ] ListPage sorting changes follow the canonical `context/ui-reference.md` contract instead of FormPage lookup-list patterns
 - [ ] Numeric/date controls keep scale and picker-type metadata when the column type requires it
 - [ ] Preprocessor-backed controls are not bloated with duplicate auto-generated wiring
 - [ ] Programmatic follow-up requests use `request.$context.executeRequest(...)` when needed
