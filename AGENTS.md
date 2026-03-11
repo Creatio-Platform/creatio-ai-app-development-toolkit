@@ -81,6 +81,12 @@ Decision rules:
 - if an answer is ambiguous, rephrase and request concrete values
 - if developer says “start” before checklist completion, show missing items and ask only for missing fields
 
+Default handling policy:
+- every approved default must be classified as either `schema default` or `ui default`
+- `schema default` means the backend/entity schema contract sets the default value
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
+
 ## Source of Truth
 
 The canonical references for generation are:
@@ -207,6 +213,9 @@ Developer prompt (natural language)
 16. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
 17. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
 18. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
+19. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
+20. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults.
+21. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
 
 ## Context Files Reference
 

@@ -631,6 +631,10 @@ entity.update(
 - All other parameters optional with defaults
 - For new-app flows, the default target for `entity.update` is the template-created section entity returned by `application.create`
 - Before adding a title field, inspect the current entity snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse it and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly call for a separate business field.
+- `schema default` means the backend/entity schema contract sets the default through `defaultValueSource` and `defaultValue`.
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
+- For lookup-backed `schema default`, `defaultValue` must be the seeded row GUID, not the lookup caption.
 
 **Critical:** `operationsJson` must use `{operation, column}` structure:
 
@@ -641,10 +645,34 @@ entity.update(
     "name": "UsrField",
     "caption": "Field",
     "dataValueTypeName": "ShortText",
-    "isRequired": true,
-    "size": 250
+    "isRequired": true
   }
 }]
+```
+
+**Default-capable column payloads:**
+
+```json
+[
+  {
+    "operation": "updateColumn",
+    "column": {
+      "name": "UsrStatus",
+      "caption": "Status",
+      "dataValueTypeName": "Lookup",
+      "referenceSchemaName": "UsrEventStatus",
+      "defaultValueSource": "Const",
+      "defaultValue": "11111111-2222-3333-4444-555555555555"
+    }
+  },
+  {
+    "operation": "updateColumn",
+    "column": {
+      "name": "UsrStatus",
+      "defaultValueSource": "None"
+    }
+  }
+]
 ```
 
 **Example:**

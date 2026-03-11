@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 try:
@@ -21,6 +22,7 @@ KIND_PRIORITY = {
     "entity": 3
 }
 CUSTOM_COLUMN_PREFIX = "Usr"
+SUPPORTED_DEFAULT_VALUE_SOURCES = {"Const", "None"}
 
 
 class WorkflowError(RuntimeError):
@@ -259,6 +261,45 @@ def validate_lookup_reference(column, available_names):
         raise WorkflowError(f"Lookup reference {reference_name} is not available in current or edited context")
 
 
+def is_lookup_column(column):
+    return column.get("referenceSchemaName") or column.get("dataValueTypeName") == "Lookup"
+
+
+def is_guid_string(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
+def validate_column_default(column):
+    has_default_value_source = column.get("defaultValueSource") not in (None, "")
+    has_default_value = "defaultValue" in column
+    column_name = column["name"]
+    if has_default_value and not has_default_value_source:
+        raise WorkflowError(f"Column {column_name} requires defaultValueSource when defaultValue is specified")
+    if not has_default_value_source:
+        return
+    default_value_source = column["defaultValueSource"]
+    if default_value_source not in SUPPORTED_DEFAULT_VALUE_SOURCES:
+        raise WorkflowError(
+            f"Column {column_name} supports only defaultValueSource values: Const, None"
+        )
+    if default_value_source == "None":
+        if has_default_value and column["defaultValue"] not in (None, ""):
+            raise WorkflowError(f"Column {column_name} cannot set defaultValue when defaultValueSource is None")
+        return
+    if not has_default_value:
+        raise WorkflowError(f"Column {column_name} requires defaultValue when defaultValueSource is Const")
+    if is_lookup_column(column) and not is_guid_string(column["defaultValue"]):
+        raise WorkflowError(
+            f"Lookup column {column_name} requires defaultValue as a seeded row GUID, not a caption"
+        )
+
+
 def build_column_map(columns):
     return {column["name"]: normalize_column(column) for column in columns}
 
@@ -290,6 +331,7 @@ def build_column_operations(current_entity, edited_entity, available_names):
     operations = []
     for name in sorted(edited_columns):
         column = edited_columns[name]
+        validate_column_default(column)
         validate_lookup_reference(column, available_names)
         if name not in current_columns:
             operations.append({
@@ -321,6 +363,8 @@ def build_column_operations(current_entity, edited_entity, available_names):
 def build_create_action(entity):
     tool_name = "entity.create_lookup" if entity.get("kind") == "lookup" else "entity.create"
     filtered_columns = filter_mutable_columns(entity.get("columns", []))
+    for column in filtered_columns:
+        validate_column_default(column)
     if tool_name == "entity.create_lookup" and any(column["name"] == "UsrName" for column in filtered_columns):
         raise WorkflowError(
             f"Lookup {entity['name']} must use inherited Name as PrimaryDisplayColumn; do not add UsrName"

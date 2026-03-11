@@ -237,6 +237,13 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 13. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
 14. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
 
+## Default Classification
+
+- `schema default` means the entity schema or backend contract enforces the initial value.
+- `ui default` means the page layer applies the value through `crt.CreateRecordRequest.defaultValues` or a handler.
+- Every requirement phrased as `defaults to X` must be captured with one of those two labels before handoff to Agent 3.
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
+
 ## Completion Criteria
 
 ✅ Developer approved in natural language  

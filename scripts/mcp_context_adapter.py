@@ -16,6 +16,20 @@ class ContextError(ValueError):
     pass
 
 
+def first_text_value(payload, *keys):
+    for key in keys:
+        if key in payload and payload[key] not in (None, ""):
+            return payload[key]
+    return None
+
+
+def get_present_value(payload, *keys):
+    for key in keys:
+        if key in payload:
+            return True, payload[key]
+    return False, None
+
+
 def infer_contract_type(document):
     contract_type = document.get("contractType")
     if contract_type:
@@ -36,23 +50,50 @@ def infer_contract_type(document):
 def normalize_column(column, name=None):
     if not isinstance(column, dict):
         raise ContextError("Column must be an object")
-    name = name or column.get("name") or column.get("Name")
+    name = name or first_text_value(column, "name", "Name")
     if not name:
         raise ContextError("Column name is required")
     normalized = {
         "name": name,
-        "caption": column.get("caption") or column.get("Caption") or name,
-        "dataValueTypeName": column.get("dataValueTypeName") or column.get("DataValueTypeName") or column.get("dataValueType") or column.get("DataValueType"),
-        "referenceSchemaName": column.get("referenceSchemaName") or column.get("ReferenceSchemaName") or column.get("referenceSchema") or column.get("ReferenceSchema")
+        "caption": first_text_value(column, "caption", "Caption") or name
     }
-    u_id = column.get("uId") or column.get("UId")
+    data_value_type_name = first_text_value(
+        column,
+        "dataValueTypeName",
+        "DataValueTypeName",
+        "dataValueType",
+        "DataValueType"
+    )
+    reference_schema_name = first_text_value(
+        column,
+        "referenceSchemaName",
+        "ReferenceSchemaName",
+        "referenceSchema",
+        "ReferenceSchema"
+    )
+    if data_value_type_name:
+        normalized["dataValueTypeName"] = data_value_type_name
+    if reference_schema_name:
+        normalized["referenceSchemaName"] = reference_schema_name
+    u_id = first_text_value(column, "uId", "UId")
     if u_id:
         normalized["uId"] = u_id
-    if "isRequired" in column:
-        normalized["isRequired"] = bool(column["isRequired"])
-    if normalized["referenceSchemaName"] and not normalized["dataValueTypeName"]:
+    is_required_present, is_required = get_present_value(column, "isRequired", "IsRequired")
+    if is_required_present:
+        normalized["isRequired"] = bool(is_required)
+    default_value_source_present, default_value_source = get_present_value(
+        column,
+        "defaultValueSource",
+        "DefaultValueSource"
+    )
+    if default_value_source_present and default_value_source not in (None, ""):
+        normalized["defaultValueSource"] = default_value_source
+    default_value_present, default_value = get_present_value(column, "defaultValue", "DefaultValue")
+    if default_value_present:
+        normalized["defaultValue"] = default_value
+    if normalized.get("referenceSchemaName") and not normalized.get("dataValueTypeName"):
         normalized["dataValueTypeName"] = "Lookup"
-    return {key: value for key, value in normalized.items() if value is not None and value != ""}
+    return {key: value for key, value in normalized.items() if value is not None or key == "defaultValue"}
 
 
 def normalize_columns(columns):

@@ -28,6 +28,12 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - `entity.update` accepts explicit `operationsJson` entries: `addColumn`, `updateColumn`, `removeColumn`
 - New lookup entities must be created before entities or updates that reference them
 
+**Default Semantics**
+- `schema default` means the entity schema or backend contract stores the initial value
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
+- For lookup-backed `schema default`, use the seeded row GUID in `defaultValue`
+
 **Data Binding Generation (MCP-assisted)**
 - `binding.get_columns` returns column names, UIds, and data value types for deployed schemas
 - `binding.create` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately

@@ -113,6 +113,10 @@ Persist the compact context from MCP and set `contractType=short`.
 - Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
 - Use `entity.update` for template-created entities and pass only `operationsJson`.
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
+- `schema default` means the backend/entity schema contract sets the value through `defaultValueSource` and `defaultValue`.
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
+- If the plan says `schema default` for a lookup column, use the seeded row GUID in `defaultValue`; never send the display caption.
 - `entity.update` operations are explicit:
   - `addColumn`
   - `updateColumn`
@@ -152,6 +156,8 @@ Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.
 7. ✅ Target schema is already materialized in DB and queryable through `binding.get_columns`
 8. ✅ Lookup seed rows use fresh GUID values, not decorative placeholders copied from docs
 9. ✅ If `columnsJson` is present, it covers every row column that must exist in the descriptor
+10. ✅ If a column uses `defaultValueSource="Const"` and is a lookup, `defaultValue` is the seeded row GUID
+11. ✅ If the requirement is `defaults to X`, the execution branch contains either a `schema default` or `ui default` step before the result is reported as complete
 
 **Pre-execution validation script:**
 

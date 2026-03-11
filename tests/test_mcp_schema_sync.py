@@ -92,6 +92,51 @@ def build_current_result_document_with_name():
     })
 
 
+def build_current_result_document_with_lookup_status():
+    return normalize_result_document({
+        "success": True,
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "code": "UsrMyApp"
+        },
+        "packages": {
+            "UsrMyPkg": {
+                "uId": "22222222-2222-2222-2222-222222222222",
+                "isPrimary": True,
+                "entities": {
+                    "UsrMyEntity": {
+                        "uId": "33333333-3333-3333-3333-333333333333",
+                        "caption": "My Entity",
+                        "columns": {
+                            "UsrName": {
+                                "uId": "77777777-7777-7777-7777-777777777777",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            },
+                            "UsrStatus": {
+                                "uId": "88888888-8888-8888-8888-888888888888",
+                                "caption": "Status",
+                                "dataValueTypeName": "Lookup",
+                                "referenceSchemaName": "UsrMyEntityType"
+                            }
+                        }
+                    },
+                    "UsrMyEntityType": {
+                        "uId": "55555555-5555-5555-5555-555555555555",
+                        "caption": "My Entity Type",
+                        "columns": {
+                            "Name": {
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+
+
 def build_edited_context():
     return {
         "app": {
@@ -217,6 +262,112 @@ def build_invalid_edited_context():
     }
 
 
+def build_edited_context_with_default_update():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "entityUId": "33333333-3333-3333-3333-333333333333",
+                        "name": "UsrMyEntity",
+                        "caption": "My Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "UsrName",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text",
+                                "defaultValueSource": "Const",
+                                "defaultValue": "Draft"
+                            },
+                            {
+                                "name": "UsrStatus",
+                                "caption": "Status",
+                                "dataValueTypeName": "Lookup",
+                                "referenceSchemaName": "UsrMyEntityType"
+                            }
+                        ]
+                    },
+                    {
+                        "entityUId": "55555555-5555-5555-5555-555555555555",
+                        "name": "UsrMyEntityType",
+                        "caption": "My Entity Type",
+                        "kind": "lookup",
+                        "columns": [
+                            {
+                                "name": "Name",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def build_edited_context_with_invalid_lookup_default():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "entityUId": "33333333-3333-3333-3333-333333333333",
+                        "name": "UsrMyEntity",
+                        "caption": "My Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "UsrName",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            },
+                            {
+                                "name": "UsrStatus",
+                                "caption": "Status",
+                                "dataValueTypeName": "Lookup",
+                                "referenceSchemaName": "UsrMyEntityType",
+                                "defaultValueSource": "Const",
+                                "defaultValue": "New"
+                            }
+                        ]
+                    },
+                    {
+                        "entityUId": "55555555-5555-5555-5555-555555555555",
+                        "name": "UsrMyEntityType",
+                        "caption": "My Entity Type",
+                        "kind": "lookup",
+                        "columns": [
+                            {
+                                "name": "Name",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
 class FakeMcpClient:
     def __init__(self, context_document):
         self.context_document = context_document
@@ -263,14 +414,18 @@ class FakeMcpClient:
             }
         if tool_name == "entity.update":
             package = next(iter(self.context_document["packages"].values()))
-            entity = next(iter(package["entities"].values()))
+            entity = package["entities"][arguments["schemaName"]]
             operations = json.loads(arguments["operationsJson"])
             for operation in operations:
                 if operation["operation"] == "addColumn":
                     col = operation["column"]
-                    entity["columns"][col["name"]] = {
-                        k: v for k, v in col.items() if k != "name"
-                    }
+                    entity["columns"][col["name"]] = {k: v for k, v in col.items() if k != "name"}
+                if operation["operation"] == "updateColumn":
+                    col = operation["column"]
+                    existing = entity["columns"][col["name"]]
+                    existing.update({k: v for k, v in col.items() if k != "name"})
+                if operation["operation"] == "removeColumn":
+                    entity["columns"].pop(operation["column"]["name"], None)
             return {
                 "success": True,
                 "packageUId": arguments["packageUId"],
@@ -386,6 +541,36 @@ class McpSchemaSyncTests(unittest.TestCase):
             "Entity UsrMyEntity already contains Name; do not add duplicate UsrName"
         ):
             build_sync_plan(current_context, build_edited_context_with_duplicate_usrname())
+
+    def test_build_sync_plan_emits_update_column_when_only_default_changes(self):
+        current_context = build_current_result_document_with_lookup_status()["editableContext"]
+        sync_plan = build_sync_plan(current_context, build_edited_context_with_default_update())
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "entity.update")
+        operations = json.loads(sync_plan["actions"][0]["arguments"]["operationsJson"])
+        self.assertEqual(
+            operations,
+            [
+                {
+                    "operation": "updateColumn",
+                    "column": {
+                        "name": "UsrName",
+                        "caption": "Name",
+                        "dataValueTypeName": "Text",
+                        "defaultValueSource": "Const",
+                        "defaultValue": "Draft"
+                    }
+                }
+            ]
+        )
+
+    def test_build_sync_plan_rejects_lookup_default_caption_instead_of_guid(self):
+        current_context = build_current_result_document_with_lookup_status()["editableContext"]
+        with self.assertRaisesRegex(
+            WorkflowError,
+            "Lookup column UsrStatus requires defaultValue as a seeded row GUID"
+        ):
+            build_sync_plan(current_context, build_edited_context_with_invalid_lookup_default())
 
     def test_apply_sync_plan_refreshes_canonical_result_after_each_mutation(self):
         result_document = build_current_result_document()

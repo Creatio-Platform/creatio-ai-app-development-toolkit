@@ -28,7 +28,9 @@ def build_short_context():
                             "UsrName": {
                                 "uId": "66666666-6666-6666-6666-666666666666",
                                 "caption": "Name",
-                                "dataValueTypeName": "Text"
+                                "dataValueTypeName": "Text",
+                                "defaultValueSource": "Const",
+                                "defaultValue": ""
                             }
                         }
                     },
@@ -71,7 +73,9 @@ def build_flat_short_context():
                     {
                         "name": "UsrName",
                         "caption": "Name",
-                        "dataValueType": "Text"
+                        "dataValueType": "Text",
+                        "defaultValueSource": "Const",
+                        "defaultValue": False
                     },
                     {
                         "name": "UsrType",
@@ -111,6 +115,8 @@ class McpContextAdapterTests(unittest.TestCase):
         self.assertEqual(root_entity["kind"], "entity")
         self.assertEqual(root_entity["columns"][0]["name"], "UsrName")
         self.assertEqual(root_entity["columns"][0]["uId"], "66666666-6666-6666-6666-666666666666")
+        self.assertEqual(root_entity["columns"][0]["defaultValueSource"], "Const")
+        self.assertEqual(root_entity["columns"][0]["defaultValue"], "")
         self.assertEqual(lookup_entity["kind"], "entity")
         self.assertEqual(lookup_entity["columns"][0]["name"], "Name")
         self.assertNotIn("uId", lookup_entity["columns"][0])
@@ -132,6 +138,8 @@ class McpContextAdapterTests(unittest.TestCase):
         self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")
         entity = package["entities"][0]
         self.assertEqual(entity["name"], "UsrMyEntity")
+        self.assertEqual(entity["columns"][0]["defaultValueSource"], "Const")
+        self.assertFalse(entity["columns"][0]["defaultValue"])
         self.assertEqual(entity["columns"][1]["dataValueTypeName"], "Lookup")
         self.assertEqual(entity["columns"][1]["referenceSchemaName"], "UsrMyEntityType")
 

@@ -115,6 +115,13 @@ Execution order for lookups with seed data:
 2. `binding.create` → populate the lookup with seed rows from requirements
 3. `application.get_info` → refresh context after both operations
 
+Default planning rules:
+- `schema default` means the backend/entity schema contract sets the value through `entity.create` or `entity.update`.
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler step in the plan.
+- A requirement such as `UsrStatus defaults to New` is closed only when the plan contains an explicit `schema default` step or an explicit `ui default` step.
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
+- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `defaultValue` with `defaultValueSource="Const"`.
+
 For `entity.update`, prepare `operationsJson` only:
 - `addColumn`
 - `updateColumn`
@@ -143,6 +150,9 @@ When generating `entity.create_lookup`, `entity.create`, or `entity.update` payl
 5. ❌ NEVER use flat column structures → always use `{operation, column: {...}}` for `operationsJson`
 6. ❌ NEVER add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns → BaseLookup already provides `Name`/`Description`, and `Name` must remain the lookup `PrimaryDisplayColumn`
 7. ❌ NEVER add `UsrName`, `UsrTitle`, or `UsrCaption` to an existing/template-created entity if the refreshed schema snapshot already contains `Name`, unless the requirements explicitly call for a separate business field
+8. ❌ NEVER treat seeded lookup rows as proof that a `defaults to X` requirement is implemented
+9. ✅ For `schema default`, use `defaultValueSource` and `defaultValue` in the column payload
+10. ✅ For lookup-backed `schema default`, `defaultValue` must be the seeded row GUID, not its caption
 
 **For Binding Tools (binding.create):**
 
@@ -179,7 +189,7 @@ curl ... -d "{
     \"packageUId\": \"$PACKAGE_UID\",    # ✅ REQUIRED from application.create
     \"schemaName\": \"UsrMainEntity\",   # ✅ Optional (can read from DB if empty)
     \"caption\": \"Main Entity\",
-    \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{...}}]\"  # ✅ Nested structure
+    \"operationsJson\": \"[{\\\"operation\\\":\\\"updateColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStatus\\\",\\\"caption\\\":\\\"Status\\\",\\\"dataValueTypeName\\\":\\\"Lookup\\\",\\\"referenceSchemaName\\\":\\\"UsrStatusLookup\\\",\\\"defaultValueSource\\\":\\\"Const\\\",\\\"defaultValue\\\":\\\"$STATUS_NEW_ID\\\"}}]\"  # ✅ Nested structure
   }
 }"
 ```
