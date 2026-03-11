@@ -249,7 +249,7 @@ Fields placed using `layoutConfig`:
 
 ## Handlers
 
-Event handlers for page logic:
+Event handlers for page logic. See `context/handlers-reference.md` for complete patterns and Creatio client APIs.
 
 ```javascript
 handlers: /**SCHEMA_HANDLERS*/[
@@ -265,4 +265,45 @@ handlers: /**SCHEMA_HANDLERS*/[
 
 ---
 
+## Module Dependencies (SCHEMA_DEPS / SCHEMA_ARGS)
+
+When handlers use external APIs (like `@creatio-devkit/common`), add them to the deps and args:
+
+```javascript
+define("UsrMyApp_FormPage",
+    /**SCHEMA_DEPS*/["@creatio-devkit/common"]/**SCHEMA_DEPS*/,
+    function/**SCHEMA_ARGS*/(sdk)/**SCHEMA_ARGS*/ {
+        return { /* handlers can use sdk.HttpClientService etc. */ };
+    }
+);
+```
+
+---
+
+## MCP Page Tools — Reading and Editing Pages
+
+Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
+
+| Tool | Description |
+|------|-------------|
+| `page.list` | Discover page schemas by package or name pattern |
+| `page.get` | Read a page schema's metadata and raw JS body |
+| `page.update` | Save the complete JS body — agent handles all edits (saves to DB, no compile needed) |
+
+### Editing Workflow
+
+See `skills/page-schema-editing/SKILL.md` for the full workflow:
+```
+1. page.list(searchPattern: "MyApp")
+2. page.get(schemaName: "UsrMyApp_FormPage")
+3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
+4. page.update(schemaName: "UsrMyApp_FormPage", body: "...modified body...")
+```
+
+**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page.get`.
+
+---
+
 **📁 For complete page examples, see `templates/pages/`**
+**📁 For handler patterns and Creatio client APIs, see `context/handlers-reference.md`**
+**📁 For viewConfigDiff component reference (buttons, containers, properties), see `context/viewconfig-reference.md`**

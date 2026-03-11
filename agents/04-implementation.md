@@ -19,6 +19,7 @@ Read:
 - `context/essentials.md`
 - `context/mcp-application-tools-reference.md` — Complete curl examples and patterns
 - `context/ui-reference.md`
+- `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
 
@@ -328,11 +329,14 @@ Verify presence of:
 - `application.create`
 - `application.get_info`
 - `application.get_list`
+- `page.get`
+- `page.update`
+- `page.list`
 - `entity.create`
 - `entity.create_lookup`
 - `entity.update`
 
-If missing, stop and report blocker.
+If application tools are missing, stop and report blocker. Schema tools are optional — skip page editing steps if unavailable.
 
 ### 4. Resolve runtime inputs
 
@@ -576,6 +580,48 @@ python3 scripts/mcp_schema_sync.py apply \
 
 Stop and report blocker on first failed entity tool call.
 
+### 7b. Execute page customization steps
+
+Read the skill doc: **`skills/page-schema-editing/SKILL.md`**
+
+If `plan.md` contains page customization requirements (handlers, viewConfigDiff, etc.):
+
+1. Call `page.list` with the app's package name to discover generated pages
+2. For each page that needs customization:
+   a. Call `page.get(schemaName)` to get the full JS body
+   b. Modify the raw body directly — update multiple sections between their markers
+   c. Merge new content with existing section content (do NOT replace existing handlers — append)
+   d. If handlers use `@creatio-devkit/common`, ensure `deps` section includes the import and `args` includes the parameter
+   e. Call `page.update` with `dryRun: "true"` first to validate
+   f. If dry run succeeds, call `page.update` without dryRun to save
+3. Update `mcp-application-result.json` with page metadata:
+   ```json
+   {
+     "packages": {
+       "<PackageName>": {
+         "pages": {
+           "<PageName>": {
+             "uId": "...",
+             "parentSchemaName": "...",
+             "hasHandlers": true,
+             "handlerCount": 2
+           }
+         }
+       }
+     }
+   }
+   ```
+4. Append page customization results to `schemaSync`
+
+**Handler generation rules:**
+- Map business intents to request types using `handlers-reference.md`
+- Always `await next?.handle(request)` to preserve parent handler chain
+- Prefix entity column attributes with `PDS_` (e.g., `PDS_UsrName`)
+- Lookup attribute values are objects with `.value` (GUID) and `.displayValue` (text)
+- Return early (without calling `next`) to cancel save/delete operations
+
+Stop and report blocker on first failed page tool call.
+
 ### 8. Validate output contract
 
 Validate result payload:
@@ -606,5 +652,6 @@ Include:
 - Result persisted to `mcp-application-result.json`
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
+- Page customization steps executed (if plan requires them)
 - Validation passed
 - Summary persisted to `mcp-application-report.md`

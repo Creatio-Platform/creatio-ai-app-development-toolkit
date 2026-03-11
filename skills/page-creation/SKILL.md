@@ -64,6 +64,16 @@ From context and templates:
 - Data source entity name matches plan
 - All generated JSON files are valid
 
+## Post-Creation Customization
+
+After generating page files, if `plan.md` specifies handlers, event reactions, or custom logic:
+
+1. Deploy the generated page to Creatio (Agent 5)
+2. Use **`skills/page-schema-editing/SKILL.md`** workflow to add handlers via MCP `page.*` tools
+3. The `page.update` tool writes directly to the running DB — no recompile needed
+
+This keeps page *generation* (file templates) separate from page *customization* (runtime MCP edits).
+
 ## Output Path
 
 `output/<AppName>/packages/<PackageName>/Schemas/<PageName>/`

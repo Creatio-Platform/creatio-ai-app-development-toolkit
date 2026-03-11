@@ -14,10 +14,11 @@ These files serve as workflow documentation and best practices:
 
 ```
 skills/
-├── entity-creation/          # Entity schema sync via MCP entity tools
-├── page-creation/           # Freedom UI page generation
-├── data-bindings-creation/  # Data binding generation
-└── package-descriptor-creation/  # Package metadata
+├── entity-creation/               # Entity schema sync via MCP entity tools
+├── page-creation/                 # Freedom UI page generation
+├── data-bindings-creation/        # Data binding generation
+├── package-descriptor-creation/   # Package metadata
+└── page-schema-editing/           # Page schema editing (agent modifies raw JS body, saves via MCP)
 ```
 
 Each SKILL.md contains:
