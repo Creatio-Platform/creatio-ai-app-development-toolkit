@@ -50,7 +50,7 @@ When the task is "entity columns were added and the FormPage must surface them",
 3. Keep `propertyName: "items"`.
 4. Continue `row` and `index` from the current maximum values already present in `SideAreaProfileContainer`.
 5. Add matching attributes in `SCHEMA_VIEW_MODEL_CONFIG_DIFF` for every inserted field.
-6. Keep the live naming pattern already present in the page body. `Name` is often a special case. Lookup controls may need extra `*_List` attributes and nested actions.
+6. Keep the live naming pattern already present in the page body. `Name` is often a special case. For datasource-bound `crt.ComboBox`, add only the main bound attribute; preserve existing materialized `*_List` attributes or nested actions only if they already exist in the live page body.
 7. Prefer minimal raw config for preprocessor-backed components. Do not manually duplicate auto-generated requests or bindings unless the current page body already stores them explicitly.
 
 ### Exception: Main-Entity Grid Sync on Live List Pages
@@ -82,7 +82,7 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 | Phone | `crt.PhoneInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | Frontend preprocessing can auto-set `phoneAsLink: true` and `displayAsPhone`. |
 | Email | `crt.EmailInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | Frontend preprocessing can auto-set `isFormatValidated`. |
 | Web URL | `crt.WebInput` | `control` | `placeholder: ""`, `tooltip: ""`, `labelPosition: "auto"`, `needHandleSave: false` | Often auto-promoted from `crt.Input` when the bound field is `WEB_TEXT`. |
-| Lookup | `crt.ComboBox` | `control` | `ariaLabel: ""`, `isAddAllowed: true`, `showValueAsLink: true`, `labelPosition: "auto"`, `controlActions: []`, `listActions: []`, `tooltip: ""` | Also add a `*_List` collection attribute. Add a child `crt.ComboboxSearchTextAction` when deterministic raw-body output is required. |
+| Lookup | `crt.ComboBox` | `control` | `ariaLabel: ""`, `isAddAllowed: true`, `showValueAsLink: true`, `labelPosition: "auto"`, `controlActions: []`, `listActions: []`, `tooltip: ""` | Add only the main ComboBox insert and the main bound attribute for datasource-bound lookups. Preserve existing live `*_List` attributes or nested actions only if they already exist in the page body. Never create a raw `modelConfig.path` like `"UsrStatus_List"` without a datasource prefix. |
 | Color | `crt.ColorPicker` | `control` | `labelPosition: "auto"`, `pickerMode: "extended"` | Supports transparent color and custom `colors` palette. |
 | Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. The frontend can auto-add `bindTo`, `crt.ToImageLink`, `imageSelected`, and `imageClear`. |
 

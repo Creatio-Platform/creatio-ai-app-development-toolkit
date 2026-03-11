@@ -324,9 +324,9 @@ Binds page attributes to data source:
 ]
 ```
 
-### Runtime Binding Pattern for Live Form Page Lookup Lists
+### Runtime Binding Pattern for Preserving Live Form Page Lookup Lists
 
-When editing an existing FormPage via `page.update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders.
+When editing an existing FormPage via `page.update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
 
 This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting via page.update` above.
 
@@ -361,7 +361,9 @@ This pattern sorts lookup records inside a ComboBox list. It is not the ListPage
 Rules:
 - Keep `Name` as the special case when it already exists in the live page.
 - Every new field insert in `SCHEMA_VIEW_CONFIG_DIFF` needs a matching attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
-- Lookup controls need both the main attribute and a `*_List` collection attribute.
+- Datasource-bound `crt.ComboBox` controls need only the main bound attribute by default.
+- Existing materialized lookup-list bindings may be preserved when they are already present in the live page body; do not invent new `*_List` attributes during sync.
+- Never introduce a new collection attribute with a raw `modelConfig.path` such as `"UsrStatus_List"` or `"UsrPriority_List"` without a datasource prefix.
 
 ---
 
@@ -528,9 +530,9 @@ Rules:
 ```
 
 Lookup rules:
-- Add the base `crt.ComboBox` insert and the child `crt.ComboboxSearchTextAction` insert together.
-- Add both the main lookup attribute and the `*_List` collection attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
-- The frontend can auto-wire `showList`, `paginationChange`, and lookup collection metadata from the main binding, so do not invent extra request configs unless the page already uses them.
+- For datasource-bound `crt.ComboBox`, add the base insert and the main bound attribute only.
+- Treat `crt.ComboboxSearchTextAction`, lookup-list datasource wiring, paging, sorting, and nested `value`/`displayValue` bindings as frontend-preprocessor concerns unless the live page body already persists them.
+- If the live page already contains materialized lookup-list bindings or child actions, preserve their naming and config instead of regenerating or renaming them.
 
 ### Additional Supported Field Components
 

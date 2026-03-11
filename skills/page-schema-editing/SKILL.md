@@ -154,13 +154,19 @@ Use this workflow when the entity gained new columns and the live FormPage must 
 Special cases from live schema:
 - Lookup fields need:
   - the main `crt.ComboBox` insert
-  - a `*_List` collection attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
-  - a child `crt.ComboboxSearchTextAction` insert in `listActions`
+  - the main bound attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
+  - preservation of any existing live `*_List` bindings or nested actions without synthesizing new ones
 - `crt.ImageInput` binds through `value`, not `control`
 - Most other field controls bind through `control`
 - Match `crt.DateTimePicker.pickerType` to the field kind when the column is date-only or time-only
 - Add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
 - `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` are preprocessor-backed; avoid hand-writing auto-generated request wiring unless the page body already persists it
+
+Guardrails for FormPage lookup sync:
+- If a new `crt.ComboBox` is bound to an entity datasource through the main attribute, do not add a sibling `*_List` attribute.
+- If the live page already has a materialized `*_List`, preserve its naming and config, but do not synthesize a new one.
+- Invalid: `UsrStatus_List.modelConfig.path = "UsrStatus_List"`.
+- Invalid: introducing `UsrPriority_List` next to `UsrPriority -> PDS.UsrPriority` on a page that did not already persist that list attribute.
 
 ### Step 3b: Adjust ListPage Sorting
 
@@ -209,12 +215,13 @@ page.update(
 7. **Deps ↔ handlers correlation** — if handler uses SDK services, ensure deps and args include the required import and preserve the live alias style (`sdk`, `devkit`, etc.)
 8. **For runtime entity-field sync, use `SideAreaProfileContainer`** when the live page already follows that pattern
 9. **Every new field insert needs a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute**
-10. **Lookup field sync also needs the `*_List` collection attribute and child `crt.ComboboxSearchTextAction`**
+10. **For datasource-bound FormPage ComboBox fields, add only the main bound attribute unless the live schema already materializes extra lookup-list bindings**
 11. **Do not manually duplicate frontend-generated ComboBox/ImageInput request wiring unless the live schema already stores it explicitly**
 12. **Use `request.$context.executeRequest(...)` for secondary programmatic requests and `setValue(...)` / `setAttributePropertyValue(...)` for runtime attribute state changes**
 13. **Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body via `page.update`**
 14. **Treat `converters` and `validators` as conservative object sections, not the default place for new validation logic without live schema evidence**
 15. **For ListPage sorting, use the canonical contract in `context/ui-reference.md` and do not infer business order from lookup sorting direction**
+16. **Treat any newly introduced FormPage attribute ending with `_List` as a blocker unless the live page already contained it before editing**
 
 ## Validation Checklist
 
@@ -227,7 +234,8 @@ page.update(
 - [ ] Entity attributes prefixed with `PDS_`
 - [ ] Every inserted field has a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute
 - [ ] Runtime FormPage field sync appends to `SideAreaProfileContainer`
-- [ ] Lookup sync includes `*_List` binding and child `crt.ComboboxSearchTextAction`
+- [ ] Datasource-bound FormPage ComboBox fields do not introduce new `*_List` bindings unless the live page already persisted them
+- [ ] Existing live lookup-list bindings or nested actions are preserved instead of regenerated or renamed
 - [ ] ListPage sorting changes follow the canonical `context/ui-reference.md` contract instead of FormPage lookup-list patterns
 - [ ] Numeric/date controls keep scale and picker-type metadata when the column type requires it
 - [ ] Preprocessor-backed controls are not bloated with duplicate auto-generated wiring

@@ -171,6 +171,11 @@ ListPage plan rules:
 - plan deterministic `DataGrid.columns` merge logic
 - plan sorting changes only when requirements explicitly call for supported sortable-column order
 
+FormPage lookup sync plan rules:
+- for datasource-bound `crt.ComboBox` fields, instruct Agent 4 to add only the main view-model attribute and minimal ComboBox view config
+- do not plan manual `*_List`, embeddedModel, nested `value`/`displayValue`, sorting, paging, or `crt.ComboboxSearchTextAction` unless the live page body already materializes them and the plan explicitly says to preserve them
+- keep FormPage lookup-list preservation guidance separate from ListPage sorting rules; never reuse lookup-list examples as a general binding-generation recipe
+
 ### 4.2. Entity Tool Payload Validation
 
 When generating `entity.create_lookup`, `entity.create`, or `entity.update` payloads in the plan, follow these rules to prevent parameter name errors:

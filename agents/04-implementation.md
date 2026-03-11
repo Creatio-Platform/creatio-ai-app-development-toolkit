@@ -610,7 +610,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    d3. Only implement plain sortable-column order through DataGrid sorting metadata; if the requirement is semantic business order without an explicit sort key or approved runtime logic, stop with blocker instead of improvising
    e. For runtime FormPage field sync, append missing field inserts to `SideAreaProfileContainer` and continue `row` and `index` from the current maximum values
    f. Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field
-   g. For lookup fields, add the `crt.ComboBox` insert, the `*_List` collection attribute, and the child `crt.ComboboxSearchTextAction` insert
+   g. For datasource-bound lookup fields, add the `crt.ComboBox` insert and the main view-model attribute only; preserve existing live lookup-list bindings or nested actions only when they are already materialized in the page body
    h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
    i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
    j. Call `page.update` with `dryRun: "true"` first to validate
@@ -647,12 +647,14 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 - Continue `row` and `index` from the current maximum values in `SideAreaProfileContainer`
 - Keep `column=1`, `colSpan=1`, and `rowSpan=1` unless the live page already uses a different layout grid
 - Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` bindings for every inserted field
-- Lookup fields also need the `*_List` collection attribute and a child `crt.ComboboxSearchTextAction` insert
+- For datasource-bound lookup fields, add only the main ComboBox binding by default
+- Do not manually add `*_List`, embeddedModel, nested `value`/`displayValue`, paging, sorting, or `crt.ComboboxSearchTextAction` unless the live page body already contains that materialization and it must be preserved
 - Keep `Name` as the record title/header when it already exists and do not duplicate it
 - Required non-inherited business fields must never be omitted from the synchronized FormPage
 - `crt.ImageInput` binds via `value`; most other field controls bind via `control`
 - Match `crt.DateTimePicker.pickerType` to the real field kind and add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
 - Treat `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` as preprocessor-backed controls; avoid manually duplicating generated request wiring such as ComboBox load handlers or ImageInput upload/clear handlers unless the live page body already contains explicit versions
+- Stop with blocker if page sync introduces a new FormPage attribute ending with `_List` that was not present in the live page before editing
 - `crt.FileInput`, `crt.EncryptedInput`, and `crt.Slider` are supported, but use them only when the approved plan explicitly calls for that UX instead of the default field mapping
 
 **ListPage grid sync rules:**
