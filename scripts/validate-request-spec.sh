@@ -36,6 +36,9 @@ sections=(
 for section in "${sections[@]}"; do
   require_expr ".businessChecklist.${section}.complete == true" "businessChecklist.${section}.complete must be true"
   require_expr ".businessChecklist.${section}.value | strings | length > 0" "businessChecklist.${section}.value must be a non-empty string"
+  require_expr ".businessChecklist.${section}.source as \$source | [\"confirmed\", \"assumed\"] | index(\$source) != null" "businessChecklist.${section}.source must be confirmed or assumed"
+  require_expr "if .businessChecklist.${section}.source == \"assumed\" then (.businessChecklist.${section}.assumption | strings | length > 0) else true end" "businessChecklist.${section}.assumption must be a non-empty string when source is assumed"
+  require_expr "if .businessChecklist.${section}.source == \"assumed\" then (.businessChecklist.${section}.assumption as \$assumption | .assumptions | index(\$assumption) != null) else true end" "businessChecklist.${section}.assumption must be listed in assumptions when source is assumed"
 done
 require_expr '.technicalInputs.creatioUrl | strings | test("^https?://")' 'technicalInputs.creatioUrl must be a valid http(s) URL'
 require_expr '.technicalInputs.credentialsStatus as $status | ["provided", "missing", "existing_env"] | index($status) != null' 'technicalInputs.credentialsStatus must be one of: provided, missing, existing_env'

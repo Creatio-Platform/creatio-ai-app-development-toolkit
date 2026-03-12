@@ -176,6 +176,37 @@ FormPage lookup sync plan rules:
 - do not plan manual `*_List`, embeddedModel, nested `value`/`displayValue`, sorting, paging, or `crt.ComboboxSearchTextAction` unless the live page body already materializes them and the plan explicitly says to preserve them
 - keep FormPage lookup-list preservation guidance separate from ListPage sorting rules; never reuse lookup-list examples as a general binding-generation recipe
 
+Machine-readable page sync contract:
+- when page sync is required, `plan.md` must include an embedded JSON block between these exact markers:
+  - `<!-- PAGE_SYNC_PLAN_JSON_START -->`
+  - `<!-- PAGE_SYNC_PLAN_JSON_END -->`
+- the embedded JSON must be valid and use this shape:
+
+```json
+{
+  "packageName": "UsrTodoList",
+  "pages": [
+    {
+      "schemaName": "UsrTodoList_FormPage",
+      "kind": "form",
+      "bodyPath": "output/UsrTodoList/page-sync/UsrTodoList_FormPage.body.js",
+      "requiredModelPaths": ["PDS.UsrStatus", "PDS.UsrPriority"]
+    },
+    {
+      "schemaName": "UsrTodoList_ListPage",
+      "kind": "list",
+      "bodyPath": "output/UsrTodoList/page-sync/UsrTodoList_ListPage.body.js",
+      "requiredCodes": ["PDS_Name", "PDS_UsrStatus", "PDS_UsrPriority"]
+    }
+  ]
+}
+```
+
+- prefer `bodyPath` over inline `body` so `plan.md` stays readable
+- if `bodyPath` is used, Agent 3 must materialize those page body files under `output/<AppName>/page-sync/`
+- if the run requires page sync, Agent 3 must also write `output/<AppName>/page-sync-plan.json` with the same JSON payload used in the embedded block
+- `requiredModelPaths` and `requiredCodes` must reflect the resolved verification targets that Agent 4 will check after persistence
+
 ### 4.2. Entity Tool Payload Validation
 
 When generating `entity.create_lookup`, `entity.create`, or `entity.update` payloads in the plan, follow these rules to prevent parameter name errors:
@@ -288,6 +319,7 @@ Create `plan.md` with sections:
 - MCP Payload (resolved and validated)
 - Schema Sync Plan
 - Page Sync Plan
+- Embedded `page-sync-plan.json` block when page sync is required
 - Runtime Resolution Strategy (`iconId` and `iconBackground`)
 - Expected Output Artifacts
 - Validation Rules
@@ -318,17 +350,23 @@ Check:
 Write final plan to:
 - `output/<AppName>/plan.md`
 
+When page sync is required, also write:
+- `output/<AppName>/page-sync-plan.json`
+- `output/<AppName>/page-sync/<SchemaName>.body.js` for each synchronized page
+
 ## Rules
 
 1. Keep plan deterministic and execution-ready.
 2. Do not create GUID matrices manually for all schemas.
 3. Do not include generated file bodies in plan.
 4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, ordered page sync calls, and result/report artifact persistence.
+5. If page sync is required, the machine-readable page sync contract must be extractable without parsing prose.
 
 ## Completion Criteria
 
 ✅ Gate R passed  
 ✅ `businessChecklist.complete=true` in `request-spec.json`  
 ✅ `output/<AppName>/plan.md` exists  
+✅ when page sync is required, `output/<AppName>/page-sync-plan.json` exists and matches the embedded contract  
 ✅ MCP payload is fully resolved or has explicit runtime resolution rules  
 ✅ Explicit validations and blocker conditions are documented  

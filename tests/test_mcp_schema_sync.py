@@ -585,6 +585,9 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(my_entity["columns"][1]["name"], "UsrType")
         self.assertEqual(my_entity["columns"][1]["referenceSchemaName"], "UsrMyEntityType")
         self.assertEqual(len(persisted["schemaSync"]), 2)
+        self.assertEqual(len(persisted["operationLog"]), 2)
+        self.assertEqual(persisted["schemaSync"][0]["tool"], "entity.create_lookup")
+        self.assertEqual(persisted["schemaSync"][1]["evidence"]["entity"]["columns"], ["UsrName", "UsrType"])
         self.assertEqual(
             [call[0] for call in fake_client.calls],
             ["entity.create_lookup", "application.get_info", "entity.update", "application.get_info"]

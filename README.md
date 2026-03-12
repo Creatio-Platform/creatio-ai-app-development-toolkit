@@ -27,6 +27,8 @@ Primary workflow is natural language:
 6. Agent runs the pipeline and returns final artifacts/results.
 7. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
 
+Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
+
 ## Workflow
 
 Orchestrator flow:
@@ -46,10 +48,16 @@ All generated artifacts are under `output/<AppName>/`.
 - `bash scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
 - `bash scripts/check-approval-gate.sh <AppName>`
 - `python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json`
+- `python3 scripts/mcp_result_evidence.py report output/<AppName>/mcp-application-result.json output/<AppName>/mcp-application-report.md`
+- `python3 scripts/page_body_tools.py build-update-args <SchemaName> <body-file> --dry-run`
 - `python3 scripts/mcp_schema_sync.py plan --current-result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json`
 - `python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json`
+- `python3 scripts/mcp_page_sync.py build-plan --plan-md output/<AppName>/plan.md --output output/<AppName>/page-sync-plan.json`
+- `python3 scripts/mcp_page_sync.py apply --result output/<AppName>/mcp-application-result.json --plan output/<AppName>/page-sync-plan.json --env output/<AppName>/.creatio-env.json --report output/<AppName>/mcp-application-report.md`
 
-`mcp-application-result.json` stores the compact short MCP response in flat runtime form (`packageUId`, `packageName`, `entities`) plus `editableContext`, which is the package/entity-oriented model intended for LLM or HITL edits before schema synchronization.
+`mcp-application-result.json` stores the compact short MCP response in flat runtime form (`packageUId`, `packageName`, `entities`) plus `editableContext`, `operationLog`, `pageEvidence`, and any persisted acceptance evidence. Reports must be derived from that runtime evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
+
+When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly.
 
 ## Architecture
 

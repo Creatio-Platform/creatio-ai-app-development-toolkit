@@ -23,6 +23,8 @@ Read:
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
+- `scripts/page_body_tools.py`
+- `scripts/mcp_result_evidence.py`
 
 ## MCP Workflow (Direct curl Execution)
 
@@ -102,8 +104,12 @@ Normalize and persist:
 - `error`
 - `schemaSync`
 - `editableContext`
+- `operationLog`
+- `pageEvidence`
+- `acceptanceEvidence`
 
 Persist the compact context from MCP and set `contractType=short`.
+Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
 
 ### Schema Sync Rules
 
@@ -616,6 +622,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    j. Call `page.update` with `dryRun: "true"` first to validate
    k. If dry run succeeds, call `page.update` without dryRun to save
    l. Re-read the page with `page.get` and verify the resolved FormPage fields or ListPage columns are actually present
+   m. Persist page verification with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`
 3. Update `mcp-application-result.json` with page metadata:
    ```json
    {
@@ -628,6 +635,9 @@ If `plan.md` contains page customization requirements, or the run creates or ext
              "hasHandlers": true,
               "handlerCount": 2,
               "verification": {
+                "implemented": true,
+                "machineChecked": true,
+                "manualChecked": false,
                 "requiredFieldsPresent": true,
                 "resolvedColumnsPresent": true
               }
@@ -639,6 +649,22 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    ```
 4. Append page customization results to `schemaSync`
 5. Stop with blocker if the plan required page sync but the final verification still shows missing fields or columns
+
+**Python helper option:**
+
+```bash
+python3 scripts/mcp_page_sync.py build-plan \
+  --plan-md output/<AppName>/plan.md \
+  --output output/<AppName>/page-sync-plan.json
+
+python3 scripts/mcp_page_sync.py apply \
+  --result output/<AppName>/mcp-application-result.json \
+  --plan output/<AppName>/page-sync-plan.json \
+  --env output/<AppName>/.creatio-env.json \
+  --report output/<AppName>/mcp-application-report.md
+```
+
+`--plan` may also point directly to `output/<AppName>/plan.md` when that file contains the embedded `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
 
 **FormPage field sync rules:**
 - Read the current `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together before adding fields
@@ -715,6 +741,8 @@ Include:
 - page sync steps executed and verification results for `FormPage` and `ListPage`
 - validation results for normalized contract
 - whether the run completed via create flow or existing-app update flow
+- explicit distinction between `implemented`, `machineChecked`, and `manualCheckPending`
+- never claim UI acceptance is verified unless the corresponding evidence exists in `mcp-application-result.json`
 
 ## Completion Criteria
 

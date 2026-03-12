@@ -76,6 +76,14 @@ Set `businessChecklistComplete=true` only when:
 - all required checklist items are answered, or
 - unresolved items are documented in assumptions and explicitly accepted by developer.
 
+For each checklist group, persist:
+- `source: "confirmed"` when the developer answered it directly
+- `source: "assumed"` when the agent had to resolve a gap
+- `assumption: "<text>"` when `source="assumed"`
+
+Do not mark a checklist group complete without `source`.
+If a group is assumed, the same assumption text must be listed in the top-level `assumptions` array before approval is written.
+
 If not complete, continue clarification and do not proceed to implementation planning.
 
 ## Clarification Strategy

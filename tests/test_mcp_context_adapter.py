@@ -103,6 +103,8 @@ class McpContextAdapterTests(unittest.TestCase):
         normalized = normalize_result_document(build_short_context())
         self.assertEqual(normalized["contractType"], "short")
         self.assertIn("editableContext", normalized)
+        self.assertEqual(normalized["operationLog"], [])
+        self.assertEqual(normalized["pageEvidence"], {})
         editable_context = normalized["editableContext"]
         self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
         self.assertEqual(len(editable_context["packages"]), 1)
@@ -125,6 +127,7 @@ class McpContextAdapterTests(unittest.TestCase):
         normalized = normalize_result_document(build_short_error_context())
         self.assertEqual(normalized["contractType"], "short")
         self.assertIsNone(normalized["editableContext"])
+        self.assertEqual(normalized["acceptanceEvidence"], {})
         self.assertFalse(normalized["success"])
         self.assertEqual(normalized["error"]["message"], "Validation failed")
 

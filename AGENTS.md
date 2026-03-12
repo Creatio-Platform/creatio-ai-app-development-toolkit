@@ -72,6 +72,11 @@ Stop condition to proceed:
 - unresolved points are documented as explicit assumptions
 - developer has seen a short “What I understood” summary and confirmed it in natural language
 
+Checklist persistence rules:
+- every checklist group must store `source=confirmed|assumed`
+- if a group is `assumed`, persist explicit `assumption` text for that group and include the same text in the top-level `assumptions` array
+- `businessChecklistComplete=true` is valid only when every checklist group is confirmed or explicitly assumed and the final natural-language approval covers those assumptions
+
 Technical question policy:
 - ask only execution blockers (URL/access/credentials)
 - do not ask for MCP/template/icon details when deterministic defaults exist
@@ -129,6 +134,7 @@ Developer prompt (natural language)
 │ Agent 3: Implementation │  Read: agents/03-implementation-plan.md
 │ Plan                    │  Context: essentials + request-spec
 │                         │  Output: output/<App>/plan.md
+│                         │          + page-sync-plan.json when page sync is required
 └────────────┬────────────┘
              ▼
 ┌─────────────────────────┐
@@ -146,8 +152,8 @@ Developer prompt (natural language)
 |-------|-------|--------|
 | 1. Environment Setup | Developer request (URL optional) | `output/<App>/.creatio-env.json` |
 | 2. Requirements Gathering | Natural-language app prompt | `output/<App>/requirements.md` + `output/<App>/request-spec.json` + `output/<App>/workflow-state.json` |
-| 3. Implementation Plan | `requirements.md` + `request-spec.json` + `workflow-state.json` | `output/<App>/plan.md` |
-| 4. Implementation | `plan.md` + `workflow-state.json` + `.creatio-env.json` | `output/<App>/mcp-application-result.json` + `mcp-application-report.md` (FINAL) |
+| 3. Implementation Plan | `requirements.md` + `request-spec.json` + `workflow-state.json` | `output/<App>/plan.md` + embedded page sync contract + `output/<App>/page-sync-plan.json` when required |
+| 4. Implementation | `plan.md` + optional `page-sync-plan.json` + `workflow-state.json` + `.creatio-env.json` | `output/<App>/mcp-application-result.json` + `mcp-application-report.md` (FINAL) |
 
 ## Orchestration Rules
 
@@ -157,7 +163,7 @@ Developer prompt (natural language)
 4. Agents 1/3/5 run in background mode with `task(..., mode: "background")`. Agent 4 runs synchronously.
 5. Before Agent 1, run `scripts/check-planning-gate.sh <AppName>`. On failure, hard-stop and report blocker.
 6. After launching a background agent, wait with `read_agent(agent_id, wait: true)`. For Agent 4, surface an explicit “Starting implementation” status and keep execution in the foreground.
-7. Verify expected outputs exist and are non-empty before moving to the next agent.
+7. Verify expected outputs exist and are non-empty before moving to the next agent. When Agent 3 requires page sync, this includes the embedded page sync contract in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, plus `output/<AppName>/page-sync-plan.json`.
 8. Agent 2 is interactive only. Never delegate it.
 9. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
 10. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
@@ -174,6 +180,7 @@ Developer prompt (natural language)
    - Step K: if the run creates or extends the main entity for a new app, discover the generated FormPage and ListPage and synchronize them via `page.list` → `page.get` → `page.update(dryRun)` → `page.update`
    - Step L: re-read the updated pages via `page.get`, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
    - Step M: validate final normalized `success=true` with short-contract checks and planned page-sync materialization
+   - Step N: build `mcp-application-report.md` only from persisted runtime evidence in `mcp-application-result.json`; never synthesize green acceptance claims without explicit machine or manual evidence
 11. On failure, decide: retry, fix, or report blocker.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
 13. Persist Gate P state in `.workflow-state/<AppName>/planning-state.json` via:
@@ -222,17 +229,19 @@ Developer prompt (natural language)
    - `output/<AppName>/mcp-application-report.md`
 15. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 16. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
-17. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
-18. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
-19. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
-20. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults.
-21. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
-22. For new apps, or when the main section entity gains approved business fields, synchronize the generated `FormPage` and `ListPage` before the run can be reported as complete.
-23. `FormPage` defaults must keep `Name` as the header/title when present and surface all approved non-inherited business fields from the main entity. Required business fields must always be included.
-24. `ListPage` defaults must include `Name`, all required non-inherited business fields, and then only the highest-priority short operational fields needed for a compact grid.
-25. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless those fields are explicitly requested or required.
-26. Keep auto-selected default `ListPage` columns compact by capping them at 6 total visible columns unless required business fields exceed that number.
-27. Generated artifacts under `output/**` are not normative sources for generator instructions or validation policy.
+17. Every `businessChecklist.<group>` object in `request-spec.json` must include `source`. When `source="assumed"`, it must also include `assumption`, and that exact text must appear in the top-level `assumptions` array.
+18. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
+19. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
+20. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
+21. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults.
+22. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
+23. For new apps, or when the main section entity gains approved business fields, synchronize the generated `FormPage` and `ListPage` before the run can be reported as complete.
+24. `FormPage` defaults must keep `Name` as the header/title when present and surface all approved non-inherited business fields from the main entity. Required business fields must always be included.
+25. `ListPage` defaults must include `Name`, all required non-inherited business fields, and then only the highest-priority short operational fields needed for a compact grid.
+26. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless those fields are explicitly requested or required.
+27. Keep auto-selected default `ListPage` columns compact by capping them at 6 total visible columns unless required business fields exceed that number.
+28. `mcp-application-report.md` must distinguish `implemented`, `machineChecked`, and `manualCheckPending`. Never mark UI acceptance as verified unless the corresponding evidence is persisted in `mcp-application-result.json`.
+29. Generated artifacts under `output/**` are not normative sources for generator instructions or validation policy.
 
 ## Context Files Reference
 

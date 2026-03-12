@@ -12,8 +12,10 @@ from pathlib import Path
 
 try:
     from scripts.mcp_context_adapter import infer_contract_type, normalize_column, normalize_result_document
+    from scripts.mcp_result_evidence import append_operation, ensure_result_document
 except ImportError:
     from mcp_context_adapter import infer_contract_type, normalize_column, normalize_result_document
+    from mcp_result_evidence import append_operation, ensure_result_document
 
 KIND_PRIORITY = {
     "lookup": 0,
@@ -509,10 +511,9 @@ def build_refresh_failure(action, error):
 
 
 def apply_sync_plan(client, result_document, edited_context, result_path):
-    current_document = normalize_result_document(result_document)
+    current_document = ensure_result_document(result_document)
     current_context = extract_editable_context(current_document)
     sync_plan = build_sync_plan(current_context, edited_context)
-    schema_sync = list(current_document.get("schemaSync", []))
     ensure_required_tools(client)
     app_selector = resolve_app_selector(current_document)
     if not sync_plan["actions"]:
@@ -523,18 +524,24 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
         if tool_response.get("success") is not True:
             error = tool_response.get("error") or {}
             raise WorkflowError(error.get("message") or f"{action['toolName']} failed")
-        schema_sync.append({
-            "toolName": action["toolName"],
-            "target": action["target"],
-            "packageUId": action["packageUId"],
-            "status": "success"
-        })
+        current_document = append_operation(
+            current_document,
+            action["toolName"],
+            action["target"],
+            "success",
+            response=tool_response,
+            phase="schema",
+            refreshed_by="application.get_info"
+        )
         try:
             refreshed_context = client.call_tool_json("application.get_info", app_selector)
         except WorkflowError as error:
             raise build_refresh_failure(action, error)
-        normalized_context = normalize_result_document(refreshed_context)
-        normalized_context["schemaSync"] = list(schema_sync)
+        normalized_context = ensure_result_document(refreshed_context)
+        normalized_context["schemaSync"] = list(current_document.get("schemaSync", []))
+        normalized_context["operationLog"] = list(current_document.get("operationLog", []))
+        normalized_context["pageEvidence"] = dict(current_document.get("pageEvidence", {}))
+        normalized_context["acceptanceEvidence"] = dict(current_document.get("acceptanceEvidence", {}))
         current_document = normalized_context
         write_json(result_path, current_document)
     return current_document

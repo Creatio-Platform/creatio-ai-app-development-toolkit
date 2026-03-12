@@ -18,14 +18,14 @@ def build_valid_request_spec():
     return {
         "sourcePrompt": "Generate a Todo app",
         "businessChecklist": {
-            "businessOutcome": {"complete": True, "value": "Track daily work"},
-            "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks"},
-            "domainModel": {"complete": True, "value": "Task, status, priority"},
-            "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed"},
-            "businessRules": {"complete": True, "value": "Status and priority are required"},
-            "uxExpectations": {"complete": True, "value": "List and form pages are required"},
-            "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp"},
-            "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks"},
+            "businessOutcome": {"complete": True, "value": "Track daily work", "source": "confirmed"},
+            "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks", "source": "confirmed"},
+            "domainModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
+            "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
+            "businessRules": {"complete": True, "value": "Status and priority are required", "source": "confirmed"},
+            "uxExpectations": {"complete": True, "value": "List and form pages are required", "source": "confirmed"},
+            "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp", "source": "confirmed"},
+            "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks", "source": "confirmed"},
             "complete": True
         },
         "technicalInputs": {
@@ -52,6 +52,29 @@ def run_script(script_name, *args, workflow_root):
 
 
 class WorkflowGateTests(unittest.TestCase):
+    def test_validate_request_spec_rejects_missing_checklist_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_root = Path(temp_dir)
+            app_dir = workflow_root / "output" / "TodoList"
+            request_spec = build_valid_request_spec()
+            request_spec["businessChecklist"]["businessRules"].pop("source")
+            write_file(app_dir / "request-spec.json", json.dumps(request_spec))
+            result = run_script("validate-request-spec.sh", str(app_dir / "request-spec.json"), workflow_root=str(workflow_root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("businessChecklist.businessRules.source must be confirmed or assumed", result.stderr)
+
+    def test_validate_request_spec_rejects_assumed_section_without_explicit_assumption(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_root = Path(temp_dir)
+            app_dir = workflow_root / "output" / "TodoList"
+            request_spec = build_valid_request_spec()
+            request_spec["businessChecklist"]["edgeCases"]["source"] = "assumed"
+            request_spec["businessChecklist"]["edgeCases"]["assumption"] = "Assume no duplicate handling for MVP"
+            write_file(app_dir / "request-spec.json", json.dumps(request_spec))
+            result = run_script("validate-request-spec.sh", str(app_dir / "request-spec.json"), workflow_root=str(workflow_root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("businessChecklist.edgeCases.assumption must be listed in assumptions", result.stderr)
+
     def test_write_approval_state_requires_planning_gate(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workflow_root = Path(temp_dir)
@@ -68,6 +91,61 @@ class WorkflowGateTests(unittest.TestCase):
             app_dir = workflow_root / "output" / "TodoList"
             write_file(app_dir / "requirements.md", "# TodoList\n")
             write_file(app_dir / "request-spec.json", json.dumps({"businessChecklist": {"complete": True}}))
+            planning = run_script(
+                "write-planning-state.sh",
+                "TodoList",
+                "tester",
+                "http://localhost:5001",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=str(workflow_root)
+            )
+            self.assertEqual(planning.returncode, 0, planning.stderr)
+            write_file(
+                app_dir / "workflow-state.json",
+                json.dumps(
+                    {
+                        "requirementsApproved": True,
+                        "approvalToken": "APPROVE_REQUIREMENTS",
+                        "appName": "TodoList",
+                        "requirementsSha256": "",
+                        "approvedBy": "tester",
+                        "approvedAtUtc": "2026-03-10T00:00:00Z",
+                        "approvalSource": "natural-language",
+                        "approvalText": "Approved, proceed",
+                        "interactionMode": "nl-business-first",
+                        "businessChecklistComplete": True
+                    }
+                )
+            )
+            workflow_state = json.loads((app_dir / "workflow-state.json").read_text(encoding="utf-8"))
+            workflow_state["requirementsSha256"] = sha256((app_dir / "requirements.md").read_bytes()).hexdigest()
+            write_file(app_dir / "workflow-state.json", json.dumps(workflow_state))
+            result = run_script("check-approval-gate.sh", "TodoList", workflow_root=str(workflow_root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Request spec failed", result.stderr)
+
+    def test_check_approval_gate_rejects_url_and_proceed_only_flow(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_root = Path(temp_dir)
+            app_dir = workflow_root / "output" / "TodoList"
+            write_file(app_dir / "requirements.md", "# TodoList\n")
+            write_file(
+                app_dir / "request-spec.json",
+                json.dumps(
+                    {
+                        "sourcePrompt": "Generate a Todo app",
+                        "businessChecklist": {
+                            "complete": True
+                        },
+                        "technicalInputs": {
+                            "creatioUrl": "http://localhost:5001",
+                            "credentialsStatus": "existing_env"
+                        },
+                        "assumptions": []
+                    }
+                )
+            )
             planning = run_script(
                 "write-planning-state.sh",
                 "TodoList",

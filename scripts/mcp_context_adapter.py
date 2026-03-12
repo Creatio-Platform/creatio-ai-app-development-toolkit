@@ -226,7 +226,13 @@ def normalize_result_document(document):
     contract_type = infer_contract_type(normalized)
     normalized["contractType"] = contract_type
     schema_sync = normalized.get("schemaSync")
+    operation_log = normalized.get("operationLog")
+    page_evidence = normalized.get("pageEvidence")
+    acceptance_evidence = normalized.get("acceptanceEvidence")
     normalized["schemaSync"] = list(schema_sync) if isinstance(schema_sync, list) else []
+    normalized["operationLog"] = list(operation_log) if isinstance(operation_log, list) else []
+    normalized["pageEvidence"] = copy.deepcopy(page_evidence) if isinstance(page_evidence, dict) else {}
+    normalized["acceptanceEvidence"] = copy.deepcopy(acceptance_evidence) if isinstance(acceptance_evidence, dict) else {}
     if contract_type == "short" and normalized.get("success") is True:
         normalized["editableContext"] = build_editable_context(normalized)
     else:

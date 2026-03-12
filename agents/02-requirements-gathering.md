@@ -65,6 +65,13 @@ Mandatory checklist groups:
 
 Do not proceed until checklist is complete.
 
+For every checklist group, persist:
+- `source: "confirmed"` when the developer answered it explicitly
+- `source: "assumed"` when the agent had to resolve it
+- `assumption: "<text>"` when `source="assumed"`
+
+Do not mark `businessChecklist.complete=true` unless every group is either confirmed or explicitly assumed and accepted through the final natural-language approval.
+
 Default UX policy when explicit page surfaces are missing or partial:
 - `FormPage`: keep `Name` as header/title when present and include all approved non-inherited business fields from the main entity. Required business fields must always be included.
 - `ListPage`: include `Name`, every required non-inherited business field, then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
@@ -87,14 +94,14 @@ Create normalized request spec:
 {
   "sourcePrompt": "<original developer prompt>",
   "businessChecklist": {
-    "businessOutcome": {"complete": true, "value": "..."},
-    "actorsAndRoles": {"complete": true, "value": "..."},
-    "domainModel": {"complete": true, "value": "..."},
-    "lifecycleAndStatuses": {"complete": true, "value": "..."},
-    "businessRules": {"complete": true, "value": "..."},
-    "uxExpectations": {"complete": true, "value": "..."},
-    "edgeCases": {"complete": true, "value": "..."},
-    "acceptanceCriteria": {"complete": true, "value": "..."},
+    "businessOutcome": {"complete": true, "value": "...", "source": "confirmed"},
+    "actorsAndRoles": {"complete": true, "value": "...", "source": "confirmed"},
+    "domainModel": {"complete": true, "value": "...", "source": "confirmed"},
+    "lifecycleAndStatuses": {"complete": true, "value": "...", "source": "confirmed"},
+    "businessRules": {"complete": true, "value": "...", "source": "confirmed"},
+    "uxExpectations": {"complete": true, "value": "...", "source": "confirmed"},
+    "edgeCases": {"complete": true, "value": "...", "source": "assumed", "assumption": "..."},
+    "acceptanceCriteria": {"complete": true, "value": "...", "source": "confirmed"},
     "complete": true
   },
   "technicalInputs": {
@@ -107,6 +114,9 @@ Create normalized request spec:
   ]
 }
 ```
+
+Every checklist section object must include `source`.
+If `source="assumed"`, it must also include `assumption`, and that exact text must appear in the top-level `assumptions` array.
 
 Do not use a shortened request spec. Every key shown above is mandatory when `businessChecklist.complete=true`.
 
@@ -247,10 +257,12 @@ scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
 12. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
 13. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
 14. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
-15. If list/form UX is missing or partial, write the resolved default `FormPage` fields and `ListPage` columns explicitly into `requirements.md` before handoff.
-16. Required non-inherited business fields must never be omitted from the resolved default `FormPage` or `ListPage`.
-17. Default `ListPage` columns must stay compact: include `Name`, required business fields, then only the highest-priority short operational fields, capped at 6 total visible columns unless required fields exceed that number.
-18. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless explicitly requested or required.
+15. Do not mark a checklist group complete without `source="confirmed"` or `source="assumed"`.
+16. If `source="assumed"`, persist the explicit assumption text in both the section object and the top-level `assumptions` array.
+17. If list/form UX is missing or partial, write the resolved default `FormPage` fields and `ListPage` columns explicitly into `requirements.md` before handoff.
+18. Required non-inherited business fields must never be omitted from the resolved default `FormPage` or `ListPage`.
+19. Default `ListPage` columns must stay compact: include `Name`, required business fields, then only the highest-priority short operational fields, capped at 6 total visible columns unless required fields exceed that number.
+20. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless explicitly requested or required.
 
 ## Default Classification
 
