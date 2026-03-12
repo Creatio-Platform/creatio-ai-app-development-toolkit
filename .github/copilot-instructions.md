@@ -2,53 +2,65 @@
 
 ## About This Repository
 
-This is a self-contained toolkit for AI-assisted Creatio composable app development. It contains all knowledge, templates, and instructions needed to generate complete Creatio applications from natural language descriptions.
+Toolkit for AI-assisted Creatio composable app development. It includes orchestration instructions, generation skills, canonical context, and templates.
+
+## Source of Truth
+
+Treat these as canonical:
+- `AGENTS.md`
+- `context/business-checklist.md`
+- `context/essentials.md`
+- `context/schema-reference.md`
+- `context/ui-reference.md`
+- `context/data-bindings-reference.md`
+- `context/bindings-lookup.json`
+- `templates/**`
 
 ## Architecture
 
-The toolkit uses a **multi-agent architecture**:
+- Orchestrator: `AGENTS.md`
+- Agents: `agents/`
+- Skills: `skills/*/SKILL.md`
+- Context: `context/`
+- Templates: `templates/`
 
-- **Orchestrator** (`AGENTS.md`) — coordinates 5 agents in sequence
-- **Agents** (`agents/`) — 5 specialized agents, one per phase
-- **Skills** (`skills/`) — 4 implementation skills used by Agent 4
-- **Context** (`context/`) — knowledge base (read-only)
-- **Templates** (`templates/`) — file format references (read-only)
+## Execution Rules
 
-## How to Work
+1. Read `AGENTS.md` first.
+2. Use natural-language interaction as primary UX.
+3. Before Agent 1, persist Gate P with `scripts/write-planning-state.sh` and verify it with `scripts/check-planning-gate.sh`.
+4. Never create `output/<AppName>/` artifacts before Gate P passes.
+5. Ask business clarifications until checklist is complete.
+6. Ask technical questions only for blockers only.
+7. Never expose internal gate tokens or script names in user-facing dialogue.
+8. Run phases in order: setup → requirements → plan → implementation.
+9. Agents 1/3 run in background (`task(..., mode: "background")`) and wait with `read_agent`. Agent 4 runs synchronously.
+10. Agent 2 is interactive only and must not be delegated.
+11. Persist workflow artifacts:
+   - `requirements.md`
+   - `request-spec.json`
+   - `workflow-state.json`
+12. Before Agent 3/4 run: `scripts/check-approval-gate.sh <AppName>`.
+13. Gate R must be written with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
+14. For full app creation, use MCP `application.create` as primary generation path.
+15. If create collides with an existing app, branch only through documented existing-app discovery (`application.get_list` → `application.get_info`) and report the branch explicitly.
+16. Validate `application.create` presence via `tools/list` before implementation.
+17. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
+18. Final summaries must reflect the materialized result, not only the planned request spec.
+19. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 
-When a developer asks you to create a Creatio application:
+## Agent 4 Implementation
 
-1. **First**, read `AGENTS.md` for the orchestration workflow
-2. **Execute agents in order**: Environment Setup → Requirements → Plan → Implementation → Deploy
-3. **Each agent has its own file** in `agents/` — read it before starting that phase
-4. **ALL agents run in background** using `task` tool with `mode: "background"` — wait for completion with `read_agent`
-5. **Agent 2 (Requirements) is INTERACTIVE** — do NOT delegate to a sub-agent (handle directly, not via task tool)
-6. **Agent 4 uses skills** from `skills/` — each skill generates a specific file type
-7. **Always read referenced context files** (`context/*.md`) — they contain critical GUIDs and format specs
-8. **Use templates** (`templates/`) as exact format reference for generated files
+Agent 4 executes MCP tools directly via curl commands. All instructions and examples are in:
+- `agents/04-implementation.md`
+- `context/mcp-application-tools-reference.md`
 
-## Key Context Files
+The `skills/application-creation/SKILL.md` file is **deprecated** and no longer used. All workflow documentation has been consolidated into the agent instructions and MCP reference guide.
 
-| File | Contains |
-|------|----------|
-| `context/creatio-platform.md` | Platform overview, composable apps, Freedom UI |
-| `context/entity-types.md` | DataValueType→GUID map, KNOWN_PARENTS, BASE_ENTITY_COLS |
-| `context/schema-types.md` | Entity/Page/Addon file formats with examples |
-| `context/composable-app-structure.md` | Package descriptor, directory structure |
-| `context/freedomui-reference.md` | Page JS format, control types, viewConfigDiff |
-| `context/data-bindings-reference.md` | SysModule/SysModuleEntity column UIds |
-| `context/clio-reference.md` | CLI commands for deploy |
-| `context/naming-conventions.md` | Usr prefix, PascalCase, GUID format |
+## Critical Conventions
 
-## Critical Rules
-
-- **All agents run in background mode** — use `task` tool with `mode: "background"`, then `read_agent` to wait
-- **Agent 2 requires user interaction** — always challenge the idea, ask questions, get approval (handle directly, NOT via task tool)
-- **Do NOT generate files until .creatio-env.json exists**
-- Entities MUST inherit from BaseEntity or BaseLookup (never standalone)
-- Do NOT add Id, CreatedOn, CreatedBy, ModifiedOn, ModifiedBy columns (inherited)
-- Enum-like fields → separate lookup entity (extends BaseLookup)
-- Use `clio push-pkg` for deploy (file-based, not OData)
-- Use `clio new-pkg` to create package skeleton
-- Generate files to `output/<AppName>/` directory
-- All entity/page names start with `Usr` prefix
+- All custom names start with `Usr`.
+- Entities inherit from BaseEntity or BaseLookup.
+- Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`).
+- Enum-like fields are separate lookup entities.
+- All generated files live under `output/<AppName>/`.

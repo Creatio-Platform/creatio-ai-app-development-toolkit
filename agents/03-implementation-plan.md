@@ -2,133 +2,371 @@
 
 ## Role
 
-Transform approved requirements into technical plan with all GUIDs pre-generated.
+Transform approved requirements into a deterministic MCP execution plan for `application.create`, `application.get_list`, `application.get_info`, and follow-up DB-first schema sync.
 
 ## Input/Output
 
-- **Input:** `output/<AppName>/requirements.md`
-- **Output:** `output/<AppName>/plan.md`
+- Input:
+  - `output/<AppName>/requirements.md`
+  - `output/<AppName>/request-spec.json`
+  - `output/<AppName>/workflow-state.json`
+- Output: `output/<AppName>/plan.md`
 
 ## Context
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/schema-reference.md` for GUIDs/types, `context/essentials.md` for structure/naming).
-
----
+Read:
+- `context/essentials.md`
+- `context/business-checklist.md`
+- `context/ui-reference.md`
+- `context/data-bindings-reference.md`
 
 ## Steps
 
-### 1. Generate All GUIDs
+### 0. Check Gate R (mandatory)
 
-Generate unique GUID (lowercase `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) for:
-- Package, entities, columns, pages, addons, bindings, records
-
-### 2. Define Generation Order
-
-Strict dependency order:
-1. Lookup entities (BaseLookup)
-2. Main entities (BaseEntity)
-3. List pages
-4. Form pages
-5. Addons
-6. Data bindings (SysModule, SysModuleEntity)
-7. Seed data
-
-### 3. Define Each Entity
-
-For every entity, write the following block:
-
-```
-Entity: UsrTaskStatus
-UId: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-Parent: BaseLookup (11ab4bcb-9b23-4b6d-9c86-520fae925d75)
-Columns: (none — BaseLookup provides Name, Description)
+Run:
+```bash
+scripts/check-planning-gate.sh <AppName>
+scripts/check-approval-gate.sh <AppName>
 ```
 
-For entities with columns:
+If this fails, stop immediately and report blocker.
 
+### 1. Validate Business Completeness
+
+Parse `request-spec.json` and verify:
+- `businessChecklist.complete=true`
+- every required business checklist section has `complete=true` and non-empty `value`
+- `sourcePrompt` is present
+- `technicalInputs.creatioUrl` is present
+- `technicalInputs.credentialsStatus` is present
+- `assumptions` is present as an array
+
+Parse `workflow-state.json` and verify:
+- `businessChecklistComplete=true`
+- `interactionMode="nl-business-first"`
+- `approvalSource="natural-language"`
+- `approvalText` is non-empty
+
+If any check fails, stop with blocker and return missing checklist items.
+
+When requirements mention ListPage sorting, classify them before planning:
+- plain column order such as `CreatedOn desc` or `UsrDueDate asc`
+- semantic or business order such as "Open first, Done last"
+
+Only the first category is plan-safe as pure `page.update` sorting metadata. The second category requires an explicit technical sort key, approved additional runtime logic, or a blocker note.
+
+### 2. Parse Inputs
+
+Extract from requirements + request spec:
+- app overview and locked business decisions
+- whether the flow creates a new app or updates an existing app
+- entities/lookups/pages/rules
+- whether there is a single primary record type that should stay on the template-created section entity or multiple distinct business objects
+- record title / display column for each entity and lookup
+- whether any title-like field is explicitly distinct from the record name or should be normalized to `Name`
+- whether list/form UX is explicit, partial, or missing and therefore requires resolved defaults
+- the resolved FormPage field set and ListPage column set for the main entity
+- assumptions
+- MCP `application.create` input block
+- entity schema changes that cannot be expressed by `application.create` template defaults
+
+### 3. Resolve MCP Payload
+
+Build final payload fields for Agent 4:
+- `name`
+- `code`
+- `templateCode`
+- `iconId`
+- `iconBackground`
+- `description` (nullable)
+- `clientTypeId` (nullable)
+- `optionalTemplateDataJson` (JSON string)
+
+Resolution rules:
+1. `code` must start with `Usr`.
+2. If `templateCode` is empty, use `AppFreedomUI`.
+3. If `optionalTemplateData.useExistingEntitySchema=true`, require `entitySchemaName`.
+4. `optionalTemplateData.useAIContentGeneration` must be `false` for this MCP flow.
+5. `iconId`:
+   - use explicit value if provided,
+   - otherwise mark as `auto` and document runtime selection strategy.
+6. `iconBackground`:
+   - use explicit value if provided,
+   - otherwise mark as `auto` and document deterministic palette strategy.
+
+### 4. Build schema sync plan
+
+For each approved entity:
+- determine whether `application.create` template output is sufficient
+- for new-app flows, treat the template-created section entity returned by `application.create` as the canonical main entity for the app's primary records
+- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns through `entity.update`
+- if extra custom columns are required, prepare explicit sync steps
+- if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
+- if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
+- create new lookup entities first via `entity.create_lookup`
+- for every lookup entity, rely on inherited `Name` as the display value, mark it as the required `PrimaryDisplayColumn`, and never plan `Name` or duplicate title-like columns as custom columns
+- after every `entity.create_lookup` step, require response validation that inherited `Name` is present in the persisted schema snapshot before proceeding
+- for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `binding.create` step immediately after the corresponding `entity.create_lookup` call
+- create non-template entities via `entity.create` only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
+- before any `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`; if `Name` already exists, reuse `Name` in UX and never plan an `addColumn` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
+- update existing template-created entities via `entity.update`
+- if the run creates a new app or extends the main entity with approved non-inherited business fields, emit explicit page-sync steps for the generated `FormPage` and `ListPage`
+
+Execution order for lookups with seed data:
+1. `entity.create_lookup` → create the lookup schema
+2. `binding.create` → populate the lookup with seed rows from requirements
+3. `application.get_info` → refresh context after both operations
+
+Default planning rules:
+- `schema default` means the backend/entity schema contract sets the value through `entity.create` or `entity.update`.
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler step in the plan.
+- A requirement such as `UsrStatus defaults to New` is closed only when the plan contains an explicit `schema default` step or an explicit `ui default` step.
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
+- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `defaultValue` with `defaultValueSource="Const"`.
+
+For `entity.update`, prepare `operationsJson` only:
+- `addColumn`
+- `updateColumn`
+- `removeColumn`
+
+Never treat omission as deletion.
+
+Canonical context rule:
+- initialize from `application.create` for new apps
+- initialize from `application.get_info` for existing apps
+- after every successful entity mutation, refresh context via `application.get_info`
+- treat `entity.create_lookup`, `entity.create`, and `entity.update` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
+
+### 4.1. Build Page Sync Plan
+
+When the plan creates a new app or extends the main section entity, page sync is mandatory.
+
+Resolve FormPage fields with this algorithm:
+- if requirements provide a complete explicit FormPage field list, use it as-is and add any missing required non-inherited business fields
+- if requirements are partial, keep the explicit fields and fill the missing fields with defaults
+- if requirements are missing, default to `Name` as header/title when present and include all approved non-inherited business fields from the main entity
+- required non-inherited business fields must never be omitted
+
+Resolve ListPage columns with this algorithm:
+- if requirements provide a complete explicit ListPage column list, use it as-is and add any missing required non-inherited business fields
+- if requirements are partial, keep the explicit columns and fill the missing columns with defaults
+- always include `Name`
+- always include every required non-inherited business field
+- then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount
+- cap auto-selected default ListPage columns at 6 total visible columns unless required business fields exceed that number
+- exclude inherited audit/system fields unless explicitly requested
+- exclude long/rich/blob fields unless explicitly requested or required
+
+For each required page, emit this execution sequence in `plan.md`:
+1. `page.list` to discover the generated page schema in the app package
+2. `page.get` to read the live JS body
+3. `page.update` with `dryRun: "true"` to validate the merged body
+4. `page.update` without dry run to persist the page
+5. `page.get` again to verify required FormPage fields and resolved ListPage columns are materialized
+
+ListPage plan rules:
+- preserve existing DataGrid columns and order unless the requirements explicitly demand reordering
+- append only the missing resolved columns
+- plan deterministic `DataGrid.columns` merge logic
+- plan sorting changes only when requirements explicitly call for supported sortable-column order
+
+FormPage lookup sync plan rules:
+- for datasource-bound `crt.ComboBox` fields, instruct Agent 4 to add only the main view-model attribute and minimal ComboBox view config
+- do not plan manual `*_List`, embeddedModel, nested `value`/`displayValue`, sorting, paging, or `crt.ComboboxSearchTextAction` unless the live page body already materializes them and the plan explicitly says to preserve them
+- keep FormPage lookup-list preservation guidance separate from ListPage sorting rules; never reuse lookup-list examples as a general binding-generation recipe
+
+Machine-readable page sync contract:
+- when page sync is required, `plan.md` must include an embedded JSON block between these exact markers:
+  - `<!-- PAGE_SYNC_PLAN_JSON_START -->`
+  - `<!-- PAGE_SYNC_PLAN_JSON_END -->`
+- the embedded JSON must be valid and use this shape:
+
+```json
+{
+  "packageName": "UsrTodoList",
+  "pages": [
+    {
+      "schemaName": "UsrTodoList_FormPage",
+      "kind": "form",
+      "bodyPath": "output/UsrTodoList/page-sync/UsrTodoList_FormPage.body.js",
+      "requiredModelPaths": ["PDS.UsrStatus", "PDS.UsrPriority"]
+    },
+    {
+      "schemaName": "UsrTodoList_ListPage",
+      "kind": "list",
+      "bodyPath": "output/UsrTodoList/page-sync/UsrTodoList_ListPage.body.js",
+      "requiredCodes": ["PDS_Name", "PDS_UsrStatus", "PDS_UsrPriority"]
+    }
+  ]
+}
 ```
-Entity: UsrTask
-UId: f9e8d7c6-b5a4-3210-fedc-ba0987654321
-Parent: BaseEntity (1bab9dcf-17d5-49f8-9536-8e0064f1dce0)
-Columns:
-  - UsrName: UId=11111111-2222-3333-4444-555555555555, DVT=Text(250) (8b3f29bb-ea14-4ce5-a5c5-293571e9d8b3) [numeric DVT=1]
-  - UsrDescription: UId=22222222-3333-4444-5555-666666666666, DVT=Text(500) (8b3f29bb-ea14-4ce5-a5c5-293571e9d8b3) [numeric DVT=1]
-  - UsrStatus: UId=33333333-4444-5555-6666-777777777777, DVT=Lookup (b295071f-7ea9-4e62-8d1a-919bf3732ff2) [numeric DVT=10], ReferenceSchema=UsrTaskStatus (a1b2c3d4-e5f6-7890-abcd-ef1234567890)
-  - UsrDueDate: UId=44444444-5555-6666-7777-888888888888, DVT=Date (d21e9ef4-c064-4012-b286-fa1a8171da2e) [numeric DVT=8]
+
+- prefer `bodyPath` over inline `body` so `plan.md` stays readable
+- if `bodyPath` is used, Agent 3 must materialize those page body files under `output/<AppName>/page-sync/`
+- if the run requires page sync, Agent 3 must also write `output/<AppName>/page-sync-plan.json` with the same JSON payload used in the embedded block
+- `requiredModelPaths` and `requiredCodes` must reflect the resolved verification targets that Agent 4 will check after persistence
+
+### 4.2. Entity Tool Payload Validation
+
+When generating `entity.create_lookup`, `entity.create`, or `entity.update` payloads in the plan, follow these rules to prevent parameter name errors:
+
+**CRITICAL Parameter Names:**
+
+**For Entity Tools (entity.create_lookup, entity.create, entity.update):**
+
+1. ❌ NEVER use `packageName` → always use `packageUId` (GUID string)
+2. ❌ NEVER use `entitySchemaUId` → always use `entityUId` (GUID string, REQUIRED for entity.update)
+3. ❌ NEVER use `entityName` → always use `name` for create tools, `schemaName` for entity.update
+4. ❌ NEVER use `displayName` or `description` → always use `caption` (string)
+5. ❌ NEVER use flat column structures → always use `{operation, column: {...}}` for `operationsJson`
+6. ❌ NEVER add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns → BaseLookup already provides `Name`/`Description`, and `Name` must remain the lookup `PrimaryDisplayColumn`
+7. ❌ NEVER add `UsrName`, `UsrTitle`, or `UsrCaption` to an existing/template-created entity if the refreshed schema snapshot already contains `Name`, unless the requirements explicitly call for a separate business field
+8. ❌ NEVER treat seeded lookup rows as proof that a `defaults to X` requirement is implemented
+9. ✅ For `schema default`, use `defaultValueSource` and `defaultValue` in the column payload
+10. ✅ For lookup-backed `schema default`, `defaultValue` must be the seeded row GUID, not its caption
+
+**For Binding Tools (binding.create):**
+
+1. ❌ NEVER use `dataName` or `bindingFolder` → always use `bindingName`
+2. ❌ NEVER use `dataJson` or `data` → always use `rowsJson`
+3. ❌ NEVER use `packageName` → always use `packageUId`
+4. ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
+5. ✅ ALWAYS use `schemaName` for entity reference
+6. ✅ `rowsJson` must be array of rows: `[[{columnName, value}, ...], ...]`
+7. ✅ For lookup seed data, each row must include a fresh `Id` GUID and `Name`; include `Description` when the lookup seed should persist it
+8. ✅ If `columnsJson` is provided, it must include every row column that must be persisted in the descriptor; otherwise omit `columnsJson` and let MCP infer columns from `rowsJson`
+
+**Correct Payload Templates:**
+
+**entity.create_lookup:**
+```bash
+curl ... -d "{
+  \"name\": \"entity.create_lookup\",
+  \"arguments\": {
+    \"packageUId\": \"$PACKAGE_UID\",     # ✅ GUID from application.create
+    \"name\": \"UsrStatusLookup\",        # ✅ NOT entityName
+    \"caption\": \"Status\",              # ✅ NOT displayName
+    \"columnsJson\": \"[]\"               # ✅ BaseLookup already provides Name/Description; Name stays the lookup PrimaryDisplayColumn
+  }
+}"
 ```
 
-### 4. Define Each Page
-
-```
-ListPage: UsrTask_ListPage
-UId: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
-Parent: ListPageV3Template (b7b898d0-8b1c-4a64-8310-005c2e523c76)
-SchemaType: AngularSchema
-DataGrid columns: UsrName, UsrStatus, UsrDueDate
-```
-
-```
-FormPage: UsrTask_FormPage
-UId: bbbbbbbb-cccc-dddd-eeee-ffffffffffff
-Parent: PageWithTabsFreedomTemplate (3b2e117f-efac-49a2-a9f5-0f2e4e8f1496)
-SchemaType: AngularSchema
-Fields:
-  Row1: UsrName (Input)
-  Row2: UsrDescription (Input, multiline)
-  Row3: UsrStatus (ComboBox), UsrPriority (ComboBox)
-  Row4: UsrDueDate (DatePicker)
+**entity.update:**
+```bash
+curl ... -d "{
+  \"name\": \"entity.update\",
+  \"arguments\": {
+    \"entityUId\": \"$ENTITY_UID\",      # ✅ REQUIRED from entity.create or application.get_info
+    \"packageUId\": \"$PACKAGE_UID\",    # ✅ REQUIRED from application.create
+    \"schemaName\": \"UsrMainEntity\",   # ✅ Optional (can read from DB if empty)
+    \"caption\": \"Main Entity\",
+    \"operationsJson\": \"[{\\\"operation\\\":\\\"updateColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStatus\\\",\\\"caption\\\":\\\"Status\\\",\\\"dataValueTypeName\\\":\\\"Lookup\\\",\\\"referenceSchemaName\\\":\\\"UsrStatusLookup\\\",\\\"defaultValueSource\\\":\\\"Const\\\",\\\"defaultValue\\\":\\\"$STATUS_NEW_ID\\\"}}]\"  # ✅ Nested structure
+  }
+}"
 ```
 
-### 5. Define Each Addon
-
-```
-Addon: UsrTask_FormPage_Addon
-UId: cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa
-TargetEntity: UsrTask (f9e8d7c6-b5a4-3210-fedc-ba0987654321)
-FormPage: UsrTask_FormPage (bbbbbbbb-cccc-dddd-eeee-ffffffffffff)
-```
-
-### 6. Define Data Bindings
-
-```
-SysModuleEntity:
-  Id: dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb
-  SysEntitySchemaUId: f9e8d7c6-b5a4-3210-fedc-ba0987654321 (UsrTask)
-
-SysModule:
-  Id: eeeeeeee-ffff-aaaa-bbbb-cccccccccccc
-  SysModuleEntityId: dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb
-  CardSchemaUId: bbbbbbbb-cccc-dddd-eeee-ffffffffffff (UsrTask_FormPage)
-  SectionSchemaUId: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee (UsrTask_ListPage)
-
-LookupSeed: UsrTaskStatus
-  Records:
-    - { Id: 11111111-aaaa-bbbb-cccc-dddddddddddd, Name: "New" }
-    - { Id: 22222222-aaaa-bbbb-cccc-dddddddddddd, Name: "In Progress" }
-    - { Id: 33333333-aaaa-bbbb-cccc-dddddddddddd, Name: "Done" }
+**binding.create:**
+```bash
+STATUS_NEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+curl ... -d "{
+  \"name\": \"binding.create\",
+  \"arguments\": {
+    \"packageUId\": \"$PACKAGE_UID\",             # ✅ REQUIRED from application.create
+    \"schemaName\": \"UsrStatusLookup\",        # ✅ Entity schema name
+    \"bindingName\": \"UsrStatusLookup_Seed\",  # ✅ NOT dataName or bindingFolder
+    \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_NEW_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}]]\",  # ✅ NOT dataJson
+    \"installType\": \"0\"                      # ✅ Optional, default 0
+  }
+}"
 ```
 
-### 7. Save plan.md
+**CRITICAL for binding.create:**
+- ❌ NEVER use `dataName` → always use `bindingName`
+- ❌ NEVER use `dataJson` → always use `rowsJson`
+- ❌ NEVER use `packageName` → always use `packageUId`
+- ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
+- ❌ NEVER use decorative placeholder GUIDs such as `11111111-...` in executable payloads; generate fresh GUIDs at runtime
+- ❌ NEVER pass partial `columnsJson`; if `columnsJson` is supplied, MCP uses only those descriptor columns
+- ✅ Success response is only `{\"success\": true}`
+- ✅ `rowsJson` format: array of rows, each row is array of `{columnName, value}` objects
+- ✅ For lookup seed bindings, prefer omitting `columnsJson` so MCP infers `Id`, `Name`, and optional `Description` from `rowsJson`
+- ✅ Example: `[[{"columnName":"Id","value":"<fresh-guid>"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]`
 
-Write the complete plan to `output/<AppName>/plan.md` with all sections above.
+**UId Variable Strategy:**
+
+Document in plan that UIds will be extracted from `application.create` response using the new flat format:
+
+```bash
+# Method 1: Ultra-simple with helper script (recommended)
+bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
+source /tmp/.mcp-env
+# Variables: $PACKAGE_UID, $MAIN_ENTITY_UID, $PACKAGE_NAME, etc.
+
+# Method 2: Direct jq extraction from flat format
+PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-response.json)
+MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-response.json)
+```
+
+Always show correct JSON structure in plan examples. Never show wrong parameter names.
+
+### 5. Build `plan.md`
+
+Create `plan.md` with sections:
+- App Summary
+- Business Decisions Locked
+- Assumptions
+- MCP Payload (resolved and validated)
+- Schema Sync Plan
+- Page Sync Plan
+- Embedded `page-sync-plan.json` block when page sync is required
+- Runtime Resolution Strategy (`iconId` and `iconBackground`)
+- Expected Output Artifacts
+- Validation Rules
+- Blocker Conditions
+
+### 6. Validation Checks
+
+Check:
+- required payload fields are present
+- GUID format validity for explicit `iconId` and explicit `clientTypeId`
+- `optionalTemplateDataJson` is valid JSON
+- no unsupported values remain (`useAIContentGeneration=true`)
+- lookup creation steps are ordered before updates that reference them
+- lookup creation steps include validation that inherited `Name` exists in the persisted schema snapshot
+- every `entity.update` step uses explicit `operationsJson`
+- if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operationsJson` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
+- if the app has one primary record type, the plan does not create a second BaseEntity with the same business meaning as the template-created section entity
+- if the run creates or extends the main entity for a new app, the plan includes explicit `FormPage` and `ListPage` sync steps
+- resolved FormPage fields include every required non-inherited business field
+- resolved ListPage columns include `Name`, every required non-inherited business field, and only compact optional fields selected by the priority rules
+- auto-selected default ListPage columns are capped at 6 total visible columns unless required business fields exceed that number
+- every page sync sequence ends with `page.get` verification after persistence
+- the implementation phase is described as synchronous, not a detached/background write phase
+- every ListPage sorting step is classified as either plain column order or semantic order, and semantic order is not emitted as plain DataGrid sorting without an explicit technical carrier
+
+### 7. Save `plan.md`
+
+Write final plan to:
+- `output/<AppName>/plan.md`
+
+When page sync is required, also write:
+- `output/<AppName>/page-sync-plan.json`
+- `output/<AppName>/page-sync/<SchemaName>.body.js` for each synchronized page
 
 ## Rules
 
-1. **Every GUID must be unique** across the entire plan. No duplicates anywhere.
-2. **Lookups before entities** — generation order matters because entities reference lookups.
-3. **DVT GUIDs must come from `context/entity-types.md`** — never invent DataValueType GUIDs.
-4. **Parent UIds must come from KNOWN_PARENTS** in `context/entity-types.md` — never invent parent GUIDs.
-5. **Do NOT include inherited columns** — `Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy` come from `BaseEntity`/`BaseLookup` automatically.
-6. **Column names must start with `Usr` prefix** — e.g., `UsrName`, `UsrStatus`.
-7. **Entity names must start with `Usr` prefix** — e.g., `UsrTask`, `UsrTaskStatus`.
-8. **Page names follow pattern** `<EntityName>_ListPage` and `<EntityName>_FormPage`.
-9. **Addon names follow pattern** `<EntityName>_FormPage_Addon`.
+1. Keep plan deterministic and execution-ready.
+2. Do not create GUID matrices manually for all schemas.
+3. Do not include generated file bodies in plan.
+4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, ordered page sync calls, and result/report artifact persistence.
+5. If page sync is required, the machine-readable page sync contract must be extractable without parsing prose.
 
 ## Completion Criteria
 
+✅ Gate R passed  
+✅ `businessChecklist.complete=true` in `request-spec.json`  
 ✅ `output/<AppName>/plan.md` exists  
-✅ Every artifact has a unique GUID  
-✅ All DVT GUIDs match `context/entity-types.md`  
-✅ All parent UIds match KNOWN_PARENTS  
-✅ Cross-references are consistent (entity UIds used in pages/addons/bindings match entity definitions)  
-✅ Generation order is explicit: lookups → entities → pages → addons → bindings → seed data  
+✅ when page sync is required, `output/<AppName>/page-sync-plan.json` exists and matches the embedded contract  
+✅ MCP payload is fully resolved or has explicit runtime resolution rules  
+✅ Explicit validations and blocker conditions are documented  

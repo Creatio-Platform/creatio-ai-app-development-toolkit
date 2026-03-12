@@ -1,79 +1,122 @@
 # No-Code Assistant for Creatio
 
-Self-contained toolkit that enables AI code agents to generate Creatio composable apps from natural language descriptions.
+Self-contained toolkit for AI-driven generation and deployment of Creatio composable apps from natural-language requests.
 
-**Supported AI agents:** GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code
+Supported agents: GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code.
 
-## Quick Start
+## Source of Truth
 
-1. Clone this repo and open in your IDE with AI agent
-2. Say: *"Create a Todo List app with tasks, statuses, and priorities on http://mysite.creatio.com"*
-3. AI orchestrates 5 agents automatically: setup → requirements → planning → implementation → deploy
-4. Working Creatio app deployed and accessible
+Use these files as canonical:
+- `AGENTS.md`
+- `context/business-checklist.md`
+- `context/essentials.md`
+- `context/schema-reference.md`
+- `context/ui-reference.md`
+- `context/data-bindings-reference.md`
+- `context/bindings-lookup.json`
+- `templates/**`
+
+## Developer UX
+
+Primary workflow is natural language:
+1. Developer sends one free-form prompt.
+2. Agent returns a short “What I understood”.
+3. Agent persists Gate P only after natural-language confirmation and a concrete Creatio URL.
+4. Agent asks business clarifications in batches until checklist is complete.
+5. Agent asks minimal technical questions only (blockers).
+6. Agent runs the pipeline and returns final artifacts/results.
+7. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
+
+Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
+
+## Workflow
+
+Orchestrator flow:
+1. Planning start with natural-language confirmation and persisted Gate P in `.workflow-state/<AppName>/planning-state.json`.
+2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
+3. Requirements gathering: builds a full `request-spec.json`, then writes approved `workflow-state.json`.
+4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
+5. Implementation: runs synchronously, uses MCP `application.create`, or branches explicitly into `application.get_list` → `application.get_info` for existing apps, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
+
+All generated artifacts are under `output/<AppName>/`.
+
+## Runtime Scripts
+
+- `bash scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
+- `bash scripts/check-planning-gate.sh <AppName>`
+- `bash scripts/validate-request-spec.sh output/<AppName>/request-spec.json`
+- `bash scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
+- `bash scripts/check-approval-gate.sh <AppName>`
+- `python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json`
+- `python3 scripts/mcp_result_evidence.py report output/<AppName>/mcp-application-result.json output/<AppName>/mcp-application-report.md`
+- `python3 scripts/page_body_tools.py build-update-args <SchemaName> <body-file> --dry-run`
+- `python3 scripts/mcp_schema_sync.py plan --current-result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json`
+- `python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json`
+- `python3 scripts/mcp_page_sync.py build-plan --plan-md output/<AppName>/plan.md --output output/<AppName>/page-sync-plan.json`
+- `python3 scripts/mcp_page_sync.py apply --result output/<AppName>/mcp-application-result.json --plan output/<AppName>/page-sync-plan.json --env output/<AppName>/.creatio-env.json --report output/<AppName>/mcp-application-report.md`
+
+`mcp-application-result.json` stores the compact short MCP response in flat runtime form (`packageUId`, `packageName`, `entities`) plus `editableContext`, `operationLog`, `pageEvidence`, and any persisted acceptance evidence. Reports must be derived from that runtime evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
+
+When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly.
 
 ## Architecture
 
 ```
 Orchestrator (AGENTS.md)
-├── Agent 1: Environment Setup    → .creatio-env.json
-├── Agent 2: Requirements ⛔       → requirements.md (interactive Q&A)
-├── Agent 3: Implementation Plan  → plan.md (GUIDs, specs)
-├── Agent 4: Implementation       → packages/**
-│   ├── Skill: Entity Creation
-│   ├── Skill: Page Creation
-│   ├── Skill: Addon Creation
-│   └── Skill: Data Bindings
-└── Agent 5: Deploy & Verify      → deployed app
-```
-
-## How It Works
-
-```
-You describe the app → AI reads agents/skills from this repo → generates package files → deploys via clio
+├── Agent 1: Environment Setup           -> .creatio-env.json
+├── Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
+├── Agent 3: Implementation Plan         -> plan.md
+├── Agent 4: Implementation              -> mcp-application-result.json + report (FINAL)
+│   └── Direct MCP tools via curl (see context/mcp-application-tools-reference.md)
 ```
 
 ## Repository Structure
 
 ```
-AGENTS.md                          ← Orchestrator (pipeline, contracts, rules)
-.github/copilot-instructions.md    ← Custom instructions for Copilot
-agents/                            ← Agent definitions (one per phase)
-  ├── 01-environment-setup.md        Clio connection setup
-  ├── 02-requirements-gathering.md   Interactive requirements Q&A
-  ├── 03-implementation-plan.md      Plan with all GUIDs
-  ├── 04-implementation.md           File generation orchestrator
-  └── 05-deploy-verification.md      Deploy, compile, verify
-skills/                            ← Implementation skills (used by Agent 4)
-  ├── entity-creation.md             Entity schema files (3 per entity)
-  ├── page-creation.md               Page schema files (4 per page)
-  ├── addon-creation.md              Addon schema files (3 per addon)
-  └── data-bindings-creation.md      SysModule, SysModuleEntity, seed data
-context/                           ← Knowledge base about Creatio platform
-  ├── creatio-platform.md            Platform overview, composable apps
-  ├── entity-types.md                DataValueType→GUID map, parent schemas
-  ├── schema-types.md                Entity/Page/Addon file formats
-  ├── composable-app-structure.md    Package descriptor, directory layout
-  ├── freedomui-reference.md         Page JS format, control types
-  ├── data-bindings-reference.md     SysModule/SysModuleEntity formats
-  ├── clio-reference.md              CLI commands reference
-  └── naming-conventions.md          Usr prefix, PascalCase rules
-templates/                         ← Real working file templates
-examples/todo-list/                ← Complete reference implementation
-output/                            ← Generated apps (gitignored)
+AGENTS.md
+.github/copilot-instructions.md
+agents/
+  01-environment-setup.md
+  02-requirements-gathering.md
+  03-implementation-plan.md
+  04-implementation.md
+skills/
+  entity-creation/SKILL.md
+  page-creation/SKILL.md
+  data-bindings-creation/SKILL.md
+  package-descriptor-creation/SKILL.md
+scripts/
+  check-planning-gate.sh
+  check-approval-gate.sh
+  validate-request-spec.sh
+  write-planning-state.sh
+  write-approval-state.sh
+  mcp_context_adapter.py
+  mcp_schema_sync.py
+.workflow-state/
+context/
+  business-checklist.md
+  essentials.md
+  mcp-application-tools-reference.md  (✨ Complete MCP tools guide)
+  schema-reference.md
+  ui-reference.md
+  data-bindings-reference.md
+  bindings-lookup.json
+templates/
+output/
 ```
 
 ## Prerequisites
 
-- AI code agent (any of the supported agents above)
-- [clio](https://github.com/Advance-Technologies-Foundation/clio) — `dotnet tool install clio -g`
-- Access to a Creatio instance
+- AI code agent
+- [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
+- Access to a running Creatio instance
 
-## Example
+## Example Prompt
 
+```text
+Generate with a code agent an Events composable app with all required schema types.
+A simple Events app is a lightweight tool for managing events in Creatio.
+It allows users to create and maintain a list of events, see them in a structured list view,
+update their status, and manage event details throughout their lifecycle.
 ```
-> Create a Todo List application with tasks that have title, description,
-> status (New/In Progress/Done), priority (Low/Medium/High), and due date.
-> Deploy to http://mysite.creatio.com
-```
-
-See `examples/todo-list/` for the complete reference output — all generated files with correct formats.

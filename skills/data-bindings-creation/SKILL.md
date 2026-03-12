@@ -1,231 +1,68 @@
 ---
 name: data-bindings-creation
-description: Generate SysModule and SysModuleEntity records for Creatio application sections. Use when creating navigation/sections in plan.md
-compatibility: Requires access to context/bindings-lookup.json
+description: Create or update Creatio data bindings through MCP `binding.get_columns` and `binding.create` for SysModule, SysModuleEntity, and lookup seed data.
+compatibility: Requires Creatio MCP binding tools plus context/bindings-lookup.json and context/data-bindings-reference.md.
 metadata:
-  version: "2.0"
+  version: "4.1"
   category: creatio-schema-generation
 ---
 
-# Data Bindings Generator
+# Data Bindings via MCP
 
-Generate SysModule and SysModuleEntity configuration records for Creatio composable apps. These records make entities appear in the application workspace as navigable sections.
+Generate package data bindings that register sections and seed lookup values.
 
-## What This Skill Does
+## Outputs
 
-Transforms section definitions from `plan.md` into SQL INSERT statements for:
-- **SysModule**
-- **SysModuleEntity**
+- MCP response with `{"success": true}`
+- Binding persisted in Creatio DB and data installed immediately
+- Optional server-side files when `outputPath` is provided to `binding.create`
 
-## When to Use
+## Source Inputs
 
-Use this skill when:
-- Creating navigable sections in the application workspace
-- Linking entities to list/form pages
-- Need exact column UIds for SysModule/SysModuleEntity tables
-
-## Input Expected
-
-From `plan.md`, you need:
-- Section name (e.g., "Tasks")
-- Section UId (pre-generated GUID)
-- Icon (e.g., "star-icon")
-- Entity UId
-- List page UId
-- Form page UId (optional, can be NULL)
-- Position in workspace (integer)
-
-## Context to Read First
-
-Before generating, read:
+From MCP and context:
+- `binding.get_columns` for deployed schemas
+- current app context with `packageUId` and target schema names
 - `context/bindings-lookup.json`
+- `context/data-bindings-reference.md`
 
-**Critical:** You MUST use the exact column UIds from `bindings-lookup.json`. Don't generate new ones.
+## Rules
 
----
+1. MCP usage is the primary generation path.
+2. Do not generate or change stable system column UIds; use values from `bindings-lookup.json`.
+3. `SysModule.data.json` and `SysModuleEntity.data.json` must reference the same SysModuleEntity record GUID.
+4. `SysModule.CardSchemaUId` must match the form page UId in the resolved app context.
+5. `SysModule.SectionSchemaUId` must match the list page UId in the resolved app context.
+6. Use standard values from `context/data-bindings-reference.md`:
+   - `SectionModuleSchemaUId`: `12244568-6d4f-f201-ed26-ac3913021080`
+   - `CardModuleUId`: `c3382be3-6619-9256-2260-93d87cf0d9b5`
+   - `FolderMode`: `b659d704-3955-e011-981f-00155d043204`
+7. `filter.json` for standard bindings is `""`.
+8. For lookup seed data, create one row per seed value.
+9. `binding.create` requires `packageUId` and works only with deployed schema metadata. After `entity.create` or `entity.create_lookup`, use the persisted schema name and `binding.get_columns` if column discovery is needed.
+10. Generate a fresh GUID for every lookup seed row. Do not reuse decorative placeholder GUIDs from docs in executable payloads.
+11. For lookup seed bindings, prefer `rowsJson` with `Id`, `Name`, and optional `Description`, and omit `columnsJson` unless explicit descriptor flags are required.
+12. If `columnsJson` is supplied, it must include every row column that must be persisted in the descriptor.
 
-## How It Works
+## Typical MCP Flow
 
-### 1. Load Column UIds
-
-Read `context/bindings-lookup.json` to get:
-
-```json
-{
-  "SysModule": {
-    "Id": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
-    "Caption": "...",
-    "SectionSchemaUId": "...",
-    "SysModuleEntityId": "..."
-    // ... more columns
-  },
-  "SysModuleEntity": {
-    "Id": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
-    "SysEntitySchemaUId": "...",
-    "CardSchemaUId": "...",
-    "SectionSchemaUId": "..."
-    // ... more columns
-  }
-}
-```
-
-Note: These UIds are **not** standard GUIDs. They're specific to Creatio's metamodel. Using wrong UIds will break the workspace.
-
-### 2. Generate SysModule INSERT
-
-Structure:
-
-```sql
-INSERT INTO SysModule (
-  [<Id_columnUId>],              -- Section UId
-  [<Caption_columnUId>],         -- Section name
-  [<SectionSchemaUId_columnUId>], -- List page UId
-  [<SysModuleEntityId_columnUId>], -- Link to SysModuleEntity record
-  [<Image32Id_columnUId>],       -- Icon
-  [<SectionIconId_columnUId>],   -- Icon (same value)
-  [<Position_columnUId>]         -- Position in workspace
-)
-VALUES (
-  '<sectionUId>',
-  '<sectionCaption>',
-  '<listPageUId>',
-  '<sysModuleEntityUId>',
-  '<iconUId>',
-  '<iconUId>',
-  <position>
-);
-```
-
-**Replace placeholders:**
-- `<Id_columnUId>` → Value from `bindings-lookup.json["SysModule"]["Id"]`
-- `<Caption_columnUId>` → Value from `bindings-lookup.json["SysModule"]["Caption"]`
-- And so on for all columns
-
-**Icon UIds:** Common icons have known UIds. For custom apps, you can use:
-- `star-icon`: Use a standard icon UId (consult context if available)
-- Or generate new icon UId (if uploading custom icon)
-
-**Position:** Integer defining order in workspace (e.g., 0, 1, 2...). Lower numbers appear first.
-
-### 3. Generate SysModuleEntity INSERT
-
-Structure:
-
-```sql
-INSERT INTO SysModuleEntity (
-  [<Id_columnUId>],                -- SysModuleEntity UId
-  [<SysEntitySchemaUId_columnUId>], -- Entity UId
-  [<CardSchemaUId_columnUId>],     -- Form page UId (or NULL)
-  [<SectionSchemaUId_columnUId>],  -- List page UId
-  [<TypeColumnUId_columnUId>]      -- Type column (for filtering, or NULL)
-)
-VALUES (
-  '<sysModuleEntityUId>',
-  '<entityUId>',
-  '<formPageUId>',
-  '<listPageUId>',
-  NULL
-);
-```
-
-**Replace placeholders:**
-- `<Id_columnUId>` → Value from `bindings-lookup.json["SysModuleEntity"]["Id"]`
-- `<SysEntitySchemaUId_columnUId>` → Value from `bindings-lookup.json["SysModuleEntity"]["SysEntitySchemaUId"]`
-- And so on
-
-**CardSchemaUId (Form page):**
-- If your section has a form page, use its UId
-- If it's list-only, use `NULL`
-
-**TypeColumnUId:**
-- Usually `NULL` for custom entities
-- Only used if entity has a type discriminator column (rare)
-
----
-
-## Critical Rules
-
-**NEVER generate new column UIds:**
-- Column UIds for SysModule/SysModuleEntity are fixed
-- Always read from `bindings-lookup.json`
-- If a column is missing from the JSON, flag it as an error
-
-**Match GUIDs between tables:**
-- `SysModule.SysModuleEntityId` MUST equal `SysModuleEntity.Id`
-- `SysModule.SectionSchemaUId` MUST equal list page UId
-- `SysModuleEntity.SectionSchemaUId` MUST equal list page UId
-
-**SQL format:**
-- Use square brackets for column identifiers: `[<guid>]`
-- Use single quotes for string/GUID values: `'<guid>'`
-- NULLs are unquoted: `NULL`
-
-**Position values:**
-- Must be unique across sections
-- Determines display order in workspace
-- Lower = higher priority (appears first)
-
----
-
-## Example Output
-
-```sql
--- SysModule for Tasks section
-INSERT INTO SysModule (
-  [ae0e45ca-c495-4fe7-a39d-3ab7278e1617], -- Id
-  [3e0502c3-c11f-4911-9802-45a82b49eb04], -- Caption
-  [bfc4f09c-e832-4266-9dda-89b841a2e19c], -- SectionSchemaUId
-  [f3e70c79-d9c2-4c3b-a5b4-c2a6f1e8b3d1], -- SysModuleEntityId
-  [e1c2d4b5-a3f6-4e7d-8c9b-1a2b3c4d5e6f], -- Image32Id
-  [e1c2d4b5-a3f6-4e7d-8c9b-1a2b3c4d5e6f], -- SectionIconId
-  [c4e6f8a2-b1d3-4e5f-9c7a-2b3c4d5e6f7a]  -- Position
-)
-VALUES (
-  '12345678-1234-1234-1234-123456789abc',
-  'Tasks',
-  '23456789-2345-2345-2345-23456789abcd',
-  '34567890-3456-3456-3456-34567890abcd',
-  '45678901-4567-4567-4567-45678901abcd',
-  '45678901-4567-4567-4567-45678901abcd',
-  0
-);
-
--- SysModuleEntity linking entity to pages
-INSERT INTO SysModuleEntity (
-  [ae0e45ca-c495-4fe7-a39d-3ab7278e1617], -- Id
-  [a27bf249-e5f2-4f41-8c7d-3a6b5e4f3c2b], -- SysEntitySchemaUId
-  [b38c1d5a-f6e3-4d52-9b8e-4c7a6f5d4e3c], -- CardSchemaUId
-  [bfc4f09c-e832-4266-9dda-89b841a2e19c], -- SectionSchemaUId
-  [d4a9f2b1-c8e7-4f6d-a5c3-2b1e9f8d7c6b]  -- TypeColumnUId
-)
-VALUES (
-  '34567890-3456-3456-3456-34567890abcd',
-  '56789012-5678-5678-5678-56789012abcd',
-  '67890123-6789-6789-6789-67890123abcd',
-  '23456789-2345-2345-2345-23456789abcd',
-  NULL
-);
-```
-
----
+1. Call `binding.get_columns` for deployed targets such as `SysModule` or `SysModuleEntity`.
+2. Build `rowsJson` and use `columnsJson` only when explicit descriptor flags are needed.
+3. Call `binding.create` with `packageUId`, `schemaName`, `bindingName`, and `rowsJson`.
+4. Validate `{"success": true}` and use `outputPath` only when server-side files are needed.
 
 ## Validation Checklist
 
-Before finalizing SQL, verify:
+- MCP response parses successfully
+- `success` is `true`
+- Binding and seed data are installed in Creatio
+- If `outputPath` is used, `descriptor.json`, `data.json`, and `filter.json` are written on the server
+- All references (entity/page/module ids) match the current app context
+- Lookup data contains all seed values
+- Lookup seed rows use fresh GUID values
+- If `columnsJson` is present, descriptor columns cover the seeded lookup columns that must persist
 
-- ✅ All column UIds from `bindings-lookup.json`
-- ✅ SysModule.SysModuleEntityId = SysModuleEntity.Id
-- ✅ Both records reference same list page UId
-- ✅ Position is unique integer
-- ✅ Entity UId matches entity schema from plan
-- ✅ Form page UId is valid or NULL
+## Notes
 
----
-
-## Output
-
-Generate SQL file directly to: `output/<AppName>/sql/workspace-bindings.sql`
-
-Append all SysModule/SysModuleEntity pairs to this file (one section pair per entity).
-
-When done, confirm: "Generated data bindings for `<SectionName>` section
+- `outputPath` is optional and writes files on the Creatio server, not into this repository.
+- `binding.create` does not return generated file bodies on success; the main result is DB persistence and immediate install.
+- Use `templates/data-bindings/` as reference examples, not as the primary generation path.

@@ -13,7 +13,7 @@
 + MetaData.Schema.D31 "null"
 + MetaData.Schema.D2 {
   "UId": "/* REPLACE: column GUID */",
-  "A2": "/* REPLACE: column name (e.g., UsrTitle) */",
+  "A2": "/* REPLACE: column name (e.g., UsrTaskCode) */",
   "A3": "/* REPLACE: entity GUID */",
   "A4": "/* REPLACE: entity GUID */",
   "A5": "/* REPLACE: package GUID */",

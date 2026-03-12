@@ -35,16 +35,15 @@ Array of operations that modify the parent page template:
 ```json
 {
 	"operation": "insert",
-	"name": "UsrTitle",
+	"name": "Name",
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 1, "rowSpan": 1},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrTitle_label",
-		"control": "$PDS_UsrTitle",
-		"visible": true,
-		"readonly": false
+		"label": "$Resources.Strings.Name",
+		"control": "$Name",
+		"labelPosition": "auto"
 	},
-	"parentName": "GeneralInfoTab",
+	"parentName": "SideAreaProfileContainer",
 	"propertyName": "items",
 	"index": 0
 }
@@ -62,8 +61,26 @@ Array of operations that modify the parent page template:
 | Boolean | Checkbox | `crt.Checkbox` |
 | DateTime, Date, Time | DateTimePicker | `crt.DateTimePicker` |
 | Lookup | ComboBox | `crt.ComboBox` |
+| Blob, File | FileInput | `crt.FileInput` |
 | Image, ImageLookup | ImageInput | `crt.ImageInput` |
 | Color | ColorPicker | `crt.ColorPicker` |
+| SecureText | EncryptedInput | `crt.EncryptedInput` |
+| Integer, Float, Money (alternate UI) | Slider | `crt.Slider` |
+
+---
+
+## Frontend-backed Component Notes
+
+The frontend runtime adds a few important rules that are not obvious from raw page examples alone:
+
+- `crt.NumberInput` supports `format.decimalPrecision`; use it when the numeric column scale is known.
+- `crt.DateTimePicker` supports `pickerType`, `useSeconds`, `startView`, `mode`, and `timeInterval`. Match `pickerType` to the real field kind (`date`, `time`, or `datetime`).
+- `crt.PhoneInput`, `crt.EmailInput`, and `crt.WebInput` are backed by preprocessors that can promote a bound text input to a more specific control based on the underlying data value type.
+- `crt.ComboBox` is also preprocessor-backed: it can auto-build lookup loading requests, pagination wiring, and lookup list attributes from the main binding.
+- `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
+- `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
+
+When editing raw page bodies through `page.update`, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output.
 
 ---
 
@@ -82,9 +99,9 @@ Configure visible columns in the DataTable:
 		"columns": [
 			{
 				"id": "f252f582-...",
-				"code": "PDS_UsrTitle",
-				"path": "UsrTitle",
-				"caption": "#ResourceString(PDS_UsrTitle)#",
+				"code": "PDS_Name",
+				"path": "Name",
+				"caption": "#ResourceString(PDS_Name)#",
 				"dataValueType": 1
 			},
 			{
@@ -107,6 +124,170 @@ Configure visible columns in the DataTable:
 - `caption` — localized with `#ResourceString()#`
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
+
+### Default ListPage Column Selection for New Apps
+
+Use this policy when a new app is generated or the main section entity gains approved business fields and the requirements do not provide a complete explicit ListPage column list.
+
+- Start from the explicit ListPage columns from the requirements if they exist.
+- Always include `Name`.
+- Always include every required non-inherited business field from the main entity.
+- Then append only short operational fields in this priority order until the default grid stays compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
+- Keep auto-selected default ListPage columns compact by capping them at 6 total visible columns unless required business fields exceed that number.
+- Exclude inherited audit/system fields unless explicitly requested.
+- Exclude long/rich/blob fields unless explicitly requested or required.
+- If the requirements are partial, keep the explicit columns and fill only the missing columns with this default policy.
+- When editing a live page, preserve existing DataGrid columns and order. Append only the missing resolved columns unless the requirements explicitly demand reordering.
+
+### ListPage DataGrid Sorting via `page.update`
+
+This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through `page.update`.
+
+The runtime contract is centered on the DataGrid collection attribute, not on the visual `sorting` property stored inside the DataGrid node:
+
+- The DataGrid `items` binding points to a collection attribute such as `Items`.
+- The actual collection attribute name comes from the live DataGrid `items` binding and is not always literally `Items`.
+- That collection attribute remains bound to the primary data source through `Items.modelConfig.path = "PDS"`.
+- `Items.modelConfig.sortingConfig.attributeName` points to a sibling sorting attribute such as `ItemsSorting`.
+- The sorting attribute stores an array of sort options.
+- Each sort option uses entity column names, not attribute keys.
+- Valid sort option shape:
+
+```json
+{
+	"columnName": "CreatedOn",
+	"direction": "desc",
+	"visible": true
+}
+```
+
+- `columnName` must be the entity column name such as `CreatedOn`, `Name`, or `UsrDueDate`.
+- `direction` supports only `asc`, `desc`, and `none`.
+- `visible` is optional.
+- `sortingConfig.default` is a valid way to define default data-source sorting for the ListPage collection.
+
+The frontend preprocessor can auto-inject DataGrid view properties from this metadata:
+
+- `viewConfig.sorting`
+- `viewConfig.sortingChange`
+
+When editing raw page bodies through `page.update`, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
+
+#### Minimal Safe Example
+
+Use this pattern when you need deterministic default sorting and the live page does not already store an explicit sorting attribute change block.
+
+```json
+[
+	{
+		"operation": "merge",
+		"path": ["attributes"],
+		"values": {
+			"Items": {
+				"isCollection": true,
+				"modelConfig": {
+					"path": "PDS",
+					"pagingConfig": {
+						"rowCount": 30
+					},
+					"sortingConfig": {
+						"attributeName": "ItemsSorting",
+						"default": [
+							{
+								"columnName": "CreatedOn",
+								"direction": "desc"
+							}
+						]
+					}
+				}
+			},
+			"ItemsSorting": {}
+		}
+	}
+]
+```
+
+#### Expanded Example with Explicit Sorting Attribute Behavior
+
+Use this pattern when the live page body already materializes a sibling sorting attribute and its reload behavior, and the edit must preserve that explicit shape.
+
+```json
+[
+	{
+		"operation": "merge",
+		"path": ["attributes"],
+		"values": {
+			"Items": {
+				"isCollection": true,
+				"viewModelConfig": {
+					"attributes": {
+						"PDS_Id": {
+							"modelConfig": {
+								"path": "PDS.Id"
+							}
+						},
+						"PDS_Name": {
+							"modelConfig": {
+								"path": "PDS.Name"
+							}
+						},
+						"PDS_UsrDueDate": {
+							"modelConfig": {
+								"path": "PDS.UsrDueDate"
+							}
+						}
+					}
+				},
+				"modelConfig": {
+					"path": "PDS",
+					"pagingConfig": {
+						"rowCount": 30
+					},
+					"sortingConfig": {
+						"attributeName": "ItemsSorting",
+						"default": [
+							{
+								"columnName": "UsrDueDate",
+								"direction": "asc"
+							},
+							{
+								"columnName": "CreatedOn",
+								"direction": "desc"
+							}
+						]
+					}
+				}
+			},
+			"ItemsSorting": {
+				"change": {
+					"request": "crt.LoadDataRequest",
+					"params": {
+						"dataSourceName": "PDS",
+						"parameters": [],
+						"config": {
+							"loadType": "reload"
+						}
+					}
+				}
+			}
+		}
+	}
+]
+```
+
+#### Anti-patterns
+
+- Do not reuse FormPage lookup `*_List` sorting examples as the recipe for ListPage DataGrid row sorting.
+- Do not assume sorting by a lookup column guarantees business lifecycle order.
+- Do not change `Items.modelConfig.path` or paging config unless the task explicitly requires a data-source change.
+- Do not put attribute keys such as `PDS_UsrDueDate_ab12cd3` into `columnName`; use the entity column name `UsrDueDate`.
+- Do not treat a manually added DataGrid `sorting` property as the primary source of truth when the collection metadata already defines sorting.
+
+#### Limitations
+
+- Plain sortable-column ordering such as `CreatedOn desc` or `UsrDueDate asc` is supported by this contract.
+- Semantic order such as "Open first, Done last" is not considered implemented by plain sorting config unless the schema exposes an explicit sortable rank or the page adds separate runtime logic.
+- Agents must not silently replace semantic ordering requirements with heuristics such as lookup sort direction.
 
 ### Add Button Configuration
 
@@ -135,13 +316,54 @@ Binds page attributes to data source:
 		"operation": "merge",
 		"path": ["attributes"],
 		"values": {
-			"PDS_UsrTitle": {"modelConfig": {"path": "PDS.UsrTitle"}},
-			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
-			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
+			"Name": {"modelConfig": {"path": "PDS.Name"}},
+			"PDS_UsrStatus_ab12cd3": {"modelConfig": {"path": "PDS.UsrStatus"}},
+			"PDS_UsrDueDate_ab12cd3": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
 	}
 ]
 ```
+
+### Runtime Binding Pattern for Preserving Live Form Page Lookup Lists
+
+When editing an existing FormPage via `page.update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
+
+This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting via page.update` above.
+
+```json
+{
+	"Name": {
+		"modelConfig": {
+			"path": "PDS.Name"
+		}
+	},
+	"PDS_Column8_qc014wq": {
+		"modelConfig": {
+			"path": "PDS.Column8"
+		}
+	},
+	"PDS_Column16_lcbi4nq_List": {
+		"isCollection": true,
+		"modelConfig": {
+			"sortingConfig": {
+				"default": [
+					{
+						"columnName": "Name",
+						"direction": "asc"
+					}
+				]
+			}
+		}
+	}
+}
+```
+
+Rules:
+- Keep `Name` as the special case when it already exists in the live page.
+- Every new field insert in `SCHEMA_VIEW_CONFIG_DIFF` needs a matching attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
+- Datasource-bound `crt.ComboBox` controls need only the main bound attribute by default.
+- Existing materialized lookup-list bindings may be preserved when they are already present in the live page body; do not invent new `*_List` attributes during sync.
+- Never introduce a new collection attribute with a raw `modelConfig.path` such as `"UsrStatus_List"` or `"UsrPriority_List"` without a datasource prefix.
 
 ---
 
@@ -188,12 +410,24 @@ Configures primary data source:
 
 ## Form Page Layout
 
-Fields placed using `layoutConfig`:
+### Default FormPage Field Selection for New Apps
+
+Use this policy when a new app is generated or the main section entity gains approved business fields and the requirements do not provide a complete explicit FormPage field list.
+
+- Keep `Name` as the record title/header when the schema already contains it.
+- Include all approved non-inherited business fields from the main entity.
+- Required business fields must always be included.
+- If the requirements are partial, keep the explicit fields and fill only the missing fields with this default policy.
+- Preserve existing live fields and append only missing resolved fields unless the requirements explicitly demand removal or re-layout.
+
+### Runtime Field Insertion via `page.update`
+
+Use the current page body from `page.get` as the source of truth. For live FormPage field sync, append missing resolved field controls to `SideAreaProfileContainer`.
 
 ```json
 {
 	"operation": "insert",
-	"name": "UsrTitle",
+	"name": "Name",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -202,37 +436,117 @@ Fields placed using `layoutConfig`:
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrTitle_label",
-		"control": "$PDS_UsrTitle"
+		"label": "$Resources.Strings.Name",
+		"control": "$Name",
+		"labelPosition": "auto"
 	},
-	"parentName": "GeneralInfoTab",
+	"parentName": "SideAreaProfileContainer",
 	"propertyName": "items",
 	"index": 0
 }
 ```
 
-- `column` — grid column (1-based)
-- `colSpan` — columns to span
-- `row` — grid row (1-based)
-- `rowSpan` — rows to span
+```json
+{
+	"operation": "insert",
+	"name": "Input_ab12cd3",
+	"values": {
+		"layoutConfig": {
+			"column": 1,
+			"colSpan": 1,
+			"row": 2,
+			"rowSpan": 1
+		},
+		"type": "crt.Input",
+		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
+		"control": "$PDS_UsrCode_ab12cd3",
+		"placeholder": "",
+		"tooltip": "",
+		"readonly": false,
+		"multiline": false,
+		"labelPosition": "auto"
+	},
+	"parentName": "SideAreaProfileContainer",
+	"propertyName": "items",
+	"index": 1
+}
+```
 
-### ComboBox for Lookup Fields
+Rules:
+- `parentName` is `SideAreaProfileContainer` for runtime entity-field sync on live FormPages.
+- `propertyName` is `items`.
+- `row` and `index` continue from the current maximum values already present in `SideAreaProfileContainer`.
+- Default grid placement for new fields is `column=1`, `colSpan=1`, `rowSpan=1`.
+- For numeric fields, add `format.decimalPrecision` when the target column scale is known.
+- For date and time fields, set `pickerType` to match the underlying data value type.
+- Do not replace existing inserts; append only missing fields.
+- Keep `Name` as the header/title when it already exists and do not duplicate it.
+- Required non-inherited business fields must never be omitted from the synchronized FormPage.
+- Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
+
+### Runtime Lookup Special Case
 
 ```json
 {
 	"operation": "insert",
-	"name": "UsrStatus",
+	"name": "ComboBox_ab12cd3",
 	"values": {
-		"layoutConfig": {"column": 1, "colSpan": 1, "row": 3, "rowSpan": 1},
+		"layoutConfig": {"column": 1, "colSpan": 1, "row": 10, "rowSpan": 1},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_label",
-		"control": "$PDS_UsrStatus"
+		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"ariaLabel": "",
+		"isAddAllowed": true,
+		"showValueAsLink": true,
+		"labelPosition": "auto",
+		"controlActions": [],
+		"listActions": [],
+		"tooltip": "",
+		"control": "$PDS_UsrStatus_ab12cd3"
 	},
-	"parentName": "GeneralInfoTab",
+	"parentName": "SideAreaProfileContainer",
 	"propertyName": "items",
-	"index": 2
+	"index": 9
 }
 ```
+
+```json
+{
+	"operation": "insert",
+	"name": "addRecord_ab12cd3",
+	"values": {
+		"code": "addRecord",
+		"type": "crt.ComboboxSearchTextAction",
+		"icon": "combobox-add-new",
+		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"clicked": {
+			"request": "crt.CreateRecordFromLookupRequest",
+			"params": {}
+		}
+	},
+	"parentName": "ComboBox_ab12cd3",
+	"propertyName": "listActions",
+	"index": 0
+}
+```
+
+Lookup rules:
+- For datasource-bound `crt.ComboBox`, add the base insert and the main bound attribute only.
+- Treat `crt.ComboboxSearchTextAction`, lookup-list datasource wiring, paging, sorting, and nested `value`/`displayValue` bindings as frontend-preprocessor concerns unless the live page body already persists them.
+- If the live page already contains materialized lookup-list bindings or child actions, preserve their naming and config instead of regenerating or renaming them.
+
+### Additional Supported Field Components
+
+The frontend also supports these field controls:
+
+| Component | Type String | Typical data value types | Notes |
+|-----------|-------------|--------------------------|-------|
+| File input | `crt.FileInput` | Blob, File, Image, ImageLookup | Supports `accept`, `maxFileSize`, and upload/download/preview events. Use only when the scenario explicitly needs file upload UX. |
+| Encrypted input | `crt.EncryptedInput` | SecureText | Supports masking state and `toggleMaskValue`. Use for secure text, not as a generic text replacement. |
+| Slider | `crt.Slider` | Integer, Float, Money | Supports `minValue`, `maxValue`, `step`, `color`. Use only when the UX explicitly wants a range/slider control. |
+
+### Template Note
+
+`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime `page.update` edits. When editing a live page, trust `page.get` and preserve the current container and binding pattern.
 
 ---
 
@@ -245,24 +559,100 @@ Fields placed using `layoutConfig`:
 | PageWithRightAreaAndTabsFreedomTemplate | `5f8dd430-acf2-4e1a-80c8-77cf57e245ce` | Form with right area + tabs |
 | LightFormPage | `ec5fd902-66ce-4139-a241-10ebd8addc40` | Light/mini form |
 
+Do not infer runtime field container names only from the parent template. A live page can still place field inserts in `SideAreaProfileContainer` even when `page.get` reports `PageWithTabsFreedomTemplate`.
+
 ---
 
 ## Handlers
 
-Event handlers for page logic:
+Handlers are stored in the page body as a marker-delimited array and executed at runtime through the Freedom UI request chain. Keep the page-body marker format for MCP editing, but write handler logic with the real runtime model in mind. See `context/handlers-reference.md` for the full execution model, request catalog, and APIs.
 
 ```javascript
 handlers: /**SCHEMA_HANDLERS*/[
 	{
 		request: "crt.HandleViewModelInitRequest",
 		handler: async (request, next) => {
-			// Page initialization logic
-			return next?.handle(request);
+			await next?.handle(request);
+			request.$context.IsReady = true;
 		}
 	}
 ]/**SCHEMA_HANDLERS*/
 ```
 
+Handler rules:
+
+- By default, `await next?.handle(request)` to preserve the request chain.
+- Omit `next` only when intentionally canceling or overriding the default flow.
+- Use `finally` when cleanup must happen even if earlier logic fails.
+- Use `request.$context.executeRequest(...)` for programmatic follow-up requests.
+- Use `setValue(...)` and `setAttributePropertyValue(...)` for dynamic attribute state and validation.
+
+---
+
+## Module Dependencies (SCHEMA_DEPS / SCHEMA_ARGS)
+
+When page-body handlers use external APIs (like `@creatio-devkit/common`), add them to the source-module deps and args:
+
+```javascript
+define("UsrMyApp_FormPage",
+    /**SCHEMA_DEPS*/["@creatio-devkit/common"]/**SCHEMA_DEPS*/,
+    function/**SCHEMA_ARGS*/(sdk)/**SCHEMA_ARGS*/ {
+        return { /* handlers can use sdk.HttpClientService etc. */ };
+    }
+);
+```
+
+These source imports are part of the page body edited by MCP. They are not a replacement for the separate frontend TypeScript decorator-based runtime infrastructure.
+
+Rules:
+
+- Prefer `@creatio-devkit/common` for SDK services in page-body handlers.
+- Reuse the live page alias (`sdk`, `devkit`, etc.) instead of renaming it.
+- Common verified SDK use cases include `HttpClientService`, `SysValuesService`, `SysSettingsService`, `RightsService`, `Model.create(...)`, `FilterGroup`, and `ProcessEngineService`.
+- See `context/handlers-reference.md` for concrete SDK recipes.
+- See `context/devkit-common-reference.md` for the exhaustive `@creatio-devkit/common` public export catalog and short API descriptions.
+
+---
+
+## Converters and Validators Status
+
+The page body format includes `converters` and `validators` object sections, but current frontend evidence does not confirm them as the primary Freedom UI mechanism for page-level validation or conversion logic.
+
+For new work, prefer:
+
+1. handlers
+2. business rules
+3. attribute property APIs such as `setAttributePropertyValue(...)`
+4. controlled `setValue(...)` updates
+
+If the live page already contains `converters` or `validators`, preserve them and edit them conservatively as object sections.
+
+---
+
+## MCP Page Tools — Reading and Editing Pages
+
+Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
+
+| Tool | Description |
+|------|-------------|
+| `page.list` | Discover page schemas by package or name pattern |
+| `page.get` | Read a page schema's metadata and raw JS body |
+| `page.update` | Save the complete JS body — agent handles all edits (saves to DB, no compile needed) |
+
+### Editing Workflow
+
+See `skills/page-schema-editing/SKILL.md` for the full workflow:
+```
+1. page.list(searchPattern: "MyApp")
+2. page.get(schemaName: "UsrMyApp_FormPage")
+3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
+4. page.update(schemaName: "UsrMyApp_FormPage", body: "...modified body...")
+```
+
+**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page.get`.
+
 ---
 
 **📁 For complete page examples, see `templates/pages/`**
+**📁 For handler patterns and Creatio client APIs, see `context/handlers-reference.md`**
+**📁 For viewConfigDiff component reference (buttons, containers, properties), see `context/viewconfig-reference.md`**

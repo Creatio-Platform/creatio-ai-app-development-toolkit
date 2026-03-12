@@ -9,12 +9,42 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 **Composable Applications**
 - Built from self-contained **packages** containing: entity schemas, page schemas, data bindings, business processes, source code
 - Packages can depend on other packages (via `DependsOn` in descriptor.json)
-- Deploy via `clio push-pkg` command
+
+**MCP Application Creation (DB-first)**
+- Primary generation path is MCP tool `application.create`
+- Discovery path for existing apps is `application.get_list`
+- Canonical DB refresh path is `application.get_info`
+- Tool creates application artifacts directly in Creatio DB (PostgreSQL)
+- For new Freedom UI apps, `application.create` also materializes the initial section entity whose schema name normally matches the app code
+- Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) execute CREATE TABLE and ALTER TABLE directly
+- Schemas are immediately runtime-accessible — no compilation or deployment step required
+- Tool returns short compact context JSON (`success`, `app`, `packages` dict, `error`)
+- Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
+- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application.create` or `application.get_info`
+
+**Entity Schema Sync (DB-first)**
+- Secondary generation path is MCP `entity.create`, `entity.create_lookup`, `entity.update`
+- These tools mutate entity schemas in Creatio DB and return persisted schema snapshots
+- `entity.update` accepts explicit `operationsJson` entries: `addColumn`, `updateColumn`, `removeColumn`
+- New lookup entities must be created before entities or updates that reference them
+
+**Default Semantics**
+- `schema default` means the entity schema or backend contract stores the initial value
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
+- For lookup-backed `schema default`, use the seeded row GUID in `defaultValue`
+
+**Data Binding Generation (MCP-assisted)**
+- `binding.get_columns` returns column names, UIds, and data value types for deployed schemas
+- `binding.create` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately
+- `binding.create` requires `packageUId` and supports optional `outputPath` only when files must also be written on the server
+- If `columnsJson` is supplied to `binding.create`, it becomes the authoritative descriptor column list; omitted row columns are not inferred back from `rowsJson`
 
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)
 - UI described via `viewConfigDiff` — array of operations (merge, insert, remove, move)
 - Schema type: `"AngularSchema"`
+- When frontend or page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface rather than relying on root-barrel access to internal exports
 
 **Entity Model**
 - Entities extend a parent (BaseEntity, BaseLookup, etc.)
@@ -35,13 +65,13 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 | Element | Prefix | Example |
 |---------|--------|---------|
 | Custom entity | `Usr` | `UsrTodoTask` |
-| Custom column | `Usr` | `UsrTitle`, `UsrStatus` |
+| Custom column | `Usr` | `UsrStatus`, `UsrDueDate` |
 | Custom page | `Usr` | `UsrTodoTask_FormPage` |
 | Custom package | `Usr` | `UsrTodoListApp` |
 
 ### Casing
 
-- **Entities/Columns**: PascalCase — `UsrTodoTask`, `UsrTitle`
+- **Entities/Columns**: PascalCase — `UsrTodoTask`, `UsrStatus`
 - **Pages**: PascalCase with underscore — `UsrTodoTask_ListPage`, `UsrTodoTask_FormPage`
 - **Packages**: PascalCase — `UsrTodoListApp`
 
@@ -115,14 +145,111 @@ packages/<PackageName>/
 
 ### Generation Order
 
-Generate in this order for referential integrity:
+**For complete MCP workflow with detailed curl examples, see `context/mcp-application-tools-reference.md`**
 
-1. **Package descriptor** — root `descriptor.json`
-2. **Lookup entities** — extends BaseLookup
-3. **Main entities** — with lookup columns
-4. **Pages** — List + Form pages
-5. **Addons** — Link entities to forms
-6. **Data bindings** — SysModule, SysModuleEntity, seed data
+Primary generation flow:
+
+1. Initialize MCP session (`initialize` → extract `Mcp-Session-Id`)
+2. Validate tool availability (`tools/list`)
+3. Build and execute `application.create` payload
+4. Parse SSE response and validate short contract (`success`, `app`, `packages`)
+5. Identify the template-created section entity from the response and treat it as the canonical main entity for single-record-type apps
+6. Persist result to `output/<AppName>/mcp-application-result.json`
+7. If approved schema changes exist:
+   - Execute ordered entity sync (`entity.create_lookup` → `entity.create` → `entity.update`)
+   - After EACH mutation, refresh context with `application.get_info`
+   - Overwrite `mcp-application-result.json` with updated state
+8. If explicit data bindings required, use `binding.get_columns` and `binding.create`
+
+**Critical pattern:** Always call `application.get_info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
+**Critical pattern:** Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity with `entity.update` unless requirements define an additional distinct business object.
+
+### Working with MCP Tools
+
+**Endpoint:** `http://localhost:5001/mcp`
+**Authentication:** HTTP Basic Auth (`-u Supervisor:Supervisor`)
+
+**Required Headers:**
+```bash
+-H "Content-Type: application/json"
+-H "Accept: application/json, text/event-stream"  # Both required!
+-H "Mcp-Session-Id: $SESSION_ID"  # After initialize
+```
+
+**Response Format:** Server-Sent Events (SSE)
+```
+event: message
+data: {"result":{"content":[{"type":"text","text":"..."}]},"id":1,"jsonrpc":"2.0"}
+```
+
+**Standard Parsing Pattern:**
+```bash
+curl ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text'
+```
+
+**Available Tools:**
+- `application.create` — Create new app with initial package/entity
+- `application.get_info` — Refresh application context (canonical DB refresh)
+- `application.get_list` — Discover existing apps
+- `entity.create_lookup` — Create BaseLookup entity
+- `entity.create` — Create BaseEntity entity
+- `entity.update` — Add/update columns on existing entity
+- `binding.get_columns` — Query deployed schema metadata
+- `binding.create` — Generate data binding artifacts
+
+**Complete reference with curl examples:** `context/mcp-application-tools-reference.md`
+
+### MCP `application.create` Input
+
+Required:
+- `name`
+- `code` (must start with `Usr`)
+- `templateCode`
+- `iconBackground` (hex color)
+
+Optional:
+- `iconId` (GUID) — if omitted, random icon from SysAppIcons is selected automatically
+- `description`
+- `clientTypeId` (GUID)
+- `optionalTemplateDataJson` with:
+  - `useExistingEntitySchema`
+  - `entitySchemaName`
+  - `appSectionDescription`
+  - `useAIContentGeneration`
+
+Validation notes:
+- if `iconId` provided, must reference existing record in `SysAppIcons` table
+- `clientTypeId` must be valid GUID if provided
+- this flow does not support `useAIContentGeneration=true`
+- tool must exist in `tools/list` before execution
+- for a new app with one primary record type, the template-created entity named like `code` is the default main entity to update; do not plan a parallel entity for the same records
+
+### MCP Request Example
+
+```bash
+curl -s "$MCP_URL" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":2,
+    "method":"tools/call",
+    "params":{
+      "name":"application.create",
+      "arguments":{
+        "name":"Task App",
+        "code":"UsrTaskApp",
+        "templateCode":"AppFreedomUI",
+        "iconBackground":"#1F5F8B",
+        "optionalTemplateDataJson":"{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"\",\"useAIContentGeneration\":false}"
+      }
+    }
+  }'
+```
+
+> 💡 **Note:** `iconId` is optional. If omitted, a random icon from `SysAppIcons` is selected automatically.
+> 💡 **Note:** Use `"AppFreedomUI"` for templateCode. Core resolves it dynamically to v1 or v2 based on feature flags (`UseListPageV3Template` and `FreedomUIDashboardsEnabled`).
 
 ---
 
@@ -134,7 +261,7 @@ Clio is the command-line tool for Creatio deployments.
 
 ```bash
 # Register environment
-clio reg-web-app myenv -u https://mysite.creatio.com -l admin -p pass
+clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
 
 # Set active
 clio reg-web-app -a myenv
@@ -143,12 +270,7 @@ clio reg-web-app -a myenv
 clio healthcheck myenv
 ```
 
-### Package Deployment
-
 ```bash
-# Push package (primary method)
-clio push-pkg <path-to-package> -e myenv
-
 # Compile configuration
 clio compile-configuration -e myenv
 
@@ -159,26 +281,6 @@ clio restart-web-app myenv
 clio last-compilation-log -e myenv
 ```
 
-### Standard Deploy Workflow
-
-```bash
-# 1. Verify environment
-clio healthcheck -e myenv
-
-# 2. Push package
-clio push-pkg "C:\path\to\package" -e myenv
-
-# 3. Compile
-clio compile-configuration -e myenv
-
-# 4. Restart
-clio restart-web-app myenv
-
-# 5. Verify
-clio healthcheck -e myenv
-
-# 6. Check errors (if any)
-clio last-compilation-log -e myenv
 ```
 
 ### Package Management
@@ -218,11 +320,13 @@ clio install-gate -e myenv
 
 ---
 
-## Deploy Flow Diagram
+## MCP Workflow (DB-First)
 
 ```
-Generate files → clio push-pkg → compile-configuration → restart-web-app → verify
+MCP application.create or application.get_info → initialize canonical context → [optional] entity.create_lookup/entity.create/entity.update → application.get_info refresh → [optional] binding.get_columns/binding.create → schemas immediately usable
 ```
+
+**Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
 
 ---
 
