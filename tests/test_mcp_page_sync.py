@@ -1,15 +1,29 @@
+import contextlib
 import json
+import shutil
 import sys
-import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_TMP_ROOT = ROOT / ".tmp-tests"
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
 from scripts.mcp_page_sync import WorkflowError, apply_page_sync_plan, parse_embedded_page_sync_plan, run_build_plan
+
+
+@contextlib.contextmanager
+def temp_workdir():
+    workdir = TEST_TMP_ROOT / f"tmp-{uuid.uuid4().hex}"
+    workdir.mkdir(parents=True, exist_ok=False)
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def build_result_document():
@@ -217,8 +231,7 @@ class McpPageSyncTests(unittest.TestCase):
 ```
 <!-- PAGE_SYNC_PLAN_JSON_END -->
 """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        with temp_workdir() as temp_path:
             plan_md_path = temp_path / "plan.md"
             output_path = temp_path / "page-sync-plan.json"
             plan_md_path.write_text(markdown, encoding="utf-8")
@@ -244,8 +257,7 @@ class McpPageSyncTests(unittest.TestCase):
         }
         fake_client = FakePageClient(pages)
         result_document = build_result_document()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             report_path = temp_path / "mcp-application-report.md"
             form_body_path = temp_path / "form-body.js"
@@ -300,8 +312,7 @@ class McpPageSyncTests(unittest.TestCase):
         }
         fake_client = FakePageClient(pages)
         result_document = build_result_document()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             form_body_path = temp_path / "form-body.js"
             result_path.write_text(json.dumps(result_document), encoding="utf-8")
@@ -339,8 +350,7 @@ class McpPageSyncTests(unittest.TestCase):
         }
         fake_client = FakePageClient(pages)
         result_document = build_result_document()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             result_path.write_text(json.dumps(result_document), encoding="utf-8")
             with self.assertRaisesRegex(WorkflowError, "page.list did not return required page UsrTodoList_ListPage"):
@@ -391,8 +401,7 @@ class McpPageSyncTests(unittest.TestCase):
 }
 ```
 """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             result_path.write_text(json.dumps(result_document), encoding="utf-8")
             plan_path = temp_path / "plan.md"

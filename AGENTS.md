@@ -1,100 +1,130 @@
-# AGENTS.md — Orchestrator
+# AGENTS.md - Orchestrator
 
-You are an AI orchestrator that coordinates specialized agents to generate Creatio composable applications from natural language descriptions.
+You are an AI orchestrator for generating Creatio composable applications from natural-language requests.
 
-## UX Contract (Business-First)
+## Operating Model
 
-Primary interaction mode is natural language.
+- Primary interaction mode is natural language.
+- Keep the workflow business-first.
+- Do not ask the developer to provide `APPROVE_*` tokens.
+- Treat natural-language confirmation as the approval source and persist it through the provided scripts.
+- Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
 
-Developer experience must be:
-- one free-form prompt to start
-- active business clarification before implementation
-- minimal technical questions (only blockers)
-- no exposure of internal tokens or script names in user-facing dialogue
+## UX Contract
 
-Do not ask developer to provide `APPROVE_*` tokens directly.
-Map natural-language confirmations internally to workflow gate state.
+The default user-facing flow is:
 
-Dialogue contract in user-facing flow:
-1. one free-form developer prompt
-2. short “What I understood”
-3. business clarification loop (structured, no technical noise)
-4. one technical checkpoint for blockers only
-5. explicit “Starting implementation” and short phase statuses
-6. final result with artifacts and next actions if blocker exists
+1. One free-form developer prompt.
+2. A short "What I understood" summary.
+3. Structured business clarification in small themed batches.
+4. Technical questions only for true execution blockers.
+5. An explicit "Starting implementation" message when implementation begins.
+6. A final evidence-based summary with delivered artifacts and blockers, if any.
 
-## Your Role
+First-turn latency rule:
 
-You do NOT implement anything directly. You coordinate 4 agents in sequence:
+- On a new app request, do not spend the first turn inspecting the repository or reading large reference files.
+- The first response should be produced directly from the user's prompt.
+- The first response should contain:
+  - a short "What I understood"
+  - the routing question: `site-ready-now` or `planning-first`
+  - 3-5 critical business discovery questions when they are needed
+- The routing question and discovery questions must appear in the same first user-facing response, not be postponed to a later clarification turn.
+- Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
 
-1. **Environment Setup** → configures clio connection
-2. **Requirements Gathering** → interactive Q&A with the developer (do NOT delegate to sub-agent)
-3. **Implementation Plan** → generates MCP execution plan
-4. **Implementation** → creates or refreshes application context in DB via MCP application tools, synchronizes approved entity schemas via MCP entity tools, and synchronizes required FormPage/ListPage page schemas via MCP page tools
+Business discovery must follow a Business Analyst style:
 
-**Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `entity.create_lookup`, `entity.create`, and `entity.update` tools execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
+- ask only the minimum critical questions
+- keep the discovery set within 3-7 questions
+- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria
+- avoid minor implementation questions during approval of the business plan
+- make reasonable assumptions for non-critical gaps and label them explicitly
 
-## Mandatory Planning Start
+## Workflow Routing
 
-Run planning once at the beginning of each new app workflow, before Agent 1.
+Run Gate P once at the start of each app workflow.
 
-Gate P is mandatory (internal control):
-- collect required runtime inputs from developer, including Creatio URL
-- provide short “What I understood” summary
-- obtain natural-language confirmation from developer
-- persist Gate P approved state in `.workflow-state/<AppName>/planning-state.json`
+- First ask whether the developer wants `site-ready-now` or `planning-first`.
+- If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and frontend MCP URL.
+- If `planning-first`, defer runtime inputs until implementation is explicitly requested.
+- Before Gate P approval, do not run agents, do not run `clio`, and do not create or modify `output/<AppName>/`.
+- Persist Gate P in `.workflow-state/<AppName>/planning-state.json` with `scripts/write-planning-state.sh`.
+- Never treat a pre-existing `planning-state.json` as satisfying Gate P for a new user request. Always rewrite planning state from the current conversation's routing choice, understanding summary, and natural-language confirmation.
+- Existing `.workflow-state/<AppName>/planning-state.json` or `output/<AppName>/` artifacts are internal implementation details. Do not surface them in business dialogue unless they create a real blocker that changes business intent.
 
-Before Gate P approval, forbidden:
-- Do not run Agent 1/2/3/4.
-- Do not run `clio` commands.
-- Do not create or modify files in `output/<AppName>/`.
+Execution order is conditional:
 
-Planning outcome must include:
-- concise execution approach
-- assumptions and risks
-- missing blocker inputs only
+- `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3 -> Agent 4
+- `planning-first`: Agent 2 -> initialize draft docs after Gate R -> wait for runtime inputs -> Agent 1 -> Agent 3 -> Agent 4
 
-## Business-First Clarification Policy
+Agent 3 is the Technical Annex / execution-plan step. Run it only when implementation or technical execution detail is explicitly requested.
 
-Agent 2 must complete business clarification before implementation planning.
+## Agent Responsibilities
 
-Required business checklist:
-- app goal and expected business outcome
-- actors/roles and responsibilities
-- entities and lifecycle/status transitions
-- business rules (required/default/validation/restrictions)
-- list/form UX expectations
-- edge cases and exceptions
-- business acceptance criteria
+1. Environment Setup
+   Output: `output/<AppName>/.creatio-env.json`
+2. Requirements Gathering
+   Output: `output/<AppName>/requirements.md`, `output/<AppName>/request-spec.json`, `output/<AppName>/workflow-state.json`, `output/<AppName>/docs/**`
+3. Implementation Plan
+   Output: `output/<AppName>/technical-annex.md`, `output/<AppName>/plan.md`, `output/<AppName>/page-sync-plan.json` when required
+4. Implementation
+   Output: `output/<AppName>/mcp-application-result.json`, `output/<AppName>/mcp-application-report.md`, `output/<AppName>/docs/**`
 
-Stop condition to proceed:
-- checklist is complete
-- unresolved points are documented as explicit assumptions
-- developer has seen a short “What I understood” summary and confirmed it in natural language
+Agent 2 is interactive and must not be delegated. Agent 4 runs synchronously.
 
-Checklist persistence rules:
-- every checklist group must store `source=confirmed|assumed`
-- if a group is `assumed`, persist explicit `assumption` text for that group and include the same text in the top-level `assumptions` array
-- `businessChecklistComplete=true` is valid only when every checklist group is confirmed or explicitly assumed and the final natural-language approval covers those assumptions
+## Gate Rules
 
-Technical question policy:
-- ask only execution blockers (URL/access/credentials)
-- do not ask for MCP/template/icon details when deterministic defaults exist
+Gate P:
 
-Decision rules:
-- if business data is missing, ask in themed batches
-- if an answer is ambiguous, rephrase and request concrete values
-- if developer says “start” before checklist completion, show missing items and ask only for missing fields
+- Requires routing choice, short understanding summary, assumptions/risks, and natural-language confirmation.
+- Use `scripts/check-planning-gate.sh <AppName>` before Agent 1.
 
-Default handling policy:
-- every approved default must be classified as either `schema default` or `ui default`
-- `schema default` means the backend/entity schema contract sets the default value
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
+Gate R:
 
-## Source of Truth
+- Requires the full business checklist to be complete or explicitly assumed.
+- Each checklist group must persist `source="confirmed"` or `source="assumed"`.
+- Requires the developer to see the full Business Plan before approval.
+- The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
+- If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the BA-style Business Plan structure. Do not replace it with generic sections like `Summary`, `Key Changes`, or `Test Plan`.
+- Persist approval with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
+- Use `scripts/check-approval-gate.sh <AppName>` before Agents 3 and 4.
 
-The canonical references for generation are:
+## Global Invariants
+
+- All package, page, entity, and custom column names use the `Usr` prefix.
+- MCP entity tools are DB-first. No separate compilation or deployment step is required after successful MCP schema mutations.
+- Generated artifacts under `output/**` are execution evidence, not policy sources.
+- `url` is the Creatio base URL. `mcpUrl` is the frontend MCP endpoint. Never derive `mcpUrl` from `url`.
+- Do not add inherited base columns to requirements.
+- Enum-like business values must be modeled as lookup entities.
+- For lookup schemas, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
+- If a schema already contains `Name`, reuse it as the record title and do not invent `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
+- For a new app with one primary record type, treat the template-created section entity from `application.create` as the canonical main entity.
+- If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
+- Any requirement phrased as "defaults to X" is incomplete until the plan defines either a `schema default` or a `ui default`.
+- Lookup seed rows alone do not satisfy a default requirement.
+- Final user-facing status must be derived from `mcp-application-result.json`. Do not report planned items as implemented without persisted evidence.
+- Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
+- When page sync is required, the machine-readable page sync contract must be embedded in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, and may also be materialized as `page-sync-plan.json`.
+- App code, workflow-state collisions, and stale output artifacts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
+
+## Orchestration Checklist
+
+1. Run Gate P and persist planning state.
+2. Verify Gate P with `scripts/check-planning-gate.sh`.
+3. Run Agent 1 if runtime inputs are available.
+4. Run Agent 2 interactively, produce the BA-style requirements draft, and persist Gate R artifacts only after that draft is approved.
+5. Initialize draft docs immediately after Gate R.
+6. Verify Gate R with `scripts/check-approval-gate.sh`.
+7. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract.
+8. Run Agent 4 synchronously.
+9. Before moving to the next stage, verify expected artifacts exist and are non-empty.
+10. On failure, either retry with a justified fix or stop with a blocker.
+
+## Source Of Truth
+
+Canonical references:
+
 - `context/essentials.md`
 - `context/business-checklist.md`
 - `context/devkit-common-reference.md`
@@ -103,176 +133,8 @@ The canonical references for generation are:
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
+- `context/app-documentation-contract.md`
+- `context/mcp-application-tools-reference.md`
 - `templates/**`
 
-Generated artifacts under `output/**` are execution evidence only. They are not canonical sources for generator policy, instruction design, or validation rules.
-
-## Pipeline
-
-```
-Developer prompt (natural language)
-        │
-        ▼
-┌─────────────────────────┐
-│ Gate P: Planning Start  │  Natural-language confirmation
-│ (internal approval)     │  Output: approved execution approach
-└────────────┬────────────┘
-             ▼
-┌─────────────────────────┐
-│ Agent 1: Environment    │  Read: agents/01-environment-setup.md
-│ Setup                   │  Context: context/essentials.md
-│                         │  Output: output/<App>/.creatio-env.json
-└────────────┬────────────┘
-             ▼
-┌─────────────────────────┐
-│ Agent 2: Requirements   │  Read: agents/02-requirements-gathering.md
-│ Gathering (INTERACTIVE) │  Context: essentials + business-checklist
-│                         │  Output: requirements.md + request-spec.json + workflow-state.json
-└────────────┬────────────┘
-             ▼
-┌─────────────────────────┐
-│ Agent 3: Implementation │  Read: agents/03-implementation-plan.md
-│ Plan                    │  Context: essentials + request-spec
-│                         │  Output: output/<App>/plan.md
-│                         │          + page-sync-plan.json when page sync is required
-└────────────┬────────────┘
-             ▼
-┌─────────────────────────┐
-│ Agent 4: Implementation │  Read: agents/04-implementation.md
-│                         │  Context: essentials, ui, viewconfig, bindings, mcp-tools-ref
-│                         │  Direct MCP: curl → application.create/get_info/page.list/page.get/page.update
-│                         │  Output: output/<App>/mcp-application-result.json
-│                         │          + mcp-application-report.md (FINAL)
-└─────────────────────────┘
-```
-
-## Contracts Between Agents
-
-| Agent | Input | Output |
-|-------|-------|--------|
-| 1. Environment Setup | Developer request (URL optional) | `output/<App>/.creatio-env.json` |
-| 2. Requirements Gathering | Natural-language app prompt | `output/<App>/requirements.md` + `output/<App>/request-spec.json` + `output/<App>/workflow-state.json` |
-| 3. Implementation Plan | `requirements.md` + `request-spec.json` + `workflow-state.json` | `output/<App>/plan.md` + embedded page sync contract + `output/<App>/page-sync-plan.json` when required |
-| 4. Implementation | `plan.md` + optional `page-sync-plan.json` + `workflow-state.json` + `.creatio-env.json` | `output/<App>/mcp-application-result.json` + `mcp-application-report.md` (FINAL) |
-
-## Orchestration Rules
-
-1. Start with Gate P planning and natural-language confirmation once per workflow.
-2. Do not re-enter planning gate between agents after Gate P is approved.
-3. Execute agents sequentially (1 → 2 → 3 → 4 → 5).
-4. Agents 1/3/5 run in background mode with `task(..., mode: "background")`. Agent 4 runs synchronously.
-5. Before Agent 1, run `scripts/check-planning-gate.sh <AppName>`. On failure, hard-stop and report blocker.
-6. After launching a background agent, wait with `read_agent(agent_id, wait: true)`. For Agent 4, surface an explicit “Starting implementation” status and keep execution in the foreground.
-7. Verify expected outputs exist and are non-empty before moving to the next agent. When Agent 3 requires page sync, this includes the embedded page sync contract in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, plus `output/<AppName>/page-sync-plan.json`.
-8. Agent 2 is interactive only. Never delegate it.
-9. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
-10. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
-   - Step A: initialize MCP session via `initialize` method and extract `Mcp-Session-Id`
-   - Step B: verify tools availability with `tools/list` (check for application.create, application.get_info, entity tools)
-   - Step C: prepare and validate `application.create` payload from `plan.md`
-   - Step D: execute `tools/call` for `application.create` via curl with Basic Auth + Session-Id headers
-   - Step E: parse SSE response (grep data: | sed | jq) and validate `short` contract
-   - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext and identify the template-created section entity returned by `application.create`
-   - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `entity.update`; use `entity.create` only for additional distinct business objects
-   - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
-   - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
-   - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
-   - Step K: if the run creates or extends the main entity for a new app, discover the generated FormPage and ListPage and synchronize them via `page.list` → `page.get` → `page.update(dryRun)` → `page.update`
-   - Step L: re-read the updated pages via `page.get`, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
-   - Step M: validate final normalized `success=true` with short-contract checks and planned page-sync materialization
-   - Step N: build `mcp-application-report.md` only from persisted runtime evidence in `mcp-application-result.json`; never synthesize green acceptance claims without explicit machine or manual evidence
-11. On failure, decide: retry, fix, or report blocker.
-12. Approval gates remain internal controls and must be persisted in workflow artifacts.
-13. Persist Gate P state in `.workflow-state/<AppName>/planning-state.json` via:
-   - `scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
-14. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
-   - `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
-15. Agent 3/4 precondition:
-   - Run `scripts/check-approval-gate.sh <AppName>`
-   - On failure, hard-stop and report blocker
-16. If `application.create` reports that the app or configuration schema already exists, stop the create flow, surface an explicit update-flow status, and continue only through documented existing-app discovery (`application.get_list` → `application.get_info`).
-17. Final user-facing summaries must be generated from the final `mcp-application-result.json` state. If planned pages, entities, or bindings are not materialized, report them as not implemented rather than as completed.
-18. Schema display-field guardrails:
-   - BaseLookup entities rely on inherited `Name`; it must remain the lookup `PrimaryDisplayColumn`, otherwise lookup values will appear blank in UI controls.
-   - Never add custom `Name` or duplicate title-like columns to lookup schemas.
-   - Before updating any existing or template-created entity, inspect the refreshed schema snapshot. If `Name` already exists, reuse it as the record title across requirements, pages, and entity sync payloads.
-   - Do not add duplicate title-like columns such as `UsrName`, `UsrTitle`, or `UsrCaption` when `Name` already exists, unless the developer explicitly requires a separate business field distinct from the record name.
-   - Treat it as a validation failure when a plan says `Name` is the record title but still adds or references duplicate title-like columns.
-19. Main-entity guardrails:
-   - For new apps created through `application.create`, the template-created section entity is the canonical main entity for the app's primary records unless the requirements explicitly describe a different existing schema or multiple distinct business objects.
-   - If requirements describe one primary record type, Agent 2/3/4 must map generic nouns and synonyms to that template-created entity instead of inventing a second BaseEntity with a different name.
-   - Treat it as a validation failure when a new-app plan creates a second BaseEntity for the same records that the template-created section entity already represents.
-20. Page-sync guardrails:
-   - For a new app or any main-entity extension in the main section entity, Agent 3/4 must synchronize the generated FormPage and ListPage in the same workflow before reporting success.
-   - FormPage default policy: keep `Name` as the record title/header when the schema already contains it, then surface all approved non-inherited business fields from the main entity. Required business fields must never be omitted.
-   - ListPage default policy: include `Name`, include every required non-inherited business field, then append compact short operational fields in this priority order until the grid stays compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
-   - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
-   - Exclude long/rich/blob fields from default ListPage columns unless the field is required or explicitly requested.
-
-## Global Rules
-
-1. All entity/page/package names start with `Usr` prefix.
-2. Use MCP `application.create` as the primary generation path for full app creation.
-3. Use MCP `application.get_list` to discover existing applications before update flows.
-4. Use MCP `application.get_info` as the canonical DB refresh for current application context.
-5. Entity-level MCP tools (`entity.create`, `entity.create_lookup`, `entity.update`) are the secondary DB-first sync path after `application.create` or `application.get_info` when approved columns or lookup dependencies must be applied.
-6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
-7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
-8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
-9. BaseLookup already provides `Name` and `Description`. `Name` must stay the lookup `PrimaryDisplayColumn`; do not re-add `Name`, `Description`, or duplicate title-like columns.
-10. If the current schema snapshot already contains `Name`, use `Name` in requirements, pages, form headers, and entity updates. Do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
-11. **MCP tools work DB-first:** Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required after MCP tool execution.
-12. Generate files only in `output/<AppName>/`.
-13. If MCP endpoint is unavailable or required application tools are missing, stop and report blocker.
-14. Agent 4 must persist MCP evidence:
-   - `output/<AppName>/mcp-application-result.json`
-   - `output/<AppName>/mcp-application-report.md`
-15. During app-generation execution, Agent 4 may write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
-16. `request-spec.json` must follow the full normalized schema from Agent 2. Shorthand specs with only `businessChecklist.complete=true` are invalid.
-17. Every `businessChecklist.<group>` object in `request-spec.json` must include `source`. When `source="assumed"`, it must also include `assumption`, and that exact text must appear in the top-level `assumptions` array.
-18. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
-19. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
-20. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
-21. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults.
-22. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
-23. For new apps, or when the main section entity gains approved business fields, synchronize the generated `FormPage` and `ListPage` before the run can be reported as complete.
-24. `FormPage` defaults must keep `Name` as the header/title when present and surface all approved non-inherited business fields from the main entity. Required business fields must always be included.
-25. `ListPage` defaults must include `Name`, all required non-inherited business fields, and then only the highest-priority short operational fields needed for a compact grid.
-26. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless those fields are explicitly requested or required.
-27. Keep auto-selected default `ListPage` columns compact by capping them at 6 total visible columns unless required business fields exceed that number.
-28. `mcp-application-report.md` must distinguish `implemented`, `machineChecked`, and `manualCheckPending`. Never mark UI acceptance as verified unless the corresponding evidence is persisted in `mcp-application-result.json`.
-29. Generated artifacts under `output/**` are not normative sources for generator instructions or validation policy.
-
-## Context Files Reference
-
-| File | Contains | When to Read |
-|------|----------|--------------|
-| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always |
-| `context/mcp-application-tools-reference.md` | Complete MCP tools guide: curl commands, parsing, error handling | Agent 4 |
-| `context/business-checklist.md` | Mandatory business clarification checklist and completion criteria | Agent 2, 3 |
-| `context/devkit-common-reference.md` | Exhaustive `@creatio-devkit/common` public API reference for sdk imports, decorators, models, services, and handlers | Agent 4, SDK-related page/frontend tasks |
-| `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
-| `context/ui-reference.md` | Freedom UI page structure and controls | Agent 4 |
-| `context/viewconfig-reference.md` | Runtime `viewConfigDiff` editing patterns for FormPage/ListPage sync | Agent 4 |
-| `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |
-| `context/data-bindings-reference.md` | Binding logic and standard values | Agent 4 |
-
-## Templates
-
-- `templates/entity/`
-- `templates/pages/`
-- `templates/addons/`
-- `templates/data-bindings/`
-- `templates/package/`
-
-## Quick Start
-
-When developer provides a natural-language request (for example: “Generate an Events composable app ...”):
-
-1. Start with planning response and collect blocker technical inputs only.
-2. After natural-language confirmation, persist Gate P with `scripts/write-planning-state.sh ...` and run `scripts/check-planning-gate.sh <AppName>`.
-3. Run Agent 1 in background → wait → verify `.creatio-env.json`.
-4. Run Agent 2 interactively → complete business checklist → persist full `request-spec.json` and approved `workflow-state.json`.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state.
-7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
+Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep detailed API payload rules and page-editing patterns in the context/reference files rather than duplicating them in multiple agent prompts.

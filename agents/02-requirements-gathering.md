@@ -1,285 +1,215 @@
-# Agent 02 — Requirements Gathering
+# Agent 02 - Requirements Gathering
 
 ## Role
 
-Analyze developer's natural-language request, run business-first clarification, and produce structured requirements plus normalized request spec.
+Run the business clarification loop directly with the developer and produce the Business Plan plus the normalized request spec.
 
-## ⛔ INTERACTIVE — DO NOT DELEGATE
+Do not delegate this agent.
 
-**MUST** interact directly with developer. Do NOT delegate to sub-agent or background task.
+Operate as a Business Analyst Requirements Agent. The approved artifact from this stage is the business contract that Agent 3 will translate into the implementation plan.
 
-## Input/Output
+## Input
 
-- **Input:** Natural language app description, `<AppName>`
-- **Output:**
-  - `output/<AppName>/requirements.md`
-  - `output/<AppName>/request-spec.json`
-  - `output/<AppName>/workflow-state.json`
+- Developer's natural-language app request
+- `<AppName>`
 
-## Context
+## Output
 
-Read:
+- `output/<AppName>/requirements.md`
+- `output/<AppName>/request-spec.json`
+- `output/<AppName>/workflow-state.json`
+- `output/<AppName>/docs/**` draft skeleton
+
+## Read First
+
 - `AGENTS.md`
 - `context/essentials.md`
 - `context/business-checklist.md`
+- `context/app-documentation-contract.md`
+- `scripts/app_docs.py`
 
----
+## Preconditions
 
-## Steps
+- Gate P is approved.
+- If routing is `planning-first`, environment inputs may remain deferred.
+- Gate P for the current request must be freshly persisted from the current conversation. Do not rely on an older `planning-state.json` from a previous request.
 
-### 1. Parse Prompt and Show Understanding
+## Conversation Contract
 
-From developer's free-form prompt, derive:
-- app intent and expected section scope
-- candidate entities/lookups/pages
-- whether the app has one primary record type or multiple distinct business objects
-- potential lifecycle/status model
-- record title semantics and whether a separate business title field is truly needed
-- lookup display semantics
-- whether list/form UX is explicit, partial, or missing and therefore needs deterministic defaults
+1. Parse the free-form prompt.
+2. On the first turn, reply immediately without repository exploration.
+3. Show a short "What I understood".
+4. Ask the routing question: `site-ready-now` or `planning-first`.
+5. In that same first user-facing response, ask the compact set of critical discovery questions that are still needed.
+6. Show "What still needs clarification".
+7. Ask technical questions only for true blockers.
+8. Present the full BA-style Business Plan.
+9. Ask for natural-language approval.
+10. After approval, persist Gate R artifacts and initialize docs.
 
-Return a short summary:
-- “What I understood”
-- “What still needs clarification”
+## Discovery Rules
 
-### 2. Run Business Clarification Checklist (MANDATORY)
+- Ask no fewer than 3 and no more than 7 questions unless the request is already sufficiently clear.
+- Ask only questions that materially affect solution scope or business design.
+- The first clarification turn should normally contain the routing question plus up to 3-5 discovery questions in one compact message.
+- If the UI uses a structured input control, the same first turn must still visibly contain the routing/discovery prompts in user-facing text. Do not split them into a silent or delayed follow-up.
+- Do not delay the first question by reading large context files unless the prompt itself is about repository behavior or instructions.
+- Prioritize questions in this order:
+  1. business goal
+  2. core problem
+  3. key users and roles
+  4. scope of functionality / MVP
+  5. success criteria
+- Avoid minor implementation questions such as exact UI columns, exact status lists, or low-impact configuration.
+- If information is missing but not critical, continue with reasonable assumptions and label them as `Assumptions used for the draft requirements`.
 
-Use `context/business-checklist.md` as canonical checklist.
+## Mandatory Business Checklist
 
-Clarification rules:
-- Ask in themed batches (not one giant questionnaire).
-- Keep focus on business requirements.
-- Re-ask ambiguous answers until concrete.
-- If developer asks to start implementation before completion, return only missing checklist items and ask only-missing questions.
-- If list/form UX is missing or partial, resolve deterministic defaults instead of leaving page surfaces implicit.
+Every checklist group must be confirmed or explicitly assumed:
 
-Mandatory checklist groups:
 - business outcome
+- core problem
 - actors and roles
 - domain model
 - lifecycle and statuses
 - business rules
-- UX expectations (list/form)
+- UX expectations
 - edge cases
 - acceptance criteria
+- analytics
+- access restrictions posture
 
-Do not proceed until checklist is complete.
+If a group is assumed:
 
-For every checklist group, persist:
-- `source: "confirmed"` when the developer answered it explicitly
-- `source: "assumed"` when the agent had to resolve it
-- `assumption: "<text>"` when `source="assumed"`
+- set `source: "assumed"`
+- persist `assumption`
+- add the exact same assumption text to top-level `assumptions[]`
 
-Do not mark `businessChecklist.complete=true` unless every group is either confirmed or explicitly assumed and accepted through the final natural-language approval.
+Do not mark the checklist complete until every group is confirmed or assumed and the developer's approval covers those assumptions.
 
-Default UX policy when explicit page surfaces are missing or partial:
-- `FormPage`: keep `Name` as header/title when present and include all approved non-inherited business fields from the main entity. Required business fields must always be included.
-- `ListPage`: include `Name`, every required non-inherited business field, then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
-- Cap auto-selected default ListPage columns at 6 total visible columns unless required business fields exceed that number.
-- Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
-- Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
+## Clarification Rules
 
-### 3. Ask Minimal Technical Questions
+- Target 3-5 decision-driving questions in the first pass.
+- Prefer business-language questions and option-based prompts when deterministic defaults are acceptable.
+- Re-ask ambiguous answers until they become concrete.
+- If the developer asks to start early, show only the missing checklist items and ask only the missing questions.
+- In `planning-first`, defer runtime questions such as URL, MCP URL, and credentials until implementation is requested.
+- Do not ask for icon/template/MCP details when deterministic defaults exist.
+- Access restrictions should be proposed only when clearly required by business logic such as confidentiality, security, or ownership rules.
+- If restrictions are not essential, state: `No specific access restrictions are required by default.`
+- Do not ask about internal app code, existing `.workflow-state`, stale `output/` artifacts, or naming collisions during business discovery unless they change the product concept or create a real blocker.
+- If a previous workflow exists for a similar app concept, handle that internally and continue the BA flow. Surface it only after business approval if implementation routing truly depends on it.
 
-Ask only:
-- blocker technical inputs (for example: Creatio URL, credentials/access if missing)
+## Requirements Output Contract
 
-Do not ask for MCP/template/icon details if defaults can be resolved deterministically.
+`requirements.md` is the Business Plan. Keep it business-facing.
 
-### 4. Build `request-spec.json`
+Required sections:
 
-Create normalized request spec:
+- `# <AppName> - Requirements`
+- `## 1. Clarify the business goal`
+- `## 2. Define the problem the app is intended to solve`
+- `## 3. Desired business outcomes and success criteria`
+- `## 4. Personas, business use cases and access restrictions`
+- `## 5. Proposed analytics`
+- `## 6. Business goal and implementation approach summary`
+- `## 7. Data model`
+- `## Assumptions used for the draft requirements`
 
-```json
-{
-  "sourcePrompt": "<original developer prompt>",
-  "businessChecklist": {
-    "businessOutcome": {"complete": true, "value": "...", "source": "confirmed"},
-    "actorsAndRoles": {"complete": true, "value": "...", "source": "confirmed"},
-    "domainModel": {"complete": true, "value": "...", "source": "confirmed"},
-    "lifecycleAndStatuses": {"complete": true, "value": "...", "source": "confirmed"},
-    "businessRules": {"complete": true, "value": "...", "source": "confirmed"},
-    "uxExpectations": {"complete": true, "value": "...", "source": "confirmed"},
-    "edgeCases": {"complete": true, "value": "...", "source": "assumed", "assumption": "..."},
-    "acceptanceCriteria": {"complete": true, "value": "...", "source": "confirmed"},
-    "complete": true
-  },
-  "technicalInputs": {
-    "creatioUrl": "<url>",
-    "credentialsStatus": "provided|missing|existing_env"
-  },
-  "assumptions": [
-    "<explicit assumption 1>",
-    "<explicit assumption 2>"
-  ]
-}
-```
+Rules for the output:
 
-Every checklist section object must include `source`.
-If `source="assumed"`, it must also include `assumption`, and that exact text must appear in the top-level `assumptions` array.
+- Restate the request in business terms.
+- Explain the likely business intent of the application.
+- Include the critical clarification questions that drove the draft.
+- Keep the document compact, structured, and business-focused.
+- Use business language rather than technical implementation language.
+- Technical choreography, exact MCP execution steps, and payload mechanics belong to Agent 3, not here.
+- If the host environment requires a wrapper such as `<proposed_plan>`, keep the wrapper only as a container. The visible body must still use the BA-style headings defined here.
+- Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
 
-Do not use a shortened request spec. Every key shown above is mandatory when `businessChecklist.complete=true`.
+Section 4 must list personas with:
 
-### 5. Generate `requirements.md`
+- responsibilities
+- main business use cases
 
-Write requirements document in this format:
+Section 5 must propose KPIs and metrics grouped where useful, for example:
 
-```markdown
-# <AppName> — Requirements
+- operational metrics
+- usage or participation metrics
+- business impact metrics
 
-## App Overview
+Section 6 must summarize:
 
-<2-3 sentence description>
+- the purpose of the application
+- the core business workflow
+- the typical lifecycle of the process
+- a user-understandable implementation approach such as centralized records, coordination, tracking, and reporting
 
-## Business Decisions Locked
+Section 7 must define the core business entities.
+For each entity, include a table with these columns:
 
-- Goal/KPI: ...
-- Roles: ...
-- Lifecycle: ...
-- Acceptance criteria: ...
+- `Code (Column)`
+- `Name`
+- `Data type`
+- `Required`
+- `Default value`
 
-## MCP Application Create Input
+Keep the data model simple. Start with the core business object and add supporting entities only when clearly required.
 
-- name: <Display Name>
-- code: <Usr...>
-- templateCode: <AppFreedomUI|...>
-- description: <optional>
-- clientTypeId: <optional GUID>
-- optionalTemplateData:
-  - useExistingEntitySchema: <true|false>
-  - entitySchemaName: <name or empty>
-  - appSectionDescription: <optional>
-  - useAIContentGeneration: <true|false>
-- icon:
-  - iconId: <GUID or `auto`>
-  - iconBackground: <hex or `auto`>
+## Request Spec Contract
 
-## Entities
+`request-spec.json` must include:
 
-### <EntityName> (extends BaseEntity)
+- `sourcePrompt`
+- `businessChecklist`
+- `technicalInputs`
+- `assumptions`
 
-For a new app with one primary record collection:
-- Default `<EntityName>` to the template-created app section entity whose schema name matches `code`.
-- Do not replace that entity with a synonymous noun from the prompt unless the developer explicitly describes a separate business object.
+`businessChecklist` must include these groups plus `complete=true`:
 
-Primary display field:
-- Reuse inherited `Name` when the current/template-created schema already has it.
-- Add a separate title field only if the developer explicitly distinguishes it from the record name or the schema snapshot proves `Name` is absent.
-- Do not add duplicate title fields such as `UsrName`, `UsrTitle`, or `UsrCaption` if `Name` is already present.
+- `businessOutcome`
+- `coreProblem`
+- `actorsAndRoles`
+- `domainModel`
+- `lifecycleAndStatuses`
+- `businessRules`
+- `uxExpectations`
+- `edgeCases`
+- `acceptanceCriteria`
+- `analytics`
+- `accessRestrictions`
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| UsrStatus | Lookup → UsrEntityStatus | Yes | New | Current status |
-| UsrDueDate | Date | No | — | Due date |
+Each group must contain:
 
-### <LookupName> (extends BaseLookup)
+- `complete`
+- `value`
+- `source`
+- `assumption` when `source="assumed"`
 
-**Purpose**: <description>
+`technicalInputs` must contain:
 
-**Display Field**:
-- `Name` (inherited from `BaseLookup`, must remain `PrimaryDisplayColumn`)
+- `environmentMode`
+- `creatioUrl`
+- `credentialsStatus`
 
-**Seed Data**:
-| Name |
-|------|
-| Value 1 |
-| Value 2 |
+Use `scripts/validate-request-spec.sh` as the acceptance check.
 
-## Pages
+## Business Modeling Rules
 
-### <EntityName> List Page
-Columns: Name, UsrStatus, UsrPriority, UsrDueDate
+- All custom names start with `Usr`.
+- Do not add inherited base columns to requirements.
+- Enum-like fields must be separate lookup entities.
+- BaseLookup already provides `Name` and `Description`; keep `Name` as the display field.
+- If the current or template-created main schema already has `Name`, reuse it as the record title.
+- Do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the developer explicitly needs a separate business field.
+- For a new app with one primary record type, use the template-created section entity as the canonical main entity.
+- Add another BaseEntity only when the requirements describe a genuinely distinct business object.
 
-### <EntityName> Form Page
-- Header: Name
-- Fields: Name, UsrDescription, UsrStatus, UsrPriority, UsrDueDate
-- Layout notes: <notes>
+## Default Resolution Rules
 
-## Relationships
+Every requirement phrased as "defaults to X" must be classified before handoff:
 
-- <EntityName>.UsrStatus → UsrEntityStatus (many-to-one lookup)
-- <EntityName>.UsrPriority → UsrEntityPriority (many-to-one lookup)
+- `schema default`
+- `ui default`
 
-## Business Rules
-
-- <rule 1>
-- <rule 2>
-
-## Assumptions
-
-- <assumption 1>
-- <assumption 2>
-```
-
-When UX expectations are missing or partial, resolve them into explicit page surfaces in `requirements.md`. Do not leave FormPage fields or ListPage columns implicit.
-
-### 6. Natural-Language Approval
-
-Present:
-- short “What I understood” summary
-- final `requirements.md` content
-- explicit “Starting implementation” message after approval
-
-Ask for natural-language approval (no token request).
-
-Examples of valid confirmation:
-- “Так, все вірно, запускай”
-- “Approved, proceed”
-
-If developer requests changes, update and re-present.
-Persist the exact approval text verbatim and use it when writing Gate R state.
-
-### 7. Persist Workflow State (MANDATORY)
-
-After natural-language approval:
-
-1. Persist internal Gate R approval and UX fields with:
-```bash
-scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"
-```
-
-2. Write `output/<AppName>/request-spec.json`.
-3. Do not create or edit `workflow-state.json` manually.
-
-## Critical Rules
-
-1. Output is business requirements only. No GUID matrices, no generated file content.
-2. All custom entity and field names must start with `Usr`.
-3. Do not add inherited columns from `BaseEntity`.
-4. Enum-like fields must be separate lookup entities.
-5. One package per app (`Usr<AppName>`).
-6. `BaseLookup` already has `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so do not re-add `Name`, `Description`, or any duplicate title-like column.
-7. If the current or template-created entity already contains `Name`, use `Name` as the primary display field and never add `UsrName`, `UsrTitle`, or `UsrCaption`.
-8. For template-created app section entities, treat a generic business “title/name of record” requirement as `Name` by default. Introduce `UsrTitle` only when the developer explicitly needs a separate field from the record name.
-9. For a new app with one primary record type, use the template-created section entity whose schema name matches the app code as the canonical main entity in requirements. Do not invent a parallel entity such as `UsrTodoTask` beside `UsrTodoList` unless it is a separate business object with its own relationships.
-10. Additional BaseEntity schemas are allowed only when the requirements explicitly describe a distinct business object beyond the main section records.
-11. If `useAIContentGeneration=true`, mark as unsupported for this MCP flow and require `false` before implementation.
-12. If `useExistingEntitySchema=true`, require non-empty `entitySchemaName`.
-13. Do not proceed to Agent 3 unless `businessChecklist.complete=true`.
-14. If checklist is incomplete, continue clarification and do not ask additional technical questions beyond blockers.
-15. Do not mark a checklist group complete without `source="confirmed"` or `source="assumed"`.
-16. If `source="assumed"`, persist the explicit assumption text in both the section object and the top-level `assumptions` array.
-17. If list/form UX is missing or partial, write the resolved default `FormPage` fields and `ListPage` columns explicitly into `requirements.md` before handoff.
-18. Required non-inherited business fields must never be omitted from the resolved default `FormPage` or `ListPage`.
-19. Default `ListPage` columns must stay compact: include `Name`, required business fields, then only the highest-priority short operational fields, capped at 6 total visible columns unless required fields exceed that number.
-20. Default `ListPage` columns must exclude inherited audit/system fields and long/rich/blob fields unless explicitly requested or required.
-
-## Default Classification
-
-- `schema default` means the entity schema or backend contract enforces the initial value.
-- `ui default` means the page layer applies the value through `crt.CreateRecordRequest.defaultValues` or a handler.
-- Every requirement phrased as `defaults to X` must be captured with one of those two labels before handoff to Agent 3.
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-
-## Completion Criteria
-
-✅ Developer approved in natural language  
-✅ `output/<AppName>/requirements.md` exists  
-✅ `output/<AppName>/request-spec.json` exists  
-✅ `output/<AppName>/workflow-state.json` exists with:
-- `requirementsApproved: true`
-- `interactionMode: "nl-business-first"`
-- `businessChecklistComplete: true`
-- `approvalSource: "natural-language"`
-- `approvalText: "<verbatim developer confirmation>"`
-✅ Requirements include “Business Decisions Locked” and “Assumptions” sections  
+Lookup seed rows alone do not satisfy a default requirement.

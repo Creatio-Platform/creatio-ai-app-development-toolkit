@@ -1,125 +1,59 @@
-# Agent 01 — Environment Setup
+# Agent 01 - Environment Setup
 
 ## Role
 
-Configure clio CLI and establish connection to Creatio instance.
+Prepare the local connection context for a specific app workflow.
 
-## Input/Output
+## Input
 
-- **Input:** Developer request with Creatio URL, `<AppName>`
-- **Output:** `output/<AppName>/.creatio-env.json`
+- `<AppName>`
+- Creatio base URL
+- frontend MCP URL
+- credentials or an already-registered `clio` environment
 
-## Context
+## Output
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
+- `output/<AppName>/.creatio-env.json`
 
----
+## Read First
+
+- `AGENTS.md`
+- `context/essentials.md`
+
+## Preconditions
+
+- Gate P is already approved.
+- Runtime inputs are available.
+- `scripts/check-planning-gate.sh <AppName>` passes.
 
 ## Steps
 
-### 1. Verify clio is installed
+1. Verify `clio` is installed.
+2. List existing `clio` environments.
+3. Reuse an existing environment for the target URL if available.
+4. Otherwise register a new environment.
+5. Detect `isNetCore` by trying registration/healthcheck with `.NET Core` first, then fall back to `.NET Framework` if needed.
+6. Run `clio healthcheck -e <env_name>`.
+7. Write `output/<AppName>/.creatio-env.json` with:
+   - `environment`
+   - `url`
+   - `isNetCore`
+   - `mcpUrl`
+8. Verify the MCP endpoint with `initialize` against `mcpUrl`.
+9. Treat environment setup as successful only when the MCP response includes `Mcp-Session-Id`.
 
-```bash
-clio ver
-```
+## Rules
 
-- If the command succeeds, note the version and proceed.
-- If the command fails (not found), stop and tell the developer:
-  > clio is not installed. Please install it first:
-  > ```
-  > dotnet tool install clio -g
-  > ```
-  Then wait for the developer to confirm installation before retrying.
-
-### 2. List existing environments
-
-```bash
-clio show-web-app-list
-```
-
-Display the list to the developer. Check if an environment for the target URL already exists.
-
-- **If it exists** — use that environment name and skip to Step 5.
-- **If it does not exist** — proceed to Step 3.
-
-### 3. Register the environment
-
-If the developer provided URL, login, and password:
-
-```bash
-clio reg-web-app <env_name> -u <url> -l <login> -p <password>
-```
-
-If the developer did **not** provide login and/or password — **ask for them**. Do not guess or use defaults.
-
-The `<env_name>` should be a short, descriptive name derived from the URL (e.g., `dev-crm`, `prod-sales`).
-
-### 4. Detect IsNetCore
-
-Creatio instances can be .NET Core or .NET Framework. Detect this automatically:
-
-1. **Try .NET Core first**:
-   ```bash
-   clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i true
-   ```
-2. Run a healthcheck (Step 5). If it fails with a connection/protocol error:
-3. **Fall back to .NET Framework**:
-   ```bash
-   clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i false
-   ```
-4. Save the detected `isNetCore` value (`true` or `false`) for the env file.
-
-### 5. Verify the connection
-
-```bash
-clio healthcheck -e <env_name>
-```
-
-- **Success** — proceed to Step 6.
-- **Failure** — see Error Handling below.
-
-### 6. Save environment configuration
-
-Create the file `output/<AppName>/.creatio-env.json`:
-
-```json
-{
-  "environment": "<env_name>",
-  "url": "<URL>",
-  "isNetCore": true,
-  "mcpUrl": "<URL>/mcp"
-}
-```
-
-Replace `true` with `false` if .NET Framework was detected in Step 4.
-For the current MCP integration, use `<URL>/mcp` for `mcpUrl`.
-
-### 7. Verify MCP endpoint (MANDATORY)
-
-Run MCP initialize against `mcpUrl` from `.creatio-env.json` and verify response includes `Mcp-Session-Id` header:
-
-```bash
-curl -s -D- "<mcpUrl>" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"agent","version":"1.0"}}}'
-```
-
-- **Success** (session header exists) — environment setup is complete.
-- **Failure** — stop and report blocker to developer. Do not continue pipeline.
-
-## Error Handling
-
-| Error | Action |
-|-------|--------|
-| `clio ver` fails | Tell developer to install clio (`dotnet tool install clio -g`) |
-| `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
-| Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
-| Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
-| MCP initialize fails or no `Mcp-Session-Id` header | Verify `.creatio-env.json` `mcpUrl`, site reachability, and credentials. Stop pipeline until fixed. |
+- Never infer `mcpUrl` from the Creatio site URL.
+- If login/password are required and missing, ask for them. Do not guess.
+- If `clio` is missing, stop and report the blocker.
+- If healthcheck fails for both `isNetCore=true` and `isNetCore=false`, stop and report the blocker.
+- If MCP `initialize` fails or does not return a session header, stop and report the blocker.
 
 ## Completion Criteria
 
-✅ `clio healthcheck -e <env_name>` passes  
-✅ `output/<AppName>/.creatio-env.json` exists with correct values  
-✅ MCP initialize succeeds for `mcpUrl` and returns `Mcp-Session-Id`  
+- `output/<AppName>/.creatio-env.json` exists and is non-empty.
+- Stored `url` is a valid Creatio base URL.
+- Stored `mcpUrl` is the actual frontend MCP endpoint.
+- The saved environment passes `clio healthcheck`.
+- MCP `initialize` succeeds and yields `Mcp-Session-Id`.

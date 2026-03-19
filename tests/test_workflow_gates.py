@@ -1,12 +1,27 @@
+import contextlib
 import json
 import os
+import shutil
 import subprocess
-import tempfile
 import unittest
+import uuid
 from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_TMP_ROOT = ROOT / ".tmp-tests"
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+BASH = shutil.which("bash")
+
+
+@contextlib.contextmanager
+def temp_workflow_root():
+    workdir = TEST_TMP_ROOT / f"tmp-{uuid.uuid4().hex}"
+    workdir.mkdir(parents=True, exist_ok=False)
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def write_file(path, content):
@@ -29,6 +44,7 @@ def build_valid_request_spec():
             "complete": True
         },
         "technicalInputs": {
+            "environmentMode": "site-ready-now",
             "creatioUrl": "http://localhost:5001",
             "credentialsStatus": "existing_env"
         },
@@ -39,11 +55,13 @@ def build_valid_request_spec():
 
 
 def run_script(script_name, *args, workflow_root):
+    if not BASH:
+        raise unittest.SkipTest("bash is required to run workflow gate scripts on this platform")
     env = os.environ.copy()
     env["WORKFLOW_ROOT_DIR"] = workflow_root
     env["WORKFLOW_STATE_DIR"] = str(Path(workflow_root) / ".workflow-state")
     return subprocess.run(
-        ["bash", str(ROOT / "scripts" / script_name), *args],
+        [BASH, str(ROOT / "scripts" / script_name), *args],
         cwd=ROOT,
         env=env,
         text=True,
@@ -52,9 +70,20 @@ def run_script(script_name, *args, workflow_root):
 
 
 class WorkflowGateTests(unittest.TestCase):
+    def test_validate_request_spec_accepts_planning_first_without_url(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            request_spec = build_valid_request_spec()
+            request_spec["technicalInputs"] = {
+                "environmentMode": "planning-first",
+                "credentialsStatus": "deferred"
+            }
+            write_file(app_dir / "request-spec.json", json.dumps(request_spec))
+            result = run_script("validate-request-spec.sh", str(app_dir / "request-spec.json"), workflow_root=str(workflow_root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_validate_request_spec_rejects_missing_checklist_source(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             request_spec = build_valid_request_spec()
             request_spec["businessChecklist"]["businessRules"].pop("source")
@@ -64,8 +93,7 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("businessChecklist.businessRules.source must be confirmed or assumed", result.stderr)
 
     def test_validate_request_spec_rejects_assumed_section_without_explicit_assumption(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             request_spec = build_valid_request_spec()
             request_spec["businessChecklist"]["edgeCases"]["source"] = "assumed"
@@ -76,8 +104,7 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("businessChecklist.edgeCases.assumption must be listed in assumptions", result.stderr)
 
     def test_write_approval_state_requires_planning_gate(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             write_file(app_dir / "requirements.md", "# TodoList\n")
             write_file(app_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
@@ -85,9 +112,27 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Planning gate failed", result.stderr)
 
+    def test_write_planning_state_accepts_planning_first_without_url(self):
+        with temp_workflow_root() as workflow_root:
+            result = run_script(
+                "write-planning-state.sh",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=str(workflow_root)
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            planning_file = Path(workflow_root) / ".workflow-state" / "TodoList" / "planning-state.json"
+            payload = json.loads(planning_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["routingMode"], "planning-first")
+            self.assertTrue(payload["environmentInputsDeferred"])
+            self.assertEqual(payload["technicalInputs"]["creatioUrl"], "")
+
     def test_check_approval_gate_rejects_incomplete_request_spec(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             write_file(app_dir / "requirements.md", "# TodoList\n")
             write_file(app_dir / "request-spec.json", json.dumps({"businessChecklist": {"complete": True}}))
@@ -126,8 +171,7 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("Request spec failed", result.stderr)
 
     def test_check_approval_gate_rejects_url_and_proceed_only_flow(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             write_file(app_dir / "requirements.md", "# TodoList\n")
             write_file(
@@ -181,8 +225,7 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("Request spec failed", result.stderr)
 
     def test_check_approval_gate_accepts_full_request_spec(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             write_file(app_dir / "requirements.md", "# TodoList\n")
             write_file(app_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
