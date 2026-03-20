@@ -24,6 +24,7 @@ Read:
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
 - `scripts/page_body_tools.py`
+- `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
 
 ## MCP Workflow (Direct curl Execution)
@@ -608,7 +609,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 1. Call `page.list` with the app's package name to discover generated pages
 2. For each page that needs customization:
    a. Call `page.get(schemaName)` to get the full JS body
-   b. Modify the raw body directly — update multiple sections between their markers
+   b. Edit the body using the **Page Body Editing Algorithm** below — never use ad-hoc string manipulation
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
    d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
    d1. If the page must change ListPage default sorting, use the canonical `ListPage DataGrid Sorting via page.update` contract from `context/ui-reference.md`
@@ -702,6 +703,50 @@ python3 scripts/mcp_page_sync.py apply \
 - Use entity column names in sort options, not attribute keys
 - Treat explicit DataGrid `sorting` and `sortingChange` view properties as secondary to the collection metadata contract
 - Stop with blocker if the requirement describes semantic business order without an explicit technical sort key or separate approved runtime logic
+
+**Page Body Editing Algorithm:**
+
+When editing a page body retrieved from `page-get`, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` implements this algorithm and should be used when available.
+
+1. **Extract** — locate the marker pair `/**MARKER*/.../**MARKER*/` and extract only the content between them
+2. **Detect variant** — determine whether the section is `viewModelConfig` (plain object) or `viewModelConfigDiff` (array of merge operations); same for `modelConfig`/`modelConfigDiff`
+3. **Parse** — deserialize the section content as JSON with trailing-comma tolerance (strip `,` before `]` and `}`)
+4. **Modify** — apply changes to the parsed data structure (append to arrays, merge into objects)
+5. **Serialize** — convert back to formatted JSON string with proper indentation
+6. **Replace** — substitute the content between markers with the serialized result
+7. **Validate** — re-extract and re-parse each modified section to confirm structural integrity
+
+For FormPage field additions, use `scripts/page_body_edit.py add-form-fields` or apply the same algorithm manually:
+- Parse `SCHEMA_VIEW_CONFIG_DIFF` as JSON array
+- Find max `row` and `index` among existing inserts in `SideAreaProfileContainer`
+- Append complete insert objects with incremented row/index
+- Detect the viewModelConfig marker variant and add attributes to the correct location
+
+For ListPage column additions, use `scripts/page_body_edit.py add-list-columns` or apply the same algorithm manually:
+- Parse `SCHEMA_VIEW_CONFIG_DIFF` as JSON array
+- Find the `DataTable` merge operation and its `columns` array
+- Append complete column objects to the parsed array
+- Detect the viewModelConfigDiff marker and add attributes into the merge operation's `values` object
+
+**Page body editing anti-patterns (MUST NOT):**
+
+- ❌ Never use `body.find("}")` or brace-counting to locate insertion points — nested JS structures make positional brace search unreliable
+- ❌ Never insert raw JSON strings into the body without parsing the target section first — splicing text into unparsed JSON causes structural corruption
+- ❌ Never assume the viewModelConfig section type — always detect whether it is `viewModelConfig` (object `{}`) or `viewModelConfigDiff` (array `[]` of operations); FormPage typically uses the object variant, ListPage the array variant
+- ❌ Never verify edits by substring search alone (e.g., `"UsrStatus" in body`) — a field name can be present in a structurally broken body; always re-parse each edited section as JSON to confirm integrity
+- ❌ Never insert content at a position found by counting closing braces from an anchor string — the correct anchor is the marker boundary, not a brace position
+
+**Post-edit structural validation (MUST):**
+
+Before calling `page-update`, validate the edited body:
+1. All 8 marker pairs are present (6 required + 1 viewModelConfig variant + 1 modelConfig variant)
+2. `SCHEMA_VIEW_CONFIG_DIFF` content parses as a JSON array
+3. `SCHEMA_VIEW_MODEL_CONFIG` or `SCHEMA_VIEW_MODEL_CONFIG_DIFF` content parses as valid JSON
+4. `SCHEMA_MODEL_CONFIG` or `SCHEMA_MODEL_CONFIG_DIFF` content parses as valid JSON
+5. Every `insert` operation in viewConfigDiff has `name`, `values`, `parentName`, `propertyName`, `index`
+6. Every field using `control: "$X"` has a matching attribute `X` in viewModelConfig(Diff)
+7. For FormPage: insert operations targeting `SideAreaProfileContainer` have monotonically increasing `row` values
+8. For ListPage: `DataTable` merge contains all required column codes from the page-sync plan
 
 **Handler generation rules:**
 - Map business intents to request types using `handlers-reference.md`

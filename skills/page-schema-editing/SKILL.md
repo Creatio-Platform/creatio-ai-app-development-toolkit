@@ -125,12 +125,34 @@ page.get(schemaName: "TestApp1_ListPage")
 
 ### Step 3: Modify the Body
 
-Edit the `body` string directly. You can modify multiple sections in a single edit:
+**Use marker-based section extraction and structured JSON modification.** The utility `scripts/page_body_edit.py` implements this algorithm. For standard field/column additions, prefer the utility over manual editing.
 
-1. Find the section by its markers (e.g., `/**SCHEMA_HANDLERS*/.../**SCHEMA_HANDLERS*/`)
-2. Replace the content between markers
-3. Ensure all 8 marker pairs are preserved
-4. Ensure braces, brackets, and parentheses are balanced
+**Safe Editing Algorithm:**
+
+1. **Extract** — locate the marker pair `/**MARKER*/.../**MARKER*/` and extract only the content between them
+2. **Detect variant** — determine whether the section is `viewModelConfig` (plain object `{}`) or `viewModelConfigDiff` (array `[]` of merge operations); same for `modelConfig`/`modelConfigDiff`
+3. **Parse** — deserialize the extracted content as JSON with trailing-comma tolerance (strip `,` before `]` and `}`)
+4. **Modify** — apply changes to the parsed data structure (append to arrays, merge into objects)
+5. **Serialize** — convert back to formatted JSON string with proper indentation
+6. **Replace** — substitute the content between markers with the serialized result
+7. **Validate** — re-extract and re-parse each modified section to confirm structural integrity before calling `page-update`
+
+**Anti-patterns (MUST NOT):**
+
+- ❌ Never use `body.find("}")` or brace-counting to locate insertion points — nested JS structures make positional brace search unreliable
+- ❌ Never insert raw JSON strings into the body without parsing the target section first — splicing text into unparsed JSON causes structural corruption (fields land inside wrong objects, attributes escape their parent container)
+- ❌ Never assume the viewModelConfig section type — always detect whether it is `viewModelConfig` (object) or `viewModelConfigDiff` (array); FormPage typically uses the object variant, ListPage uses the array variant
+- ❌ Never verify edits by substring search alone (e.g., `"UsrStatus" in body`) — a field name can appear in a structurally broken body; always re-parse each edited section as JSON to confirm integrity
+- ❌ Never insert content at a position found by counting closing braces from an anchor string — the correct anchor is the marker boundary, not a brace position
+
+**FormPage vs ListPage structural differences:**
+
+| Aspect | FormPage | ListPage |
+|--------|----------|----------|
+| viewModel section | `viewModelConfig` — plain object with `attributes: {}` | `viewModelConfigDiff` — array of merge operations with `path` and `values` |
+| model section | `modelConfig` — plain object | `modelConfigDiff` — array of merge operations |
+| Adding attributes | Merge into `attributes` object directly | Merge into the operation's `values` object where `path` contains `"attributes"` |
+| Field container | `SideAreaProfileContainer` with `insert` operations | `DataTable` merge with `columns` array |
 
 ### Step 3a: Sync New Entity Fields into a Live FormPage
 
@@ -225,10 +247,22 @@ page.update(
 
 ## Validation Checklist
 
+### Pre-edit
 - [ ] `page.get` called before edit
+- [ ] Section variant detected (`viewModelConfig` vs `viewModelConfigDiff`)
+
+### Structural integrity (before calling page-update)
 - [ ] All 8 `/**MARKER*/.../**MARKER*/` pairs present in modified body
+- [ ] `SCHEMA_VIEW_CONFIG_DIFF` content parses as a valid JSON array
+- [ ] viewModelConfig(Diff) content parses as valid JSON (object or array depending on variant)
+- [ ] modelConfig(Diff) content parses as valid JSON (object or array depending on variant)
 - [ ] `define(...)` wrapper and `return {` structure preserved
-- [ ] Braces `{}`, brackets `[]`, parentheses `()` balanced
+- [ ] Every `insert` operation in viewConfigDiff has: `name`, `values`, `parentName`, `propertyName`, `index`
+- [ ] Every field using `control: "$X"` has a matching attribute `X` in viewModelConfig(Diff)
+- [ ] For FormPage: insert operations targeting `SideAreaProfileContainer` have monotonically increasing `row` values
+- [ ] For ListPage: `DataTable` merge contains all required column codes
+
+### Content correctness
 - [ ] Handler uses correct request type for business intent
 - [ ] Each handler either preserves the chain intentionally, stops it intentionally, or documents cleanup via `finally`
 - [ ] Entity attributes prefixed with `PDS_`
