@@ -31,6 +31,12 @@ clio ver
   > ```
   Then wait for the developer to confirm installation before retrying.
 
+### Environment Name Guardrail
+
+**CRITICAL:** Never use a URL (e.g., `http://localhost:5001`) as `environmentName`.
+The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
+Always register through `clio reg-web-app` if the environment does not exist.
+
 ### 2. List existing environments
 
 ```bash

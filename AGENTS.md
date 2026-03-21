@@ -39,7 +39,8 @@ You do NOT implement anything directly. You coordinate 4 agents in sequence:
 Run planning once at the beginning of each new app workflow, before Agent 1.
 
 Gate P is mandatory (internal control):
-- collect required runtime inputs from developer, including Creatio URL
+- collect required runtime inputs from developer: Creatio URL, login, and password
+- if the developer omitted login or password, ask for them — these are execution blockers even in autonomous mode
 - provide short “What I understood” summary
 - obtain natural-language confirmation from developer
 - persist Gate P approved state in `.workflow-state/<AppName>/planning-state.json`
@@ -80,6 +81,9 @@ Checklist persistence rules:
 Technical question policy:
 - ask only execution blockers (URL/access/credentials)
 - do not ask for MCP/template/icon details when deterministic defaults exist
+- "autonomous" or "without questions" mode applies to business clarifications only
+- runtime credentials (URL, login, password) are always execution blockers and must be collected before Gate P approval
+- if the developer says "autonomous" but did not provide credentials, ask for credentials only
 
 Decision rules:
 - if business data is missing, ask in themed batches
@@ -184,7 +188,7 @@ Developer prompt (natural language)
 11. On failure, decide: retry, fix, or report blocker.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
 13. Persist Gate P state in `.workflow-state/<AppName>/planning-state.json` via:
-   - `scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
+   - `scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<creatioLogin>" "<creatioPassword>" "<understandingText>" "<confirmationText>"`
 14. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
    - `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
 15. Agent 3/4 precondition:
