@@ -58,6 +58,24 @@ Only the first category is plan-safe as pure `page.update` sorting metadata. The
 
 ### 2. Parse Inputs
 
+Determine whether this is a new-app or existing-app flow **before** resolving the MCP payload:
+
+```python
+# Check if app already exists
+import sys
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
+apps = r.get('data', {}).get('applications', []) if r['success'] else []
+existing = next((a for a in apps if a.get('code') == APP_CODE), None)
+# existing = None → new-app flow
+# existing = {...}  → update flow — extract packageUId and entities from application-get-info
+```
+
+Persist the result in the plan (`## App Discovery` section):
+- `existingApp: true|false`
+- if `true`: `packageUId`, entity list, current columns — so Agent 4 can skip `application-create`
+
 Extract from requirements + request spec:
 - app overview and locked business decisions
 - whether the flow creates a new app or updates an existing app

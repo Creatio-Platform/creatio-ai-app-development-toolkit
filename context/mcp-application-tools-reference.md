@@ -1,10 +1,13 @@
 # MCP Application Tools Reference Guide
 
+> **⚠️ Transport Notice:** All MCP calls use **clio stdio transport** via `scripts/mcp_client.py`, not HTTP/SSE.
+> The HTTP endpoint examples in this file are **parameter reference only** — do NOT copy curl commands as execution patterns.
+> Use `python3 scripts/mcp_client.py <tool-name> '<args-json>'` for all actual calls.
+> Tool names use dashes: `application-create`, `create-lookup`, `update-entity-schema` (not dots).
+
 ## Overview
 
-MCP (Model Context Protocol) application tools provide DB-first integration for Creatio composable app creation and schema management. All tools are accessed through the `/mcp` endpoint via JSON-RPC 2.0 protocol over HTTP.
-
-**Endpoint:** `http://localhost:5001/mcp`
+MCP (Model Context Protocol) application tools provide DB-first integration for Creatio composable app creation and schema management.
 
 ## Authentication
 

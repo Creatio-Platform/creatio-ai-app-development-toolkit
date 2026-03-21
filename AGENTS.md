@@ -144,7 +144,7 @@ Developer prompt (natural language)
 ┌─────────────────────────┐
 │ Agent 4: Implementation │  Read: agents/04-implementation.md
 │                         │  Context: essentials, ui, viewconfig, bindings, mcp-tools-ref
-│                         │  Direct MCP: curl → application.create/get_info/page.list/page.get/page.update
+│                         │  MCP via stdio: scripts/mcp_client.py → application-create/get-info/page-list/page-get/page-update
 │                         │  Output: output/<App>/mcp-application-result.json
 │                         │          + mcp-application-report.md (FINAL)
 └─────────────────────────┘
@@ -170,12 +170,12 @@ Developer prompt (natural language)
 7. Verify expected outputs exist and are non-empty before moving to the next agent. When Agent 3 requires page sync, this includes the embedded page sync contract in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, plus `output/<AppName>/page-sync-plan.json`.
 8. Agent 2 is interactive only. Never delegate it.
 9. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
-10. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
-   - Step A: initialize MCP session via `initialize` method and extract `Mcp-Session-Id`
-   - Step B: verify tools availability with `tools/list` (check for application.create, application.get_info, entity tools)
-   - Step C: prepare and validate `application.create` payload from `plan.md`
-   - Step D: execute `tools/call` for `application.create` via curl with Basic Auth + Session-Id headers
-   - Step E: parse SSE response (grep data: | sed | jq) and validate `short` contract
+10. Agent 4 implementation order (use `scripts/mcp_client.py` for all MCP calls):
+   - Step A: verify clio MCP reachable via `python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}'`
+   - Step B: check if app already exists by searching `data.applications` by `code`; branch explicitly — new-app flow or existing-app flow
+   - Step C: prepare and validate `application-create` payload from `plan.md`
+   - Step D: if new-app flow — call `application-create`; if collision returned, switch to existing-app flow via `application-get-info`
+   - Step E: parse `r['data']` from `mcp_client.py` result and validate `short` contract (`success`, `packageUId`, `entities`)
    - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext and identify the template-created section entity returned by `application.create`
    - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `entity.update`; use `entity.create` only for additional distinct business objects
    - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
@@ -249,10 +249,12 @@ Developer prompt (natural language)
 
 ## Context Files Reference
 
+**Lazy loading rule:** Read context files per-phase, not all at once. Each agent reads only the files it needs.
+
 | File | Contains | When to Read |
 |------|----------|--------------|
-| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always |
-| `context/mcp-application-tools-reference.md` | Complete MCP tools guide: curl commands, parsing, error handling | Agent 4 |
+| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always (Gate P + all agents) |
+| `context/mcp-application-tools-reference.md` | MCP tool parameters and payload reference | Agent 4 only |
 | `context/business-checklist.md` | Mandatory business clarification checklist and completion criteria | Agent 2, 3 |
 | `context/devkit-common-reference.md` | Exhaustive `@creatio-devkit/common` public API reference for sdk imports, decorators, models, services, and handlers | Agent 4, SDK-related page/frontend tasks |
 | `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
@@ -260,6 +262,7 @@ Developer prompt (natural language)
 | `context/viewconfig-reference.md` | Runtime `viewConfigDiff` editing patterns for FormPage/ListPage sync | Agent 4 |
 | `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |
 | `context/data-bindings-reference.md` | Binding logic and standard values | Agent 4 |
+| `scripts/mcp_client.py` | Reusable stdio MCP client for clio | Agent 4 (read before first MCP call) |
 
 ## Templates
 
@@ -278,5 +281,5 @@ When developer provides a natural-language request (for example: “Generate an 
 3. Run Agent 1 in background → wait → verify `.creatio-env.json`.
 4. Run Agent 2 interactively → complete business checklist → persist full `request-spec.json` and approved `workflow-state.json`.
 5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state.
+6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state. Agent 4 uses `scripts/mcp_client.py` (stdio transport) for all MCP calls.
 7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.

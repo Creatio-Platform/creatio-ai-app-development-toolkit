@@ -17,71 +17,106 @@ Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts dur
 
 Read:
 - `context/essentials.md`
-- `context/mcp-application-tools-reference.md` — Complete curl examples and patterns
+- `context/mcp-application-tools-reference.md` — MCP tool parameters and payload reference
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
+- `scripts/mcp_client.py` — Reusable stdio MCP client (use this, not curl)
 - `scripts/page_body_tools.py`
 - `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
 
-## MCP Workflow (Direct curl Execution)
+## MCP Workflow (via scripts/mcp_client.py)
 
-**Reference:** See `context/mcp-application-tools-reference.md` for complete curl examples, response parsing patterns, and error handling.
+**Primary transport:** clio MCP uses **stdio** (`clio mcp-server`), not HTTP/SSE. Use `scripts/mcp_client.py` for all MCP calls. Do NOT use curl for clio MCP.
 
-Use MCP `application.create` as the primary DB-first flow for full app creation. Use `application.get_list` and `application.get_info` for existing-app discovery and canonical DB refresh.
+### clio Resolution Order
+
+`scripts/mcp_client.py` resolves clio in this priority:
+
+| Scenario | Resolution |
+|----------|-----------|
+| User provided custom clio path | Set `CLIO_CMD` env var: `CLIO_CMD="dotnet /path/to/clio.dll"` |
+| Standard install (most users) | `clio` in PATH — installed via `dotnet tool install clio -g` |
+| clio not found | `RuntimeError` with install instructions — stop and ask user to install |
+
+### clio stdio Transport — Critical Constraints
+
+❌ **NEVER** pass `-e` flag to `mcp-server` — it is NOT supported (causes exit code 1)
+❌ **NEVER** use shell variable expansion (`$VAR`) in pipes to `mcp-server` — blocked by security scanner
+❌ **NEVER** send `notifications/initialized` — clio does not support it
+❌ **NEVER** use dot-separated tool names (`application.create`) — clio uses **dashes** (`application-create`)
+✅ **ALWAYS** use `scripts/mcp_client.py` which handles all transport details correctly
 
 ### Quick Start Pattern
 
 ```bash
-# 1. Initialize and get session ID
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}' \
-  -D /tmp/headers.txt > /tmp/init.txt
+# All MCP calls go through the stdio client — same interface for every tool
+python3 scripts/mcp_client.py <tool-name> '<args-json>' [timeout]
 
-SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/headers.txt | sed 's/.*: //' | tr -d '\r')
+# Returns JSON: {"success": bool, "data": {...}|null, "raw": "..."}
 
-# 2. Call application.create
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"application.create","arguments":{...}}}' \
-  | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text'
+# Example: create application
+python3 scripts/mcp_client.py application-create '{
+  "environment-name": "local",
+  "name": "My App",
+  "code": "UsrMyApp"
+}' | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['data'] if r['success'] else r['raw'])"
 
-# 3. After entity mutations, refresh context
-curl -s ... "application.get_info" ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text' \
-  | jq '. + {contractType:"short",schemaSync:[...]}' > output/App/mcp-application-result.json
+# Example: after entity mutations, refresh context
+python3 scripts/mcp_client.py application-get-info '{
+  "environment-name": "local",
+  "app-code": "UsrMyApp"
+}' | python3 -c "
+import json, sys
+r = json.load(sys.stdin)
+if r['success']:
+    json.dump(r['data'], open('output/UsrMyApp/mcp-application-result.json','w'), indent=2)
+else:
+    print('ERROR:', r['raw'])
+"
 ```
 
-**Critical headers:**
-- `Accept: application/json, text/event-stream` — Both required
-- `Mcp-Session-Id: <session>` — From initialize response header
+**When creating mcp_client.py calls in bash scripts — always use the two-step pattern:**
+```bash
+# Step 1: write the script to a file
+cat > /tmp/run_mcp.py << 'PYEOF'
+import sys
+sys.path.insert(0, '/Users/a.kravchuk/Projects/ai-driven-app-creation/scripts')
+from mcp_client import call_mcp_tool
+result = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'My App',
+    'code': 'UsrMyApp',
+})
+import json
+print(json.dumps(result, indent=2))
+PYEOF
+
+# Step 2: run it
+python3 /tmp/run_mcp.py
+```
 
 ### MCP Protocol Flow
 
-1. `initialize`
-2. extract `Mcp-Session-Id`
-3. `tools/list` and verify `application.create`, `application.get_list`, `application.get_info`
-4. for new app flow: `tools/call` → `application.create`
-5. if `application.create` returns an existing-app collision, stop the create flow, surface the branch, then continue only through documented existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
-6. for explicit existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
-7. parse `result.content[0].text` as the short contract
-8. initialize `mcp-application-result.json`
-9. if needed, execute ordered:
-   - `entity.create_lookup`
-   - `binding.create` (seed data for each lookup with values defined in plan)
-   - `entity.create`
-   - `entity.update`
-10. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
-11. if the plan creates or extends the main entity for a new app, execute the planned `page.list` → `page.get` → `page.update(dryRun)` → `page.update` page-sync steps for the generated `FormPage` and `ListPage`
-12. re-read synchronized pages with `page.get`, persist page metadata and verification results, and stop with blocker if required fields or resolved grid columns are missing
+All calls use `scripts/mcp_client.py`. Transport details (initialize handshake, stdio framing) are handled internally by the script.
+
+1. verify `application-get-list` responds (confirms clio MCP is reachable)
+2. check if target app already exists: `application-get-list` → search by `code`
+3. **if app does not exist** → `application-create`; if it returns a collision, surface the branch and switch to update flow
+4. **if app exists** → use `application-get-info` directly (skip `application-create`)
+5. parse response `data` field as the short contract
+6. initialize `mcp-application-result.json`
+7. if needed, execute ordered:
+   - `create-lookup`
+   - `create-data-binding-db` (seed data for each lookup with values defined in plan)
+   - `create-entity-schema`
+   - `update-entity-schema`
+8. after each successful entity mutation, call `application-get-info` and overwrite `mcp-application-result.json`
+9. if the plan creates or extends the main entity for a new app, execute the planned `page-list` → `page-get` → `page-update(dryRun)` → `page-update` page-sync steps for the generated `FormPage` and `ListPage`
+10. re-read synchronized pages with `page-get`, persist page metadata and verification results, and stop with blocker if required fields or resolved grid columns are missing
 
 Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
 
@@ -305,62 +340,33 @@ If this fails, stop immediately.
 
 Extract resolved MCP payload, runtime resolution strategy, and ordered schema sync steps.
 
-### 2. Initialize MCP session
+### 2. Verify MCP reachability
 
-**See:** `context/mcp-application-tools-reference.md` section "Initialize Session"
-
-Use `mcpUrl` from `.creatio-env.json`:
+Read `environment` from `.creatio-env.json`, then verify clio MCP responds:
 
 ```bash
-MCP_URL=$(jq -r '.mcpUrl' output/<AppName>/.creatio-env.json)
-
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2024-11-05",
-      "capabilities": {},
-      "clientInfo": {"name": "app-creator", "version": "1.0.0"}
-    }
-  }' -D /tmp/mcp-headers.txt > /tmp/mcp-init.txt
-
-SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/mcp-headers.txt | sed 's/.*: //' | tr -d '\r')
+ENV_NAME=$(python3 -c "import json; print(json.load(open('output/<AppName>/.creatio-env.json'))['environment'])")
+python3 scripts/mcp_client.py application-get-list "{\"environment-name\": \"$ENV_NAME\"}" 30
 ```
 
-If initialize fails, stop and report blocker.
+Expected: `{"success": true, ...}`. If `success` is false, stop and report blocker.
 
-### 3. Verify tool availability
-
-**See:** `context/mcp-application-tools-reference.md` section "List Available Tools"
+### 3. Check if app already exists
 
 ```bash
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-  | grep -A 1000 'event: message' | sed 's/^event: message$//' | sed 's/^data: //' \
-  | jq -r '.result.tools[] | select(.name | startswith("application.") or startswith("entity.")) | .name'
+python3 scripts/mcp_client.py application-get-list "{\"environment-name\": \"$ENV_NAME\"}" \
+  | python3 -c "
+import json, sys
+r = json.load(sys.stdin)
+apps = r.get('data', {}).get('applications', []) if r['success'] else []
+match = next((a for a in apps if a.get('code') == '<AppCode>'), None)
+print('exists:', match is not None)
+if match:
+    print(json.dumps(match, indent=2))
+"
 ```
 
-Verify presence of:
-- `application.create`
-- `application.get_info`
-- `application.get_list`
-- `page.get`
-- `page.update`
-- `page.list`
-- `entity.create`
-- `entity.create_lookup`
-- `entity.update`
-
-If application tools are missing, stop and report blocker. Schema tools are optional — skip page editing steps if unavailable.
+Use the result to branch: new-app flow (`application-create`) or existing-app flow (`application-get-info`).
 
 ### 4. Resolve runtime inputs
 
@@ -391,57 +397,45 @@ If payload has `iconBackground=auto`:
 
 ### 5. Initialize application context
 
-**See:** `context/mcp-application-tools-reference.md` section "Create Application"
+**See:** `context/mcp-application-tools-reference.md` for parameter reference.
 
-For new app flow:
-
-```bash
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": {
-      "name": "application.create",
-      "arguments": {
-        "name": "'"$APP_NAME"'",
-        "code": "'"$APP_CODE"'",
-        "templateCode": "AppFreedomUI",
-        "iconBackground": "'"$ICON_COLOR"'",
-        "description": "'"$APP_DESCRIPTION"'",
-        "optionalTemplateDataJson": "'"$TEMPLATE_DATA"'"
-      }
-    }
-  }' 2>&1 | tee /tmp/mcp-app-create-raw.txt
-```
-
-Parse and validate:
+For new app flow — use the two-step bash pattern (create script, then run it):
 
 ```bash
-RESPONSE=$(grep 'data: ' /tmp/mcp-app-create-raw.txt | sed 's/^data: //' | jq -r '.result.content[0].text')
+cat > /tmp/run_app_create.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
 
-# Validate short contract
-echo "$RESPONSE" | jq -e '.success == true and .packageUId != null and (.entities | length > 0)' > /dev/null \
-  || { echo "Error: $(echo "$RESPONSE" | jq -r '.error.message')"; exit 1; }
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'APP_NAME_PLACEHOLDER',
+    'code': 'APP_CODE_PLACEHOLDER',
+    'templateCode': 'AppFreedomUI',
+    'iconBackground': 'ICON_COLOR_PLACEHOLDER',
+    'description': 'DESCRIPTION_PLACEHOLDER',
+    'optionalTemplateDataJson': 'TEMPLATE_DATA_PLACEHOLDER',
+})
+if not r['success']:
+    print('ERROR:', r['raw']); sys.exit(1)
+data = r['data']
+if not data.get('success') or not data.get('packageUId'):
+    print('ERROR: missing packageUId:', json.dumps(data)); sys.exit(1)
+json.dump(data, open('/tmp/mcp-app-context.json', 'w'), indent=2)
+print('OK packageUId:', data['packageUId'])
+PYEOF
+python3 /tmp/run_app_create.py
 ```
 
 For existing app flow:
-1. call `application.get_list`
-2. validate the target app is discoverable
-3. call `application.get_info` with the chosen `appId` or `appCode`
-4. log the branch explicitly in the report and final status
-
-Retry up to 3 times with 10s delay on transient failures.
+1. call `application-get-list` and find the app by `code`
+2. call `application-get-info` with `app-code`
+3. log the branch explicitly in the report and final status
 
 Stop and report blocker when:
-- text is plain `ERROR: ...`
-- payload is not parseable JSON
 - `success=false`
-- successful response is missing `packageUId` or `entities`
+- response missing `packageUId` or `entities`
+- plain `ERROR: ...` text
 
 ### 6. Initialize canonical context
 
@@ -482,113 +476,83 @@ Persist the compact tree response as-is and add `contractType=short`.
 - "Create Lookup Entity (entity.create_lookup)"
 - "Update Entity (entity.update)"
 
-If `plan.md` contains approved schema sync:
-
-**Option 1: Manual curl execution**
-
-Example for entity.create_lookup:
+If `plan.md` contains approved schema sync, use `scripts/mcp_client.py` (two-step pattern):
 
 ```bash
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 5,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.create_lookup\",
-      \"arguments\": {
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"name\": \"UsrEventStatus\",
-        \"caption\": \"Event Status\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-lookup-raw.txt
+# entity.create_lookup
+cat > /tmp/run_create_lookup.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('create-lookup', {
+    'environment-name': 'local',
+    'package-name': 'UsrMyApp',
+    'name': 'UsrMyStatus',
+    'title': 'My Status',
+})
+print(json.dumps(r, indent=2))
+PYEOF
+python3 /tmp/run_create_lookup.py
+
+# entity.update — after reading entityUId from application-get-info response
+cat > /tmp/run_update_entity.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+ops = json.dumps([{
+    'operation': 'addColumn',
+    'column': {'name': 'UsrStatus', 'caption': 'Status',
+               'dataValueTypeName': 'Lookup', 'referenceSchemaName': 'UsrMyStatus'}
+}])
+r = call_mcp_tool('update-entity-schema', {
+    'environment-name': 'local',
+    'schema-name': 'UsrMyApp',
+    'operations': ops,
+})
+print(json.dumps(r, indent=2))
+PYEOF
+python3 /tmp/run_update_entity.py
+
+# binding.create (seed data)
+cat > /tmp/run_binding.py << 'PYEOF'
+import sys, json, uuid
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+rows = json.dumps([
+    [{'columnName': 'Id', 'value': str(uuid.uuid4())}, {'columnName': 'Name', 'value': 'New'}],
+    [{'columnName': 'Id', 'value': str(uuid.uuid4())}, {'columnName': 'Name', 'value': 'Done'}],
+])
+r = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'schema-name': 'UsrMyStatus',
+    'rows': rows,
+})
+print(json.dumps(r, indent=2))
+PYEOF
+python3 /tmp/run_binding.py
 ```
 
-Example for entity.update:
+**After EACH successful entity mutation — refresh context:**
 
 ```bash
-# Extract entity UId from application.get_info response
-ENTITY_UID=$(jq -r '.entities[] | select(.name=="UsrEvent") | .uId' /tmp/mcp-app-context.json)
-
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 6,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.update\",
-      \"arguments\": {
-        \"entityUId\": \"$ENTITY_UID\",
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"schemaName\": \"UsrEvent\",
-        \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrLocation\\\",\\\"caption\\\":\\\"Location\\\",\\\"dataValueTypeName\\\":\\\"MediumText\\\"}}]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-update-raw.txt
+cat > /tmp/run_get_info.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+if r['success'] and r['data']:
+    data = r['data']
+    data['contractType'] = 'short'
+    data.setdefault('schemaSync', [])
+    json.dump(data, open('output/UsrMyApp/mcp-application-result.json', 'w'), indent=2)
+    print('OK entities:', len(data.get('entities', [])))
+else:
+    print('ERROR:', r['raw']); sys.exit(1)
+PYEOF
+python3 /tmp/run_get_info.py
 ```
 
-Example for binding.create:
-
-```bash
-STATUS_NEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-STATUS_IN_PROGRESS_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 10,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"binding.create\",
-      \"arguments\": {
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"schemaName\": \"UsrEventStatus\",
-        \"bindingName\": \"UsrEventStatus_Lookup\",
-        \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_NEW_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}],[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_IN_PROGRESS_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"In Progress\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}]]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-binding-raw.txt
-```
-
-Successful binding response is only `{"success": true}`.
-
-**After EACH successful entity mutation:**
-
-```bash
-# Refresh context
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 7,
-    "method": "tools/call",
-    "params": {
-      "name": "application.get_info",
-      "arguments": {"appCode": "UsrEvents"}
-    }
-  }' | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text' \
-  | jq '. + {
-      contractType: "short",
-      schemaSync: [...existing..., {tool: "entity.create_lookup", target: "UsrEventStatus", status: "success"}]
-    }' > output/<AppName>/mcp-application-result.json
-```
-
-**Option 2: Python helper** (for complex workflows):
+**Or use the Python helper for complex workflows:**
 
 ```bash
 python3 scripts/mcp_schema_sync.py apply \
@@ -710,7 +674,26 @@ python3 scripts/mcp_page_sync.py apply \
 - Treat explicit DataGrid `sorting` and `sortingChange` view properties as secondary to the collection metadata contract
 - Stop with blocker if the requirement describes semantic business order without an explicit technical sort key or separate approved runtime logic
 
-**Page Body Editing Algorithm:**
+**Page Body Editing — MANDATORY: use `scripts/page_body_edit.py`**
+
+❌ NEVER write custom inline page editing scripts (e.g. `/tmp/edit_pages.py`) — `scripts/page_body_edit.py` already implements the marker-based algorithm.
+
+```bash
+# Add fields to FormPage
+python3 scripts/page_body_edit.py add-form-fields \
+  --input /tmp/FormPage.body.js \
+  --fields '[{"name":"UsrStatus","type":"crt.ComboBox","label":"Status"},...]' \
+  --output /tmp/FormPage.edited.js
+
+# Add columns to ListPage
+python3 scripts/page_body_edit.py add-list-columns \
+  --input /tmp/ListPage.body.js \
+  --columns '[{"code":"PDS_UsrStatus","caption":"Status","type":"crt.ComboBox"},...]' \
+  --output /tmp/ListPage.edited.js
+
+# Validate result
+python3 scripts/page_body_edit.py validate --input /tmp/FormPage.edited.js
+```
 
 When editing a page body retrieved from `page-get`, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` implements this algorithm and should be used when available.
 
