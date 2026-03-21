@@ -28,11 +28,14 @@ Credentials are stored in `.creatio-env.json` and passed via `environment-name` 
 - `update-entity-schema` — `package-name`, `schema-name`, `operations` (list)
 - `create-data-binding-db` — `package-name`, `schema-name`, `binding-name`, `rows` (JSON string)
 - `page-get` / `page-update` — `schemaName`, `environmentName` (camelCase, page tools are different!)
+- `page-update` extra params: `body` (string, required), `dryRun` (boolean `True`/`False`, optional)
 
 **Why this matters:** clio MCP SDK maps JSON argument names to C# parameters. Names must match exactly (case-sensitive). Mismatch causes a silent error:
 ```
 An error occurred invoking 'create-lookup'.
 ```
+
+**Boolean parameters** (e.g. `dryRun`, `required`, `extendParent`) MUST be native booleans (`True`/`False` in Python), NOT strings (`'true'`/`'false'`). Passing a string causes MCP SDK deserialization failure with the same generic error.
 
 ## Response Format
 

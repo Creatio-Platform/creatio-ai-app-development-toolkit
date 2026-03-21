@@ -62,6 +62,11 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
 
     Returns:
         {"success": bool, "data": dict|None, "raw": str}
+
+    Important:
+        Boolean parameters (e.g. dryRun, extendParent) MUST be Python bool
+        (True/False), NOT strings ('true'/'false'). Passing a string causes
+        MCP SDK deserialization failure and a generic invocation error.
     """
     messages = [
         json.dumps({

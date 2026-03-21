@@ -48,6 +48,7 @@ Read:
 ❌ **NEVER** use shell variable expansion (`$VAR`) in pipes to `mcp-server` — blocked by security scanner
 ❌ **NEVER** send `notifications/initialized` — clio does not support it
 ❌ **NEVER** use dot-separated tool names (`application.create`) — clio uses **dashes** (`application-create`)
+❌ **NEVER** pass boolean parameters as strings (`'true'`/`'false'`) — use Python `True`/`False`. String booleans cause MCP SDK deserialization failure with generic `"An error occurred invoking..."` error.
 ✅ **ALWAYS** use `scripts/mcp_client.py` which handles all transport details correctly
 
 ### Quick Start Pattern
@@ -563,7 +564,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    g. For datasource-bound lookup fields, add the `crt.ComboBox` insert and the main view-model attribute only; preserve existing live lookup-list bindings or nested actions only when they are already materialized in the page body
    h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
    i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
-   j. Call `page.update` with `dryRun: "true"` first to validate
+   j. Call `page.update` with `dryRun: True` (boolean, not string) first to validate
    k. If dry run succeeds, call `page.update` without dryRun to save
    l. Re-read the page with `page.get` and verify the resolved FormPage fields or ListPage columns are actually present
    m. Persist page verification with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`
