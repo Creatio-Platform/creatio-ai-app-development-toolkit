@@ -89,7 +89,13 @@ Implementation execution is synchronous. Do not background Agent 4, and do not m
 
 `tools/call` response content is text.
 
-Expected contract:
+**CRITICAL — Response Validation (before any parsing):**
+1. Check `isError` flag first: if `result.isError === true`, the call failed — do NOT attempt to parse `result.content[0].text` as a success payload.
+2. On `isError: true`: extract the error message from `result.content[0].text`, log it, and decide: retry with fixed params, or stop with blocker.
+3. On empty or missing `result.content[0].text`: treat as error — do NOT call `json.loads("")` or `jq` on empty input.
+4. Only parse the text content as JSON after confirming `isError` is absent or `false` and the text is non-empty.
+
+Expected contract (when `isError` is absent or false):
 - `success`
 - flat runtime fields: `packageUId`, `packageName`, `entities[]`
 - optional selectors: `app`, `appId`, or `appCode`
