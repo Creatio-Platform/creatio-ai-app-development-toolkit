@@ -155,118 +155,84 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### Schema Sync Rules
 
-- Create new lookup entities first with `entity.create_lookup`.
+- Create new lookup entities first with `create-lookup`.
 - For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or duplicate title-like columns as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
-- After every `entity.create_lookup`, validate the tool response contains inherited `Name` in the persisted schema snapshot. If `Name` is missing, stop with blocker instead of assuming the lookup is usable.
-- After creating each lookup entity that has seed values defined in the plan, call `binding.create` to populate it with seed rows before proceeding to the next entity.
-- For new-app flows, inspect the entity list returned by `application.create` and treat the template-created section entity as the canonical main entity for the app's primary records.
+- After every `create-lookup`, validate the tool response contains inherited `Name` in the persisted schema snapshot. If `Name` is missing, stop with blocker instead of assuming the lookup is usable.
+- After creating each lookup entity that has seed values defined in the plan, call `create-data-binding-db` to populate it with seed rows before proceeding to the next entity.
+- For new-app flows, inspect the entity list returned by `application-create` and treat the template-created section entity as the canonical main entity for the app's primary records.
 - Use `entity.create` only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
-- Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
-- Use `entity.update` for template-created entities and pass only `operationsJson`.
-- Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
+- Before `update-entity-schema`, inspect the current schema snapshot from `application-create` or `application-get-info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
+- Use `update-entity-schema` for template-created entities and pass only `operations` (native list).
+- Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application-get-info`, and not left in a `Database update required` state.
 - If the run creates a new app or extends the main section entity with approved non-inherited business fields, page sync for the generated `FormPage` and `ListPage` is mandatory before success can be reported.
 - Treat a missing page-sync section in `plan.md` for such a run as a blocker in the plan, not as a reason to silently skip UI sync.
-- `schema default` means the backend/entity schema contract sets the value through `defaultValueSource` and `defaultValue`.
+- `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- If the plan says `schema default` for a lookup column, use the seeded row GUID in `defaultValue`; never send the display caption.
-- `entity.update` operations are explicit:
-  - `addColumn`
-  - `updateColumn`
-  - `removeColumn`
+- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption.
+- `update-entity-schema` operations are explicit:
+  - `action: "add"`
+  - `action: "update"`
+  - `action: "remove"`
 - Omission never implies deletion.
 
 ### Related Binding Tools
 
 - `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
-- `binding.create` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. `outputPath` only writes optional server-side file copies.
+- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately.
 - Schemas created earlier in the same flow are DB-first and should be queried through `binding.get_columns`; do not use raw mode.
-- For lookup seed bindings, generate a fresh GUID for every row, include `Name`, and include `Description` when it must be persisted with the lookup value.
-- If `columnsJson` is supplied to `binding.create`, MCP uses only those descriptor columns. Do not pass partial `columnsJson` for lookup seed bindings.
+- For lookup seed bindings, the `rows` format is a JSON string of `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
+- Never pass partial `columnsJson` for lookup seed bindings.
 
 ### Parameter Validation Checklist
 
-Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.update`), validate:
+Before EVERY `create-lookup` call, validate:
 
-1. ✅ Using `packageUId` (GUID) extracted from `application.create` response
-2. ✅ Using `entityUId` (GUID) extracted from `entity.create` or `application.get_info` response (REQUIRED for `entity.update`)
-3. ✅ Using `schemaName` parameter for `entity.update` (optional, can read from DB if empty)
-4. ✅ Using `name` parameter for `entity.create`/`entity.create_lookup` (NOT `entityName` or `schemaName`)
-5. ✅ Using `caption` parameter (NOT `displayName` or `description`)
-6. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
-7. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
-8. ✅ For lookup schemas, `columnsJson` does not attempt to add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption`
-9. ✅ For existing/template-created entities, `operationsJson` does not add `UsrName`, `UsrTitle`, or `UsrCaption` when the refreshed schema already contains `Name`, unless the plan explicitly documents a separate business field
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name (NOT a GUID)
+3. ✅ `schema-name` is the entity schema name (e.g., "UsrTodoStatus")
+4. ✅ `title` is the display name (NOT `caption`)
+5. ✅ No `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns
 
-**Before EVERY binding tool call (`binding.create`), validate:**
+Before EVERY `update-entity-schema` call, validate:
 
-1. ✅ Using `packageUId` (GUID) extracted from `application.create` response
-2. ✅ Using `schemaName` (entity schema name, e.g. "UsrTodoStatus")
-3. ✅ Using `bindingName` (NOT `dataName` or `bindingFolder`)
-4. ✅ Using `rowsJson` (NOT `dataJson` or `data`)
-5. ✅ Each row in `rowsJson` is array of `{columnName, value}` objects
-6. ✅ Optional `columnsJson` with `{columnName, isKey?, isForceUpdate?}` structure
-7. ✅ Target schema is already materialized in DB and queryable through `binding.get_columns`
-8. ✅ Lookup seed rows use fresh GUID values, not decorative placeholders copied from docs
-9. ✅ If `columnsJson` is present, it covers every row column that must exist in the descriptor
-10. ✅ If a column uses `defaultValueSource="Const"` and is a lookup, `defaultValue` is the seeded row GUID
-11. ✅ If the requirement is `defaults to X`, the execution branch contains either a `schema default` or `ui default` step before the result is reported as complete
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name (NOT a GUID)
+3. ✅ `schema-name` is the entity schema name
+4. ✅ `operations` is a Python **list** (NOT a JSON-encoded string)
+5. ✅ Each operation uses `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`)
+6. ✅ `required` is a boolean (`True`/`False`), not a string
+7. ✅ Schema defaults use `default-value-source` and `default-value` (kebab-case)
+8. ✅ For existing/template-created entities, no `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
+
+Before EVERY `create-data-binding-db` call, validate:
+
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name
+3. ✅ `schema-name` is the entity schema name
+4. ✅ `binding-name` is provided (e.g., "UsrTodoStatus_Lookup")
+5. ✅ `rows` is a JSON **string** of `[{"values": {...}}, ...]` format
+6. ✅ Lookup seed rows use `{"values": {"Name": "New"}}` — not `[{columnName, value}]` format
+7. ✅ Target schema is already materialized in DB
 
 **Pre-execution validation script:**
 
 ```bash
-# Before entity.create_lookup or entity.create
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "ERROR: PACKAGE_UID not set or invalid"
-  exit 1
-fi
-
-# Before entity.update
-if [[ -z "$ENTITY_UID" || "$ENTITY_UID" == "null" ]]; then
-  echo "ERROR: ENTITY_UID not set or invalid"
-  exit 1
-fi
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "ERROR: PACKAGE_UID not set or invalid"
+# Before create-lookup or update-entity-schema: check package name is set
+if [[ -z "$PACKAGE_NAME" ]]; then
+  echo "ERROR: PACKAGE_NAME not set"
   exit 1
 fi
 ```
 
-**UId Extraction Pattern (New Flat Format):**
+**Package Name Extraction (New Flat Format):**
 
-Since core 8.3.4.802, MCP tools return simplified flat format. Use the helper script for zero-dependency extraction:
+Since core 8.3.4.802, MCP tools return simplified flat format. Extract `packageName` from `application-create` response:
 
 ```bash
-# Method 1: Ultra-simple with helper script (recommended)
-bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-app-create-parsed.json > /tmp/.mcp-env
-source /tmp/.mcp-env
-
-echo "Extracted Package UId: $PACKAGE_UID"
-echo "Extracted Package Name: $PACKAGE_NAME"
-echo "Extracted Main Entity UId: $MAIN_ENTITY_UID"
-echo "Extracted Main Entity Name: $MAIN_ENTITY_NAME"
-
-# Validate extraction succeeded
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "BLOCKER: Failed to extract package UId from application.create response"
-  exit 1
-fi
+PACKAGE_NAME=$(python3 -c "import json; d=json.load(open('/tmp/mcp-app-context.json')); print(d['packageName'])")
+echo "Package Name: $PACKAGE_NAME"
 ```
-
-**Alternative: Direct jq extraction (simple paths):**
-
-```bash
-# Method 2: Direct jq (no helper script)
-PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-app-create-parsed.json)
-PACKAGE_NAME=$(jq -r '.packageName' /tmp/mcp-app-create-parsed.json)
-MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-app-create-parsed.json)
-MAIN_ENTITY_NAME=$(jq -r '.entities[0].name' /tmp/mcp-app-create-parsed.json)
-
-echo "Extracted Package UId: $PACKAGE_UID"
-echo "Extracted Entity UId: $MAIN_ENTITY_UID"
-```
-
-**New Response Format Structure:**
 ```json
 {
   "success": true,
@@ -290,7 +256,7 @@ tmux capture-pane -t core -p -S -1000 | grep -A5 "ArgumentException\|Error\|Exce
 Look for diagnostic patterns:
 - `ArgumentException: missing value for required parameter 'packageUId'` → using wrong parameter name (e.g., `packageName`)
 - `ArgumentException: missing value for required parameter 'entityUId'` → using wrong parameter name (e.g., `entitySchemaUId`)
-- `Unsupported operation ''` → wrong JSON structure in `operationsJson` (flat instead of nested)
+- `Unsupported operation ''` → wrong JSON structure in `operations` (using JSON string instead of native list, or old {operation,column} format)
 
 **Correct Tool Signatures Reference:**
 
@@ -324,7 +290,7 @@ Always verify against C# source files:
 - If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing `entity.create`.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
 - If `application.get_info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
-- Never synthesize success for `binding.create`; if the response cannot be parsed or does not contain `success=true`, stop with blocker.
+- Never synthesize success for `create-data-binding-db`; if the response cannot be parsed or does not contain `success=true` or `exit-code: 0`, stop with blocker.
 
 ## Steps
 
@@ -384,7 +350,7 @@ If payload has `iconId=auto`:
 
 If payload has explicit color, use it.
 
-If payload has `iconBackground=auto`:
+If payload has `icon-background=auto`:
 - use deterministic pseudo-random pick by `appCode` from palette:
   - `#1F5F8B`
   - `#2D8CFF`
@@ -411,10 +377,10 @@ r = call_mcp_tool('application-create', {
     'environment-name': 'local',
     'name': 'APP_NAME_PLACEHOLDER',
     'code': 'APP_CODE_PLACEHOLDER',
-    'templateCode': 'AppFreedomUI',
-    'iconBackground': 'ICON_COLOR_PLACEHOLDER',
+    'template-code': 'AppFreedomUI',
+    'icon-background': 'ICON_COLOR_PLACEHOLDER',
     'description': 'DESCRIPTION_PLACEHOLDER',
-    'optionalTemplateDataJson': 'TEMPLATE_DATA_PLACEHOLDER',
+    'optional-template-data-json': 'TEMPLATE_DATA_PLACEHOLDER',
 })
 if not r['success']:
     print('ERROR:', r['raw']); sys.exit(1)
@@ -473,13 +439,13 @@ Persist the compact tree response as-is and add `contractType=short`.
 ### 7. Execute schema sync steps
 
 **See:** `context/mcp-application-tools-reference.md` sections:
-- "Create Lookup Entity (entity.create_lookup)"
-- "Update Entity (entity.update)"
+- "Create Lookup Entity (create-lookup)"
+- "Update Entity (update-entity-schema)"
 
 If `plan.md` contains approved schema sync, use `scripts/mcp_client.py` (two-step pattern):
 
 ```bash
-# entity.create_lookup
+# entity.create_lookup → uses create-lookup tool
 cat > /tmp/run_create_lookup.py << 'PYEOF'
 import sys, json
 sys.path.insert(0, 'scripts')
@@ -487,44 +453,51 @@ from mcp_client import call_mcp_tool
 r = call_mcp_tool('create-lookup', {
     'environment-name': 'local',
     'package-name': 'UsrMyApp',
-    'name': 'UsrMyStatus',
+    'schema-name': 'UsrMyStatus',
     'title': 'My Status',
 })
 print(json.dumps(r, indent=2))
 PYEOF
 python3 /tmp/run_create_lookup.py
 
-# entity.update — after reading entityUId from application-get-info response
+# entity.update → uses update-entity-schema tool
 cat > /tmp/run_update_entity.py << 'PYEOF'
 import sys, json
 sys.path.insert(0, 'scripts')
 from mcp_client import call_mcp_tool
-ops = json.dumps([{
-    'operation': 'addColumn',
-    'column': {'name': 'UsrStatus', 'caption': 'Status',
-               'dataValueTypeName': 'Lookup', 'referenceSchemaName': 'UsrMyStatus'}
-}])
 r = call_mcp_tool('update-entity-schema', {
     'environment-name': 'local',
+    'package-name': 'UsrMyApp',
     'schema-name': 'UsrMyApp',
-    'operations': ops,
+    'operations': [
+        {
+            'action': 'add',
+            'column-name': 'UsrStatus',
+            'type': 'Lookup',
+            'title': 'Status',
+            'reference-schema-name': 'UsrMyStatus',
+            'required': True,
+        }
+    ],
 })
 print(json.dumps(r, indent=2))
 PYEOF
 python3 /tmp/run_update_entity.py
 
-# binding.create (seed data)
+# binding.create (seed data) → uses create-data-binding-db tool
 cat > /tmp/run_binding.py << 'PYEOF'
-import sys, json, uuid
+import sys, json
 sys.path.insert(0, 'scripts')
 from mcp_client import call_mcp_tool
 rows = json.dumps([
-    [{'columnName': 'Id', 'value': str(uuid.uuid4())}, {'columnName': 'Name', 'value': 'New'}],
-    [{'columnName': 'Id', 'value': str(uuid.uuid4())}, {'columnName': 'Name', 'value': 'Done'}],
+    {'values': {'Name': 'New'}},
+    {'values': {'Name': 'Done'}},
 ])
 r = call_mcp_tool('create-data-binding-db', {
     'environment-name': 'local',
+    'package-name': 'UsrMyApp',
     'schema-name': 'UsrMyStatus',
+    'binding-name': 'UsrMyStatus_Lookup',
     'rows': rows,
 })
 print(json.dumps(r, indent=2))

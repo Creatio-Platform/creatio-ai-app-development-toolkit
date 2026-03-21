@@ -145,111 +145,86 @@ packages/<PackageName>/
 
 ### Generation Order
 
-**For complete MCP workflow with detailed curl examples, see `context/mcp-application-tools-reference.md`**
+**For complete MCP workflow with Python examples, see `context/mcp-application-tools-reference.md`**
 
 Primary generation flow:
 
-1. Initialize MCP session (`initialize` → extract `Mcp-Session-Id`)
-2. Validate tool availability (`tools/list`)
-3. Build and execute `application.create` payload
-4. Parse SSE response and validate short contract (`success`, `app`, `packages`)
-5. Identify the template-created section entity from the response and treat it as the canonical main entity for single-record-type apps
-6. Persist result to `output/<AppName>/mcp-application-result.json`
-7. If approved schema changes exist:
-   - Execute ordered entity sync (`entity.create_lookup` → `entity.create` → `entity.update`)
-   - After EACH mutation, refresh context with `application.get_info`
+1. Validate tool availability (`tools/list`)
+2. Build and execute `application-create` payload
+3. Parse response and validate short contract (`success`, `app`, `packages`)
+4. Identify the template-created section entity from the response and treat it as the canonical main entity for single-record-type apps
+5. Persist result to `output/<AppName>/mcp-application-result.json`
+6. If approved schema changes exist:
+   - Execute ordered entity sync (`create-lookup` → `create-entity-schema` → `update-entity-schema`)
+   - After EACH mutation, refresh context with `application-get-info`
    - Overwrite `mcp-application-result.json` with updated state
-8. If explicit data bindings required, use `binding.get_columns` and `binding.create`
+7. If explicit data bindings required, use `binding-get-columns` and `create-data-binding-db`
 
-**Critical pattern:** Always call `application.get_info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
-**Critical pattern:** Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity with `entity.update` unless requirements define an additional distinct business object.
+**Critical pattern:** Always call `application-get-info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
+**Critical pattern:** Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity with `update-entity-schema` unless requirements define an additional distinct business object.
 
 ### Working with MCP Tools
 
-**Endpoint:** `http://localhost:5001/mcp`
-**Authentication:** HTTP Basic Auth (`-u Supervisor:Supervisor`)
+**Transport:** clio stdio via `scripts/mcp_client.py`.
 
-**Required Headers:**
-```bash
--H "Content-Type: application/json"
--H "Accept: application/json, text/event-stream"  # Both required!
--H "Mcp-Session-Id: $SESSION_ID"  # After initialize
-```
-
-**Response Format:** Server-Sent Events (SSE)
-```
-event: message
-data: {"result":{"content":[{"type":"text","text":"..."}]},"id":1,"jsonrpc":"2.0"}
-```
-
-**Standard Parsing Pattern:**
-```bash
-curl ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text'
+```python
+from scripts.mcp_client import call_mcp_tool
+r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
 ```
 
 **Available Tools:**
-- `application.create` — Create new app with initial package/entity
-- `application.get_info` — Refresh application context (canonical DB refresh)
-- `application.get_list` — Discover existing apps
-- `entity.create_lookup` — Create BaseLookup entity
-- `entity.create` — Create BaseEntity entity
-- `entity.update` — Add/update columns on existing entity
-- `binding.get_columns` — Query deployed schema metadata
-- `binding.create` — Generate data binding artifacts
+- `application-create` — Create new app with initial package/entity
+- `application-get-info` — Refresh application context (canonical DB refresh)
+- `application-get-list` — Discover existing apps
+- `create-lookup` — Create BaseLookup entity
+- `create-entity-schema` — Create BaseEntity entity
+- `update-entity-schema` — Add/update columns on existing entity
+- `binding-get-columns` — Query deployed schema metadata
+- `create-data-binding-db` — Seed lookup data
+- `page-list`, `page-get`, `page-update` — Synchronize Freedom UI pages
 
-**Complete reference with curl examples:** `context/mcp-application-tools-reference.md`
+**Complete reference with Python examples:** `context/mcp-application-tools-reference.md`
 
 ### MCP `application.create` Input
 
 Required:
 - `name`
 - `code` (must start with `Usr`)
-- `templateCode`
-- `iconBackground` (hex color)
+- `template-code`
+- `icon-background` (hex color)
 
 Optional:
-- `iconId` (GUID) — if omitted, random icon from SysAppIcons is selected automatically
+- `icon-id` (GUID) — if omitted, random icon from SysAppIcons is selected automatically
 - `description`
-- `clientTypeId` (GUID)
-- `optionalTemplateDataJson` with:
+- `client-type-id` (GUID)
+- `optional-template-data-json` with:
   - `useExistingEntitySchema`
   - `entitySchemaName`
   - `appSectionDescription`
   - `useAIContentGeneration`
 
 Validation notes:
-- if `iconId` provided, must reference existing record in `SysAppIcons` table
-- `clientTypeId` must be valid GUID if provided
+- if `icon-id` provided, must reference existing record in `SysAppIcons` table
+- `client-type-id` must be valid GUID if provided
 - this flow does not support `useAIContentGeneration=true`
 - tool must exist in `tools/list` before execution
 - for a new app with one primary record type, the template-created entity named like `code` is the default main entity to update; do not plan a parallel entity for the same records
 
 ### MCP Request Example
 
-```bash
-curl -s "$MCP_URL" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc":"2.0",
-    "id":2,
-    "method":"tools/call",
-    "params":{
-      "name":"application.create",
-      "arguments":{
-        "name":"Task App",
-        "code":"UsrTaskApp",
-        "templateCode":"AppFreedomUI",
-        "iconBackground":"#1F5F8B",
-        "optionalTemplateDataJson":"{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"\",\"useAIContentGeneration\":false}"
-      }
-    }
-  }'
+```python
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'Task App',
+    'code': 'UsrTaskApp',
+    'template-code': 'AppFreedomUI',
+    'icon-background': '#1F5F8B',
+    'optional-template-data-json': '{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}',
+})
 ```
 
-> 💡 **Note:** `iconId` is optional. If omitted, a random icon from `SysAppIcons` is selected automatically.
-> 💡 **Note:** Use `"AppFreedomUI"` for templateCode. Core resolves it dynamically to v1 or v2 based on feature flags (`UseListPageV3Template` and `FreedomUIDashboardsEnabled`).
+> 💡 **Note:** `icon-id` is optional. If omitted, a random icon from `SysAppIcons` is selected automatically.
+> 💡 **Note:** Use `"AppFreedomUI"` for `template-code`. Core resolves it dynamically to v1 or v2 based on feature flags.
 
 ---
 

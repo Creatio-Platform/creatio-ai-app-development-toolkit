@@ -94,22 +94,22 @@ Extract from requirements + request spec:
 Build final payload fields for Agent 4:
 - `name`
 - `code`
-- `templateCode`
-- `iconId`
-- `iconBackground`
+- `template-code`
+- `icon-id`
+- `icon-background`
 - `description` (nullable)
-- `clientTypeId` (nullable)
-- `optionalTemplateDataJson` (JSON string)
+- `client-type-id` (nullable)
+- `optional-template-data-json` (JSON string)
 
 Resolution rules:
 1. `code` must start with `Usr`.
-2. If `templateCode` is empty, use `AppFreedomUI`.
+2. If `template-code` is empty, use `AppFreedomUI`.
 3. If `optionalTemplateData.useExistingEntitySchema=true`, require `entitySchemaName`.
 4. `optionalTemplateData.useAIContentGeneration` must be `false` for this MCP flow.
-5. `iconId`:
+5. `icon-id`:
    - use explicit value if provided,
    - otherwise mark as `auto` and document runtime selection strategy.
-6. `iconBackground`:
+6. `icon-background`:
    - use explicit value if provided,
    - otherwise mark as `auto` and document deterministic palette strategy.
 
@@ -118,43 +118,43 @@ Resolution rules:
 For each approved entity:
 - determine whether `application.create` template output is sufficient
 - for new-app flows, treat the template-created section entity returned by `application.create` as the canonical main entity for the app's primary records
-- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns through `entity.update`
+- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns through `update-entity-schema`
 - if extra custom columns are required, prepare explicit sync steps
 - if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
 - if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
-- create new lookup entities first via `entity.create_lookup`
+- create new lookup entities first via `create-lookup`
 - for every lookup entity, rely on inherited `Name` as the display value, mark it as the required `PrimaryDisplayColumn`, and never plan `Name` or duplicate title-like columns as custom columns
-- after every `entity.create_lookup` step, require response validation that inherited `Name` is present in the persisted schema snapshot before proceeding
-- for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `binding.create` step immediately after the corresponding `entity.create_lookup` call
-- create non-template entities via `entity.create` only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
-- before any `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`; if `Name` already exists, reuse `Name` in UX and never plan an `addColumn` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
-- update existing template-created entities via `entity.update`
+- after every `create-lookup` step, require response validation that inherited `Name` is present in the persisted schema snapshot before proceeding
+- for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `create-data-binding-db` step immediately after the corresponding `create-lookup` call
+- create non-template entities via `create-entity-schema` only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
+- before any `update-entity-schema`, inspect the current schema snapshot from `application-create` or `application-get-info`; if `Name` already exists, reuse `Name` in UX and never plan an `action: add` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
+- update existing template-created entities via `update-entity-schema`
 - if the run creates a new app or extends the main entity with approved non-inherited business fields, emit explicit page-sync steps for the generated `FormPage` and `ListPage`
 
 Execution order for lookups with seed data:
-1. `entity.create_lookup` → create the lookup schema
-2. `binding.create` → populate the lookup with seed rows from requirements
-3. `application.get_info` → refresh context after both operations
+1. `create-lookup` → create the lookup schema
+2. `create-data-binding-db` → populate the lookup with seed rows from requirements
+3. `application-get-info` → refresh context after both operations
 
 Default planning rules:
-- `schema default` means the backend/entity schema contract sets the value through `entity.create` or `entity.update`.
+- `schema default` means the backend/entity schema contract sets the value through `update-entity-schema` with `default-value-source` and `default-value`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler step in the plan.
 - A requirement such as `UsrStatus defaults to New` is closed only when the plan contains an explicit `schema default` step or an explicit `ui default` step.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `defaultValue` with `defaultValueSource="Const"`.
+- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `default-value` with `default-value-source: "Const"`.
 
-For `entity.update`, prepare `operationsJson` only:
-- `addColumn`
-- `updateColumn`
-- `removeColumn`
+For `update-entity-schema`, prepare `operations` list only. Supported `action` values:
+- `"add"`
+- `"update"`
+- `"remove"`
 
 Never treat omission as deletion.
 
 Canonical context rule:
-- initialize from `application.create` for new apps
-- initialize from `application.get_info` for existing apps
-- after every successful entity mutation, refresh context via `application.get_info`
-- treat `entity.create_lookup`, `entity.create`, and `entity.update` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
+- initialize from `application-create` for new apps
+- initialize from `application-get-info` for existing apps
+- after every successful entity mutation, refresh context via `application-get-info`
+- treat `create-lookup`, `create-entity-schema`, and `update-entity-schema` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
 
 ### 4.1. Build Page Sync Plan
 
@@ -227,106 +227,97 @@ Machine-readable page sync contract:
 
 ### 4.2. Entity Tool Payload Validation
 
-When generating `entity.create_lookup`, `entity.create`, or `entity.update` payloads in the plan, follow these rules to prevent parameter name errors:
+When generating `create-lookup`, `update-entity-schema`, or `create-data-binding-db` payloads in the plan, follow these rules to prevent parameter name errors.
+
+> **All entity tools use kebab-case parameters** (not camelCase). There is no `packageUId`, `entityUId`, or `operationsJson` — those names are not accepted.
 
 **CRITICAL Parameter Names:**
 
-**For Entity Tools (entity.create_lookup, entity.create, entity.update):**
+**For `create-lookup`:**
 
-1. ❌ NEVER use `packageName` → always use `packageUId` (GUID string)
-2. ❌ NEVER use `entitySchemaUId` → always use `entityUId` (GUID string, REQUIRED for entity.update)
-3. ❌ NEVER use `entityName` → always use `name` for create tools, `schemaName` for entity.update
-4. ❌ NEVER use `displayName` or `description` → always use `caption` (string)
-5. ❌ NEVER use flat column structures → always use `{operation, column: {...}}` for `operationsJson`
-6. ❌ NEVER add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns → BaseLookup already provides `Name`/`Description`, and `Name` must remain the lookup `PrimaryDisplayColumn`
-7. ❌ NEVER add `UsrName`, `UsrTitle`, or `UsrCaption` to an existing/template-created entity if the refreshed schema snapshot already contains `Name`, unless the requirements explicitly call for a separate business field
-8. ❌ NEVER treat seeded lookup rows as proof that a `defaults to X` requirement is implemented
-9. ✅ For `schema default`, use `defaultValueSource` and `defaultValue` in the column payload
-10. ✅ For lookup-backed `schema default`, `defaultValue` must be the seeded row GUID, not its caption
+1. ✅ `environment-name` — registered clio env name (NOT a URL)
+2. ✅ `package-name` — package string name (e.g., "UsrTodoList", NOT a GUID)
+3. ✅ `schema-name` — entity schema name (e.g., "UsrTodoStatus")
+4. ✅ `title` — display name (NOT `caption`)
+5. ❌ NEVER add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns — BaseLookup inherits them
 
-**For Binding Tools (binding.create):**
+**For `update-entity-schema`:**
 
-1. ❌ NEVER use `dataName` or `bindingFolder` → always use `bindingName`
-2. ❌ NEVER use `dataJson` or `data` → always use `rowsJson`
-3. ❌ NEVER use `packageName` → always use `packageUId`
-4. ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
-5. ✅ ALWAYS use `schemaName` for entity reference
-6. ✅ `rowsJson` must be array of rows: `[[{columnName, value}, ...], ...]`
-7. ✅ For lookup seed data, each row must include a fresh `Id` GUID and `Name`; include `Description` when the lookup seed should persist it
-8. ✅ If `columnsJson` is provided, it must include every row column that must be persisted in the descriptor; otherwise omit `columnsJson` and let MCP infer columns from `rowsJson`
+1. ✅ `environment-name`
+2. ✅ `package-name` — package string name (NOT a GUID, NOT `packageUId`)
+3. ✅ `schema-name` — entity schema name
+4. ✅ `operations` — Python **list** of operation objects (NOT a JSON-encoded string, NOT `operationsJson`)
+5. Each operation object: `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`), `required` (boolean), `default-value-source`, `default-value`
+6. ❌ NEVER add `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
 
-**Correct Payload Templates:**
+**For `create-data-binding-db`:**
 
-**entity.create_lookup:**
-```bash
-curl ... -d "{
-  \"name\": \"entity.create_lookup\",
-  \"arguments\": {
-    \"packageUId\": \"$PACKAGE_UID\",     # ✅ GUID from application.create
-    \"name\": \"UsrStatusLookup\",        # ✅ NOT entityName
-    \"caption\": \"Status\",              # ✅ NOT displayName
-    \"columnsJson\": \"[]\"               # ✅ BaseLookup already provides Name/Description; Name stays the lookup PrimaryDisplayColumn
-  }
-}"
+1. ✅ `environment-name`
+2. ✅ `package-name` — package string name
+3. ✅ `schema-name` — entity schema name
+4. ✅ `binding-name` — binding folder name (e.g., "UsrTodoStatus_Lookup")
+5. ✅ `rows` — JSON **string** of `[{"values": {"Name": "New"}}, ...]` format
+6. ❌ NEVER use `rowsJson`, `dataJson`, `bindingName`, or `packageUId`
+
+**Correct Payload Templates (mcp_client.py format):**
+
+**`create-lookup`:**
+```python
+r = call_mcp_tool('create-lookup', {
+    'environment-name': 'local',
+    'package-name': 'UsrMyApp',       # ✅ string name, NOT GUID
+    'schema-name': 'UsrStatusLookup', # ✅ NOT 'name'
+    'title': 'Status',                # ✅ NOT 'caption'
+})
 ```
 
-**entity.update:**
-```bash
-curl ... -d "{
-  \"name\": \"entity.update\",
-  \"arguments\": {
-    \"entityUId\": \"$ENTITY_UID\",      # ✅ REQUIRED from entity.create or application.get_info
-    \"packageUId\": \"$PACKAGE_UID\",    # ✅ REQUIRED from application.create
-    \"schemaName\": \"UsrMainEntity\",   # ✅ Optional (can read from DB if empty)
-    \"caption\": \"Main Entity\",
-    \"operationsJson\": \"[{\\\"operation\\\":\\\"updateColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStatus\\\",\\\"caption\\\":\\\"Status\\\",\\\"dataValueTypeName\\\":\\\"Lookup\\\",\\\"referenceSchemaName\\\":\\\"UsrStatusLookup\\\",\\\"defaultValueSource\\\":\\\"Const\\\",\\\"defaultValue\\\":\\\"$STATUS_NEW_ID\\\"}}]\"  # ✅ Nested structure
-  }
-}"
+**`update-entity-schema`:**
+```python
+r = call_mcp_tool('update-entity-schema', {
+    'environment-name': 'local',
+    'package-name': 'UsrMyApp',       # ✅ string name, NOT GUID
+    'schema-name': 'UsrMainEntity',   # ✅ entity schema name
+    'operations': [                   # ✅ native list, NOT json.dumps'd, NOT 'operationsJson'
+        {
+            'action': 'add',                          # ✅ NOT 'operation'
+            'column-name': 'UsrStatus',               # ✅ NOT 'name'
+            'type': 'Lookup',                         # ✅ NOT 'dataValueTypeName'
+            'title': 'Status',                        # ✅ NOT 'caption'
+            'reference-schema-name': 'UsrStatusLookup', # ✅ NOT 'referenceSchemaName'
+            'required': True,                         # ✅ boolean
+            'default-value-source': 'Const',          # ✅ NOT 'defaultValueSource'
+            'default-value': '$STATUS_NEW_GUID',      # ✅ NOT 'defaultValue'
+        }
+    ],
+})
 ```
 
-**binding.create:**
-```bash
-STATUS_NEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-curl ... -d "{
-  \"name\": \"binding.create\",
-  \"arguments\": {
-    \"packageUId\": \"$PACKAGE_UID\",             # ✅ REQUIRED from application.create
-    \"schemaName\": \"UsrStatusLookup\",        # ✅ Entity schema name
-    \"bindingName\": \"UsrStatusLookup_Seed\",  # ✅ NOT dataName or bindingFolder
-    \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_NEW_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}]]\",  # ✅ NOT dataJson
-    \"installType\": \"0\"                      # ✅ Optional, default 0
-  }
-}"
+**`create-data-binding-db`:**
+```python
+import json
+rows = json.dumps([
+    {'values': {'Name': 'New'}},
+    {'values': {'Name': 'In Progress'}},
+    {'values': {'Name': 'Done'}},
+])
+r = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'package-name': 'UsrMyApp',           # ✅ NOT packageUId
+    'schema-name': 'UsrStatusLookup',     # ✅ entity schema name
+    'binding-name': 'UsrStatusLookup_Lookup', # ✅ NOT 'bindingName' or 'dataName'
+    'rows': rows,                         # ✅ JSON string, format: [{"values":{...}}]
+})
 ```
 
-**CRITICAL for binding.create:**
-- ❌ NEVER use `dataName` → always use `bindingName`
-- ❌ NEVER use `dataJson` → always use `rowsJson`
-- ❌ NEVER use `packageName` → always use `packageUId`
-- ❌ NEVER use `rawSchemaJson` → binding flow works only with deployed schema metadata
-- ❌ NEVER use decorative placeholder GUIDs such as `11111111-...` in executable payloads; generate fresh GUIDs at runtime
-- ❌ NEVER pass partial `columnsJson`; if `columnsJson` is supplied, MCP uses only those descriptor columns
-- ✅ Success response is only `{\"success\": true}`
-- ✅ `rowsJson` format: array of rows, each row is array of `{columnName, value}` objects
-- ✅ For lookup seed bindings, prefer omitting `columnsJson` so MCP infers `Id`, `Name`, and optional `Description` from `rowsJson`
-- ✅ Example: `[[{"columnName":"Id","value":"<fresh-guid>"},{"columnName":"Name","value":"New"},{"columnName":"Description","value":""}]]`
+**UId/Name Variable Strategy:**
 
-**UId Variable Strategy:**
+After `application-create`, extract `packageName` (string) for subsequent entity tools:
 
-Document in plan that UIds will be extracted from `application.create` response using the new flat format:
-
-```bash
-# Method 1: Ultra-simple with helper script (recommended)
-bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
-source /tmp/.mcp-env
-# Variables: $PACKAGE_UID, $MAIN_ENTITY_UID, $PACKAGE_NAME, etc.
-
-# Method 2: Direct jq extraction from flat format
-PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-response.json)
-MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-response.json)
+```python
+data = r['data']  # from call_mcp_tool('application-create', ...)
+package_name = data['packageName']
+main_entity_name = data['entities'][0]['name']
 ```
-
-Always show correct JSON structure in plan examples. Never show wrong parameter names.
 
 ### 5. Build `plan.md`
 
@@ -338,7 +329,7 @@ Create `plan.md` with sections:
 - Schema Sync Plan
 - Page Sync Plan
 - Embedded `page-sync-plan.json` block when page sync is required
-- Runtime Resolution Strategy (`iconId` and `iconBackground`)
+- Runtime Resolution Strategy (`icon-id` and `icon-background`)
 - Expected Output Artifacts
 - Validation Rules
 - Blocker Conditions
@@ -347,13 +338,13 @@ Create `plan.md` with sections:
 
 Check:
 - required payload fields are present
-- GUID format validity for explicit `iconId` and explicit `clientTypeId`
-- `optionalTemplateDataJson` is valid JSON
+- GUID format validity for explicit `icon-id` and explicit `client-type-id`
+- `optional-template-data-json` is valid JSON
 - no unsupported values remain (`useAIContentGeneration=true`)
 - lookup creation steps are ordered before updates that reference them
 - lookup creation steps include validation that inherited `Name` exists in the persisted schema snapshot
-- every `entity.update` step uses explicit `operationsJson`
-- if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operationsJson` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
+- every `update-entity-schema` step uses explicit `operations` list (native list, not JSON string)
+- if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operations` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
 - if the app has one primary record type, the plan does not create a second BaseEntity with the same business meaning as the template-created section entity
 - if the run creates or extends the main entity for a new app, the plan includes explicit `FormPage` and `ListPage` sync steps
 - resolved FormPage fields include every required non-inherited business field
