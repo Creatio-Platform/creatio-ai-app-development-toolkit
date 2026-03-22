@@ -249,10 +249,11 @@ Developer prompt (natural language)
 
 ## Context Files Reference
 
-**Lazy loading rule:** Read context files per-phase, not all at once. Each agent reads only the files it needs.
+**Lazy loading rule:** Read `context/INDEX.md` first — it maps every file to line ranges per phase. Never read full files when the INDEX provides the exact section boundaries. Each agent reads only the sections it needs.
 
 | File | Contains | When to Read |
 |------|----------|--------------|
+| `context/INDEX.md` | Navigation index with line ranges for all context files | **Always first** — before any other context file |
 | `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always (Gate P + all agents) |
 | `context/mcp-application-tools-reference.md` | MCP tool parameters and payload reference | Agent 4 only |
 | `context/business-checklist.md` | Mandatory business clarification checklist and completion criteria | Agent 2, 3 |
