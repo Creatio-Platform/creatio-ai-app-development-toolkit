@@ -170,7 +170,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption.
+- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption. Preferred GUID resolution: generate UUIDs client-side via `uuid.uuid4()` and pass `Id` in seed row `values` during `create-data-binding-db`, then reuse the same UUID as `default-value`. Alternative: parse created row info from `create-data-binding-db` response log messages.
 - `update-entity-schema` operations are explicit:
   - `action: "add"`
   - `action: "update"`
@@ -183,6 +183,26 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately.
 - Schemas created earlier in the same flow are DB-first and should be queried through `binding.get_columns`; do not use raw mode.
 - For lookup seed bindings, the `rows` format is a JSON string of `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
+- When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`. This eliminates any need to query the DB for the GUID after seeding:
+
+```python
+import uuid, json
+new_id = str(uuid.uuid4())
+rows = json.dumps([
+    {'values': {'Id': new_id, 'Name': 'New'}},
+    {'values': {'Name': 'In Progress'}},
+    {'values': {'Name': 'Done'}},
+])
+r = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'package-name': 'UsrMyApp',
+    'schema-name': 'UsrMyStatus',
+    'binding-name': 'UsrMyStatus_Lookup',
+    'rows': rows,
+})
+# Then use `new_id` directly as `default-value` in update-entity-schema:
+# 'default-value-source': 'Const', 'default-value': new_id
+```
 - Never pass partial `columnsJson` for lookup seed bindings.
 
 ### Parameter Validation Checklist

@@ -479,7 +479,17 @@ columns = r['data']
 ]
 ```
 
-This format is **different** from the old `binding.create` HTTP format. There are no `columnName`/`value` pairs and no `Id` generation needed.
+This format is **different** from the old `binding.create` HTTP format. There are no `columnName`/`value` pairs. When a seed row does not include `Id`, the tool auto-generates a GUID server-side.
+
+**Deterministic GUID for schema defaults:** When a seed row will be referenced later as `default-value` for a lookup column, generate UUID client-side and include `Id` in the row's `values`:
+
+```json
+[
+  {"values": {"Id": "dda4901c-f62a-4ef9-be7e-dc88dc0aad52", "Name": "New"}},
+  {"values": {"Name": "In Progress"}},
+  {"values": {"Name": "Done"}}
+]
+```
 
 **Example: Lookup Seed Data**
 
@@ -500,17 +510,56 @@ r = call_mcp_tool('create-data-binding-db', {
 })
 ```
 
-**Response Format:**
-```json
-{"exit-code": 0, "execution-log-messages": [{"message-type": "Info", "value": "Done"}]}
+**Example: Seed Data with Schema Default**
+
+```python
+import uuid, json
+new_id = str(uuid.uuid4())
+rows = json.dumps([
+    {'values': {'Id': new_id, 'Name': 'New'}},
+    {'values': {'Name': 'In Progress'}},
+    {'values': {'Name': 'Done'}},
+])
+r = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'schema-name': 'UsrTodoStatus',
+    'binding-name': 'UsrTodoStatus_Lookup',
+    'rows': rows,
+})
+
+# Then use `new_id` directly in update-entity-schema:
+r2 = call_mcp_tool('update-entity-schema', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'schema-name': 'UsrTodoList',
+    'operations': [{
+        'action': 'add',
+        'column-name': 'UsrStatus',
+        'type': 'Lookup',
+        'title': 'Status',
+        'reference-schema-name': 'UsrTodoStatus',
+        'required': True,
+        'default-value-source': 'Const',
+        'default-value': new_id,
+    }],
+})
 ```
 
-**After seeding, query seeded row GUIDs** (needed for schema defaults):
-```python
-import json
-r2 = call_mcp_tool('application-get-list', {'environment-name': 'local'})
-# Or query via SQL / page handler to get seeded row GUIDs
+**Response Format:**
+```json
+{
+  "exit-code": 0,
+  "execution-log-messages": [
+    {"message-type": "Info", "value": "Created row: dda4901c-... (Name=New)"},
+    {"message-type": "Info", "value": "Created row: 7b3f22a1-... (Name=In Progress)"},
+    {"message-type": "Info", "value": "Created row: a1c99ef3-... (Name=Done)"},
+    {"message-type": "Info", "value": "Done"}
+  ]
+}
 ```
+
+The response log messages include each created row's `Id` and column values. When deterministic GUIDs were provided via client-side `Id`, the same values appear in the response.
 
 ## Error Handling
 

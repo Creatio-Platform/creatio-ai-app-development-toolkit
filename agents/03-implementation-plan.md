@@ -133,15 +133,16 @@ For each approved entity:
 
 Execution order for lookups with seed data:
 1. `create-lookup` → create the lookup schema
-2. `create-data-binding-db` → populate the lookup with seed rows from requirements
+2. `create-data-binding-db` → populate the lookup with seed rows from requirements; when a seed row will be used as `default-value`, generate a deterministic UUID client-side via `uuid.uuid4()` and include `Id` in the row's `values`
 3. `application-get-info` → refresh context after both operations
+4. `update-entity-schema` → use the client-generated UUID as `default-value` with `default-value-source: "Const"`
 
 Default planning rules:
 - `schema default` means the backend/entity schema contract sets the value through `update-entity-schema` with `default-value-source` and `default-value`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler step in the plan.
 - A requirement such as `UsrStatus defaults to New` is closed only when the plan contains an explicit `schema default` step or an explicit `ui default` step.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `default-value` with `default-value-source: "Const"`.
+- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `default-value` with `default-value-source: "Const"`. Preferred resolution: generate UUID client-side during `create-data-binding-db` and reuse it in `update-entity-schema`. Alternative: parse created row info from `create-data-binding-db` response log messages. The plan must specify which resolution strategy is used and record the `default-value` GUID explicitly.
 
 For `update-entity-schema`, prepare `operations` list only. Supported `action` values:
 - `"add"`
