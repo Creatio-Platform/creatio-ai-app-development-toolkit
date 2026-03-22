@@ -584,17 +584,18 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
             phase="schema",
             refreshed_by="application.get_info"
         )
-        try:
-            refreshed_context = client.call_tool_json("application.get_info", app_selector)
-        except WorkflowError as error:
-            raise build_refresh_failure(action, error)
-        normalized_context = ensure_result_document(refreshed_context)
-        normalized_context["schemaSync"] = list(current_document.get("schemaSync", []))
-        normalized_context["operationLog"] = list(current_document.get("operationLog", []))
-        normalized_context["pageEvidence"] = dict(current_document.get("pageEvidence", {}))
-        normalized_context["acceptanceEvidence"] = dict(current_document.get("acceptanceEvidence", {}))
-        current_document = normalized_context
-        write_json(result_path, current_document)
+    try:
+        refreshed_context = client.call_tool_json("application.get_info", app_selector)
+    except WorkflowError as error:
+        last_action = sync_plan["actions"][-1]
+        raise build_refresh_failure(last_action, error)
+    normalized_context = ensure_result_document(refreshed_context)
+    normalized_context["schemaSync"] = list(current_document.get("schemaSync", []))
+    normalized_context["operationLog"] = list(current_document.get("operationLog", []))
+    normalized_context["pageEvidence"] = dict(current_document.get("pageEvidence", {}))
+    normalized_context["acceptanceEvidence"] = dict(current_document.get("acceptanceEvidence", {}))
+    current_document = normalized_context
+    write_json(result_path, current_document)
     return current_document
 
 

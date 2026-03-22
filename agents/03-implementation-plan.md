@@ -118,33 +118,31 @@ Resolution rules:
 For each approved entity:
 - determine whether `application.create` template output is sufficient
 - for new-app flows, treat the template-created section entity returned by `application.create` as the canonical main entity for the app's primary records
-- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns through `update-entity-schema`
+- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns as `update-entity` operations within a `schema-sync` batch
 - if extra custom columns are required, prepare explicit sync steps
 - if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
 - if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
-- create new lookup entities first via `create-lookup`
+- create new lookup entities as `create-lookup` operations within the `schema-sync` operations array
 - for every lookup entity, rely on inherited `Name` as the display value, mark it as the required `PrimaryDisplayColumn`, and never plan `Name` or duplicate title-like columns as custom columns
-- after every `create-lookup` step, require response validation that inherited `Name` is present in the persisted schema snapshot before proceeding
-- for each lookup entity with seed values defined in requirements (status lists, priority levels, type enumerations), prepare a `create-data-binding-db` step immediately after the corresponding `create-lookup` call
-- create non-template entities via `create-entity-schema` only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
-- before any `update-entity-schema`, inspect the current schema snapshot from `application-create` or `application-get-info`; if `Name` already exists, reuse `Name` in UX and never plan an `action: add` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
-- update existing template-created entities via `update-entity-schema`
+- include `seed-rows` inline in each `create-lookup` operation for lookup entities with seed values (status lists, priority levels, type enumerations)
+- create non-template entities as `create-entity` operations only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
+- before any `update-entity` operation, inspect the current schema snapshot from `application-create` or `application-get-info`; if `Name` already exists, reuse `Name` in UX and never plan an `action: add` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
+- update existing template-created entities as `update-entity` operations with `update-operations`
 - if the run creates a new app or extends the main entity with approved non-inherited business fields, emit explicit page-sync steps for the generated `FormPage` and `ListPage`
 
-Execution order for lookups with seed data:
-1. `create-lookup` → create the lookup schema
-2. `create-data-binding-db` → populate the lookup with seed rows from requirements; when a seed row will be used as `default-value`, generate a deterministic UUID client-side via `uuid.uuid4()` and include `Id` in the row's `values`
-3. `application-get-info` → refresh context after both operations
-4. `update-entity-schema` → use the client-generated UUID as `default-value` with `default-value-source: "Const"`
+Schema sync plan format — operations array for `schema-sync` composite tool:
+1. `create-lookup` operations with inline `seed-rows` (including deterministic UUIDs via `uuid.uuid4()` when rows will be used as `default-value`)
+2. `update-entity` operations with `update-operations` array (using client-generated UUIDs as `default-value` with `default-value-source: "Const"`)
+3. After `schema-sync` completes, refresh context once with `application-get-info`
 
 Default planning rules:
-- `schema default` means the backend/entity schema contract sets the value through `update-entity-schema` with `default-value-source` and `default-value`.
+- `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value` in `update-entity` `update-operations`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler step in the plan.
 - A requirement such as `UsrStatus defaults to New` is closed only when the plan contains an explicit `schema default` step or an explicit `ui default` step.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `default-value` with `default-value-source: "Const"`. Preferred resolution: generate UUID client-side during `create-data-binding-db` and reuse it in `update-entity-schema`. Alternative: parse created row info from `create-data-binding-db` response log messages. The plan must specify which resolution strategy is used and record the `default-value` GUID explicitly.
+- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `default-value` with `default-value-source: "Const"`. Generate UUID client-side and include `Id` in the `seed-rows` values, then reuse in `update-entity` operation.
 
-For `update-entity-schema`, prepare `operations` list only. Supported `action` values:
+For `update-entity` `update-operations`, prepare operations list only. Supported `action` values:
 - `"add"`
 - `"update"`
 - `"remove"`
@@ -154,8 +152,8 @@ Never treat omission as deletion.
 Canonical context rule:
 - initialize from `application-create` for new apps
 - initialize from `application-get-info` for existing apps
-- after every successful entity mutation, refresh context via `application-get-info`
-- treat `create-lookup`, `create-entity-schema`, and `update-entity-schema` as successful only when the mutated schema is immediately refreshable and not left in a `Database update required` state
+- after `schema-sync` completes, refresh context once via `application-get-info`
+- treat `schema-sync` as successful only when all mutated schemas are immediately refreshable and not left in a `Database update required` state
 
 ### 4.1. Build Page Sync Plan
 
@@ -228,13 +226,23 @@ Machine-readable page sync contract:
 
 ### 4.2. Entity Tool Payload Validation
 
-When generating `create-lookup`, `update-entity-schema`, or `create-data-binding-db` payloads in the plan, follow these rules to prevent parameter name errors.
+When generating `schema-sync` operations or individual `create-lookup`, `update-entity-schema`, `create-data-binding-db` payloads in the plan, follow these rules to prevent parameter name errors.
 
 > **All entity tools use kebab-case parameters** (not camelCase). There is no `packageUId`, `entityUId`, or `operationsJson` — those names are not accepted.
 
 **CRITICAL Parameter Names:**
 
-**For `create-lookup`:**
+**For `schema-sync` (preferred — batches all operations):**
+
+1. ✅ `environment-name` — registered clio env name (NOT a URL)
+2. ✅ `package-name` — package string name (e.g., "UsrTodoList", NOT a GUID)
+3. ✅ `operations` — ordered array of operation objects
+4. Each operation has `type` (`create-lookup`, `create-entity`, or `update-entity`), `schema-name`, and type-specific fields
+5. `create-lookup` operations: `title`, optional `columns`, optional `seed-rows`
+6. `update-entity` operations: `update-operations` (same format as `update-entity-schema` `operations`)
+7. `seed-rows` format: `[{"values": {"Name": "New"}}, ...]` — native list, NOT JSON string
+
+**For individual `create-lookup` (fallback):**
 
 1. ✅ `environment-name` — registered clio env name (NOT a URL)
 2. ✅ `package-name` — package string name (e.g., "UsrTodoList", NOT a GUID)
@@ -242,7 +250,7 @@ When generating `create-lookup`, `update-entity-schema`, or `create-data-binding
 4. ✅ `title` — display name (NOT `caption`)
 5. ❌ NEVER add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns — BaseLookup inherits them
 
-**For `update-entity-schema`:**
+**For individual `update-entity-schema` (fallback):**
 
 1. ✅ `environment-name`
 2. ✅ `package-name` — package string name (NOT a GUID, NOT `packageUId`)
@@ -251,7 +259,7 @@ When generating `create-lookup`, `update-entity-schema`, or `create-data-binding
 5. Each operation object: `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`), `required` (boolean), `default-value-source`, `default-value`
 6. ❌ NEVER add `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
 
-**For `create-data-binding-db`:**
+**For individual `create-data-binding-db` (fallback, prefer `seed-rows` in `schema-sync`):**
 
 1. ✅ `environment-name`
 2. ✅ `package-name` — package string name
@@ -260,53 +268,42 @@ When generating `create-lookup`, `update-entity-schema`, or `create-data-binding
 5. ✅ `rows` — JSON **string** of `[{"values": {"Name": "New"}}, ...]` format
 6. ❌ NEVER use `rowsJson`, `dataJson`, `bindingName`, or `packageUId`
 
-**Correct Payload Templates (mcp_client.py format):**
+**Correct Payload Template (schema-sync, preferred):**
 
-**`create-lookup`:**
 ```python
-r = call_mcp_tool('create-lookup', {
+import uuid
+new_id = str(uuid.uuid4())
+r = call_mcp_tool('schema-sync', {
     'environment-name': 'local',
-    'package-name': 'UsrMyApp',       # ✅ string name, NOT GUID
-    'schema-name': 'UsrStatusLookup', # ✅ NOT 'name'
-    'title': 'Status',                # ✅ NOT 'caption'
-})
-```
-
-**`update-entity-schema`:**
-```python
-r = call_mcp_tool('update-entity-schema', {
-    'environment-name': 'local',
-    'package-name': 'UsrMyApp',       # ✅ string name, NOT GUID
-    'schema-name': 'UsrMainEntity',   # ✅ entity schema name
-    'operations': [                   # ✅ native list, NOT json.dumps'd, NOT 'operationsJson'
+    'package-name': 'UsrMyApp',
+    'operations': [
         {
-            'action': 'add',                          # ✅ NOT 'operation'
-            'column-name': 'UsrStatus',               # ✅ NOT 'name'
-            'type': 'Lookup',                         # ✅ NOT 'dataValueTypeName'
-            'title': 'Status',                        # ✅ NOT 'caption'
-            'reference-schema-name': 'UsrStatusLookup', # ✅ NOT 'referenceSchemaName'
-            'required': True,                         # ✅ boolean
-            'default-value-source': 'Const',          # ✅ NOT 'defaultValueSource'
-            'default-value': '$STATUS_NEW_GUID',      # ✅ NOT 'defaultValue'
-        }
+            'type': 'create-lookup',
+            'schema-name': 'UsrStatusLookup',
+            'title': 'Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrMainEntity',
+            'update-operations': [
+                {
+                    'action': 'add',
+                    'column-name': 'UsrStatus',
+                    'type': 'Lookup',
+                    'title': 'Status',
+                    'reference-schema-name': 'UsrStatusLookup',
+                    'required': True,
+                    'default-value-source': 'Const',
+                    'default-value': new_id,
+                },
+            ],
+        },
     ],
-})
-```
-
-**`create-data-binding-db`:**
-```python
-import json
-rows = json.dumps([
-    {'values': {'Name': 'New'}},
-    {'values': {'Name': 'In Progress'}},
-    {'values': {'Name': 'Done'}},
-])
-r = call_mcp_tool('create-data-binding-db', {
-    'environment-name': 'local',
-    'package-name': 'UsrMyApp',           # ✅ NOT packageUId
-    'schema-name': 'UsrStatusLookup',     # ✅ entity schema name
-    'binding-name': 'UsrStatusLookup_Lookup', # ✅ NOT 'bindingName' or 'dataName'
-    'rows': rows,                         # ✅ JSON string, format: [{"values":{...}}]
 })
 ```
 

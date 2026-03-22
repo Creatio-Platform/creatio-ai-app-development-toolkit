@@ -155,12 +155,13 @@ Primary generation flow:
 4. Identify the template-created section entity from the response and treat it as the canonical main entity for single-record-type apps
 5. Persist result to `output/<AppName>/mcp-application-result.json`
 6. If approved schema changes exist:
-   - Execute ordered entity sync (`create-lookup` → `create-entity-schema` → `update-entity-schema`)
-   - After EACH mutation, refresh context with `application-get-info`
+   - Use `schema-sync` to batch all entity operations (create-lookup + seed + update-entity) in one MCP call
+   - After `schema-sync` completes, refresh context once with `application-get-info`
    - Overwrite `mcp-application-result.json` with updated state
+   - Fallback: individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls
 7. If explicit data bindings required, use `binding-get-columns` and `create-data-binding-db`
 
-**Critical pattern:** Always call `application-get-info` after entity mutations and verify schema is immediately queryable (not in "Database update required" state).
+**Critical pattern:** Always call `application-get-info` after entity mutations complete and verify schema is immediately queryable (not in "Database update required" state).
 **Critical pattern:** Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity with `update-entity-schema` unless requirements define an additional distinct business object.
 
 ### Working with MCP Tools
@@ -176,12 +177,16 @@ r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
 - `application-create` — Create new app with initial package/entity
 - `application-get-info` — Refresh application context (canonical DB refresh)
 - `application-get-list` — Discover existing apps
-- `create-lookup` — Create BaseLookup entity
-- `create-entity-schema` — Create BaseEntity entity
-- `update-entity-schema` — Add/update columns on existing entity
+- `schema-sync` — **Batch** entity operations (create-lookup, seed, create-entity, update-entity) in one call
+- `page-sync` — **Batch** page updates with built-in validation in one call
+- `create-lookup` — Create BaseLookup entity (individual, prefer `schema-sync`)
+- `create-entity-schema` — Create BaseEntity entity (individual, prefer `schema-sync`)
+- `update-entity-schema` — Add/update columns (individual, prefer `schema-sync`)
 - `binding-get-columns` — Query deployed schema metadata
-- `create-data-binding-db` — Seed lookup data
-- `page-list`, `page-get`, `page-update` — Synchronize Freedom UI pages
+- `create-data-binding-db` — Seed lookup data (individual, prefer `schema-sync` with `seed-rows`)
+- `page-list` — Discover Freedom UI pages
+- `page-get` — Read page body (still individual — needed before `page-sync`)
+- `page-update` — Save page body (individual, prefer `page-sync`)
 
 **Complete reference with Python examples:** `context/mcp-application-tools-reference.md`
 

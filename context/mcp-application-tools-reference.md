@@ -24,6 +24,8 @@ Credentials are stored in `.creatio-env.json` and passed via `environment-name` 
 ```
 
 **Parameters by tool:**
+- `schema-sync` — `environment-name`, `package-name`, `operations` (array of batch operations)
+- `page-sync` — `environment-name`, `pages` (array), `validate` (bool), `verify` (bool)
 - `create-lookup` — `package-name`, `schema-name`, `title`
 - `update-entity-schema` — `package-name`, `schema-name`, `operations` (list)
 - `create-data-binding-db` — `package-name`, `schema-name`, `binding-name`, `rows` (JSON string)
@@ -78,6 +80,8 @@ python3 scripts/mcp_client.py tools/list '{}' 30
 application-create
 application-get-info
 application-get-list
+schema-sync
+page-sync
 create-entity-schema
 create-lookup
 update-entity-schema
@@ -86,6 +90,8 @@ page-list
 page-get
 page-update
 ```
+
+> **Preferred tools:** Use `schema-sync` instead of individual `create-lookup` / `create-data-binding-db` / `update-entity-schema` calls. Use `page-sync` instead of sequential `page-update` calls. Individual tools remain available as fallback and for read-only operations (`page-get`, `page-list`).
 
 ### 3. Create Application (application-create)
 
@@ -202,7 +208,7 @@ data.setdefault('editableContext', {})
 json.dump(data, open('output/Events/mcp-application-result.json', 'w'), indent=2)
 ```
 
-**Critical Pattern:** Always call `application-get-info` after each successful entity mutation (`create-lookup`, `update-entity-schema`) and overwrite `mcp-application-result.json`.
+**Context Refresh Pattern:** Call `application-get-info` once after all entity mutations complete (after `schema-sync` batch or after all individual entity tool calls) and overwrite `mcp-application-result.json`. Per-mutation refresh is no longer required when using `schema-sync`.
 
 ### 4.1. List Applications (application.get_list)
 
@@ -320,6 +326,8 @@ r = call_mcp_tool('create-entity-schema', {
 
 **Purpose:** Create a BaseLookup-based entity in the specified package.
 
+> **Prefer `schema-sync`:** When creating lookups as part of a larger schema workflow, use `schema-sync` to batch all operations (create-lookup + seed + update-entity) into a single MCP call.
+
 **Tool name:** `create-lookup`
 
 **Required parameters:**
@@ -334,8 +342,9 @@ r = call_mcp_tool('create-entity-schema', {
 - `Name` must remain the lookup `PrimaryDisplayColumn`; otherwise lookup values appear blank in UI controls.
 
 **Lookup Validation Rule:**
-- After `create-lookup` succeeds, call `application-get-info` and verify the entity is fully materialized.
+- After `create-lookup` succeeds, verify the entity is fully materialized.
 - If `Name` is not present in the schema snapshot, stop with blocker.
+- Context refresh (`application-get-info`) is needed only once after all entity mutations — not after each individual call when using `schema-sync`.
 
 **Example:**
 
@@ -348,11 +357,13 @@ r = call_mcp_tool('create-lookup', {
 })
 ```
 
-**After Success:** Immediately call `application-get-info` to refresh context and verify the entity is fully materialized (not in "Database update required" state).
+**After Success:** Refresh context with `application-get-info` once all entity mutations are complete.
 
 ### 7. Update Entity (update-entity-schema)
 
 **Purpose:** Add, update, or remove columns on an existing entity.
+
+> **Prefer `schema-sync`:** When updating entities as part of a workflow with lookups and seed data, use `schema-sync` to batch all operations into a single MCP call.
 
 **Tool name:** `update-entity-schema`
 
@@ -422,7 +433,7 @@ r = call_mcp_tool('update-entity-schema', {
 })
 ```
 
-**After Success:** Call `application-get-info` and update context.
+**After Success:** Refresh context with `application-get-info` once all entity mutations are complete.
 
 ### 8. Get Entity Columns (binding.get_columns)
 
@@ -575,6 +586,184 @@ r2 = call_mcp_tool('update-entity-schema', {
 
 The response log messages include each created row's `Id` and column values. When deterministic GUIDs were provided via client-side `Id`, the same values appear in the response.
 
+## Composite Tools (Preferred)
+
+### 9a. Schema Sync (schema-sync)
+
+**Purpose:** Batch multiple schema operations (create lookups, seed data, create entities, update entities) into a single MCP call. Reduces round-trips, lock acquisitions, and sleep overhead.
+
+**Tool name:** `schema-sync`
+
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `package-name` — package string name (e.g., "UsrTodoList") — **NOT a GUID**
+- `operations` — ordered array of schema operations
+
+**Operation types:**
+
+| type | Description | Required fields |
+|------|-------------|----------------|
+| `create-lookup` | Create BaseLookup entity | `schema-name`, `title` |
+| `create-entity` | Create entity with custom parent | `schema-name`, `title`, `parent-schema-name` |
+| `update-entity` | Add/modify/remove columns | `schema-name`, `update-operations` |
+
+**Operation fields:**
+
+| Field | Type | Used in | Description |
+|-------|------|---------|-------------|
+| `type` | string | all | `create-lookup`, `create-entity`, or `update-entity` |
+| `schema-name` | string | all | Target entity schema name |
+| `title` | string | create-* | Display name |
+| `parent-schema-name` | string | create-entity | Parent schema (e.g., "BaseEntity") |
+| `extend-parent` | bool | create-entity | Create replacement schema |
+| `columns` | array | create-* | Initial columns for new entity |
+| `update-operations` | array | update-entity | Column mutation operations (same format as `update-entity-schema` `operations`) |
+| `seed-rows` | array | create-* | Rows to seed after creating. Each: `{"values": {"Name": "New"}}` |
+
+**Execution behavior:**
+- Operations execute in array order within a single lock acquisition
+- Stops on first failure (subsequent operations may depend on earlier ones)
+- Seed rows for an operation are inserted immediately after that operation succeeds
+- Single Thread.Sleep at the end (not per operation)
+
+**Example:**
+
+```python
+import uuid, json
+new_id = str(uuid.uuid4())
+r = call_mcp_tool('schema-sync', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'operations': [
+        {
+            'type': 'create-lookup',
+            'schema-name': 'UsrTodoStatus',
+            'title': 'Todo Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrTodoList',
+            'update-operations': [
+                {
+                    'action': 'add',
+                    'column-name': 'UsrStatus',
+                    'type': 'Lookup',
+                    'title': 'Status',
+                    'reference-schema-name': 'UsrTodoStatus',
+                    'required': True,
+                    'default-value-source': 'Const',
+                    'default-value': new_id,
+                },
+                {
+                    'action': 'add',
+                    'column-name': 'UsrDueDate',
+                    'type': 'Date',
+                    'title': 'Due Date',
+                },
+            ],
+        },
+    ],
+})
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "results": [
+    {"operation": "create-lookup", "schema-name": "UsrTodoStatus", "success": true},
+    {"operation": "seed-data", "schema-name": "UsrTodoStatus", "success": true},
+    {"operation": "update-entity", "schema-name": "UsrTodoList", "success": true}
+  ]
+}
+```
+
+**After Success:** Call `application-get-info` once to refresh full context.
+
+### 9b. Page Sync (page-sync)
+
+**Purpose:** Update multiple Freedom UI page schemas in a single MCP call with built-in validation.
+
+**Tool name:** `page-sync`
+
+**⚠️ Parameter naming:** `page-sync` uses **kebab-case** for `environment-name` and page objects use `schema-name` (unlike individual page tools that use camelCase).
+
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `pages` — array of page objects to update
+
+**Optional parameters:**
+- `validate` — run client-side validation (markers + JS syntax) before saving. Default: `true`
+- `verify` — re-read each page after saving to confirm. Default: `false`
+
+**Page object:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `schema-name` | string | Yes | Page schema name (e.g., "UsrTodoList_FormPage") |
+| `body` | string | Yes | Full JavaScript page body with all 8 marker pairs |
+
+**Execution behavior:**
+- Validates each page client-side (if `validate: true`) before sending to Creatio
+- Saves each page via DesignerService
+- If verify is enabled, re-reads each page after save to confirm
+- Continues processing remaining pages on failure (unlike `schema-sync` which stops)
+- Single lock acquisition and single Thread.Sleep for entire batch
+
+**Workflow:**
+1. Read current page bodies via individual `page-get` calls
+2. Edit bodies using `page_body_edit.py`
+3. Send all edited pages via `page-sync` in one call
+
+**Example:**
+
+```python
+r = call_mcp_tool('page-sync', {
+    'environment-name': 'local',
+    'pages': [
+        {
+            'schema-name': 'UsrTodoList_FormPage',
+            'body': edited_form_body,
+        },
+        {
+            'schema-name': 'UsrTodoList_ListPage',
+            'body': edited_list_body,
+        },
+    ],
+    'validate': True,
+})
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "pages": [
+    {
+      "schema-name": "UsrTodoList_FormPage",
+      "success": true,
+      "body-length": 3775,
+      "validation": {"markers-ok": true, "js-syntax-ok": true}
+    },
+    {
+      "schema-name": "UsrTodoList_ListPage",
+      "success": true,
+      "body-length": 2181,
+      "validation": {"markers-ok": true, "js-syntax-ok": true}
+    }
+  ]
+}
+```
+
+**Note:** `page-get` and `page-list` are still used individually for reading pages and discovering page schemas. `page-sync` replaces only the write portion of the page workflow.
+
 ## Error Handling
 
 ### Common Errors
@@ -674,16 +863,15 @@ call_mcp_tool('update-entity-schema', {
 
 **Problem:** Schema exists in DB but not visible in `application-get-info`
 
-**Cause:** Not calling `application.get_info` after each successful entity mutation
+**Cause:** Not calling `application.get_info` after entity mutations
 
-**Solution:** Always refresh context:
+**Solution:** Refresh context once after all entity mutations complete (after `schema-sync` batch or after all individual entity tool calls):
 
-```bash
-# After entity.create_lookup or entity.update
-curl ... application.get_info | ... > output/App/mcp-application-result.json
-
-# Verify entity is present
-jq '.packages.UsrApp.entities.UsrNewEntity' output/App/mcp-application-result.json
+```python
+r = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+ctx = r['data']
+ctx['contractType'] = 'short'
+json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 ```
 
 ### Validation Checklist
@@ -710,6 +898,79 @@ done
 ```
 
 ## Complete Workflow Example
+
+### Using composite tools (preferred)
+
+```python
+import json, uuid, sys
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+
+# 1. Create application
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'MyApp',
+    'code': 'UsrMyApp',
+    'template-code': 'AppFreedomUI',
+    'icon-background': '#1F5F8B',
+}, timeout=180)
+data = r['data']
+package_name = data['packageName']
+json.dump(data | {'contractType': 'short', 'schemaSync': [], 'editableContext': {}},
+          open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
+
+# 2. Schema sync — create lookup + seed + extend main entity in ONE call
+new_id = str(uuid.uuid4())
+r2 = call_mcp_tool('schema-sync', {
+    'environment-name': 'local',
+    'package-name': package_name,
+    'operations': [
+        {
+            'type': 'create-lookup',
+            'schema-name': 'UsrMyStatus',
+            'title': 'My Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrMyApp',
+            'update-operations': [
+                {'action': 'add', 'column-name': 'UsrStatus', 'type': 'Lookup',
+                 'title': 'Status', 'reference-schema-name': 'UsrMyStatus',
+                 'required': True, 'default-value-source': 'Const', 'default-value': new_id},
+            ],
+        },
+    ],
+})
+assert r2['data']['success'], f"schema-sync failed: {r2}"
+
+# 3. Refresh context ONCE after all schema operations
+r3 = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+ctx = r3['data']
+ctx['contractType'] = 'short'
+ctx.setdefault('schemaSync', [])
+json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
+
+# 4. Read pages, edit bodies, then sync via page-sync
+form_r = call_mcp_tool('page-get', {'environmentName': 'local', 'schemaName': 'UsrMyApp_FormPage'})
+list_r = call_mcp_tool('page-get', {'environmentName': 'local', 'schemaName': 'UsrMyApp_ListPage'})
+# ... edit bodies with page_body_edit.py ...
+r4 = call_mcp_tool('page-sync', {
+    'environment-name': 'local',
+    'pages': [
+        {'schema-name': 'UsrMyApp_FormPage', 'body': edited_form_body},
+        {'schema-name': 'UsrMyApp_ListPage', 'body': edited_list_body},
+    ],
+    'validate': True,
+})
+assert r4['data']['success'], f"page-sync failed: {r4}"
+```
+
+### Using individual tools (fallback)
 
 ```python
 import json
@@ -786,10 +1047,10 @@ fi
 
 ### 2. Maintain Context Integrity
 
-After every entity mutation:
+After entity mutations complete (after `schema-sync` batch or all individual calls):
 1. Call `application.get_info`
 2. Overwrite `mcp-application-result.json`
-3. Add entry to `schemaSync` array
+3. Add entries to `schemaSync` array
 
 ### 3. Use Temporary Files
 

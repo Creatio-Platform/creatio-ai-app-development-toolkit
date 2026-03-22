@@ -24,9 +24,14 @@ Treat these as canonical:
 - Context: `context/`
 - Templates: `templates/`
 
+## Context Navigation
+
+Before reading any context or agent files, read `context/INDEX.md` first.
+It maps every file to line ranges per phase — use `view(file, [startLine, endLine])` with those ranges instead of reading full files.
+
 ## Execution Rules
 
-1. Read `AGENTS.md` first.
+1. Read `context/INDEX.md` first, then `AGENTS.md`.
 2. Use natural-language interaction as primary UX.
 3. Before Agent 1, persist Gate P with `scripts/write-planning-state.sh` and verify it with `scripts/check-planning-gate.sh`.
 4. Never create `output/<AppName>/` artifacts before Gate P passes.

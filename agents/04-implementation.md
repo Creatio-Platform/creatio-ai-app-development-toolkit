@@ -116,14 +116,10 @@ All calls use `scripts/mcp_client.py`. Transport details (initialize handshake, 
 4. **if app exists** → use `application-get-info` directly (skip `application-create`)
 5. parse response `data` field as the short contract
 6. initialize `mcp-application-result.json`
-7. if needed, execute ordered:
-   - `create-lookup`
-   - `create-data-binding-db` (seed data for each lookup with values defined in plan)
-   - `create-entity-schema`
-   - `update-entity-schema`
-8. after each successful entity mutation, call `application-get-info` and overwrite `mcp-application-result.json`
-9. if the plan creates or extends the main entity for a new app, execute the planned `page-list` → `page-get` → `page-update(dryRun)` → `page-update` page-sync steps for the generated `FormPage` and `ListPage`
-10. re-read synchronized pages with `page-get`, persist page metadata and verification results, and stop with blocker if required fields or resolved grid columns are missing
+7. if needed, execute entity sync via `schema-sync` composite tool (batches create-lookup + seed + create-entity + update-entity into one call)
+8. after `schema-sync` completes, call `application-get-info` once and overwrite `mcp-application-result.json`
+9. if the plan creates or extends the main entity for a new app, read current page bodies via `page-get`, edit them, then execute `page-sync` composite tool to update all pages in one call
+10. persist page sync results and stop with blocker if required fields or resolved grid columns are missing
 
 Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
 
@@ -162,22 +158,23 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### Schema Sync Rules
 
-- Create new lookup entities first with `create-lookup`.
+- Use `schema-sync` composite tool as the primary path for all entity mutations. It batches create-lookup, seed-data, create-entity, and update-entity into a single MCP call with one lock acquisition.
+- Create new lookup entities first (as `create-lookup` operations in the `schema-sync` operations array).
 - For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or duplicate title-like columns as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
-- After every `create-lookup`, validate the tool response contains inherited `Name` in the persisted schema snapshot. If `Name` is missing, stop with blocker instead of assuming the lookup is usable.
-- After creating each lookup entity that has seed values defined in the plan, call `create-data-binding-db` to populate it with seed rows before proceeding to the next entity.
+- Include `seed-rows` directly in the `create-lookup` operation for inline seeding (no separate `create-data-binding-db` call needed).
 - For new-app flows, inspect the entity list returned by `application-create` and treat the template-created section entity as the canonical main entity for the app's primary records.
-- Use `entity.create` only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
-- Before `update-entity-schema`, inspect the current schema snapshot from `application-create` or `application-get-info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
-- Use `update-entity-schema` for template-created entities and pass only `operations` (native list).
+- Use `create-entity` operation type only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
+- Before including an `update-entity` operation, inspect the current schema snapshot from `application-create` or `application-get-info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
+- Use `update-entity` operation type for template-created entities with `update-operations` (same format as `update-entity-schema` `operations`).
 - Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application-get-info`, and not left in a `Database update required` state.
+- After `schema-sync` completes successfully, call `application-get-info` ONCE (not per operation) and overwrite `mcp-application-result.json`.
 - If the run creates a new app or extends the main section entity with approved non-inherited business fields, page sync for the generated `FormPage` and `ListPage` is mandatory before success can be reported.
 - Treat a missing page-sync section in `plan.md` for such a run as a blocker in the plan, not as a reason to silently skip UI sync.
 - `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption. Preferred GUID resolution: generate UUIDs client-side via `uuid.uuid4()` and pass `Id` in seed row `values` during `create-data-binding-db`, then reuse the same UUID as `default-value`. Alternative: parse created row info from `create-data-binding-db` response log messages.
-- `update-entity-schema` operations are explicit:
+- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption. Generate UUIDs client-side via `uuid.uuid4()` and include `Id` in the `seed-rows` values within the same `schema-sync` operation, then use the same UUID as `default-value` in the `update-entity` operation.
+- `update-entity` `update-operations` are explicit:
   - `action: "add"`
   - `action: "update"`
   - `action: "remove"`
@@ -186,34 +183,43 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 ### Related Binding Tools
 
 - `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
-- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately.
+- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
 - Schemas created earlier in the same flow are DB-first and should be queried through `binding.get_columns`; do not use raw mode.
-- For lookup seed bindings, the `rows` format is a JSON string of `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
-- When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`. This eliminates any need to query the DB for the GUID after seeding:
+- For lookup seed rows, the format is `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
+- When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`:
 
 ```python
-import uuid, json
+import uuid
 new_id = str(uuid.uuid4())
-rows = json.dumps([
-    {'values': {'Id': new_id, 'Name': 'New'}},
-    {'values': {'Name': 'In Progress'}},
-    {'values': {'Name': 'Done'}},
-])
-r = call_mcp_tool('create-data-binding-db', {
-    'environment-name': 'local',
-    'package-name': 'UsrMyApp',
-    'schema-name': 'UsrMyStatus',
-    'binding-name': 'UsrMyStatus_Lookup',
-    'rows': rows,
-})
-# Then use `new_id` directly as `default-value` in update-entity-schema:
+# In schema-sync, use seed-rows inline:
+# 'seed-rows': [{'values': {'Id': new_id, 'Name': 'New'}}, ...]
+# Then in update-entity operation:
 # 'default-value-source': 'Const', 'default-value': new_id
 ```
 - Never pass partial `columnsJson` for lookup seed bindings.
 
 ### Parameter Validation Checklist
 
-Before EVERY `create-lookup` call, validate:
+**For `schema-sync` calls, validate:**
+
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name (NOT a GUID)
+3. ✅ `operations` is a Python **list** of operation objects
+4. ✅ Each operation has `type` (`create-lookup`, `create-entity`, or `update-entity`)
+5. ✅ Each operation has `schema-name`
+6. ✅ `update-operations` within `update-entity` uses same format as `update-entity-schema` `operations`
+7. ✅ `seed-rows` uses `[{"values": {...}}]` format (not JSON string — native list)
+8. ✅ Booleans (`required`, `extend-parent`) are Python `True`/`False`, not strings
+
+**For `page-sync` calls, validate:**
+
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `pages` is a Python **list** of page objects
+3. ✅ Each page has `schema-name` and `body`
+4. ✅ `body` contains all 8 required marker pairs
+5. ✅ `validate` and `verify` are Python booleans if provided
+
+**For individual tool fallback — before `create-lookup`, validate:**
 
 1. ✅ `environment-name` matches registered clio env name
 2. ✅ `package-name` is the string package name (NOT a GUID)
@@ -465,74 +471,56 @@ Persist the compact tree response as-is and add `contractType=short`.
 
 ### 7. Execute schema sync steps
 
-**See:** `context/mcp-application-tools-reference.md` sections:
-- "Create Lookup Entity (create-lookup)"
-- "Update Entity (update-entity-schema)"
+**See:** `context/mcp-application-tools-reference.md` section "Schema Sync (schema-sync)"
 
-If `plan.md` contains approved schema sync, use `scripts/mcp_client.py` (two-step pattern):
+If `plan.md` contains approved schema sync, use `schema-sync` composite tool via `scripts/mcp_client.py`:
 
 ```bash
-# entity.create_lookup → uses create-lookup tool
-cat > /tmp/run_create_lookup.py << 'PYEOF'
-import sys, json
+cat > /tmp/run_schema_sync.py << 'PYEOF'
+import sys, json, uuid
 sys.path.insert(0, 'scripts')
 from mcp_client import call_mcp_tool
-r = call_mcp_tool('create-lookup', {
-    'environment-name': 'local',
-    'package-name': 'UsrMyApp',
-    'schema-name': 'UsrMyStatus',
-    'title': 'My Status',
-})
-print(json.dumps(r, indent=2))
-PYEOF
-python3 /tmp/run_create_lookup.py
 
-# entity.update → uses update-entity-schema tool
-cat > /tmp/run_update_entity.py << 'PYEOF'
-import sys, json
-sys.path.insert(0, 'scripts')
-from mcp_client import call_mcp_tool
-r = call_mcp_tool('update-entity-schema', {
+new_id = str(uuid.uuid4())
+r = call_mcp_tool('schema-sync', {
     'environment-name': 'local',
     'package-name': 'UsrMyApp',
-    'schema-name': 'UsrMyApp',
     'operations': [
         {
-            'action': 'add',
-            'column-name': 'UsrStatus',
-            'type': 'Lookup',
-            'title': 'Status',
-            'reference-schema-name': 'UsrMyStatus',
-            'required': True,
-        }
+            'type': 'create-lookup',
+            'schema-name': 'UsrMyStatus',
+            'title': 'My Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrMyApp',
+            'update-operations': [
+                {
+                    'action': 'add',
+                    'column-name': 'UsrStatus',
+                    'type': 'Lookup',
+                    'title': 'Status',
+                    'reference-schema-name': 'UsrMyStatus',
+                    'required': True,
+                    'default-value-source': 'Const',
+                    'default-value': new_id,
+                },
+            ],
+        },
     ],
 })
 print(json.dumps(r, indent=2))
+assert r.get('data', {}).get('success'), f"schema-sync failed: {r}"
 PYEOF
-python3 /tmp/run_update_entity.py
-
-# binding.create (seed data) → uses create-data-binding-db tool
-cat > /tmp/run_binding.py << 'PYEOF'
-import sys, json
-sys.path.insert(0, 'scripts')
-from mcp_client import call_mcp_tool
-rows = json.dumps([
-    {'values': {'Name': 'New'}},
-    {'values': {'Name': 'Done'}},
-])
-r = call_mcp_tool('create-data-binding-db', {
-    'environment-name': 'local',
-    'package-name': 'UsrMyApp',
-    'schema-name': 'UsrMyStatus',
-    'binding-name': 'UsrMyStatus_Lookup',
-    'rows': rows,
-})
-print(json.dumps(r, indent=2))
-PYEOF
-python3 /tmp/run_binding.py
+python3 /tmp/run_schema_sync.py
 ```
 
-**After EACH successful entity mutation — refresh context:**
+**After schema-sync completes — refresh context ONCE:**
 
 ```bash
 cat > /tmp/run_get_info.py << 'PYEOF'
@@ -561,12 +549,14 @@ python3 scripts/mcp_schema_sync.py apply \
   --env output/<AppName>/.creatio-env.json
 ```
 
+**Fallback to individual tools:** If `schema-sync` is unavailable (older clio), use individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls sequentially, refreshing context after each mutation.
+
 **Critical validation:**
 - Created/updated schema MUST be immediately queryable through `application.get_info`
 - If schema is missing from server metadata after successful entity tool response, this is a core MCP blocker - stop immediately
 - Do NOT proceed if schema is in "Database update required" state
 
-Stop and report blocker on first failed entity tool call.
+Stop and report blocker on first failed entity tool call or `schema-sync` failure.
 
 ### 7b. Execute page customization steps
 
@@ -590,9 +580,9 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    g. For datasource-bound lookup fields, add the `crt.ComboBox` insert and the main view-model attribute only; preserve existing live lookup-list bindings or nested actions only when they are already materialized in the page body
    h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
    i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
-   j. Call `page.update` with `dryRun: True` (boolean, not string) first to validate
-   k. If dry run succeeds, call `page.update` without dryRun to save
-   l. Re-read the page with `page.get` and verify the resolved FormPage fields or ListPage columns are actually present
+   j. After editing all pages, call `page-sync` composite tool with all edited bodies in one batch (with `validate: True`)
+   k. If page-sync reports validation failure, fix the body and retry
+   l. Verify the `page-sync` response shows `success: true` for all pages
    m. Persist page verification with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`
 3. Update `mcp-application-result.json` with page metadata:
    ```json
@@ -621,13 +611,12 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 4. Append page customization results to `schemaSync`
 5. Stop with blocker if the plan required page sync but the final verification still shows missing fields or columns
 
-**Page sync via `mcp_page_sync.py` (MANDATORY for new apps):**
+**Page sync via `page-sync` MCP tool (MANDATORY for new apps):**
 
-Use the CLI helper as the **primary** page sync path. Do NOT write ad-hoc page scripts or manual MCP page calls.
+Use the `page-sync` composite tool as the **primary** page write path. Use individual `page-get` for reading and `page-list` for discovery.
 
-**Step 1 — Prepare page bodies** using `scripts/page_body_edit.py`:
+**Step 1 — Read current page bodies via `page-get`:**
 ```bash
-# Get current page body via mcp_client
 python3 -c "
 import sys, os, json
 sys.path.insert(0, 'scripts')
@@ -640,19 +629,44 @@ else:
     print(json.dumps(r, indent=2))
     sys.exit(1)
 "
+```
 
-# Edit FormPage
+**Step 2 — Edit page bodies** using `scripts/page_body_edit.py`:
+```bash
 python3 scripts/page_body_edit.py add-form-fields /tmp/FormPage.body.js \
   '[{"name":"UsrStatus","type":"crt.ComboBox","path":"PDS.UsrStatus","label":"Status"}]' \
   -o /tmp/FormPage.edited.js
 
-# Edit ListPage
 python3 scripts/page_body_edit.py add-list-columns /tmp/ListPage.body.js \
   '[{"code":"PDS_UsrStatus","caption":"Status","dataValueType":10}]' \
   -o /tmp/ListPage.edited.js
 ```
 
-**Step 2 — Apply via `mcp_page_sync.py`:**
+**Step 3 — Apply via `page-sync` composite tool:**
+```bash
+cat > /tmp/run_page_sync.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+
+form_body = open('/tmp/FormPage.edited.js').read()
+list_body = open('/tmp/ListPage.edited.js').read()
+
+r = call_mcp_tool('page-sync', {
+    'environment-name': 'local',
+    'pages': [
+        {'schema-name': 'UsrMyApp_FormPage', 'body': form_body},
+        {'schema-name': 'UsrMyApp_ListPage', 'body': list_body},
+    ],
+    'validate': True,
+})
+print(json.dumps(r, indent=2))
+assert r.get('data', {}).get('success'), f"page-sync failed: {r}"
+PYEOF
+python3 /tmp/run_page_sync.py
+```
+
+**Fallback — Apply via `mcp_page_sync.py` helper (uses individual tools internally):**
 ```bash
 python3 scripts/mcp_page_sync.py apply \
   --result output/<AppName>/mcp-application-result.json \
@@ -662,10 +676,6 @@ python3 scripts/mcp_page_sync.py apply \
 ```
 
 `--plan` may also point directly to `output/<AppName>/plan.md` when that file contains the embedded `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
-
-The script supports both MCP transports automatically:
-- If `.creatio-env.json` has `mcpUrl` → uses HTTP MCP directly to Creatio
-- If `.creatio-env.json` has `mcpTransport: "stdio"` → uses clio stdio via `mcp_client.py`
 
 **Combined sync (entity + page in one process):**
 
@@ -679,8 +689,6 @@ python3 scripts/mcp_full_sync.py \
   --page-plan output/<AppName>/plan.md \
   --report output/<AppName>/mcp-application-report.md
 ```
-
-This eliminates per-call subprocess overhead and runs all operations sequentially through one connection.
 
 **FormPage field sync rules:**
 - Read the current `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together before adding fields

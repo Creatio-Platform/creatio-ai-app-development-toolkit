@@ -457,6 +457,18 @@ class FakeMcpClientRefreshFailure(FakeMcpClient):
                     "columns": []
                 }
             }
+        if tool_name == "entity.update":
+            return {
+                "success": True,
+                "packageUId": arguments["packageUId"],
+                "entity": {
+                    "uId": arguments["entityUId"],
+                    "name": arguments["schemaName"],
+                    "caption": arguments["caption"],
+                    "columns": {}
+                },
+                "appliedOperations": []
+            }
         if tool_name == "application.get_info":
             raise WorkflowError(
                 'Instance of workspace item with type "Terrasoft.Configuration.UsrMyEntityTypeSchema" cannot be obtained from server metadata'
@@ -572,7 +584,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         ):
             build_sync_plan(current_context, build_edited_context_with_invalid_lookup_default())
 
-    def test_apply_sync_plan_refreshes_canonical_result_after_each_mutation(self):
+    def test_apply_sync_plan_refreshes_canonical_result_after_batch(self):
         result_document = build_current_result_document()
         fake_client = FakeMcpClient(build_current_result_document())
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -590,7 +602,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(persisted["schemaSync"][1]["evidence"]["entity"]["columns"], ["UsrName", "UsrType"])
         self.assertEqual(
             [call[0] for call in fake_client.calls],
-            ["entity.create_lookup", "application.get_info", "entity.update", "application.get_info"]
+            ["entity.create_lookup", "entity.update", "application.get_info"]
         )
 
     def test_apply_sync_plan_raises_actionable_error_when_metadata_refresh_fails(self):
@@ -600,7 +612,7 @@ class McpSchemaSyncTests(unittest.TestCase):
             result_path = Path(temp_dir) / "mcp-application-result.json"
             with self.assertRaisesRegex(
                 WorkflowError,
-                "application.get_info failed after entity.create_lookup for UsrMyEntityType"
+                "application.get_info failed after entity.update for UsrMyEntity"
             ):
                 apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
 

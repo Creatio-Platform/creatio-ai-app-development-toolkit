@@ -32,7 +32,7 @@ You do NOT implement anything directly. You coordinate 4 agents in sequence:
 3. **Implementation Plan** → generates MCP execution plan
 4. **Implementation** → creates or refreshes application context in DB via MCP application tools, synchronizes approved entity schemas via MCP entity tools, and synchronizes required FormPage/ListPage page schemas via MCP page tools
 
-**Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `entity.create_lookup`, `entity.create`, and `entity.update` tools execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
+**Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `schema-sync` composite tool (and individual `entity.create_lookup`, `entity.create`, `entity.update` tools) execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
 
 ## Mandatory Planning Start
 
@@ -177,12 +177,12 @@ Developer prompt (natural language)
    - Step D: if new-app flow — call `application-create`; if collision returned, switch to existing-app flow via `application-get-info`
    - Step E: parse `r['data']` from `mcp_client.py` result (persistent connection reused) and validate `short` contract (`success`, `packageUId`, `entities`)
    - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext and identify the template-created section entity returned by `application.create`
-   - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `entity.update`; use `entity.create` only for additional distinct business objects
-   - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
+   - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `schema-sync`; use `entity.create` only for additional distinct business objects
+   - Step H: after `schema-sync` completes (all entity mutations batched), call `application.get_info` once and overwrite mcp-application-result.json
    - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
    - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
-   - Step K: if the run creates or extends the main entity for a new app, discover the generated FormPage and ListPage and synchronize them via `page.list` → `page.get` → `page.update(dryRun)` → `page.update`
-   - Step L: re-read the updated pages via `page.get`, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
+   - Step K: if the run creates or extends the main entity for a new app, read current page bodies via `page.get`, edit them, and save all pages via `page-sync` composite tool in one call
+   - Step L: verify `page-sync` response shows success for all pages, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
    - Step M: validate final normalized `success=true` with short-contract checks and planned page-sync materialization
    - Step N: build `mcp-application-report.md` only from persisted runtime evidence in `mcp-application-result.json`; never synthesize green acceptance claims without explicit machine or manual evidence
 11. On failure, decide: retry, fix, or report blocker.
@@ -221,7 +221,7 @@ Developer prompt (natural language)
 2. Use MCP `application.create` as the primary generation path for full app creation.
 3. Use MCP `application.get_list` to discover existing applications before update flows.
 4. Use MCP `application.get_info` as the canonical DB refresh for current application context.
-5. Entity-level MCP tools (`entity.create`, `entity.create_lookup`, `entity.update`) are the secondary DB-first sync path after `application.create` or `application.get_info` when approved columns or lookup dependencies must be applied.
+5. `schema-sync` composite tool is the primary DB-first sync path for batching entity operations (create-lookup, seed-data, create-entity, update-entity) in a single MCP call. Individual entity tools (`entity.create`, `entity.create_lookup`, `entity.update`) remain available as fallback.
 6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
 7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
 8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
@@ -239,7 +239,7 @@ Developer prompt (natural language)
 18. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
 19. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
 20. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
-21. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults. Preferred resolution: generate UUID client-side via `uuid.uuid4()` during `create-data-binding-db` seed step and pass `Id` in the row's `values`, then reuse the same UUID as `default-value`. Alternative: parse created row info from `create-data-binding-db` response log messages.
+21. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `schema-sync` `update-entity` operation or individual `entity.update`; do not plan caption-based lookup defaults. Generate UUID client-side via `uuid.uuid4()` and pass `Id` in `seed-rows` values within the `schema-sync` operation, then reuse the same UUID as `default-value`.
 22. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
 23. For new apps, or when the main section entity gains approved business fields, synchronize the generated `FormPage` and `ListPage` before the run can be reported as complete.
 24. `FormPage` defaults must keep `Name` as the header/title when present and surface all approved non-inherited business fields from the main entity. Required business fields must always be included.
@@ -287,5 +287,5 @@ When developer provides a natural-language request (for example: “Generate an 
 3. Run Agent 1 in background → wait → verify `.creatio-env.json`.
 4. Run Agent 2 interactively → complete business checklist → persist full `request-spec.json` and approved `workflow-state.json`.
 5. Run `scripts/workflow_gate.sh requirements-check <AppName>` → run Agent 3 → verify `plan.md`.
-6. Run `scripts/workflow_gate.sh requirements-check <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state. Agent 4 uses `scripts/mcp_client.py` (persistent connection) and `scripts/mcp_full_sync.py` for combined sync.
-7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
+6. Run `scripts/workflow_gate.sh requirements-check <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state. Agent 4 uses `scripts/mcp_client.py` with `schema-sync` and `page-sync` composite tools for batched operations.
+7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after `schema-sync` completes.
