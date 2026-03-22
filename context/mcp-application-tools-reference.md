@@ -365,14 +365,28 @@ r = call_mcp_tool('create-lookup', {
 
 | Field | Value | Notes |
 |-------|-------|-------|
-| `action` | `"add"` / `"update"` / `"remove"` | NOT `"operation"`, NOT `"addColumn"` |
-| `column-name` | `"UsrStatus"` | NOT `"name"` |
-| `type` | `"Lookup"` / `"ShortText"` / `"Date"` / etc. | NOT `"dataValueTypeName"` |
-| `title` | `"Status"` | NOT `"caption"` |
-| `reference-schema-name` | `"UsrTodoStatus"` | NOT `"referenceSchemaName"` (for Lookup only) |
-| `required` | `True` / `False` | boolean |
-| `default-value-source` | `"Const"` / `"None"` | NOT `"defaultValueSource"` |
-| `default-value` | `"<guid>"` | NOT `"defaultValue"` |
+| `action` | `"add"` / `"modify"` / `"remove"` | Required. NOT `"operation"`, NOT `"addColumn"` |
+| `column-name` | `"UsrStatus"` | Required. NOT `"name"` |
+| `new-name` | `"UsrNewName"` | Optional. For rename operations |
+| `type` | `"Lookup"` / `"MediumText"` / `"Date"` / etc. | Required for `add`. NOT `"dataValueTypeName"` |
+| `title` | `"Status"` | Optional. NOT `"caption"` |
+| `description` | `"Task status"` | Optional. Column description |
+| `reference-schema-name` | `"UsrTodoStatus"` | Required for Lookup type. NOT `"referenceSchemaName"` |
+| `required` | `True` / `False` | Optional. Python boolean |
+| `indexed` | `True` / `False` | Optional. Create DB index |
+| `cloneable` | `True` / `False` | Optional. Include when cloning records |
+| `track-changes` | `True` / `False` | Optional. Track column value changes |
+| `default-value` | `"<guid>"` | Optional. Constant default value. NOT `"defaultValue"` |
+| `default-value-source` | `"Const"` / `"None"` | Optional. NOT `"defaultValueSource"` |
+| `multiline-text` | `True` / `False` | Optional. Multi-line text flag |
+| `localizable-text` | `True` / `False` | Optional. Localizable text flag |
+| `accent-insensitive` | `True` / `False` | Optional. Accent-insensitive search flag |
+| `masked` | `True` / `False` | Optional. Masked input flag |
+| `format-validated` | `True` / `False` | Optional. Format validation flag |
+| `use-seconds` | `True` / `False` | Optional. Show seconds for DateTime |
+| `simple-lookup` | `True` / `False` | Optional. Simple lookup mode |
+| `cascade` | `True` / `False` | Optional. Cascade delete for lookups |
+| `do-not-control-integrity` | `True` / `False` | Optional. Skip referential integrity checks |
 
 **Default-capable column example:**
 
@@ -813,6 +827,167 @@ python3 scripts/mcp_schema_sync.py apply \
   --env output/MyApp/.creatio-env.json
 ```
 
+## Page Tools
+
+### 10. List Pages (page-list)
+
+**Purpose:** Discover Freedom UI pages belonging to a package.
+
+**Tool name:** `page-list`
+
+**⚠️ Parameter naming:** Page tools use **camelCase** parameters, unlike entity tools which use kebab-case.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `environmentName` | string | **Yes** | Registered clio environment name |
+| `packageName` | string | **Yes** | Package name (e.g., "UsrTodoList") |
+
+**Example:**
+
+```python
+r = call_mcp_tool('page-list', {
+    'environmentName': 'local',
+    'packageName': 'UsrTodoList',
+})
+# Response: list of page schemas in the package
+```
+
+### 11. Get Page (page-get)
+
+**Purpose:** Read the full JavaScript body of a Freedom UI page schema.
+
+**Tool name:** `page-get`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `environmentName` | string | **Yes** | Registered clio environment name |
+| `schemaName` | string | **Yes** | Page schema name (e.g., "UsrTodoList_FormPage") |
+
+**Response (success):**
+
+```json
+{
+  "success": true,
+  "schemaName": "UsrTodoList_FormPage",
+  "schemaUId": "eda909b1-...",
+  "packageName": "UsrTodoList",
+  "parentSchemaName": "BaseModulePage",
+  "body": "define(\"UsrTodoList_FormPage\", ..."
+}
+```
+
+**Example:**
+
+```python
+r = call_mcp_tool('page-get', {
+    'environmentName': 'local',
+    'schemaName': 'UsrTodoList_FormPage',
+})
+body = r['data']['body']  # Full JS body with markers
+```
+
+**Known Issue:** `page-get` may fail with "Error reading JObject from JsonReader" for template-created pages whose bodies haven't been loaded by the designer service. Workaround: read body directly from PostgreSQL `SysSchemaContent` table (ContentType=0, Content column as UTF-8).
+
+### 12. Update Page (page-update)
+
+**Purpose:** Save a modified Freedom UI page body.
+
+**Tool name:** `page-update`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `environmentName` | string | **Yes** | Registered clio environment name |
+| `schemaName` | string | **Yes** | Page schema name |
+| `body` | string | **Yes** | Complete JS body with all 8 marker pairs |
+| `dryRun` | boolean | No | `True` to validate without saving (Python `True`/`False`, **NOT** string `"true"`) |
+
+**⚠️ Boolean Parameters:** `dryRun` must be Python `True`/`False`. String `"true"`/`"false"` causes MCP SDK deserialization failure.
+
+**Response (success):**
+
+```json
+{
+  "success": true,
+  "schemaName": "UsrTodoList_FormPage",
+  "bodyLength": 5236,
+  "dryRun": false
+}
+```
+
+**Workflow — always validate first:**
+
+```python
+# Step 1: Dry run to validate markers and structure
+r = call_mcp_tool('page-update', {
+    'environmentName': 'local',
+    'schemaName': 'UsrTodoList_FormPage',
+    'body': new_body,
+    'dryRun': True,   # ✅ Python boolean, NOT "true"
+})
+assert r['data']['success'], f"Dry run failed: {r['data'].get('error')}"
+
+# Step 2: Save
+r = call_mcp_tool('page-update', {
+    'environmentName': 'local',
+    'schemaName': 'UsrTodoList_FormPage',
+    'body': new_body,
+})
+```
+
+**Required marker pairs in body (all 8 must be present):**
+
+```
+/**SCHEMA_DEPS*/ ... /**SCHEMA_DEPS*/
+/**SCHEMA_ARGS*/ ... /**SCHEMA_ARGS*/
+/**SCHEMA_VIEW_CONFIG_DIFF*/ ... /**SCHEMA_VIEW_CONFIG_DIFF*/
+/**SCHEMA_VIEW_MODEL_CONFIG*/ or /**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/ ... (matching close)
+/**SCHEMA_MODEL_CONFIG*/ or /**SCHEMA_MODEL_CONFIG_DIFF*/ ... (matching close)
+/**SCHEMA_HANDLERS*/ ... /**SCHEMA_HANDLERS*/
+/**SCHEMA_CONVERTERS*/ ... /**SCHEMA_CONVERTERS*/
+/**SCHEMA_VALIDATORS*/ ... /**SCHEMA_VALIDATORS*/
+```
+
+**Known Issue:** `page-update` save (non-dryRun) may fail with "Error reading JObject" for template-created pages — same root cause as `page-get`. The tool internally calls `GetSchema` to read existing schema before saving, and this call returns empty. Workaround: update page body directly in PostgreSQL `SysSchemaContent` table using psycopg2.
+
+**Direct DB Workaround Example:**
+
+```python
+import psycopg2, datetime
+conn = psycopg2.connect(dbname='dev', user='postgres', host='localhost', port=5432)
+cur = conn.cursor()
+now = datetime.datetime.now(datetime.UTC)
+cur.execute("""
+    UPDATE "SysSchemaContent" sc
+    SET "Content" = %s, "ModifiedOn" = %s
+    FROM "SysSchema" s
+    WHERE s."Id" = sc."SysSchemaId"
+      AND s."Name" = %s AND sc."ContentType" = 0
+""", (new_body.encode('utf-8'), now, 'UsrTodoList_FormPage'))
+cur.execute("""
+    UPDATE "SysSchema"
+    SET "ClientContentModifiedOn" = %s, "ModifiedOn" = %s
+    WHERE "Name" = %s
+""", (now, now, 'UsrTodoList_FormPage'))
+conn.commit()
+```
+
+### Page Tool Parameter Convention
+
+| Tool Category | Parameter Style | Example |
+|--------------|----------------|---------|
+| Entity tools | kebab-case | `environment-name`, `schema-name`, `package-name` |
+| Page tools | camelCase | `environmentName`, `schemaName`, `packageName` |
+
+Mixing these styles causes silent failures or "Error reading JObject" errors.
+
+---
+
 ## Reference
 
 **Short Contract Structure:**
@@ -852,15 +1027,36 @@ python3 scripts/mcp_schema_sync.py apply \
 
 **Data Value Type Names:**
 
-- `MediumText` - string up to 250 chars
-- `MaxSizeText` - unlimited text
-- `ShortText` - string up to 50 chars
+Primary types:
+- `Guid` - globally unique identifier
+- `Text` - generic text (defaults to MediumText)
+- `Integer` - whole number
+- `Boolean` - true/false
+- `DateTime` - date and time
+- `Lookup` - reference to another entity (requires `reference-schema-name`)
+
+Text variants (with aliases):
+- `ShortText` (alias: `Text50`) - up to 50 chars
+- `MediumText` (alias: `Text250`) - up to 250 chars
+- `LongText` (alias: `Text500`) - up to 500 chars
+- `MaxSizeText` (alias: `TextUnlimited`) - unlimited text
+- `PhoneNumber` - phone number format
+- `WebLink` - URL format
+- `Email` - email address format
+- `RichText` - rich/HTML text
+
+Date/Time variants:
 - `DateTime` - date and time
 - `Date` - date only
+- `Time` - time only
+
+Numeric variants:
 - `Integer` - whole number
-- `Float` - decimal number
-- `Boolean` - true/false
-- `Lookup` - reference to another entity (requires `referenceSchemaName`)
+- `Float` (alias: `Decimal2`) - decimal with 2 places
+- `Decimal0` through `Decimal8` - decimal with 0-8 places
+- `Currency0` through `Currency3` - currency with 0-3 decimal places
+
+Both the primary name and alias are accepted (e.g., `ShortText` and `Text50` are equivalent).
 
 **Template Codes:**
 

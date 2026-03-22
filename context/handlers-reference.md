@@ -415,7 +415,7 @@ Use these MCP tools to read and edit handler logic in deployed pages:
 1. `page.list` — discover pages
 2. `page.get` — read metadata and raw JS body
 3. edit `handlers`, `SCHEMA_DEPS`, `SCHEMA_ARGS`, and related sections in one pass
-4. `page.update(..., dryRun: "true")`
+4. `page.update(..., dryRun: True)`
 5. `page.update(...)`
 
 When editing handler logic through MCP:

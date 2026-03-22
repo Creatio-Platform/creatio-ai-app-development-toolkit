@@ -180,7 +180,7 @@ Resolve ListPage columns with this algorithm:
 For each required page, emit this execution sequence in `plan.md`:
 1. `page.list` to discover the generated page schema in the app package
 2. `page.get` to read the live JS body
-3. `page.update` with `dryRun: "true"` to validate the merged body
+3. `page.update` with `dryRun: True` to validate the merged body
 4. `page.update` without dry run to persist the page
 5. `page.get` again to verify required FormPage fields and resolved ListPage columns are materialized
 

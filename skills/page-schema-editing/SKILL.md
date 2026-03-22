@@ -55,7 +55,7 @@ Response:
 |-----------|------|----------|-------------|
 | `schemaName` | string | **Yes** | Page schema name |
 | `body` | string | **Yes** | Complete JS body with all 8 marker pairs |
-| `dryRun` | string | No | `"true"` to validate without saving |
+| `dryRun` | boolean | No | `True` to validate without saving |
 
 Response (success):
 ```json
@@ -201,7 +201,7 @@ Use this workflow when the task is to change default row sorting on a live ListP
 5. Use entity column names in sort options such as `CreatedOn` or `UsrDueDate`
 6. Add or update `sortingConfig.default` when the requirement is plain column ordering
 7. Preserve an explicit sibling sorting attribute only when the live page body already materializes it or the task requires deterministic raw-body output
-8. Run `page.update(..., dryRun: "true")` before save
+8. Run `page.update(..., dryRun: True)` before save
 
 Do not reuse FormPage lookup `*_List` sorting as the pattern for ListPage DataGrid row sorting. If the requested order is semantic or business-specific rather than plain column ordering, stop and treat it as a blocker unless there is an explicit technical sort key or separate runtime logic in scope.
 
@@ -211,7 +211,7 @@ Do not reuse FormPage lookup `*_List` sorting as the pattern for ListPage DataGr
 page.update(
   schemaName: "TestApp1_ListPage",
   body: "...full modified body...",
-  dryRun: "true"
+  dryRun: True
 )
 ```
 
@@ -277,7 +277,7 @@ page.update(
 - [ ] Dynamic validation and UI state updates use `setValue(...)` or `setAttributePropertyValue(...)` when appropriate
 - [ ] `converters` and `validators` were only edited when the live schema already used them or the task provided concrete evidence
 - [ ] Deps and args were updated if handlers use external modules, and the live SDK alias style was preserved
-- [ ] `dryRun: "true"` passed first to validate
+- [ ] `dryRun: True` passed first to validate
 - [ ] `success: true` confirmed after save
 
 ## Example: Add Handler + Update Deps in One Operation
@@ -294,7 +294,7 @@ page.update(
    - Replace /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/
      with    /**SCHEMA_HANDLERS*/[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => { await next?.handle(request); console.log("Welcome!"); } }]/**SCHEMA_HANDLERS*/
 
-3. page.update(schemaName: "TestApp1_ListPage", body: "...modified body...", dryRun: "true")
+3. page.update(schemaName: "TestApp1_ListPage", body: "...modified body...", dryRun: True)
    → success: true
 
 4. page.update(schemaName: "TestApp1_ListPage", body: "...modified body...")

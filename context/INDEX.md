@@ -169,7 +169,7 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | 413-523 | Error Handling + Pitfalls | Recovery strategies, 8 mistake patterns |
 | 524-643 | Complete Workflow Example | End-to-end execution with code |
 | 644-707 | Best Practices + Integration | 4 principles, Python helper usage |
-| 708-879 | Page Tools (list/get/update) | Page discovery, reading, editing |
+| 830-989 | Page Tools (list/get/update) | Page discovery, reading, editing, DB workaround |
 
 ### context/ui-reference.md (658 lines) — Freedom UI
 | Lines | Section | Description |
@@ -239,9 +239,9 @@ When you need a specific MCP tool's API, read only its section from `context/mcp
 | `update-entity-schema` | L277-327 | Add/modify columns |
 | `binding-get-columns` | L328-351 | Query entity metadata |
 | `create-data-binding-db` | L352-412 | Seed lookup data |
-| `page-list` | L708-740 | Discover pages in package |
-| `page-get` | L741-800 | Read page body |
-| `page-update` | L801-879 | Save modified page body |
+| `page-list` | L832-855 | Discover pages in package |
+| `page-get` | L857-893 | Read page body |
+| `page-update` | L895-989 | Save modified page body, DB workaround |
 | Error handling | L413-523 | Recovery + common pitfalls |
 
 ## Skills Detail Map
