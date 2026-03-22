@@ -82,10 +82,10 @@ class PageBodyToolsTests(unittest.TestCase):
         self.assertEqual(parsed[0]["name"], "DataTable")
         self.assertEqual(parsed[0]["values"]["columns"][1]["code"], "PDS_UsrStatus")
 
-    def test_build_page_update_arguments_uses_string_true_for_dry_run(self):
+    def test_build_page_update_arguments_uses_boolean_true_for_dry_run(self):
         arguments = build_page_update_arguments("UsrTest_FormPage", "body", dry_run=True)
         self.assertEqual(arguments["schemaName"], "UsrTest_FormPage")
-        self.assertEqual(arguments["dryRun"], "true")
+        self.assertIs(arguments["dryRun"], True)
 
     def test_verify_form_page_sync_rejects_new_lookup_actions(self):
         verification = verify_form_page_sync(

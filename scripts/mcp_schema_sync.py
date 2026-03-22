@@ -188,6 +188,57 @@ def write_json(path, payload):
     Path(path).write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
 
 
+class ClioStdioClient:
+    def __init__(self, environment_name, clio_cmd=None):
+        self.environment_name = environment_name
+        self.clio_cmd = clio_cmd
+
+    def initialize(self):
+        pass
+
+    def list_tools(self):
+        r = _call_mcp_tool_import()("tools/list", {})
+        return r.get("data", {}).get("tools", []) if r.get("success") else []
+
+    def call_tool_json(self, tool_name, arguments):
+        tool_name_dashed = tool_name.replace(".", "-")
+        if "environmentName" not in arguments and "environment-name" not in arguments:
+            if tool_name.startswith("page"):
+                arguments["environmentName"] = self.environment_name
+            else:
+                arguments["environment-name"] = self.environment_name
+        r = _call_mcp_tool_import()(tool_name_dashed, arguments)
+        if not r.get("success"):
+            raw = r.get("raw", "unknown error")
+            error_data = r.get("data") or {}
+            error_msg = error_data.get("error", raw) if isinstance(error_data, dict) else raw
+            return {"success": False, "error": error_msg}
+        return r.get("data") if r.get("data") is not None else {"success": True}
+
+
+def _call_mcp_tool_import():
+    try:
+        from scripts.mcp_client import call_mcp_tool
+    except ImportError:
+        from mcp_client import call_mcp_tool
+    return call_mcp_tool
+
+
+def load_mcp_client(env_path):
+    payload = load_json(env_path)
+    mcp_url = payload.get("mcpUrl")
+    if mcp_url:
+        return McpHttpClient(mcp_url)
+    transport = payload.get("mcpTransport", "stdio")
+    if transport == "stdio":
+        env_name = payload.get("environment")
+        if not env_name:
+            raise WorkflowError("environment name is missing in env file for stdio transport")
+        clio_cmd = payload.get("mcpCommand")
+        return ClioStdioClient(env_name, clio_cmd=clio_cmd)
+    raise WorkflowError(f"Unsupported mcpTransport: {transport}. Use 'stdio' or provide 'mcpUrl'.")
+
+
 def load_mcp_url(env_path):
     payload = load_json(env_path)
     mcp_url = payload.get("mcpUrl")
@@ -575,7 +626,7 @@ def run_plan(current_result_path, edited_context_path, output_path=None):
 def run_apply(result_path, edited_context_path, env_path):
     result_document = normalize_result_document(load_json(result_path))
     edited_context = extract_editable_context(load_json(edited_context_path))
-    client = McpHttpClient(load_mcp_url(env_path))
+    client = load_mcp_client(env_path)
     client.initialize()
     apply_sync_plan(client, result_document, edited_context, result_path)
     return str(result_path)

@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
-from scripts.mcp_schema_sync import WorkflowError, apply_sync_plan, build_create_action, build_sync_plan
+from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
 
 
 def build_current_result_document():
@@ -613,6 +613,44 @@ class McpSchemaSyncTests(unittest.TestCase):
         refresh_calls = [call for call in fake_client.calls if call[0] == "application.get_info"]
         self.assertTrue(refresh_calls)
         self.assertEqual(refresh_calls[0][1], {"appCode": "UsrMyApp"})
+
+
+class LoadMcpClientTests(unittest.TestCase):
+    def test_load_mcp_client_returns_http_client_when_mcp_url_present(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpUrl": "http://localhost:5001/mcp", "environment": "local"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, McpHttpClient)
+
+    def test_load_mcp_client_returns_stdio_client_for_stdio_transport(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpTransport": "stdio", "environment": "local"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, ClioStdioClient)
+        self.assertEqual(client.environment_name, "local")
+
+    def test_load_mcp_client_raises_without_environment_for_stdio(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpTransport": "stdio"}, f)
+            f.flush()
+            with self.assertRaisesRegex(WorkflowError, "environment name is missing"):
+                load_mcp_client(f.name)
+
+    def test_load_mcp_client_raises_for_unknown_transport(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpTransport": "grpc", "environment": "local"}, f)
+            f.flush()
+            with self.assertRaisesRegex(WorkflowError, "Unsupported mcpTransport"):
+                load_mcp_client(f.name)
+
+    def test_load_mcp_client_prefers_mcp_url_over_stdio(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpUrl": "http://localhost:5001/mcp", "mcpTransport": "stdio", "environment": "local"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, McpHttpClient)
 
 
 if __name__ == "__main__":

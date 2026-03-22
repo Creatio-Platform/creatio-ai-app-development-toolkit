@@ -16,6 +16,11 @@ Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts dur
 ## Context
 
 Read:
+
+**Preferred:** Read `context/.cache/agent-4-bundle.md` — a precompiled bundle with all required context
+in one file. Generate it first if missing: `python3 scripts/build_context_bundle.py --agent 4`
+
+**Individual files (only if bundle unavailable):**
 - `context/essentials.md`
 - `context/mcp-application-tools-reference.md` — MCP tool parameters and payload reference
 - `context/ui-reference.md`
@@ -23,7 +28,8 @@ Read:
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
-- `scripts/mcp_client.py` — Reusable stdio MCP client (use this, not curl)
+- `scripts/mcp_client.py` — Reusable stdio MCP client (persistent connection, use this, not curl)
+- `scripts/mcp_full_sync.py` — Combined entity + page sync in one process
 - `scripts/page_body_tools.py`
 - `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
@@ -615,13 +621,39 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 4. Append page customization results to `schemaSync`
 5. Stop with blocker if the plan required page sync but the final verification still shows missing fields or columns
 
-**Python helper option:**
+**Page sync via `mcp_page_sync.py` (MANDATORY for new apps):**
 
+Use the CLI helper as the **primary** page sync path. Do NOT write ad-hoc page scripts or manual MCP page calls.
+
+**Step 1 — Prepare page bodies** using `scripts/page_body_edit.py`:
 ```bash
-python3 scripts/mcp_page_sync.py build-plan \
-  --plan-md output/<AppName>/plan.md \
-  --output output/<AppName>/page-sync-plan.json
+# Get current page body via mcp_client
+python3 -c "
+import sys, os, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('page-get', {'environmentName': '<env_name>', 'schemaName': '<PageName>'})
+if r['success'] and r.get('data', {}).get('body'):
+    open('/tmp/<PageName>.body.js', 'w').write(r['data']['body'])
+    print('OK')
+else:
+    print(json.dumps(r, indent=2))
+    sys.exit(1)
+"
 
+# Edit FormPage
+python3 scripts/page_body_edit.py add-form-fields /tmp/FormPage.body.js \
+  '[{"name":"UsrStatus","type":"crt.ComboBox","path":"PDS.UsrStatus","label":"Status"}]' \
+  -o /tmp/FormPage.edited.js
+
+# Edit ListPage
+python3 scripts/page_body_edit.py add-list-columns /tmp/ListPage.body.js \
+  '[{"code":"PDS_UsrStatus","caption":"Status","dataValueType":10}]' \
+  -o /tmp/ListPage.edited.js
+```
+
+**Step 2 — Apply via `mcp_page_sync.py`:**
+```bash
 python3 scripts/mcp_page_sync.py apply \
   --result output/<AppName>/mcp-application-result.json \
   --plan output/<AppName>/page-sync-plan.json \
@@ -630,6 +662,25 @@ python3 scripts/mcp_page_sync.py apply \
 ```
 
 `--plan` may also point directly to `output/<AppName>/plan.md` when that file contains the embedded `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
+
+The script supports both MCP transports automatically:
+- If `.creatio-env.json` has `mcpUrl` → uses HTTP MCP directly to Creatio
+- If `.creatio-env.json` has `mcpTransport: "stdio"` → uses clio stdio via `mcp_client.py`
+
+**Combined sync (entity + page in one process):**
+
+When both schema sync and page sync are needed (typical for new apps), use `mcp_full_sync.py` to run everything in a single process with one persistent MCP connection:
+
+```bash
+python3 scripts/mcp_full_sync.py \
+  --env output/<AppName>/.creatio-env.json \
+  --result output/<AppName>/mcp-application-result.json \
+  --edited-context output/<AppName>/edited-context.json \
+  --page-plan output/<AppName>/plan.md \
+  --report output/<AppName>/mcp-application-report.md
+```
+
+This eliminates per-call subprocess overhead and runs all operations sequentially through one connection.
 
 **FormPage field sync rules:**
 - Read the current `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together before adding fields

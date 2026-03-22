@@ -7,11 +7,11 @@ from pathlib import Path
 
 try:
     from scripts.mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
-    from scripts.mcp_schema_sync import McpHttpClient, WorkflowError, load_mcp_url
+    from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, load_mcp_client, load_mcp_url
     from scripts.page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 except ImportError:
     from mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
-    from mcp_schema_sync import McpHttpClient, WorkflowError, load_mcp_url
+    from mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, load_mcp_client, load_mcp_url
     from page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 
 PAGE_SYNC_PLAN_START = "<!-- PAGE_SYNC_PLAN_JSON_START -->"
@@ -255,7 +255,7 @@ def run_build_plan(plan_md_path, output_path):
 def run_apply(result_path, plan_path, env_path, report_path=None):
     result_document = ensure_result_document(load_json(result_path))
     page_plan = load_page_sync_payload(plan_path)
-    client = McpHttpClient(load_mcp_url(env_path))
+    client = load_mcp_client(env_path)
     client.initialize()
     apply_page_sync_plan(client, result_document, page_plan, result_path, report_path=report_path)
     return str(result_path)

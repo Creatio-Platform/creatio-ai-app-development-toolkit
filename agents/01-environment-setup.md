@@ -90,16 +90,20 @@ The `<env_name>` should be a short, descriptive name derived from the URL (e.g.,
 
 Creatio instances can be .NET Core or .NET Framework. Detect this automatically:
 
-1. **Try .NET Core first**:
+1. **Try .NET Core first** (most common for modern Creatio):
    ```bash
    clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i true
+   clio healthcheck -e <env_name>
    ```
-2. Run a healthcheck (Step 5). If it fails with a connection/protocol error:
-3. **Fall back to .NET Framework**:
+2. If healthcheck **succeeds** — use `isNetCore: true`.
+3. If healthcheck **fails** — fall back to .NET Framework:
    ```bash
    clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i false
+   clio healthcheck -e <env_name>
    ```
 4. Save the detected `isNetCore` value (`true` or `false`) for the env file.
+
+**Critical:** Getting `isNetCore` wrong causes page-get/page-update MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
 
 ### 5. Verify the connection
 

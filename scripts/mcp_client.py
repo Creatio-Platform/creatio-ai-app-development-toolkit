@@ -51,9 +51,187 @@ def _build_clio_cmd():
     )
 
 
+def _parse_tool_response(collected):
+    for line in collected:
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(msg.get("id"), int) or msg["id"] < 2:
+            continue
+        result = msg.get("result", {})
+        is_error = result.get("isError", False)
+        content = result.get("content", [])
+        raw = content[0].get("text", "") if content else ""
+        if not raw:
+            return {"success": False, "data": None, "raw": "empty response"}
+        try:
+            data = json.loads(raw)
+            return {"success": not is_error, "data": data, "raw": raw}
+        except json.JSONDecodeError:
+            return {"success": not is_error, "data": None, "raw": raw}
+    return None
+
+
+class PersistentMcpClient:
+    """
+    Persistent clio MCP server process that stays alive across multiple tool calls.
+    Eliminates ~0.5-1s subprocess spawn + initialize overhead per call.
+    """
+
+    def __init__(self, timeout=120):
+        self._timeout = timeout
+        self._proc = None
+        self._lock = threading.Lock()
+        self._next_id = 1
+        self._initialized = False
+
+    def _ensure_started(self):
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        clio_cmd = _build_clio_cmd()
+        self._proc = subprocess.Popen(
+            clio_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self._next_id = 1
+        self._initialized = False
+
+    def _send_and_receive(self, message, target_id, timeout):
+        self._proc.stdin.write(message + "\n")
+        self._proc.stdin.flush()
+        collected = []
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = self._proc.stdout.readline()
+            if not line:
+                break
+            stripped = line.strip()
+            if not stripped:
+                continue
+            collected.append(stripped)
+            try:
+                parsed = json.loads(stripped)
+                if parsed.get("id") == target_id:
+                    return collected
+            except json.JSONDecodeError:
+                pass
+        return collected
+
+    def _initialize_once(self):
+        if self._initialized:
+            return
+        init_id = self._next_id
+        self._next_id += 1
+        init_msg = json.dumps({
+            "jsonrpc": "2.0", "id": init_id, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "mcp_client", "version": "1.0"}
+            }
+        })
+        self._send_and_receive(init_msg, init_id, min(self._timeout, 30))
+        self._initialized = True
+
+    def call_tool(self, tool_name, arguments, timeout=None):
+        timeout = timeout or self._timeout
+        with self._lock:
+            try:
+                self._ensure_started()
+                self._initialize_once()
+            except Exception:
+                self._kill()
+                raise
+            call_id = self._next_id
+            self._next_id += 1
+            call_msg = json.dumps({
+                "jsonrpc": "2.0", "id": call_id,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": {"args": arguments}}
+            })
+            try:
+                collected = self._send_and_receive(call_msg, call_id, timeout)
+            except Exception:
+                self._kill()
+                raise
+        for line in collected:
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") != call_id:
+                continue
+            result = msg.get("result", {})
+            is_error = result.get("isError", False)
+            content = result.get("content", [])
+            raw = content[0].get("text", "") if content else ""
+            if not raw:
+                return {"success": False, "data": None, "raw": "empty response"}
+            try:
+                data = json.loads(raw)
+                return {"success": not is_error, "data": data, "raw": raw}
+            except json.JSONDecodeError:
+                return {"success": not is_error, "data": None, "raw": raw}
+        self._kill()
+        return {"success": False, "data": None, "raw": f"no response. lines: {collected}"}
+
+    def call_tools_batch(self, calls):
+        results = []
+        for tool_name, arguments, timeout in calls:
+            results.append(self.call_tool(tool_name, arguments, timeout))
+        return results
+
+    def _kill(self):
+        self._initialized = False
+        if self._proc is None:
+            return
+        try:
+            self._proc.terminate()
+            self._proc.wait(timeout=5)
+        except Exception:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
+        self._proc = None
+
+    def close(self):
+        with self._lock:
+            self._kill()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def __del__(self):
+        self._kill()
+
+
+_shared_client = None
+_shared_client_lock = threading.Lock()
+
+
+def _get_shared_client():
+    global _shared_client
+    with _shared_client_lock:
+        if _shared_client is None:
+            _shared_client = PersistentMcpClient()
+        return _shared_client
+
+
 def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     """
     Call a clio MCP tool via stdio transport.
+
+    Uses a persistent clio mcp-server process under the hood.
+    The process is started on first call and reused for subsequent calls,
+    eliminating ~0.5-1s subprocess spawn + initialize overhead per call.
 
     Args:
         tool_name: dash-separated tool name (e.g. 'application-create')
@@ -68,93 +246,12 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
         (True/False), NOT strings ('true'/'false'). Passing a string causes
         MCP SDK deserialization failure and a generic invocation error.
     """
-    messages = [
-        json.dumps({
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "mcp_client", "version": "1.0"}
-            }
-        }),
-        json.dumps({
-            "jsonrpc": "2.0", "id": 2,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": {"args": arguments}}
-        }),
-    ]
-
-    clio_cmd = _build_clio_cmd()
-    proc = subprocess.Popen(
-        clio_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    def _send():
-        for msg in messages:
-            proc.stdin.write(msg + "\n")
-            proc.stdin.flush()
-            time.sleep(0.3)
-        time.sleep(max(timeout - 5, 10))
-        try:
-            proc.stdin.close()
-        except Exception:
-            pass
-
-    sender = threading.Thread(target=_send, daemon=True)
-    sender.start()
-
-    collected = []
+    client = _get_shared_client()
     try:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            stripped = line.strip()
-            if stripped:
-                collected.append(stripped)
-                try:
-                    parsed = json.loads(stripped)
-                    if parsed.get("id") == 2:
-                        break
-                except json.JSONDecodeError:
-                    pass
+        return client.call_tool(tool_name, arguments, timeout)
     except Exception:
-        pass
-    finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
-    for line in collected:
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if msg.get("id") != 2:
-            continue
-        result = msg.get("result", {})
-        is_error = result.get("isError", False)
-        content = result.get("content", [])
-        raw = content[0].get("text", "") if content else ""
-        if not raw:
-            return {"success": False, "data": None, "raw": "empty response"}
-        try:
-            data = json.loads(raw)
-            return {"success": not is_error, "data": data, "raw": raw}
-        except json.JSONDecodeError:
-            return {"success": not is_error, "data": None, "raw": raw}
-
-    return {"success": False, "data": None, "raw": f"no response. lines: {collected}"}
+        client.close()
+        return client.call_tool(tool_name, arguments, timeout)
 
 
 if __name__ == "__main__":
