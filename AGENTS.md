@@ -32,14 +32,15 @@ You do NOT implement anything directly. You coordinate 4 agents in sequence:
 3. **Implementation Plan** → generates MCP execution plan
 4. **Implementation** → creates or refreshes application context in DB via MCP application tools, synchronizes approved entity schemas via MCP entity tools, and synchronizes required FormPage/ListPage page schemas via MCP page tools
 
-**Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `entity.create_lookup`, `entity.create`, and `entity.update` tools execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
+**Note:** MCP entity tools work **DB-first** — schemas are created directly in PostgreSQL and immediately usable. No separate compilation or deployment step is required. The `schema-sync` composite tool (and individual `entity.create_lookup`, `entity.create`, `entity.update` tools) execute CREATE TABLE and ALTER TABLE statements directly, making entities runtime-accessible immediately.
 
 ## Mandatory Planning Start
 
 Run planning once at the beginning of each new app workflow, before Agent 1.
 
 Gate P is mandatory (internal control):
-- collect required runtime inputs from developer, including Creatio URL
+- collect required runtime inputs from developer: Creatio URL, login, and password
+- if the developer omitted login or password, ask for them — these are execution blockers even in autonomous mode
 - provide short “What I understood” summary
 - obtain natural-language confirmation from developer
 - persist Gate P approved state in `.workflow-state/<AppName>/planning-state.json`
@@ -80,6 +81,9 @@ Checklist persistence rules:
 Technical question policy:
 - ask only execution blockers (URL/access/credentials)
 - do not ask for MCP/template/icon details when deterministic defaults exist
+- "autonomous" or "without questions" mode applies to business clarifications only
+- runtime credentials (URL, login, password) are always execution blockers and must be collected before Gate P approval
+- if the developer says "autonomous" but did not provide credentials, ask for credentials only
 
 Decision rules:
 - if business data is missing, ask in themed batches
@@ -140,7 +144,7 @@ Developer prompt (natural language)
 ┌─────────────────────────┐
 │ Agent 4: Implementation │  Read: agents/04-implementation.md
 │                         │  Context: essentials, ui, viewconfig, bindings, mcp-tools-ref
-│                         │  Direct MCP: curl → application.create/get_info/page.list/page.get/page.update
+│                         │  MCP via stdio: scripts/mcp_client.py (persistent) + mcp_full_sync.py
 │                         │  Output: output/<App>/mcp-application-result.json
 │                         │          + mcp-application-report.md (FINAL)
 └─────────────────────────┘
@@ -161,34 +165,36 @@ Developer prompt (natural language)
 2. Do not re-enter planning gate between agents after Gate P is approved.
 3. Execute agents sequentially (1 → 2 → 3 → 4 → 5).
 4. Agents 1/3/5 run in background mode with `task(..., mode: "background")`. Agent 4 runs synchronously.
-5. Before Agent 1, run `scripts/check-planning-gate.sh <AppName>`. On failure, hard-stop and report blocker.
+5. Before Agent 1, run `scripts/workflow_gate.sh plan-check <AppName>` (or `scripts/check-planning-gate.sh <AppName>`). On failure, hard-stop and report blocker.
 6. After launching a background agent, wait with `read_agent(agent_id, wait: true)`. For Agent 4, surface an explicit “Starting implementation” status and keep execution in the foreground.
 7. Verify expected outputs exist and are non-empty before moving to the next agent. When Agent 3 requires page sync, this includes the embedded page sync contract in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, plus `output/<AppName>/page-sync-plan.json`.
 8. Agent 2 is interactive only. Never delegate it.
 9. Agent 2 must set `businessChecklistComplete=true` before Agent 3.
-10. Agent 4 implementation order (use direct curl commands per `context/mcp-application-tools-reference.md`):
-   - Step A: initialize MCP session via `initialize` method and extract `Mcp-Session-Id`
-   - Step B: verify tools availability with `tools/list` (check for application.create, application.get_info, entity tools)
-   - Step C: prepare and validate `application.create` payload from `plan.md`
-   - Step D: execute `tools/call` for `application.create` via curl with Basic Auth + Session-Id headers
-   - Step E: parse SSE response (grep data: | sed | jq) and validate `short` contract
+10. Agent 4 implementation order (use `scripts/mcp_client.py` persistent client or `scripts/mcp_full_sync.py` for combined sync):
+   - Step A: verify clio MCP reachable via `python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}'`
+   - Step B: check if app already exists by searching `data.applications` by `code`; branch explicitly — new-app flow or existing-app flow
+   - Step C: prepare and validate `application-create` payload from `plan.md`
+   - Step D: if new-app flow — call `application-create`; if collision returned, switch to existing-app flow via `application-get-info`
+   - Step E: parse `r['data']` from `mcp_client.py` result (persistent connection reused) and validate `short` contract (`success`, `packageUId`, `entities`)
    - Step F: initialize `output/<AppName>/mcp-application-result.json` with contractType, schemaSync, editableContext and identify the template-created section entity returned by `application.create`
-   - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `entity.update`; use `entity.create` only for additional distinct business objects
-   - Step H: after EACH successful entity mutation, call `application.get_info` and overwrite mcp-application-result.json
+   - Step G: if the app has one primary record type, treat the template-created section entity as the canonical main entity and extend it via `schema-sync`; use `entity.create` only for additional distinct business objects
+   - Step H: after `schema-sync` completes (all entity mutations batched), call `application.get_info` once and overwrite mcp-application-result.json
    - Step I: entity success is valid only when schema is immediately refreshable (not in "Database update required")
    - Step J: if post-mutation refresh fails with missing metadata, stop with core MCP blocker
-   - Step K: if the run creates or extends the main entity for a new app, discover the generated FormPage and ListPage and synchronize them via `page.list` → `page.get` → `page.update(dryRun)` → `page.update`
-   - Step L: re-read the updated pages via `page.get`, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
+   - Step K: if the run creates or extends the main entity for a new app, read current page bodies via `page.get`, edit them, and save all pages via `page-sync` composite tool in one call
+   - Step L: verify `page-sync` response shows success for all pages, persist page metadata and verification results in `mcp-application-result.json`, and stop with blocker if required fields or planned grid columns are still missing
    - Step M: validate final normalized `success=true` with short-contract checks and planned page-sync materialization
    - Step N: build `mcp-application-report.md` only from persisted runtime evidence in `mcp-application-result.json`; never synthesize green acceptance claims without explicit machine or manual evidence
 11. On failure, decide: retry, fix, or report blocker.
 12. Approval gates remain internal controls and must be persisted in workflow artifacts.
 13. Persist Gate P state in `.workflow-state/<AppName>/planning-state.json` via:
-   - `scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
+   - `scripts/workflow_gate.sh plan-approve <AppName> "<creatioUrl>" "<creatioLogin>" "<creatioPassword>" "<understandingText>" "<confirmationText>"`
+   - Or legacy: `scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<creatioLogin>" "<creatioPassword>" "<understandingText>" "<confirmationText>"`
 14. Persist Gate R state in `output/<AppName>/workflow-state.json` via:
-   - `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
+   - `scripts/workflow_gate.sh requirements-approve <AppName> "<approvedBy>" "<approvalText>"`
+   - Or legacy: `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
 15. Agent 3/4 precondition:
-   - Run `scripts/check-approval-gate.sh <AppName>`
+   - Run `scripts/workflow_gate.sh requirements-check <AppName>` (or `scripts/check-approval-gate.sh <AppName>`)
    - On failure, hard-stop and report blocker
 16. If `application.create` reports that the app or configuration schema already exists, stop the create flow, surface an explicit update-flow status, and continue only through documented existing-app discovery (`application.get_list` → `application.get_info`).
 17. Final user-facing summaries must be generated from the final `mcp-application-result.json` state. If planned pages, entities, or bindings are not materialized, report them as not implemented rather than as completed.
@@ -215,7 +221,7 @@ Developer prompt (natural language)
 2. Use MCP `application.create` as the primary generation path for full app creation.
 3. Use MCP `application.get_list` to discover existing applications before update flows.
 4. Use MCP `application.get_info` as the canonical DB refresh for current application context.
-5. Entity-level MCP tools (`entity.create`, `entity.create_lookup`, `entity.update`) are the secondary DB-first sync path after `application.create` or `application.get_info` when approved columns or lookup dependencies must be applied.
+5. `schema-sync` composite tool is the primary DB-first sync path for batching entity operations (create-lookup, seed-data, create-entity, update-entity) in a single MCP call. Individual entity tools (`entity.create`, `entity.create_lookup`, `entity.update`) remain available as fallback.
 6. Binding-level MCP tools (`binding.get_columns`, `binding.create`) are available when explicit data binding artifacts or lookup seed data must be generated from MCP-managed schemas.
 7. Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`) to requirements.
 8. Enum-like fields must be separate lookup entities (BaseLookup) in business requirements.
@@ -233,7 +239,7 @@ Developer prompt (natural language)
 18. `application.create` for a new Freedom UI app materializes a primary section entity whose schema name normally matches the app code. Treat that entity as the default main entity.
 19. Do not create a parallel entity with duplicate business meaning just because the prompt uses a friendlier noun such as "task", "item", or "request". Add another entity only when the requirements describe a separate business object with its own lifecycle or relationships.
 20. Treat every business rule phrased as `defaults to X` as incomplete until the plan contains an explicit `schema default` or `ui default` implementation path.
-21. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `entity.update` or `entity.create`; do not plan caption-based lookup defaults.
+21. For lookup-backed `schema default`, resolve the seeded lookup row to its GUID and send that GUID through `schema-sync` `update-entity` operation or individual `entity.update`; do not plan caption-based lookup defaults. Generate UUID client-side via `uuid.uuid4()` and pass `Id` in `seed-rows` values within the `schema-sync` operation, then reuse the same UUID as `default-value`.
 22. Lookup seed rows alone do not satisfy default behavior and must never be reported as if they closed a `defaults to X` requirement.
 23. For new apps, or when the main section entity gains approved business fields, synchronize the generated `FormPage` and `ListPage` before the run can be reported as complete.
 24. `FormPage` defaults must keep `Name` as the header/title when present and surface all approved non-inherited business fields from the main entity. Required business fields must always be included.
@@ -245,10 +251,14 @@ Developer prompt (natural language)
 
 ## Context Files Reference
 
+**Lazy loading rule:** Read `context/INDEX.md` first — it maps every file to line ranges per phase. Never read full files when the INDEX provides the exact section boundaries. Each agent reads only the sections it needs.
+
 | File | Contains | When to Read |
 |------|----------|--------------|
-| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always |
-| `context/mcp-application-tools-reference.md` | Complete MCP tools guide: curl commands, parsing, error handling | Agent 4 |
+| `context/INDEX.md` | Navigation index with line ranges for all context files | **Always first** — before any other context file |
+| `context/.cache/agent-N-bundle.md` | Precompiled per-agent context bundles | Agent 4: prefer bundle over individual files |
+| `context/essentials.md` | Platform basics, naming, package structure, clio commands | Always (Gate P + all agents) |
+| `context/mcp-application-tools-reference.md` | MCP tool parameters and payload reference | Agent 4 only |
 | `context/business-checklist.md` | Mandatory business clarification checklist and completion criteria | Agent 2, 3 |
 | `context/devkit-common-reference.md` | Exhaustive `@creatio-devkit/common` public API reference for sdk imports, decorators, models, services, and handlers | Agent 4, SDK-related page/frontend tasks |
 | `context/schema-reference.md` | Parent GUIDs, DVT GUIDs, schema formats | Agent 3, 4 (validation/reference) |
@@ -256,6 +266,9 @@ Developer prompt (natural language)
 | `context/viewconfig-reference.md` | Runtime `viewConfigDiff` editing patterns for FormPage/ListPage sync | Agent 4 |
 | `context/bindings-lookup.json` | SysModule/SysModuleEntity column UIds | Agent 4 |
 | `context/data-bindings-reference.md` | Binding logic and standard values | Agent 4 |
+| `scripts/mcp_client.py` | Persistent stdio MCP client for clio | Agent 4 (auto-reuses connection) |
+| `scripts/mcp_full_sync.py` | Combined entity + page sync in one process | Agent 4 (preferred over separate calls) |
+| `scripts/workflow_gate.sh` | Unified gate management (plan + approval) | Gate P, Gate R |
 
 ## Templates
 
@@ -270,9 +283,9 @@ Developer prompt (natural language)
 When developer provides a natural-language request (for example: “Generate an Events composable app ...”):
 
 1. Start with planning response and collect blocker technical inputs only.
-2. After natural-language confirmation, persist Gate P with `scripts/write-planning-state.sh ...` and run `scripts/check-planning-gate.sh <AppName>`.
+2. After natural-language confirmation, persist Gate P with `scripts/workflow_gate.sh plan-approve ...` and verify output.
 3. Run Agent 1 in background → wait → verify `.creatio-env.json`.
 4. Run Agent 2 interactively → complete business checklist → persist full `request-spec.json` and approved `workflow-state.json`.
-5. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 3 → verify `plan.md`.
-6. Run `scripts/check-approval-gate.sh <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state.
-7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after each mutation.
+5. Run `scripts/workflow_gate.sh requirements-check <AppName>` → run Agent 3 → verify `plan.md`.
+6. Run `scripts/workflow_gate.sh requirements-check <AppName>` → run Agent 4 synchronously → verify MCP result artifacts, synchronized schema context, and synchronized FormPage/ListPage state. Agent 4 uses `scripts/mcp_client.py` with `schema-sync` and `page-sync` composite tools for batched operations.
+7. For existing app updates, Agent 4 uses `application.get_list` → `application.get_info` before entity sync and refreshes context with `application.get_info` after `schema-sync` completes.

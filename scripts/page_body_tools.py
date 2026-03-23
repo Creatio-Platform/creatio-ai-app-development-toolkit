@@ -114,7 +114,7 @@ def build_page_update_arguments(schema_name, body, dry_run=False):
         "body": body
     }
     if dry_run:
-        arguments["dryRun"] = "true"
+        arguments["dryRun"] = True
     return arguments
 
 

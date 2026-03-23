@@ -7,11 +7,11 @@ from pathlib import Path
 
 try:
     from scripts.mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
-    from scripts.mcp_schema_sync import McpHttpClient, WorkflowError, load_mcp_url
+    from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, load_mcp_client, load_mcp_url
     from scripts.page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 except ImportError:
     from mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
-    from mcp_schema_sync import McpHttpClient, WorkflowError, load_mcp_url
+    from mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, load_mcp_client, load_mcp_url
     from page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 
 PAGE_SYNC_PLAN_START = "<!-- PAGE_SYNC_PLAN_JSON_START -->"
@@ -138,6 +138,7 @@ def ensure_required_tools(client):
     missing = sorted(required - tool_names)
     if missing:
         raise WorkflowError(f"Required MCP page tools are missing: {', '.join(missing)}")
+    return "page.sync" in tool_names or "page-sync" in tool_names
 
 
 def ensure_success(tool_name, response):
@@ -218,15 +219,70 @@ def sync_page(client, current_document, result_path, discovered_pages, page):
     return current_document
 
 
+def sync_pages_composite(client, current_document, result_path, discovered_pages, pages, env_name):
+    original_bodies = {}
+    for page in pages:
+        schema_name = page["schemaName"]
+        discovered_page = discovered_pages.get(schema_name)
+        if not discovered_page:
+            raise WorkflowError(f"page.list did not return required page {schema_name}")
+        original_response = ensure_success("page.get", client.call_tool_json("page.get", {"schemaName": schema_name}))
+        current_document = append_operation_and_persist(current_document, result_path, "page.get", schema_name, "success", response=original_response)
+        original_bodies[schema_name] = get_page_body(original_response, schema_name)
+    page_sync_pages = []
+    for page in pages:
+        page_sync_pages.append({
+            "schema-name": page["schemaName"],
+            "body": page["body"]
+        })
+    sync_args = {
+        "environment-name": env_name,
+        "pages": page_sync_pages,
+        "validate": True,
+        "verify": True
+    }
+    sync_response = client.call_tool_json("page.sync", sync_args)
+    if sync_response.get("success") is not True:
+        error = sync_response.get("error") or {}
+        raise WorkflowError(error.get("message") or "page-sync failed")
+    current_document = append_operation_and_persist(current_document, result_path, "page.sync", "batch", "success", response=sync_response)
+    page_results = sync_response.get("pages") or []
+    result_by_name = {pr.get("schemaName") or pr.get("schema-name"): pr for pr in page_results}
+    for page in pages:
+        schema_name = page["schemaName"]
+        page_result = result_by_name.get(schema_name, {})
+        if page_result.get("success") is False:
+            raise WorkflowError(f"page-sync failed for {schema_name}: {page_result.get('error', 'unknown error')}")
+        verify_body = page_result.get("verifiedBody") or page_result.get("body")
+        if verify_body:
+            verification = verify_page_sync(page, original_bodies.get(schema_name, ""), verify_body)
+        else:
+            verification = {"implemented": True, "machineChecked": False, "note": "page-sync did not return verified body"}
+        discovered_page = discovered_pages.get(schema_name, {})
+        evidence_response = copy.deepcopy(discovered_page)
+        evidence_response.update({k: v for k, v in page_result.items() if k not in ("body", "verifiedBody")})
+        if "schemaName" not in evidence_response:
+            evidence_response["schemaName"] = schema_name
+        current_document = attach_page_evidence(current_document, schema_name, verification, response=evidence_response)
+        write_json(result_path, current_document)
+        if not verification.get("implemented") or not verification.get("machineChecked"):
+            raise WorkflowError(f"Page sync verification failed for {schema_name}")
+    return current_document
+
+
 def apply_page_sync_plan(client, result_document, page_plan, result_path, report_path=None):
     current_document = ensure_result_document(result_document)
     normalized_plan = normalize_page_sync_plan(page_plan, current_document)
-    ensure_required_tools(client)
+    has_composite = ensure_required_tools(client)
     page_list_response = ensure_success("page.list", client.call_tool_json("page.list", {"packageName": normalized_plan["packageName"]}))
     current_document = append_operation_and_persist(current_document, result_path, "page.list", normalized_plan["packageName"], "success", response=page_list_response)
     discovered_pages = build_page_index(page_list_response)
-    for page in normalized_plan["pages"]:
-        current_document = sync_page(client, current_document, result_path, discovered_pages, page)
+    if has_composite and len(normalized_plan["pages"]) > 0:
+        env_name = normalized_plan.get("environmentName") or "local"
+        current_document = sync_pages_composite(client, current_document, result_path, discovered_pages, normalized_plan["pages"], env_name)
+    else:
+        for page in normalized_plan["pages"]:
+            current_document = sync_page(client, current_document, result_path, discovered_pages, page)
     if report_path:
         Path(report_path).write_text(build_report_markdown(current_document), encoding="utf-8")
     return current_document
@@ -255,7 +311,7 @@ def run_build_plan(plan_md_path, output_path):
 def run_apply(result_path, plan_path, env_path, report_path=None):
     result_document = ensure_result_document(load_json(result_path))
     page_plan = load_page_sync_payload(plan_path)
-    client = McpHttpClient(load_mcp_url(env_path))
+    client = load_mcp_client(env_path)
     client.initialize()
     apply_page_sync_plan(client, result_document, page_plan, result_path, report_path=report_path)
     return str(result_path)

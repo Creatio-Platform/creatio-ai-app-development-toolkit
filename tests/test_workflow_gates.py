@@ -96,6 +96,8 @@ class WorkflowGateTests(unittest.TestCase):
                 "TodoList",
                 "tester",
                 "http://localhost:5001",
+                "Supervisor",
+                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -151,6 +153,8 @@ class WorkflowGateTests(unittest.TestCase):
                 "TodoList",
                 "tester",
                 "http://localhost:5001",
+                "Supervisor",
+                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -191,6 +195,8 @@ class WorkflowGateTests(unittest.TestCase):
                 "TodoList",
                 "tester",
                 "http://localhost:5001",
+                "Supervisor",
+                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)

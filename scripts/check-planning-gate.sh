@@ -24,6 +24,8 @@ approval_source="$(jq -r '.approvalSource // empty' "$planning_file")"
 understanding_text="$(jq -r '.understandingText // empty' "$planning_file")"
 confirmation_text="$(jq -r '.confirmationText // empty' "$planning_file")"
 creatio_url="$(jq -r '.technicalInputs.creatioUrl // empty' "$planning_file")"
+creatio_login="$(jq -r '.technicalInputs.creatioLogin // empty' "$planning_file")"
+creatio_password="$(jq -r '.technicalInputs.creatioPassword // empty' "$planning_file")"
 if [ "$planning_approved" != "true" ]; then
   echo "Planning gate failed: planningApproved must be true" >&2
   exit 1
@@ -54,6 +56,14 @@ if [ -z "$confirmation_text" ]; then
 fi
 if ! printf '%s' "$creatio_url" | grep -Eq '^https?://'; then
   echo "Planning gate failed: technicalInputs.creatioUrl must be a valid http(s) URL" >&2
+  exit 1
+fi
+if [ -z "$creatio_login" ]; then
+  echo "Planning gate failed: technicalInputs.creatioLogin is empty" >&2
+  exit 1
+fi
+if [ -z "$creatio_password" ]; then
+  echo "Planning gate failed: technicalInputs.creatioPassword is empty" >&2
   exit 1
 fi
 echo "PLANNING_GATE_OK ${app_name}"

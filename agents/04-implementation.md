@@ -16,71 +16,110 @@ Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts dur
 ## Context
 
 Read:
+
+**Preferred:** Read `context/.cache/agent-4-bundle.md` — a precompiled bundle with all required context
+in one file. Generate it first if missing: `python3 scripts/build_context_bundle.py --agent 4`
+
+**Individual files (only if bundle unavailable):**
 - `context/essentials.md`
-- `context/mcp-application-tools-reference.md` — Complete curl examples and patterns
+- `context/mcp-application-tools-reference.md` — MCP tool parameters and payload reference
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
+- `scripts/mcp_client.py` — Reusable stdio MCP client (persistent connection, use this, not curl)
+- `scripts/mcp_full_sync.py` — Combined entity + page sync in one process
 - `scripts/page_body_tools.py`
+- `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
 
-## MCP Workflow (Direct curl Execution)
+## MCP Workflow (via scripts/mcp_client.py)
 
-**Reference:** See `context/mcp-application-tools-reference.md` for complete curl examples, response parsing patterns, and error handling.
+**Primary transport:** clio MCP uses **stdio** (`clio mcp-server`), not HTTP/SSE. Use `scripts/mcp_client.py` for all MCP calls. Do NOT use curl for clio MCP.
 
-Use MCP `application.create` as the primary DB-first flow for full app creation. Use `application.get_list` and `application.get_info` for existing-app discovery and canonical DB refresh.
+### clio Resolution Order
+
+`scripts/mcp_client.py` resolves clio in this priority:
+
+| Scenario | Resolution |
+|----------|-----------|
+| User provided custom clio path | Set `CLIO_CMD` env var: `CLIO_CMD="dotnet /path/to/clio.dll"` |
+| Standard install (most users) | `clio` in PATH — installed via `dotnet tool install clio -g` |
+| clio not found | `RuntimeError` with install instructions — stop and ask user to install |
+
+### clio stdio Transport — Critical Constraints
+
+❌ **NEVER** pass `-e` flag to `mcp-server` — it is NOT supported (causes exit code 1)
+❌ **NEVER** use shell variable expansion (`$VAR`) in pipes to `mcp-server` — blocked by security scanner
+❌ **NEVER** send `notifications/initialized` — clio does not support it
+❌ **NEVER** use dot-separated tool names (`application.create`) — clio uses **dashes** (`application-create`)
+❌ **NEVER** pass boolean parameters as strings (`'true'`/`'false'`) — use Python `True`/`False`. String booleans cause MCP SDK deserialization failure with generic `"An error occurred invoking..."` error.
+✅ **ALWAYS** use `scripts/mcp_client.py` which handles all transport details correctly
 
 ### Quick Start Pattern
 
 ```bash
-# 1. Initialize and get session ID
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}' \
-  -D /tmp/headers.txt > /tmp/init.txt
+# All MCP calls go through the stdio client — same interface for every tool
+python3 scripts/mcp_client.py <tool-name> '<args-json>' [timeout]
 
-SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/headers.txt | sed 's/.*: //' | tr -d '\r')
+# Returns JSON: {"success": bool, "data": {...}|null, "raw": "..."}
 
-# 2. Call application.create
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"application.create","arguments":{...}}}' \
-  | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text'
+# Example: create application
+python3 scripts/mcp_client.py application-create '{
+  "environment-name": "local",
+  "name": "My App",
+  "code": "UsrMyApp"
+}' | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['data'] if r['success'] else r['raw'])"
 
-# 3. After entity mutations, refresh context
-curl -s ... "application.get_info" ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text' \
-  | jq '. + {contractType:"short",schemaSync:[...]}' > output/App/mcp-application-result.json
+# Example: after entity mutations, refresh context
+python3 scripts/mcp_client.py application-get-info '{
+  "environment-name": "local",
+  "app-code": "UsrMyApp"
+}' | python3 -c "
+import json, sys
+r = json.load(sys.stdin)
+if r['success']:
+    json.dump(r['data'], open('output/UsrMyApp/mcp-application-result.json','w'), indent=2)
+else:
+    print('ERROR:', r['raw'])
+"
 ```
 
-**Critical headers:**
-- `Accept: application/json, text/event-stream` — Both required
-- `Mcp-Session-Id: <session>` — From initialize response header
+**When creating mcp_client.py calls in bash scripts — always use the two-step pattern:**
+```bash
+# Step 1: write the script to a file
+cat > /tmp/run_mcp.py << 'PYEOF'
+import sys
+sys.path.insert(0, '/Users/a.kravchuk/Projects/ai-driven-app-creation/scripts')
+from mcp_client import call_mcp_tool
+result = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'My App',
+    'code': 'UsrMyApp',
+})
+import json
+print(json.dumps(result, indent=2))
+PYEOF
+
+# Step 2: run it
+python3 /tmp/run_mcp.py
+```
 
 ### MCP Protocol Flow
 
-1. `initialize`
-2. extract `Mcp-Session-Id`
-3. `tools/list` and verify `application.create`, `application.get_list`, `application.get_info`
-4. for new app flow: `tools/call` → `application.create`
-5. if `application.create` returns an existing-app collision, stop the create flow, surface the branch, then continue only through documented existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
-6. for explicit existing app flow: `tools/call` → `application.get_list`, then `application.get_info`
-7. parse `result.content[0].text` as the short contract
-8. initialize `mcp-application-result.json`
-9. if needed, execute ordered:
-   - `entity.create_lookup`
-   - `binding.create` (seed data for each lookup with values defined in plan)
-   - `entity.create`
-   - `entity.update`
-10. after each successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`
-11. if the plan creates or extends the main entity for a new app, execute the planned `page.list` → `page.get` → `page.update(dryRun)` → `page.update` page-sync steps for the generated `FormPage` and `ListPage`
-12. re-read synchronized pages with `page.get`, persist page metadata and verification results, and stop with blocker if required fields or resolved grid columns are missing
+All calls use `scripts/mcp_client.py`. Transport details (initialize handshake, stdio framing) are handled internally by the script.
+
+1. verify `application-get-list` responds (confirms clio MCP is reachable)
+2. check if target app already exists: `application-get-list` → search by `code`
+3. **if app does not exist** → `application-create`; if it returns a collision, surface the branch and switch to update flow
+4. **if app exists** → use `application-get-info` directly (skip `application-create`)
+5. parse response `data` field as the short contract
+6. initialize `mcp-application-result.json`
+7. if needed, execute entity sync via `schema-sync` composite tool (batches create-lookup + seed + create-entity + update-entity into one call)
+8. after `schema-sync` completes, call `application-get-info` once and overwrite `mcp-application-result.json`
+9. if the plan creates or extends the main entity for a new app, read current page bodies via `page-get`, edit them, then execute `page-sync` composite tool to update all pages in one call
+10. persist page sync results and stop with blocker if required fields or resolved grid columns are missing
 
 Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
 
@@ -88,7 +127,13 @@ Implementation execution is synchronous. Do not background Agent 4, and do not m
 
 `tools/call` response content is text.
 
-Expected contract:
+**CRITICAL — Response Validation (before any parsing):**
+1. Check `isError` flag first: if `result.isError === true`, the call failed — do NOT attempt to parse `result.content[0].text` as a success payload.
+2. On `isError: true`: extract the error message from `result.content[0].text`, log it, and decide: retry with fixed params, or stop with blocker.
+3. On empty or missing `result.content[0].text`: treat as error — do NOT call `json.loads("")` or `jq` on empty input.
+4. Only parse the text content as JSON after confirming `isError` is absent or `false` and the text is non-empty.
+
+Expected contract (when `isError` is absent or false):
 - `success`
 - flat runtime fields: `packageUId`, `packageName`, `entities[]`
 - optional selectors: `app`, `appId`, or `appCode`
@@ -113,118 +158,114 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### Schema Sync Rules
 
-- Create new lookup entities first with `entity.create_lookup`.
+- Use `schema-sync` composite tool as the primary path for all entity mutations. It batches create-lookup, seed-data, create-entity, and update-entity into a single MCP call with one lock acquisition.
+- Create new lookup entities first (as `create-lookup` operations in the `schema-sync` operations array).
 - For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or duplicate title-like columns as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
-- After every `entity.create_lookup`, validate the tool response contains inherited `Name` in the persisted schema snapshot. If `Name` is missing, stop with blocker instead of assuming the lookup is usable.
-- After creating each lookup entity that has seed values defined in the plan, call `binding.create` to populate it with seed rows before proceeding to the next entity.
-- For new-app flows, inspect the entity list returned by `application.create` and treat the template-created section entity as the canonical main entity for the app's primary records.
-- Use `entity.create` only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
-- Before `entity.update`, inspect the current schema snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
-- Use `entity.update` for template-created entities and pass only `operationsJson`.
-- Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application.get_info`, and not left in a `Database update required` state.
+- Include `seed-rows` directly in the `create-lookup` operation for inline seeding (no separate `create-data-binding-db` call needed).
+- For new-app flows, inspect the entity list returned by `application-create` and treat the template-created section entity as the canonical main entity for the app's primary records.
+- Use `create-entity` operation type only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
+- Before including an `update-entity` operation, inspect the current schema snapshot from `application-create` or `application-get-info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
+- Use `update-entity` operation type for template-created entities with `update-operations` (same format as `update-entity-schema` `operations`).
+- Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application-get-info`, and not left in a `Database update required` state.
+- After `schema-sync` completes successfully, call `application-get-info` ONCE (not per operation) and overwrite `mcp-application-result.json`.
 - If the run creates a new app or extends the main section entity with approved non-inherited business fields, page sync for the generated `FormPage` and `ListPage` is mandatory before success can be reported.
 - Treat a missing page-sync section in `plan.md` for such a run as a blocker in the plan, not as a reason to silently skip UI sync.
-- `schema default` means the backend/entity schema contract sets the value through `defaultValueSource` and `defaultValue`.
+- `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- If the plan says `schema default` for a lookup column, use the seeded row GUID in `defaultValue`; never send the display caption.
-- `entity.update` operations are explicit:
-  - `addColumn`
-  - `updateColumn`
-  - `removeColumn`
+- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption. Generate UUIDs client-side via `uuid.uuid4()` and include `Id` in the `seed-rows` values within the same `schema-sync` operation, then use the same UUID as `default-value` in the `update-entity` operation.
+- `update-entity` `update-operations` are explicit:
+  - `action: "add"`
+  - `action: "update"`
+  - `action: "remove"`
 - Omission never implies deletion.
 
 ### Related Binding Tools
 
 - `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
-- `binding.create` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. `outputPath` only writes optional server-side file copies.
+- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
 - Schemas created earlier in the same flow are DB-first and should be queried through `binding.get_columns`; do not use raw mode.
-- For lookup seed bindings, generate a fresh GUID for every row, include `Name`, and include `Description` when it must be persisted with the lookup value.
-- If `columnsJson` is supplied to `binding.create`, MCP uses only those descriptor columns. Do not pass partial `columnsJson` for lookup seed bindings.
+- For lookup seed rows, the format is `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
+- When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`:
+
+```python
+import uuid
+new_id = str(uuid.uuid4())
+# In schema-sync, use seed-rows inline:
+# 'seed-rows': [{'values': {'Id': new_id, 'Name': 'New'}}, ...]
+# Then in update-entity operation:
+# 'default-value-source': 'Const', 'default-value': new_id
+```
+- Never pass partial `columnsJson` for lookup seed bindings.
 
 ### Parameter Validation Checklist
 
-Before EVERY entity tool call (`entity.create_lookup`, `entity.create`, `entity.update`), validate:
+**For `schema-sync` calls, validate:**
 
-1. ✅ Using `packageUId` (GUID) extracted from `application.create` response
-2. ✅ Using `entityUId` (GUID) extracted from `entity.create` or `application.get_info` response (REQUIRED for `entity.update`)
-3. ✅ Using `schemaName` parameter for `entity.update` (optional, can read from DB if empty)
-4. ✅ Using `name` parameter for `entity.create`/`entity.create_lookup` (NOT `entityName` or `schemaName`)
-5. ✅ Using `caption` parameter (NOT `displayName` or `description`)
-6. ✅ Using `operationsJson` with `{operation, column}` structure (NOT flat `{type, name, ...}`)
-7. ✅ Using `dataValueTypeName` (NOT `dataValueType`)
-8. ✅ For lookup schemas, `columnsJson` does not attempt to add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption`
-9. ✅ For existing/template-created entities, `operationsJson` does not add `UsrName`, `UsrTitle`, or `UsrCaption` when the refreshed schema already contains `Name`, unless the plan explicitly documents a separate business field
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name (NOT a GUID)
+3. ✅ `operations` is a Python **list** of operation objects
+4. ✅ Each operation has `type` (`create-lookup`, `create-entity`, or `update-entity`)
+5. ✅ Each operation has `schema-name`
+6. ✅ `update-operations` within `update-entity` uses same format as `update-entity-schema` `operations`
+7. ✅ `seed-rows` uses `[{"values": {...}}]` format (not JSON string — native list)
+8. ✅ Booleans (`required`, `extend-parent`) are Python `True`/`False`, not strings
 
-**Before EVERY binding tool call (`binding.create`), validate:**
+**For `page-sync` calls, validate:**
 
-1. ✅ Using `packageUId` (GUID) extracted from `application.create` response
-2. ✅ Using `schemaName` (entity schema name, e.g. "UsrTodoStatus")
-3. ✅ Using `bindingName` (NOT `dataName` or `bindingFolder`)
-4. ✅ Using `rowsJson` (NOT `dataJson` or `data`)
-5. ✅ Each row in `rowsJson` is array of `{columnName, value}` objects
-6. ✅ Optional `columnsJson` with `{columnName, isKey?, isForceUpdate?}` structure
-7. ✅ Target schema is already materialized in DB and queryable through `binding.get_columns`
-8. ✅ Lookup seed rows use fresh GUID values, not decorative placeholders copied from docs
-9. ✅ If `columnsJson` is present, it covers every row column that must exist in the descriptor
-10. ✅ If a column uses `defaultValueSource="Const"` and is a lookup, `defaultValue` is the seeded row GUID
-11. ✅ If the requirement is `defaults to X`, the execution branch contains either a `schema default` or `ui default` step before the result is reported as complete
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `pages` is a Python **list** of page objects
+3. ✅ Each page has `schema-name` and `body`
+4. ✅ `body` contains all 8 required marker pairs
+5. ✅ `validate` and `verify` are Python booleans if provided
+
+**For individual tool fallback — before `create-lookup`, validate:**
+
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name (NOT a GUID)
+3. ✅ `schema-name` is the entity schema name (e.g., "UsrTodoStatus")
+4. ✅ `title` is the display name (NOT `caption`)
+5. ✅ No `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns
+
+Before EVERY `update-entity-schema` call, validate:
+
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name (NOT a GUID)
+3. ✅ `schema-name` is the entity schema name
+4. ✅ `operations` is a Python **list** (NOT a JSON-encoded string)
+5. ✅ Each operation uses `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`)
+6. ✅ `required` is a boolean (`True`/`False`), not a string
+7. ✅ Schema defaults use `default-value-source` and `default-value` (kebab-case)
+8. ✅ For existing/template-created entities, no `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
+
+Before EVERY `create-data-binding-db` call, validate:
+
+1. ✅ `environment-name` matches registered clio env name
+2. ✅ `package-name` is the string package name
+3. ✅ `schema-name` is the entity schema name
+4. ✅ `binding-name` is provided (e.g., "UsrTodoStatus_Lookup")
+5. ✅ `rows` is a JSON **string** of `[{"values": {...}}, ...]` format
+6. ✅ Lookup seed rows use `{"values": {"Name": "New"}}` — not `[{columnName, value}]` format
+7. ✅ Target schema is already materialized in DB
 
 **Pre-execution validation script:**
 
 ```bash
-# Before entity.create_lookup or entity.create
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "ERROR: PACKAGE_UID not set or invalid"
-  exit 1
-fi
-
-# Before entity.update
-if [[ -z "$ENTITY_UID" || "$ENTITY_UID" == "null" ]]; then
-  echo "ERROR: ENTITY_UID not set or invalid"
-  exit 1
-fi
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "ERROR: PACKAGE_UID not set or invalid"
+# Before create-lookup or update-entity-schema: check package name is set
+if [[ -z "$PACKAGE_NAME" ]]; then
+  echo "ERROR: PACKAGE_NAME not set"
   exit 1
 fi
 ```
 
-**UId Extraction Pattern (New Flat Format):**
+**Package Name Extraction (New Flat Format):**
 
-Since core 8.3.4.802, MCP tools return simplified flat format. Use the helper script for zero-dependency extraction:
+Since core 8.3.4.802, MCP tools return simplified flat format. Extract `packageName` from `application-create` response:
 
 ```bash
-# Method 1: Ultra-simple with helper script (recommended)
-bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-app-create-parsed.json > /tmp/.mcp-env
-source /tmp/.mcp-env
-
-echo "Extracted Package UId: $PACKAGE_UID"
-echo "Extracted Package Name: $PACKAGE_NAME"
-echo "Extracted Main Entity UId: $MAIN_ENTITY_UID"
-echo "Extracted Main Entity Name: $MAIN_ENTITY_NAME"
-
-# Validate extraction succeeded
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "BLOCKER: Failed to extract package UId from application.create response"
-  exit 1
-fi
+PACKAGE_NAME=$(python3 -c "import json; d=json.load(open('/tmp/mcp-app-context.json')); print(d['packageName'])")
+echo "Package Name: $PACKAGE_NAME"
 ```
-
-**Alternative: Direct jq extraction (simple paths):**
-
-```bash
-# Method 2: Direct jq (no helper script)
-PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-app-create-parsed.json)
-PACKAGE_NAME=$(jq -r '.packageName' /tmp/mcp-app-create-parsed.json)
-MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-app-create-parsed.json)
-MAIN_ENTITY_NAME=$(jq -r '.entities[0].name' /tmp/mcp-app-create-parsed.json)
-
-echo "Extracted Package UId: $PACKAGE_UID"
-echo "Extracted Entity UId: $MAIN_ENTITY_UID"
-```
-
-**New Response Format Structure:**
 ```json
 {
   "success": true,
@@ -248,7 +289,7 @@ tmux capture-pane -t core -p -S -1000 | grep -A5 "ArgumentException\|Error\|Exce
 Look for diagnostic patterns:
 - `ArgumentException: missing value for required parameter 'packageUId'` → using wrong parameter name (e.g., `packageName`)
 - `ArgumentException: missing value for required parameter 'entityUId'` → using wrong parameter name (e.g., `entitySchemaUId`)
-- `Unsupported operation ''` → wrong JSON structure in `operationsJson` (flat instead of nested)
+- `Unsupported operation ''` → wrong JSON structure in `operations` (using JSON string instead of native list, or old {operation,column} format)
 
 **Correct Tool Signatures Reference:**
 
@@ -282,7 +323,7 @@ Always verify against C# source files:
 - If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing `entity.create`.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
 - If `application.get_info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
-- Never synthesize success for `binding.create`; if the response cannot be parsed or does not contain `success=true`, stop with blocker.
+- Never synthesize success for `create-data-binding-db`; if the response cannot be parsed or does not contain `success=true` or `exit-code: 0`, stop with blocker.
 
 ## Steps
 
@@ -298,62 +339,33 @@ If this fails, stop immediately.
 
 Extract resolved MCP payload, runtime resolution strategy, and ordered schema sync steps.
 
-### 2. Initialize MCP session
+### 2. Verify MCP reachability
 
-**See:** `context/mcp-application-tools-reference.md` section "Initialize Session"
-
-Use `mcpUrl` from `.creatio-env.json`:
+Read `environment` from `.creatio-env.json`, then verify clio MCP responds:
 
 ```bash
-MCP_URL=$(jq -r '.mcpUrl' output/<AppName>/.creatio-env.json)
-
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2024-11-05",
-      "capabilities": {},
-      "clientInfo": {"name": "app-creator", "version": "1.0.0"}
-    }
-  }' -D /tmp/mcp-headers.txt > /tmp/mcp-init.txt
-
-SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/mcp-headers.txt | sed 's/.*: //' | tr -d '\r')
+ENV_NAME=$(python3 -c "import json; print(json.load(open('output/<AppName>/.creatio-env.json'))['environment'])")
+python3 scripts/mcp_client.py application-get-list "{\"environment-name\": \"$ENV_NAME\"}" 30
 ```
 
-If initialize fails, stop and report blocker.
+Expected: `{"success": true, ...}`. If `success` is false, stop and report blocker.
 
-### 3. Verify tool availability
-
-**See:** `context/mcp-application-tools-reference.md` section "List Available Tools"
+### 3. Check if app already exists
 
 ```bash
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-  | grep -A 1000 'event: message' | sed 's/^event: message$//' | sed 's/^data: //' \
-  | jq -r '.result.tools[] | select(.name | startswith("application.") or startswith("entity.")) | .name'
+python3 scripts/mcp_client.py application-get-list "{\"environment-name\": \"$ENV_NAME\"}" \
+  | python3 -c "
+import json, sys
+r = json.load(sys.stdin)
+apps = r.get('data', {}).get('applications', []) if r['success'] else []
+match = next((a for a in apps if a.get('code') == '<AppCode>'), None)
+print('exists:', match is not None)
+if match:
+    print(json.dumps(match, indent=2))
+"
 ```
 
-Verify presence of:
-- `application.create`
-- `application.get_info`
-- `application.get_list`
-- `page.get`
-- `page.update`
-- `page.list`
-- `entity.create`
-- `entity.create_lookup`
-- `entity.update`
-
-If application tools are missing, stop and report blocker. Schema tools are optional — skip page editing steps if unavailable.
+Use the result to branch: new-app flow (`application-create`) or existing-app flow (`application-get-info`).
 
 ### 4. Resolve runtime inputs
 
@@ -371,7 +383,7 @@ If payload has `iconId=auto`:
 
 If payload has explicit color, use it.
 
-If payload has `iconBackground=auto`:
+If payload has `icon-background=auto`:
 - use deterministic pseudo-random pick by `appCode` from palette:
   - `#1F5F8B`
   - `#2D8CFF`
@@ -384,57 +396,45 @@ If payload has `iconBackground=auto`:
 
 ### 5. Initialize application context
 
-**See:** `context/mcp-application-tools-reference.md` section "Create Application"
+**See:** `context/mcp-application-tools-reference.md` for parameter reference.
 
-For new app flow:
-
-```bash
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": {
-      "name": "application.create",
-      "arguments": {
-        "name": "'"$APP_NAME"'",
-        "code": "'"$APP_CODE"'",
-        "templateCode": "AppFreedomUI",
-        "iconBackground": "'"$ICON_COLOR"'",
-        "description": "'"$APP_DESCRIPTION"'",
-        "optionalTemplateDataJson": "'"$TEMPLATE_DATA"'"
-      }
-    }
-  }' 2>&1 | tee /tmp/mcp-app-create-raw.txt
-```
-
-Parse and validate:
+For new app flow — use the two-step bash pattern (create script, then run it):
 
 ```bash
-RESPONSE=$(grep 'data: ' /tmp/mcp-app-create-raw.txt | sed 's/^data: //' | jq -r '.result.content[0].text')
+cat > /tmp/run_app_create.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
 
-# Validate short contract
-echo "$RESPONSE" | jq -e '.success == true and .packageUId != null and (.entities | length > 0)' > /dev/null \
-  || { echo "Error: $(echo "$RESPONSE" | jq -r '.error.message')"; exit 1; }
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'APP_NAME_PLACEHOLDER',
+    'code': 'APP_CODE_PLACEHOLDER',
+    'template-code': 'AppFreedomUI',
+    'icon-background': 'ICON_COLOR_PLACEHOLDER',
+    'description': 'DESCRIPTION_PLACEHOLDER',
+    'optional-template-data-json': 'TEMPLATE_DATA_PLACEHOLDER',
+})
+if not r['success']:
+    print('ERROR:', r['raw']); sys.exit(1)
+data = r['data']
+if not data.get('success') or not data.get('packageUId'):
+    print('ERROR: missing packageUId:', json.dumps(data)); sys.exit(1)
+json.dump(data, open('/tmp/mcp-app-context.json', 'w'), indent=2)
+print('OK packageUId:', data['packageUId'])
+PYEOF
+python3 /tmp/run_app_create.py
 ```
 
 For existing app flow:
-1. call `application.get_list`
-2. validate the target app is discoverable
-3. call `application.get_info` with the chosen `appId` or `appCode`
-4. log the branch explicitly in the report and final status
-
-Retry up to 3 times with 10s delay on transient failures.
+1. call `application-get-list` and find the app by `code`
+2. call `application-get-info` with `app-code`
+3. log the branch explicitly in the report and final status
 
 Stop and report blocker when:
-- text is plain `ERROR: ...`
-- payload is not parseable JSON
 - `success=false`
-- successful response is missing `packageUId` or `entities`
+- response missing `packageUId` or `entities`
+- plain `ERROR: ...` text
 
 ### 6. Initialize canonical context
 
@@ -471,117 +471,76 @@ Persist the compact tree response as-is and add `contractType=short`.
 
 ### 7. Execute schema sync steps
 
-**See:** `context/mcp-application-tools-reference.md` sections:
-- "Create Lookup Entity (entity.create_lookup)"
-- "Update Entity (entity.update)"
+**See:** `context/mcp-application-tools-reference.md` section "Schema Sync (schema-sync)"
 
-If `plan.md` contains approved schema sync:
-
-**Option 1: Manual curl execution**
-
-Example for entity.create_lookup:
+If `plan.md` contains approved schema sync, use `schema-sync` composite tool via `scripts/mcp_client.py`:
 
 ```bash
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 5,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.create_lookup\",
-      \"arguments\": {
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"name\": \"UsrEventStatus\",
-        \"caption\": \"Event Status\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-lookup-raw.txt
+cat > /tmp/run_schema_sync.py << 'PYEOF'
+import sys, json, uuid
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+
+new_id = str(uuid.uuid4())
+r = call_mcp_tool('schema-sync', {
+    'environment-name': 'local',
+    'package-name': 'UsrMyApp',
+    'operations': [
+        {
+            'type': 'create-lookup',
+            'schema-name': 'UsrMyStatus',
+            'title': 'My Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrMyApp',
+            'update-operations': [
+                {
+                    'action': 'add',
+                    'column-name': 'UsrStatus',
+                    'type': 'Lookup',
+                    'title': 'Status',
+                    'reference-schema-name': 'UsrMyStatus',
+                    'required': True,
+                    'default-value-source': 'Const',
+                    'default-value': new_id,
+                },
+            ],
+        },
+    ],
+})
+print(json.dumps(r, indent=2))
+assert r.get('data', {}).get('success'), f"schema-sync failed: {r}"
+PYEOF
+python3 /tmp/run_schema_sync.py
 ```
 
-Example for entity.update:
+**After schema-sync completes — refresh context ONCE:**
 
 ```bash
-# Extract entity UId from application.get_info response
-ENTITY_UID=$(jq -r '.entities[] | select(.name=="UsrEvent") | .uId' /tmp/mcp-app-context.json)
-
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 6,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.update\",
-      \"arguments\": {
-        \"entityUId\": \"$ENTITY_UID\",
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"schemaName\": \"UsrEvent\",
-        \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrLocation\\\",\\\"caption\\\":\\\"Location\\\",\\\"dataValueTypeName\\\":\\\"MediumText\\\"}}]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-update-raw.txt
+cat > /tmp/run_get_info.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+if r['success'] and r['data']:
+    data = r['data']
+    data['contractType'] = 'short'
+    data.setdefault('schemaSync', [])
+    json.dump(data, open('output/UsrMyApp/mcp-application-result.json', 'w'), indent=2)
+    print('OK entities:', len(data.get('entities', [])))
+else:
+    print('ERROR:', r['raw']); sys.exit(1)
+PYEOF
+python3 /tmp/run_get_info.py
 ```
 
-Example for binding.create:
-
-```bash
-STATUS_NEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-STATUS_IN_PROGRESS_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 10,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"binding.create\",
-      \"arguments\": {
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"schemaName\": \"UsrEventStatus\",
-        \"bindingName\": \"UsrEventStatus_Lookup\",
-        \"rowsJson\": \"[[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_NEW_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"New\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}],[{\\\"columnName\\\":\\\"Id\\\",\\\"value\\\":\\\"$STATUS_IN_PROGRESS_ID\\\"},{\\\"columnName\\\":\\\"Name\\\",\\\"value\\\":\\\"In Progress\\\"},{\\\"columnName\\\":\\\"Description\\\",\\\"value\\\":\\\"\\\"}]]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-binding-raw.txt
-```
-
-Successful binding response is only `{"success": true}`.
-
-**After EACH successful entity mutation:**
-
-```bash
-# Refresh context
-curl -s "$MCP_URL" \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 7,
-    "method": "tools/call",
-    "params": {
-      "name": "application.get_info",
-      "arguments": {"appCode": "UsrEvents"}
-    }
-  }' | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text' \
-  | jq '. + {
-      contractType: "short",
-      schemaSync: [...existing..., {tool: "entity.create_lookup", target: "UsrEventStatus", status: "success"}]
-    }' > output/<AppName>/mcp-application-result.json
-```
-
-**Option 2: Python helper** (for complex workflows):
+**Or use the Python helper for complex workflows:**
 
 ```bash
 python3 scripts/mcp_schema_sync.py apply \
@@ -590,12 +549,14 @@ python3 scripts/mcp_schema_sync.py apply \
   --env output/<AppName>/.creatio-env.json
 ```
 
+**Fallback to individual tools:** If `schema-sync` is unavailable (older clio), use individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls sequentially, refreshing context after each mutation.
+
 **Critical validation:**
 - Created/updated schema MUST be immediately queryable through `application.get_info`
 - If schema is missing from server metadata after successful entity tool response, this is a core MCP blocker - stop immediately
 - Do NOT proceed if schema is in "Database update required" state
 
-Stop and report blocker on first failed entity tool call.
+Stop and report blocker on first failed entity tool call or `schema-sync` failure.
 
 ### 7b. Execute page customization steps
 
@@ -608,7 +569,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 1. Call `page.list` with the app's package name to discover generated pages
 2. For each page that needs customization:
    a. Call `page.get(schemaName)` to get the full JS body
-   b. Modify the raw body directly — update multiple sections between their markers
+   b. Edit the body using the **Page Body Editing Algorithm** below — never use ad-hoc string manipulation
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
    d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
    d1. If the page must change ListPage default sorting, use the canonical `ListPage DataGrid Sorting via page.update` contract from `context/ui-reference.md`
@@ -619,9 +580,9 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    g. For datasource-bound lookup fields, add the `crt.ComboBox` insert and the main view-model attribute only; preserve existing live lookup-list bindings or nested actions only when they are already materialized in the page body
    h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
    i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
-   j. Call `page.update` with `dryRun: "true"` first to validate
-   k. If dry run succeeds, call `page.update` without dryRun to save
-   l. Re-read the page with `page.get` and verify the resolved FormPage fields or ListPage columns are actually present
+   j. After editing all pages, call `page-sync` composite tool with all edited bodies in one batch (with `validate: True`)
+   k. If page-sync reports validation failure, fix the body and retry
+   l. Verify the `page-sync` response shows `success: true` for all pages
    m. Persist page verification with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`
 3. Update `mcp-application-result.json` with page metadata:
    ```json
@@ -650,13 +611,63 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 4. Append page customization results to `schemaSync`
 5. Stop with blocker if the plan required page sync but the final verification still shows missing fields or columns
 
-**Python helper option:**
+**Page sync via `page-sync` MCP tool (MANDATORY for new apps):**
 
+Use the `page-sync` composite tool as the **primary** page write path. Use individual `page-get` for reading and `page-list` for discovery.
+
+**Step 1 — Read current page bodies via `page-get`:**
 ```bash
-python3 scripts/mcp_page_sync.py build-plan \
-  --plan-md output/<AppName>/plan.md \
-  --output output/<AppName>/page-sync-plan.json
+python3 -c "
+import sys, os, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('page-get', {'environmentName': '<env_name>', 'schemaName': '<PageName>'})
+if r['success'] and r.get('data', {}).get('body'):
+    open('/tmp/<PageName>.body.js', 'w').write(r['data']['body'])
+    print('OK')
+else:
+    print(json.dumps(r, indent=2))
+    sys.exit(1)
+"
+```
 
+**Step 2 — Edit page bodies** using `scripts/page_body_edit.py`:
+```bash
+python3 scripts/page_body_edit.py add-form-fields /tmp/FormPage.body.js \
+  '[{"name":"UsrStatus","type":"crt.ComboBox","path":"PDS.UsrStatus","label":"Status"}]' \
+  -o /tmp/FormPage.edited.js
+
+python3 scripts/page_body_edit.py add-list-columns /tmp/ListPage.body.js \
+  '[{"code":"PDS_UsrStatus","caption":"Status","dataValueType":10}]' \
+  -o /tmp/ListPage.edited.js
+```
+
+**Step 3 — Apply via `page-sync` composite tool:**
+```bash
+cat > /tmp/run_page_sync.py << 'PYEOF'
+import sys, json
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+
+form_body = open('/tmp/FormPage.edited.js').read()
+list_body = open('/tmp/ListPage.edited.js').read()
+
+r = call_mcp_tool('page-sync', {
+    'environment-name': 'local',
+    'pages': [
+        {'schema-name': 'UsrMyApp_FormPage', 'body': form_body},
+        {'schema-name': 'UsrMyApp_ListPage', 'body': list_body},
+    ],
+    'validate': True,
+})
+print(json.dumps(r, indent=2))
+assert r.get('data', {}).get('success'), f"page-sync failed: {r}"
+PYEOF
+python3 /tmp/run_page_sync.py
+```
+
+**Fallback — Apply via `mcp_page_sync.py` helper (uses individual tools internally):**
+```bash
 python3 scripts/mcp_page_sync.py apply \
   --result output/<AppName>/mcp-application-result.json \
   --plan output/<AppName>/page-sync-plan.json \
@@ -665,6 +676,19 @@ python3 scripts/mcp_page_sync.py apply \
 ```
 
 `--plan` may also point directly to `output/<AppName>/plan.md` when that file contains the embedded `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
+
+**Combined sync (entity + page in one process):**
+
+When both schema sync and page sync are needed (typical for new apps), use `mcp_full_sync.py` to run everything in a single process with one persistent MCP connection:
+
+```bash
+python3 scripts/mcp_full_sync.py \
+  --env output/<AppName>/.creatio-env.json \
+  --result output/<AppName>/mcp-application-result.json \
+  --edited-context output/<AppName>/edited-context.json \
+  --page-plan output/<AppName>/plan.md \
+  --report output/<AppName>/mcp-application-report.md
+```
 
 **FormPage field sync rules:**
 - Read the current `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together before adding fields
@@ -702,6 +726,69 @@ python3 scripts/mcp_page_sync.py apply \
 - Use entity column names in sort options, not attribute keys
 - Treat explicit DataGrid `sorting` and `sortingChange` view properties as secondary to the collection metadata contract
 - Stop with blocker if the requirement describes semantic business order without an explicit technical sort key or separate approved runtime logic
+
+**Page Body Editing — MANDATORY: use `scripts/page_body_edit.py`**
+
+❌ NEVER write custom inline page editing scripts (e.g. `/tmp/edit_pages.py`) — `scripts/page_body_edit.py` already implements the marker-based algorithm.
+
+```bash
+# Add fields to FormPage
+python3 scripts/page_body_edit.py add-form-fields \
+  --input /tmp/FormPage.body.js \
+  --fields '[{"name":"UsrStatus","type":"crt.ComboBox","label":"Status"},...]' \
+  --output /tmp/FormPage.edited.js
+
+# Add columns to ListPage
+python3 scripts/page_body_edit.py add-list-columns \
+  --input /tmp/ListPage.body.js \
+  --columns '[{"code":"PDS_UsrStatus","caption":"Status","type":"crt.ComboBox"},...]' \
+  --output /tmp/ListPage.edited.js
+
+# Validate result
+python3 scripts/page_body_edit.py validate --input /tmp/FormPage.edited.js
+```
+
+When editing a page body retrieved from `page-get`, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` implements this algorithm and should be used when available.
+
+1. **Extract** — locate the marker pair `/**MARKER*/.../**MARKER*/` and extract only the content between them
+2. **Detect variant** — determine whether the section is `viewModelConfig` (plain object) or `viewModelConfigDiff` (array of merge operations); same for `modelConfig`/`modelConfigDiff`
+3. **Parse** — deserialize the section content as JSON with trailing-comma tolerance (strip `,` before `]` and `}`)
+4. **Modify** — apply changes to the parsed data structure (append to arrays, merge into objects)
+5. **Serialize** — convert back to formatted JSON string with proper indentation
+6. **Replace** — substitute the content between markers with the serialized result
+7. **Validate** — re-extract and re-parse each modified section to confirm structural integrity
+
+For FormPage field additions, use `scripts/page_body_edit.py add-form-fields` or apply the same algorithm manually:
+- Parse `SCHEMA_VIEW_CONFIG_DIFF` as JSON array
+- Find max `row` and `index` among existing inserts in `SideAreaProfileContainer`
+- Append complete insert objects with incremented row/index
+- Detect the viewModelConfig marker variant and add attributes to the correct location
+
+For ListPage column additions, use `scripts/page_body_edit.py add-list-columns` or apply the same algorithm manually:
+- Parse `SCHEMA_VIEW_CONFIG_DIFF` as JSON array
+- Find the `DataTable` merge operation and its `columns` array
+- Append complete column objects to the parsed array
+- Detect the viewModelConfigDiff marker and add attributes into the merge operation's `values` object
+
+**Page body editing anti-patterns (MUST NOT):**
+
+- ❌ Never use `body.find("}")` or brace-counting to locate insertion points — nested JS structures make positional brace search unreliable
+- ❌ Never insert raw JSON strings into the body without parsing the target section first — splicing text into unparsed JSON causes structural corruption
+- ❌ Never assume the viewModelConfig section type — always detect whether it is `viewModelConfig` (object `{}`) or `viewModelConfigDiff` (array `[]` of operations); FormPage typically uses the object variant, ListPage the array variant
+- ❌ Never verify edits by substring search alone (e.g., `"UsrStatus" in body`) — a field name can be present in a structurally broken body; always re-parse each edited section as JSON to confirm integrity
+- ❌ Never insert content at a position found by counting closing braces from an anchor string — the correct anchor is the marker boundary, not a brace position
+
+**Post-edit structural validation (MUST):**
+
+Before calling `page-update`, validate the edited body:
+1. All 8 marker pairs are present (6 required + 1 viewModelConfig variant + 1 modelConfig variant)
+2. `SCHEMA_VIEW_CONFIG_DIFF` content parses as a JSON array
+3. `SCHEMA_VIEW_MODEL_CONFIG` or `SCHEMA_VIEW_MODEL_CONFIG_DIFF` content parses as valid JSON
+4. `SCHEMA_MODEL_CONFIG` or `SCHEMA_MODEL_CONFIG_DIFF` content parses as valid JSON
+5. Every `insert` operation in viewConfigDiff has `name`, `values`, `parentName`, `propertyName`, `index`
+6. Every field using `control: "$X"` has a matching attribute `X` in viewModelConfig(Diff)
+7. For FormPage: insert operations targeting `SideAreaProfileContainer` have monotonically increasing `row` values
+8. For ListPage: `DataTable` merge contains all required column codes from the page-sync plan
 
 **Handler generation rules:**
 - Map business intents to request types using `handlers-reference.md`

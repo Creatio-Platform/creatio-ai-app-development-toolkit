@@ -327,6 +327,59 @@ See `context/handlers-reference.md` for the full request type reference.
 
 ---
 
+## Editing Safety Contract
+
+When editing page bodies via `page-update`, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
+
+### Correct: FormPage field insertion via parsed JSON
+
+```
+1. Extract SCHEMA_VIEW_CONFIG_DIFF content between markers → parse as JSON array
+2. Find max row/index among existing SideAreaProfileContainer inserts
+3. Append new insert object with incremented row/index to parsed array
+4. Serialize array back to JSON → replace content between markers
+5. Extract viewModelConfig(Diff) content → parse → add attribute → serialize → replace
+```
+
+Result: all existing operations remain intact, new field appears at the correct position.
+
+### INCORRECT: FormPage field insertion via brace search
+
+```
+1. body.find('"index": 0') → find next "}" → insert new field text after that "}"
+```
+
+Failure mode: the `}` found may belong to a nested object (e.g., `layoutConfig`) or an unrelated operation (`AttachmentList`). New field text lands inside the wrong JSON object, corrupting the structure.
+
+### Correct: ListPage attribute insertion (viewModelConfigDiff)
+
+```
+1. Detect marker variant → find SCHEMA_VIEW_MODEL_CONFIG_DIFF
+2. Parse content as JSON array
+3. Find the merge operation where path contains "attributes"
+4. Add new attributes into that operation's "values" object
+5. Serialize → replace between markers
+```
+
+### INCORRECT: ListPage attribute insertion via string append
+
+```
+1. Find closing "}" of last attribute in "values" → insert new attributes after it
+```
+
+Failure mode: the closing `}` may be the end of the `values` object itself, not of the last attribute. New attributes end up as siblings of `values` instead of inside it, breaking the merge operation structure.
+
+### viewModelConfig vs viewModelConfigDiff
+
+Pages use two structural variants for the viewModel section. Always detect which variant the live page uses before editing:
+
+| Variant | Marker | Content Shape | How to add attributes |
+|---------|--------|---------------|----------------------|
+| `viewModelConfig` | `SCHEMA_VIEW_MODEL_CONFIG` | Object `{ "attributes": { ... } }` | Merge directly into `attributes` |
+| `viewModelConfigDiff` | `SCHEMA_VIEW_MODEL_CONFIG_DIFF` | Array `[{ "operation": "merge", "path": [...], "values": { ... } }]` | Find operation with `"attributes"` in `path`, merge into its `values` |
+
+FormPage typically uses the object variant; ListPage typically uses the array variant. Template-generated pages may use either — always detect, never assume.
+
 ---
 
-*Last updated: 2026-03-11*
+*Last updated: 2026-03-20*

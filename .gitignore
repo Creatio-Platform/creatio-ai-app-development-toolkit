@@ -17,3 +17,4 @@ htmlcov/
 copilot-session-*.md
 .workflow-state/
 output/
+context/.cache/
