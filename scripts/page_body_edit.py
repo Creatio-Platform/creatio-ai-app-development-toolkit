@@ -143,7 +143,7 @@ def build_form_field_insert(field, row, index):
             "rowSpan": 1,
         },
         "type": field["type"],
-        "label": field.get("label", f"$Resources.Strings.{field['name']}"),
+        "label": field.get("label") or field.get("title") or field["name"],
         "labelPosition": "auto",
     }
     binding_prop = "value" if field["type"] == "crt.ImageInput" else "control"
@@ -226,7 +226,7 @@ def add_list_columns(body, columns):
         entry = {
             "id": col.get("id", str(uuid.uuid4())),
             "code": col["code"],
-            "caption": col.get("caption", f"#ResourceString({col['code']})#"),
+            "caption": col.get("caption") or col.get("title") or col["code"],
             "dataValueType": col["dataValueType"],
         }
         if col.get("width"):
