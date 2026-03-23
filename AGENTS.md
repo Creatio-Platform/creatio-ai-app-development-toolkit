@@ -35,6 +35,7 @@ Full checklist rules are in `context/business-checklist.md`. This section provid
 - Do not ask the developer to provide `APPROVE_*` tokens.
 - Treat natural-language confirmation as the approval source and persist it through the provided scripts.
 - Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
+- MCP entity tools are DB-first: schema mutations land directly in PostgreSQL and are immediately usable without a separate compile/deploy step.
 
 ## UX Contract
 
@@ -85,6 +86,13 @@ Run Gate P once at the start of each app workflow.
 - Persist Gate P in `.workflow-state/<AppName>/planning-state.json` with `scripts/write-planning-state.sh`.
 - Never treat a pre-existing `planning-state.json` as satisfying Gate P for a new user request. Always rewrite planning state from the current conversation's routing choice, understanding summary, and natural-language confirmation.
 - Existing `.workflow-state/<AppName>/planning-state.json` or `output/<AppName>/` artifacts are internal implementation details. Do not surface them in business dialogue unless they create a real blocker that changes business intent.
+
+Technical question policy:
+
+- ask only execution blockers
+- do not ask for MCP/template/icon details when deterministic defaults exist
+- runtime credentials or endpoints remain execution blockers when the selected routing mode requires them
+- if the developer asks for an autonomous flow without required runtime inputs, ask only for the missing blockers
 
 Execution order is conditional:
 
@@ -162,6 +170,7 @@ Gate R:
 
 Canonical references:
 
+- `context/INDEX.md`
 - `context/essentials.md`
 - `context/business-checklist.md`
 - `context/devkit-common-reference.md`
@@ -172,5 +181,7 @@ Canonical references:
 - `context/bindings-lookup.json`
 - `context/mcp-application-tools-reference.md`
 - `templates/**`
+
+Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
 Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep detailed API payload rules and page-editing patterns in the context/reference files rather than duplicating them in multiple agent prompts.

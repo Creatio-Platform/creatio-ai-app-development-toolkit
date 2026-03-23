@@ -22,6 +22,7 @@ During app-generation execution, write only inside `output/<AppName>/`.
 ## Read First
 
 - `AGENTS.md`
+- `context/.cache/agent-4-bundle.md` when available
 - `context/essentials.md`
 - `context/app-documentation-contract.md`
 - `context/mcp-application-tools-reference.md`
@@ -30,9 +31,20 @@ During app-generation execution, write only inside `output/<AppName>/`.
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
+- `scripts/mcp_client.py`
+- `scripts/mcp_full_sync.py`
 - `scripts/page_body_tools.py`
+- `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
 - `scripts/app_docs.py`
+
+## MCP Transport And Tooling
+
+- Prefer `scripts/mcp_client.py` for clio stdio transport; it handles MCP initialization internally.
+- Prefer `scripts/mcp_full_sync.py` when the plan batches schema and page synchronization in one process.
+- Respect `CLIO_CMD` when a custom clio binary is configured; otherwise use global `clio`.
+- Do not use raw curl for clio stdio transport.
+- Pass boolean MCP parameters such as `dryRun` as booleans, not strings.
 
 ## Preconditions
 
@@ -43,30 +55,29 @@ During app-generation execution, write only inside `output/<AppName>/`.
 
 ## Execution Order
 
-1. Initialize MCP with `initialize`.
-2. Extract `Mcp-Session-Id`.
-3. Call `tools/list` and verify required tools exist.
-4. Resolve the execution branch:
+1. Verify MCP is reachable, either through explicit `initialize` or via `scripts/mcp_client.py`.
+2. Call `tools/list` and verify required tools exist.
+3. Resolve the execution branch:
    - new app: `application.create`
    - existing app: `application.get_list` -> `application.get_info`
-5. Parse the short MCP contract from `result.content[0].text`.
-6. Initialize `output/<AppName>/mcp-application-result.json`.
-7. Execute ordered schema sync from the plan:
+4. Parse the short MCP contract from `result.content[0].text`.
+5. Initialize `output/<AppName>/mcp-application-result.json`.
+6. Execute ordered schema sync from the plan, preferably via `schema-sync` / `scripts/mcp_full_sync.py` when the plan batches operations:
    - `entity.create_lookup`
    - `binding.create`
    - `entity.create`
    - `entity.update`
-8. After every successful entity mutation, call `application.get_info` and overwrite `mcp-application-result.json`.
-9. If the plan requires page sync, run:
+7. After each successful entity mutation or schema-sync batch, call `application.get_info` and overwrite `mcp-application-result.json`.
+8. If the plan requires page sync, run:
    - `page.list`
    - `page.get`
-   - `page.update` with `dryRun`
+   - `page.update` with `dryRun: True`
    - `page.update`
    - `page.get` again for verification
-10. Persist page evidence and verification results.
-11. Validate the final result contract.
-12. Build `mcp-application-report.md` from persisted evidence only.
-13. Sync and validate docs under `output/<AppName>/docs/`.
+9. Persist page evidence and verification results.
+10. Validate the final result contract.
+11. Build `mcp-application-report.md` from persisted evidence only.
+12. Sync and validate docs under `output/<AppName>/docs/`.
 
 ## Branching Rules
 

@@ -1,182 +1,131 @@
 # MCP Application Tools Reference Guide
 
+> **⚠️ Transport Notice:** All MCP calls use **clio stdio transport** via `scripts/mcp_client.py`, not HTTP/SSE.
+> The HTTP endpoint examples in this file are **parameter reference only** — do NOT copy curl commands as execution patterns.
+> Use `python3 scripts/mcp_client.py <tool-name> '<args-json>'` for all actual calls.
+> Tool names use dashes: `application-create`, `create-lookup`, `update-entity-schema` (not dots).
+
 ## Overview
 
-MCP (Model Context Protocol) application tools provide DB-first integration for Creatio composable app creation and schema management. All tools are accessed through the `/mcp` endpoint via JSON-RPC 2.0 protocol over HTTP.
-
-**Endpoint:** `http://localhost:5001/mcp`
+MCP (Model Context Protocol) application tools provide DB-first integration for Creatio composable app creation and schema management.
 
 ## Authentication
 
-MCP endpoint uses HTTP Basic Authentication:
-
-```bash
--u Supervisor:Supervisor
-```
-
-For production environments, use appropriate credentials stored in `.creatio-env.json`.
-
-## Required Headers
-
-```bash
--H "Content-Type: application/json"
--H "Accept: application/json, text/event-stream"
--H "Mcp-Session-Id: $SESSION_ID"  # Required after initialize
-```
-
-**Important:** The `Accept` header MUST include both `application/json` and `text/event-stream`. Missing either will result in "Not Acceptable" error.
+Credentials are stored in `.creatio-env.json` and passed via `environment-name` parameter to all clio MCP tools.
 
 ## Parameter Naming Convention
 
-**CRITICAL:** All MCP entity and schema tools use `schemaName` parameter for entity schema references.
+**CRITICAL:** All clio MCP entity and schema tools use **kebab-case** parameter names.
 
 ```
-✅ Correct:  "schemaName": "UsrTodoList"
-❌ Wrong:    "name": "UsrTodoList"
-❌ Wrong:    "entityName": "UsrTodoList"
+✅ Correct (create-lookup):  "schema-name": "UsrTodoList"
+❌ Wrong:                    "name": "UsrTodoList"
+❌ Wrong:                    "schemaName": "UsrTodoList"
 ```
 
-**Tools following this convention:**
-- `entity.update` — `schemaName` parameter (optional)
-- `binding.get_columns` — `schemaName` parameter (required)
-- `binding.create` — `schemaName` parameter (required)
+**Parameters by tool:**
+- `schema-sync` — `environment-name`, `package-name`, `operations` (array of batch operations)
+- `page-sync` — `environment-name`, `pages` (array), `validate` (bool), `verify` (bool)
+- `create-lookup` — `package-name`, `schema-name`, `title`
+- `update-entity-schema` — `package-name`, `schema-name`, `operations` (list)
+- `create-data-binding-db` — `package-name`, `schema-name`, `binding-name`, `rows` (JSON string)
+- `page-get` / `page-update` — `schemaName`, `environmentName` (camelCase, page tools are different!)
+- `page-update` extra params: `body` (string, required), `dryRun` (boolean `True`/`False`, optional)
 
-**Why this matters:** MCP SDK uses reflection to map JSON argument names to C# method parameters. Parameter names must match **exactly** (case-sensitive). Mismatch causes:
+**Why this matters:** clio MCP SDK maps JSON argument names to C# parameters. Names must match exactly (case-sensitive). Mismatch causes a silent error:
 ```
-ArgumentException: The arguments dictionary is missing a value for the required parameter '<param>'
+An error occurred invoking 'create-lookup'.
 ```
+
+**Boolean parameters** (e.g. `dryRun`, `required`, `extendParent`) MUST be native booleans (`True`/`False` in Python), NOT strings (`'true'`/`'false'`). Passing a string causes MCP SDK deserialization failure with the same generic error.
 
 ## Response Format
 
-All responses use Server-Sent Events (SSE) format:
+`call_mcp_tool` parses the clio stdio response automatically and returns a dict:
 
-```
-event: message
-data: {"result":{"content":[{"type":"text","text":"..."}]},"id":1,"jsonrpc":"2.0"}
-```
-
-## Parsing Response Pattern
-
-Standard pattern to parse MCP responses:
-
-```bash
-curl ... | grep -A 1000 'event: message' | \
-  sed 's/^event: message$//' | \
-  sed 's/^data: //' | \
-  jq -r '.result.content[0].text'
-```
-
-For list responses (like tools/list):
-
-```bash
-curl ... | grep -A 1000 'event: message' | \
-  sed 's/^event: message$//' | \
-  sed 's/^data: //' | \
-  jq '.result.tools[]'
+```python
+r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
+# r['data'] — parsed result dict
+# r['raw']  — raw text response
 ```
 
 ## Workflow Sequence
 
 ### 1. Initialize Session
 
-**Purpose:** Obtain Mcp-Session-Id for subsequent requests.
+`scripts/mcp_client.py` manages the clio stdio process automatically. No explicit initialization step is needed.
 
-```bash
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2024-11-05",
-      "capabilities": {},
-      "clientInfo": {
-        "name": "your-client-name",
-        "version": "1.0.0"
-      }
-    }
-  }' -D - 2>&1 | tee /tmp/mcp-init.txt
-```
-
-**Extract Session ID:**
-
-```bash
-SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/mcp-init.txt | sed 's/.*: //' | tr -d '\r')
+```python
+from scripts.mcp_client import call_mcp_tool
+# Session is established on first call
+r = call_mcp_tool('tools/list', {})
 ```
 
 ### 2. List Available Tools
 
 **Purpose:** Verify required tools are available.
 
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/list",
-    "params": {}
-  }' | grep -A 1000 'event: message' | \
-  sed 's/^event: message$//' | \
-  sed 's/^data: //' | \
-  jq -r '.result.tools[] | select(.name | startswith("application.") or startswith("entity.")) | .name' | sort
+```python
+r = call_mcp_tool('tools/list', {})
+# Or via CLI:
+python3 scripts/mcp_client.py tools/list '{}' 30
+```
+
+
 ```
 
 **Expected Output:**
 
 ```
-application.create
-application.get_info
-application.get_list
-entity.create
-entity.create_lookup
-entity.update
-binding.create
-binding.get_columns
+application-create
+application-get-info
+application-get-list
+schema-sync
+page-sync
+create-entity-schema
+create-lookup
+update-entity-schema
+create-data-binding-db
+page-list
+page-get
+page-update
 ```
 
-### 3. Create Application (application.create)
+> **Preferred tools:** Use `schema-sync` instead of individual `create-lookup` / `create-data-binding-db` / `update-entity-schema` calls. Use `page-sync` instead of sequential `page-update` calls. Individual tools remain available as fallback and for read-only operations (`page-get`, `page-list`).
+
+### 3. Create Application (application-create)
 
 **Purpose:** Create new Creatio application with initial package and entity.
 
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": {
-      "name": "application.create",
-      "arguments": {
-        "name": "Events",
-        "code": "UsrEvents",
-        "templateCode": "AppFreedomUI",
-        "iconBackground": "#1F5F8B",
-        "description": "A lightweight tool for managing events",
-        "optionalTemplateDataJson": "{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"Manage events\",\"useAIContentGeneration\":false}"
-      }
-    }
-  }' 2>&1 | tee /tmp/mcp-app-create-raw.txt
+```python
+from mcp_client import call_mcp_tool
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'Events',
+    'code': 'UsrEvents',
+    'template-code': 'AppFreedomUI',
+    'icon-background': '#1F5F8B',
+    'description': 'A lightweight tool for managing events',
+    'optional-template-data-json': '{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"Manage events","useAIContentGeneration":false}',
+}, timeout=180)
+if not r['success']:
+    raise RuntimeError(f"application-create failed: {r['raw']}")
+data = r['data']
+package_name = data['packageName']
+main_entity_name = data['entities'][0]['name']
 ```
 
-**Parse and Save Response:**
+**Required parameters:**
+- `environment-name` — registered clio environment name (NOT a URL)
+- `name` — display name
+- `code` — application code (e.g., "UsrEvents")
+- `template-code` — template code: `AppFreedomUI` (NOT `templateCode`)
+- `icon-background` — hex color (NOT `iconBackground`)
 
-```bash
-grep 'data: ' /tmp/mcp-app-create-raw.txt | \
-  sed 's/^data: //' | \
-  jq -r '.result.content[0].text' | \
-  jq '.' > /tmp/mcp-app-create-parsed.json
-```
+**Optional parameters:**
+- `description`
+- `optional-template-data-json` — JSON string (NOT `optionalTemplateDataJson`)
+- `icon-id` — GUID or `"auto"`
 
 **Response Contract (Short):**
 
@@ -211,7 +160,7 @@ grep 'data: ' /tmp/mcp-app-create-raw.txt | \
 
 **Canonical main-entity rule:**
 - For a new Freedom UI app, `application.create` materializes the initial section entity whose schema name normally matches the app code, for example `code=UsrTodoList` → entity `UsrTodoList`.
-- If the app has one primary record type, treat that template-created entity as the canonical main entity and extend it via `entity.update`.
+- If the app has one primary record type, treat that template-created entity as the canonical main entity and extend it via `update-entity-schema`.
 - Use `entity.create` only for additional business objects that are distinct from the template-created section records. Do not create a synonym entity such as `UsrTodoTask` beside `UsrTodoList` for the same records.
 
 **Initialize Canonical Context File:**
@@ -233,46 +182,33 @@ EOF
 
 **Purpose:** Refresh application context after schema changes. This is the canonical DB refresh operation.
 
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 7,
-    "method": "tools/call",
-    "params": {
-      "name": "application.get_info",
-      "arguments": {
-        "appCode": "UsrEvents"
-      }
-    }
-  }' 2>&1 | tee /tmp/mcp-get-info-raw.txt
+```python
+r = call_mcp_tool('application-get-info', {
+    'environment-name': 'local',
+    'app-code': 'UsrEvents',
+})
 ```
 
 **Update Context After Schema Change:**
 
-```bash
-grep 'data: ' /tmp/mcp-get-info-raw.txt | \
-  sed 's/^data: //' | \
-  jq -r '.result.content[0].text' | \
-  jq '. + {
-    contractType: "short",
-    schemaSync: [
-      {
-        tool: "entity.create_lookup",
-        target: "UsrEventStatus",
-        status: "success",
-        entityUId: "d3d882ab-bec8-4f98-8733-7702900ca093"
-      }
-    ],
-    editableContext: {}
-  }' > output/Events/mcp-application-result.json
+```python
+r = call_mcp_tool('application-get-info', {
+    'environment-name': 'local',
+    'app-code': 'UsrEvents',
+})
+data = r['data']
+data['contractType'] = 'short'
+data.setdefault('schemaSync', [])
+data['schemaSync'].append({
+    'tool': 'create-lookup',
+    'target': 'UsrEventStatus',
+    'status': 'success',
+})
+data.setdefault('editableContext', {})
+json.dump(data, open('output/Events/mcp-application-result.json', 'w'), indent=2)
 ```
 
-**Critical Pattern:** Always call `application.get_info` after each successful entity mutation (`entity.create_lookup`, `entity.create`, `entity.update`) and overwrite `mcp-application-result.json`.
+**Context Refresh Pattern:** Call `application-get-info` once after all entity mutations complete (after `schema-sync` batch or after all individual entity tool calls) and overwrite `mcp-application-result.json`. Per-mutation refresh is no longer required when using `schema-sync`.
 
 ### 4.1. List Applications (application.get_list)
 
@@ -290,22 +226,9 @@ application.get_list()  // No parameters
 
 **Example:**
 
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 4,
-    "method": "tools/call",
-    "params": {
-      "name": "application.get_list",
-      "arguments": {}
-    }
-  }' 2>&1 | grep 'data: ' | sed 's/^data: //' | \
-  jq -r '.result.content[0].text'
+```python
+r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
+apps = r['data']['applications']
 ```
 
 **Response Format:**
@@ -330,77 +253,23 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 
 **Integration with get_info:**
 
-```bash
-# 1. List applications
-APP_CODE=$(curl -s http://localhost:5001/mcp ... | \
-  jq -r '.applications[] | select(.name=="Events") | .code')
+```python
+r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
+app_code = next(a['code'] for a in r['data']['applications'] if a['name'] == 'Events')
 
-# 2. Get full context
-curl -s http://localhost:5001/mcp \
-  -d "{\"method\":\"tools/call\",\"params\":{\"name\":\"application.get_info\",\"arguments\":{\"appCode\":\"$APP_CODE\"}}}"
+r = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': app_code})
 ```
 
-### 3.1. Extract Package UId for Entity Operations
+### 3.1. Extract Package Name for Entity Operations
 
-**CRITICAL:** Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) require `packageUId` parameter as a GUID string, NOT package name.
+Entity tools (`create-lookup`, `update-entity-schema`, `create-data-binding-db`) use `package-name` (string), NOT a GUID.
 
-**New Flat Format (Recommended):** Since core version 8.3.4.802, MCP tools return simplified flat format with top-level `packageUId` and `packageName` fields.
+Extract from `application-create` response:
 
-#### Ultra-Simple Extraction (No jq Required)
-
-Use the helper script `~/scripts/mcp-response-to-env.sh` to convert MCP response to shell variables:
-
-```bash
-# Parse and save response
-curl ... | grep 'data: ' | sed 's/^data: //' | \
-  jq -r '.result.content[0].text' > /tmp/mcp-response.json
-
-# Generate .env file with all UIds
-bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
-
-# Load variables into shell
-source /tmp/.mcp-env
-
-# Use variables directly (no jq needed!)
-echo "Package UId: $PACKAGE_UID"
-echo "Package Name: $PACKAGE_NAME"
-echo "Main Entity UId: $MAIN_ENTITY_UID"
-echo "Main Entity Name: $MAIN_ENTITY_NAME"
-echo "All Entities: $ALL_ENTITY_NAMES"
-```
-
-**Generated .env file example:**
-```bash
-# Auto-generated from MCP response
-PACKAGE_UID='597944b2-c71f-4cdb-9510-0216c1e214a6'
-PACKAGE_NAME='UsrTodoList'
-
-MAIN_ENTITY_UID='32ccd416-a6c7-4eeb-bae0-46403f18c457'
-MAIN_ENTITY_NAME='UsrTodoList'
-
-ALL_ENTITY_UIDS='32ccd416-a6c7-4eeb-bae0-46403f18c457,ed3ea989-abd2-4fef-9e03-d66b62210dd2'
-ALL_ENTITY_NAMES='UsrTodoList,UsrTodoPriority,UsrTodoStatus'
-```
-
-#### Simple Extraction (jq Only)
-
-For direct jq extraction without helper script:
-
-```bash
-# Parse application.create response
-grep 'data: ' /tmp/mcp-app-create-raw.txt | \
-  sed 's/^data: //' | \
-  jq -r '.result.content[0].text' | \
-  jq '.' > /tmp/mcp-app-create-parsed.json
-
-# Extract from flat format (simple!)
-PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-app-create-parsed.json)
-PACKAGE_NAME=$(jq -r '.packageName' /tmp/mcp-app-create-parsed.json)
-MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-app-create-parsed.json)
-MAIN_ENTITY_NAME=$(jq -r '.entities[0].name' /tmp/mcp-app-create-parsed.json)
-
-echo "Package UId: $PACKAGE_UID"
-# Output: 597944b2-c71f-4cdb-9510-0216c1e214a6
+```python
+data = r['data']  # from call_mcp_tool('application-create', ...)
+package_name = data['packageName']     # e.g., "UsrTodoList"
+main_entity_name = data['entities'][0]['name']  # e.g., "UsrTodoList"
 ```
 
 **Response Format Structure:**
@@ -413,294 +282,158 @@ echo "Package UId: $PACKAGE_UID"
     {
       "uId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
       "name": "UsrTodoList",
-      "caption": "Todo",
-      "columns": [
-        {"name": "Name", "caption": "Name", "dataValueType": "MediumText"}
-      ]
+      "caption": "Todo"
     }
   ]
 }
 ```
 
-**Use these UIds in all subsequent entity tool calls:**
-- `packageUId` → use `$PACKAGE_UID` variable
-- `entityUId` → use `$MAIN_ENTITY_UID` variable (for entity.update)
+### 5. Create Entity (create-entity-schema)
 
-**Never use:**
-- ❌ `packageName` as parameter (tools require UId, not name)
-- ❌ `entitySchemaUId` (wrong parameter name, should be `entityUId`)
-- ❌ `entityName` as parameter for entity.update (wrong, use `schemaName` instead)
+**Purpose:** Create new BaseEntity-derived entity schema in Creatio database. Use only for entities that are NOT lookups.
 
-### 5. Create Entity (entity.create)
-
-**Purpose:** Create new BaseEntity-derived (or custom parent) entity schema in Creatio database.
-
-**Tool Signature:**
-```
-entity.create(
-  packageUId: string,              // REQUIRED: Package GUID
-  name: string,                    // REQUIRED: Schema name (e.g., "UsrTodoList")
-  caption: string,                 // REQUIRED: Display name
-  parentSchemaName: string,        // Optional, default "BaseEntity"
-  columnsJson: string,             // Optional, default "[]"
-  outputPath: string               // Optional, deprecated
-)
-```
+**Tool name:** `create-entity-schema`
 
 **When to Use:**
 - Creating entities that inherit from BaseEntity
-- Creating entities with custom parent schemas (e.g., inheriting from BaseFile)
-- For **lookup entities**, use `entity.create_lookup` instead (always inherits from BaseLookup)
+- For lookup entities, use `create-lookup` instead (kebab params, inherits from BaseLookup)
 
-**columnsJson Format:**
-
-```json
-[
-  {
-    "name": "UsrDueDate",
-    "caption": "Due Date",
-    "dataValueTypeName": "Date",
-    "isRequired": false
-  },
-  {
-    "name": "UsrDescription",
-    "caption": "Description",
-    "dataValueTypeName": "LongText",
-    "isRequired": false
-  },
-  {
-    "name": "UsrStatus",
-    "caption": "Status",
-    "dataValueTypeName": "Lookup",
-    "referenceSchemaName": "UsrTodoStatus",
-    "isRequired": true
-  }
-]
-```
-
-**Supported dataValueTypeName Values:**
-- `ShortText` (size: 50-250)
-- `MediumText` (size: 500-1000)
-- `LongText` (size: 2000-5000)
-- `MaxSizeText` (size: max, for large content)
-- `Integer`
-- `Float` (precision: 2-8)
-- `Boolean`
-- `Date`
-- `DateTime`
-- `Time`
-- `Lookup` (requires `referenceSchemaName`)
+**columnsJson supported types:** `ShortText`, `MediumText`, `LongText`, `MaxSizeText`, `Integer`, `Float`, `Boolean`, `Date`, `DateTime`, `Time`, `Lookup` (requires `reference-schema-name`)
 
 **Example:**
 
-```bash
-# Use extracted PACKAGE_UID from application.create
-SESSION_ID="..." && PACKAGE_UID="597944b2-c71f-4cdb-9510-0216c1e214a6" && \
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 5,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.create\",
-      \"arguments\": {
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"name\": \"UsrTodoList\",
-        \"caption\": \"Todo\",
-        \"parentSchemaName\": \"BaseEntity\",
-        \"columnsJson\": \"[{\\\"name\\\":\\\"UsrDescription\\\",\\\"caption\\\":\\\"Description\\\",\\\"dataValueTypeName\\\":\\\"LongText\\\",\\\"isRequired\\\":false}]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-entity-create-raw.txt
+```python
+r = call_mcp_tool('create-entity-schema', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'schema-name': 'UsrTodoList',
+    'title': 'Todo',
+    'columns': [
+        {'name': 'UsrDescription', 'type': 'LongText', 'title': 'Description'},
+    ],
+})
 ```
 
-**Parse Response:**
-
-```bash
-grep 'data: ' /tmp/mcp-entity-create-raw.txt | \
-  sed 's/^data: //' | \
-  jq -r '.result.content[0].text' > /tmp/mcp-entity-create.json
-
-# Extract entity UId for subsequent operations
-ENTITY_UID=$(jq -r '.entityUId' /tmp/mcp-entity-create.json)
-echo "Entity UId: $ENTITY_UID"
-```
-
-**Response Format:**
-```json
-{
-  "entityUId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
-  "schemaName": "UsrTodoList",
-  "caption": "Todo",
-  "parentSchemaName": "BaseEntity",
-  "columns": [
-    {
-      "name": "UsrDescription",
-      "uId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-      "caption": "Description",
-      "dataValueType": "LongText",
-      "isRequired": false
-    }
-  ]
-}
-```
+**After Success:** Call `application-get-info` to refresh context.
 
 **After Success:** 
-1. Save `entityUId` for subsequent `entity.update` calls
-2. Call `application.get_info` to refresh application context
-3. Overwrite `mcp-application-result.json` with updated context
+1. Call `application-get-info` to refresh application context
+2. Overwrite `mcp-application-result.json` with updated context
 
-**Difference from entity.create_lookup:**
-- `entity.create` allows custom `parentSchemaName` (BaseEntity, BaseFile, etc.)
-- `entity.create_lookup` hardcodes `parentSchemaName="BaseLookup"` internally
+**Note:** For lookup entities, use `create-lookup` instead — it hardcodes `BaseLookup` as parent and uses simpler parameters.
 
-### 6. Create Lookup Entity (entity.create_lookup)
+### 6. Create Lookup Entity (create-lookup)
 
-**Purpose:** Create lookup (BaseLookup-based) entity in specified package.
+**Purpose:** Create a BaseLookup-based entity in the specified package.
 
-**Tool Signature:**
-```
-entity.create_lookup(
-  packageUId: string,    // GUID, NOT packageName!
-  name: string,          // Entity schema name (e.g., "UsrEventStatus")
-  caption: string,       // Display name
-  columnsJson: string    // Optional, default "[]"
-)
-```
+> **Prefer `schema-sync`:** When creating lookups as part of a larger schema workflow, use `schema-sync` to batch all operations (create-lookup + seed + update-entity) into a single MCP call.
+
+**Tool name:** `create-lookup`
+
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `package-name` — package string name (e.g., "UsrTodoList") — **NOT a GUID**
+- `schema-name` — entity schema name (e.g., "UsrTodoStatus") — NOT `name`
+- `title` — display name — NOT `caption`
 
 **Lookup Display Rule:**
 - `BaseLookup` already provides inherited `Name` and `Description`.
-- Never send `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in `columnsJson`.
-- `Name` must remain the lookup `PrimaryDisplayColumn`; otherwise lookup values will appear blank after selection in UI controls.
+- Never send `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns.
+- `Name` must remain the lookup `PrimaryDisplayColumn`; otherwise lookup values appear blank in UI controls.
 
 **Lookup Validation Rule:**
-- Parse the `entity.create_lookup` response and verify `.entity.columns` contains inherited `Name` before moving to `binding.create`.
-- If the persisted snapshot does not expose `Name`, stop with blocker instead of assuming the lookup is usable.
+- After `create-lookup` succeeds, verify the entity is fully materialized.
+- If `Name` is not present in the schema snapshot, stop with blocker.
+- Context refresh (`application-get-info`) is needed only once after all entity mutations — not after each individual call when using `schema-sync`.
 
 **Example:**
 
-```bash
-# Use extracted PACKAGE_UID from application.create
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 5,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.create_lookup\",
-      \"arguments\": {
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"name\": \"UsrEventStatus\",
-        \"caption\": \"Event Status\",
-        \"columnsJson\": \"[]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-lookup-create-raw.txt
+```python
+r = call_mcp_tool('create-lookup', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',   # ✅ string name, NOT GUID
+    'schema-name': 'UsrTodoStatus',  # ✅ NOT 'name'
+    'title': 'Todo Status',          # ✅ NOT 'caption'
+})
 ```
 
-**After Success:** Immediately call `application.get_info` to refresh context and verify the entity is fully materialized (not in "Database update required" state). Do not report lookup success if the plan or follow-up validation would replace inherited `Name` with a duplicate display column.
+**After Success:** Refresh context with `application-get-info` once all entity mutations are complete.
 
-### 7. Update Entity (entity.update)
+### 7. Update Entity (update-entity-schema)
 
-**Purpose:** Add columns to existing entity.
+**Purpose:** Add, update, or remove columns on an existing entity.
 
-**Tool Signature:**
-```
-entity.update(
-  entityUId: string,       // REQUIRED: Entity GUID from entity.create response
-  packageUId: string,      // REQUIRED: Package GUID, NOT packageName!
-  schemaName: string,      // Optional, entity schema name (use for clarity)
-  caption: string,         // Optional, display name
-  parentSchemaName: string,// Optional, parent schema (default: BaseEntity)
-  operationsJson: string   // JSON array of operations (default: [])
-)
-```
+> **Prefer `schema-sync`:** When updating entities as part of a workflow with lookups and seed data, use `schema-sync` to batch all operations into a single MCP call.
 
-**Parameter Notes:**
-- `entityUId` — REQUIRED first parameter, must be GUID from previous `entity.create` or `entity.create_lookup` response
-- `packageUId` — REQUIRED, must be GUID not package name
-- `schemaName` — Optional but recommended for clarity (e.g., "UsrTodoList")
-- All other parameters optional with defaults
-- For new-app flows, the default target for `entity.update` is the template-created section entity returned by `application.create`
-- Before adding a title field, inspect the current entity snapshot from `application.create` or `application.get_info`. If `Name` already exists, reuse it and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly call for a separate business field.
-- `schema default` means the backend/entity schema contract sets the default through `defaultValueSource` and `defaultValue`.
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- For lookup-backed `schema default`, `defaultValue` must be the seeded row GUID, not the lookup caption.
+**Tool name:** `update-entity-schema`
 
-**Critical:** `operationsJson` must use `{operation, column}` structure:
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `package-name` — package string name — **NOT a GUID**, NOT `packageUId`
+- `schema-name` — entity schema name
 
-```json
-[{
-  "operation": "addColumn",   // NOT "type"!
-  "column": {                 // Nested object!
-    "name": "UsrField",
-    "caption": "Field",
-    "dataValueTypeName": "ShortText",
-    "isRequired": true
-  }
-}]
-```
+**operations parameter** — Python **list** of operation objects (NOT a JSON string, NOT `operationsJson`):
 
-**Default-capable column payloads:**
+| Field | Value | Notes |
+|-------|-------|-------|
+| `action` | `"add"` / `"modify"` / `"remove"` | Required. NOT `"operation"`, NOT `"addColumn"` |
+| `column-name` | `"UsrStatus"` | Required. NOT `"name"` |
+| `new-name` | `"UsrNewName"` | Optional. For rename operations |
+| `type` | `"Lookup"` / `"MediumText"` / `"Date"` / etc. | Required for `add`. NOT `"dataValueTypeName"` |
+| `title` | `"Status"` | Optional. NOT `"caption"` |
+| `description` | `"Task status"` | Optional. Column description |
+| `reference-schema-name` | `"UsrTodoStatus"` | Required for Lookup type. NOT `"referenceSchemaName"` |
+| `required` | `True` / `False` | Optional. Python boolean |
+| `indexed` | `True` / `False` | Optional. Create DB index |
+| `cloneable` | `True` / `False` | Optional. Include when cloning records |
+| `track-changes` | `True` / `False` | Optional. Track column value changes |
+| `default-value` | `"<guid>"` | Optional. Constant default value. NOT `"defaultValue"` |
+| `default-value-source` | `"Const"` / `"None"` | Optional. NOT `"defaultValueSource"` |
+| `multiline-text` | `True` / `False` | Optional. Multi-line text flag |
+| `localizable-text` | `True` / `False` | Optional. Localizable text flag |
+| `accent-insensitive` | `True` / `False` | Optional. Accent-insensitive search flag |
+| `masked` | `True` / `False` | Optional. Masked input flag |
+| `format-validated` | `True` / `False` | Optional. Format validation flag |
+| `use-seconds` | `True` / `False` | Optional. Show seconds for DateTime |
+| `simple-lookup` | `True` / `False` | Optional. Simple lookup mode |
+| `cascade` | `True` / `False` | Optional. Cascade delete for lookups |
+| `do-not-control-integrity` | `True` / `False` | Optional. Skip referential integrity checks |
 
-```json
-[
-  {
-    "operation": "updateColumn",
-    "column": {
-      "name": "UsrStatus",
-      "caption": "Status",
-      "dataValueTypeName": "Lookup",
-      "referenceSchemaName": "UsrEventStatus",
-      "defaultValueSource": "Const",
-      "defaultValue": "11111111-2222-3333-4444-555555555555"
-    }
-  },
-  {
-    "operation": "updateColumn",
-    "column": {
-      "name": "UsrStatus",
-      "defaultValueSource": "None"
-    }
-  }
-]
-```
+**Default-capable column example:**
 
-**Example:**
-
-```bash
-# Use extracted ENTITY_UID and PACKAGE_UID
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\": \"2.0\",
-    \"id\": 9,
-    \"method\": \"tools/call\",
-    \"params\": {
-      \"name\": \"entity.update\",
-      \"arguments\": {
-        \"entityUId\": \"$ENTITY_UID\",
-        \"packageUId\": \"$PACKAGE_UID\",
-        \"caption\": \"Events\",
-        \"operationsJson\": \"[{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrDescription\\\",\\\"caption\\\":\\\"Description\\\",\\\"dataValueTypeName\\\":\\\"MaxSizeText\\\",\\\"isRequired\\\":false}},{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStartDate\\\",\\\"caption\\\":\\\"Start Date\\\",\\\"dataValueTypeName\\\":\\\"DateTime\\\",\\\"isRequired\\\":true}},{\\\"operation\\\":\\\"addColumn\\\",\\\"column\\\":{\\\"name\\\":\\\"UsrStatus\\\",\\\"caption\\\":\\\"Status\\\",\\\"dataValueTypeName\\\":\\\"Lookup\\\",\\\"referenceSchemaName\\\":\\\"UsrEventStatus\\\",\\\"isRequired\\\":false}}]\"
-      }
-    }
-  }" 2>&1 | tee /tmp/mcp-entity-update-raw.txt
+```python
+r = call_mcp_tool('update-entity-schema', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',    # ✅ string name, NOT GUID
+    'schema-name': 'UsrTodoList',
+    'operations': [                   # ✅ native list, NOT 'operationsJson'
+        {
+            'action': 'add',                              # ✅ NOT 'operation'/'addColumn'
+            'column-name': 'UsrStatus',                   # ✅ NOT 'name'
+            'type': 'Lookup',                             # ✅ NOT 'dataValueTypeName'
+            'title': 'Status',                            # ✅ NOT 'caption'
+            'reference-schema-name': 'UsrTodoStatus',     # ✅ NOT 'referenceSchemaName'
+            'required': True,
+            'default-value-source': 'Const',
+            'default-value': '<seeded-new-guid>',
+        },
+        {
+            'action': 'add',
+            'column-name': 'UsrDueDate',
+            'type': 'Date',
+            'title': 'Due Date',
+        },
+        {
+            'action': 'add',
+            'column-name': 'UsrDescription',
+            'type': 'MediumText',
+            'title': 'Description',
+        },
+    ],
+})
 ```
 
-**After Success:** Call `application.get_info` and update context.
+**After Success:** Refresh context with `application-get-info` once all entity mutations are complete.
 
 ### 8. Get Entity Columns (binding.get_columns)
 
@@ -715,28 +448,17 @@ binding.get_columns(
 
 **Use Cases:**
 - Query metadata for system entities (Contact, Account, SysModule, etc.)
-- Prepare column mappings for binding.create
+- Prepare column mappings for create-data-binding-db
 - Validate schema deployment status
 
 **Example:**
 
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 10,
-    "method": "tools/call",
-    "params": {
-      "name": "binding.get_columns",
-      "arguments": {
-        "schemaName": "Contact"
-      }
-    }
-  }' 2>&1 | tee /tmp/mcp-get-columns-raw.txt
+```python
+r = call_mcp_tool('binding-get-columns', {
+    'environment-name': 'local',
+    'schema-name': 'Contact',
+})
+columns = r['data']
 ```
 
 **Response Format:**
@@ -759,116 +481,299 @@ SESSION_ID="..." && curl -s http://localhost:5001/mcp \
 ]
 ```
 
-### 9. Create Data Binding (binding.create)
+### 9. Create Data Binding (create-data-binding-db)
 
-**Purpose:** Create or update a binding in the DB for binding records (SysModule/SysModuleEntity) or lookup seed data, then install the data immediately.
+**Purpose:** Seed lookup data or create data bindings in the DB and install them immediately.
 
-**Tool Signature:**
-```
-binding.create(
-  packageUId: string,       // REQUIRED: Package GUID that owns the binding
-  schemaName: string,       // REQUIRED: Entity schema name (e.g., "SysModule", "UsrTodoStatus")
-  bindingName: string,      // REQUIRED: Binding folder name (e.g., "SysModule_UsrTodoTask")
-  rowsJson: string,         // REQUIRED: JSON array of rows with columnName/value pairs
-  columnsJson: string,      // Optional: Column definitions with isKey/isForceUpdate flags
-  installType: string,      // Optional: Default "0", use "3" for schema admin unit rights
-  outputPath: string        // Optional: Filesystem path to write files on server
-)
-```
+**Tool name:** `create-data-binding-db`
 
-**Parameter Details:**
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `package-name` — package string name — **NOT a GUID**
+- `schema-name` — entity schema name (e.g., "UsrTodoStatus")
+- `binding-name` — binding folder name (e.g., "UsrTodoStatus_Lookup") — NOT `bindingName`
+- `rows` — JSON **string** of `[{"values": {"Name": "New"}}, ...]` format — NOT `rowsJson`
 
-**rowsJson** format:
+**rows format:**
 ```json
 [
-  [
-    {"columnName": "Id", "value": "guid-here"},
-    {"columnName": "Name", "value": "New"}
-  ],
-  [
-    {"columnName": "Id", "value": "guid-here-2"},
-    {"columnName": "Name", "value": "In Progress"}
-  ]
+  {"values": {"Name": "New"}},
+  {"values": {"Name": "In Progress"}},
+  {"values": {"Name": "Done"}},
+  {"values": {"Name": "Cancelled"}}
 ]
 ```
 
-**columnsJson** format (optional):
+This format is **different** from the old `binding.create` HTTP format. There are no `columnName`/`value` pairs. When a seed row does not include `Id`, the tool auto-generates a GUID server-side.
+
+**Deterministic GUID for schema defaults:** When a seed row will be referenced later as `default-value` for a lookup column, generate UUID client-side and include `Id` in the row's `values`:
+
 ```json
 [
-  {"columnName": "Id", "isKey": true},
-  {"columnName": "Name", "isKey": false},
-  {"columnName": "TypeColumnUId", "isForceUpdate": true}
+  {"values": {"Id": "dda4901c-f62a-4ef9-be7e-dc88dc0aad52", "Name": "New"}},
+  {"values": {"Name": "In Progress"}},
+  {"values": {"Name": "Done"}}
 ]
 ```
-**Defaults:** `isKey=true` for "Id" only, `isForceUpdate=false` for all
-**Important:** If `columnsJson` is provided, MCP uses only those descriptor columns. It does not merge omitted row columns back in from `rowsJson`.
 
 **Example: Lookup Seed Data**
 
-```bash
-SESSION_ID="..." && curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 11,
-    "method": "tools/call",
-    "params": {
-      "name": "binding.create",
-      "arguments": {
-        "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
-        "schemaName": "UsrTodoStatus",
-        "bindingName": "UsrTodoStatus_Lookup",
-        "rowsJson": "[[{\"columnName\":\"Id\",\"value\":\"<fresh-guid-1>\"},{\"columnName\":\"Name\",\"value\":\"New\"},{\"columnName\":\"Description\",\"value\":\"\"}],[{\"columnName\":\"Id\",\"value\":\"<fresh-guid-2>\"},{\"columnName\":\"Name\",\"value\":\"In Progress\"},{\"columnName\":\"Description\",\"value\":\"\"}]]"
-      }
-    }
-  }' 2>&1 | tee /tmp/mcp-binding-create-raw.txt
+```python
+import json
+rows = json.dumps([
+    {'values': {'Name': 'New'}},
+    {'values': {'Name': 'In Progress'}},
+    {'values': {'Name': 'Done'}},
+    {'values': {'Name': 'Cancelled'}},
+])
+r = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',          # ✅ string name, NOT GUID
+    'schema-name': 'UsrTodoStatus',
+    'binding-name': 'UsrTodoStatus_Lookup', # ✅ NOT 'bindingName', NOT 'dataName'
+    'rows': rows,                           # ✅ JSON string, NOT 'rowsJson'
+})
+```
+
+**Example: Seed Data with Schema Default**
+
+```python
+import uuid, json
+new_id = str(uuid.uuid4())
+rows = json.dumps([
+    {'values': {'Id': new_id, 'Name': 'New'}},
+    {'values': {'Name': 'In Progress'}},
+    {'values': {'Name': 'Done'}},
+])
+r = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'schema-name': 'UsrTodoStatus',
+    'binding-name': 'UsrTodoStatus_Lookup',
+    'rows': rows,
+})
+
+# Then use `new_id` directly in update-entity-schema:
+r2 = call_mcp_tool('update-entity-schema', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'schema-name': 'UsrTodoList',
+    'operations': [{
+        'action': 'add',
+        'column-name': 'UsrStatus',
+        'type': 'Lookup',
+        'title': 'Status',
+        'reference-schema-name': 'UsrTodoStatus',
+        'required': True,
+        'default-value-source': 'Const',
+        'default-value': new_id,
+    }],
+})
 ```
 
 **Response Format:**
 ```json
 {
-  "success": true
+  "exit-code": 0,
+  "execution-log-messages": [
+    {"message-type": "Info", "value": "Created row: dda4901c-... (Name=New)"},
+    {"message-type": "Info", "value": "Created row: 7b3f22a1-... (Name=In Progress)"},
+    {"message-type": "Info", "value": "Created row: a1c99ef3-... (Name=Done)"},
+    {"message-type": "Info", "value": "Done"}
+  ]
 }
 ```
 
-**Important Notes:**
-- Use `binding.get_columns` first to discover column UIds for deployed entities
-- `binding.create` requires `packageUId`
-- Newly created schemas from `entity.create` or `entity.create_lookup` are DB-first and should already be queryable through `binding.get_columns`
-- `outputPath` is optional and only writes server-side file copies; success response still stays `{"success": true}`
-- Generate a fresh GUID for each lookup seed row at execution time; do not reuse decorative placeholder GUIDs from docs in executable payloads
-- Lookup seed data should include `Id` and `Name`, and may include `Description`
-- For lookup seed bindings, prefer omitting `columnsJson` so MCP infers descriptor columns from `rowsJson`; if `columnsJson` is supplied, include every seeded descriptor column such as `Id`, `Name`, and `Description`
+The response log messages include each created row's `Id` and column values. When deterministic GUIDs were provided via client-side `Id`, the same values appear in the response.
+
+## Composite Tools (Preferred)
+
+### 9a. Schema Sync (schema-sync)
+
+**Purpose:** Batch multiple schema operations (create lookups, seed data, create entities, update entities) into a single MCP call. Reduces round-trips, lock acquisitions, and sleep overhead.
+
+**Tool name:** `schema-sync`
+
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `package-name` — package string name (e.g., "UsrTodoList") — **NOT a GUID**
+- `operations` — ordered array of schema operations
+
+**Operation types:**
+
+| type | Description | Required fields |
+|------|-------------|----------------|
+| `create-lookup` | Create BaseLookup entity | `schema-name`, `title` |
+| `create-entity` | Create entity with custom parent | `schema-name`, `title`, `parent-schema-name` |
+| `update-entity` | Add/modify/remove columns | `schema-name`, `update-operations` |
+
+**Operation fields:**
+
+| Field | Type | Used in | Description |
+|-------|------|---------|-------------|
+| `type` | string | all | `create-lookup`, `create-entity`, or `update-entity` |
+| `schema-name` | string | all | Target entity schema name |
+| `title` | string | create-* | Display name |
+| `parent-schema-name` | string | create-entity | Parent schema (e.g., "BaseEntity") |
+| `extend-parent` | bool | create-entity | Create replacement schema |
+| `columns` | array | create-* | Initial columns for new entity |
+| `update-operations` | array | update-entity | Column mutation operations (same format as `update-entity-schema` `operations`) |
+| `seed-rows` | array | create-* | Rows to seed after creating. Each: `{"values": {"Name": "New"}}` |
+
+**Execution behavior:**
+- Operations execute in array order within a single lock acquisition
+- Stops on first failure (subsequent operations may depend on earlier ones)
+- Seed rows for an operation are inserted immediately after that operation succeeds
+- Single Thread.Sleep at the end (not per operation)
+
+**Example:**
+
+```python
+import uuid, json
+new_id = str(uuid.uuid4())
+r = call_mcp_tool('schema-sync', {
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
+    'operations': [
+        {
+            'type': 'create-lookup',
+            'schema-name': 'UsrTodoStatus',
+            'title': 'Todo Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrTodoList',
+            'update-operations': [
+                {
+                    'action': 'add',
+                    'column-name': 'UsrStatus',
+                    'type': 'Lookup',
+                    'title': 'Status',
+                    'reference-schema-name': 'UsrTodoStatus',
+                    'required': True,
+                    'default-value-source': 'Const',
+                    'default-value': new_id,
+                },
+                {
+                    'action': 'add',
+                    'column-name': 'UsrDueDate',
+                    'type': 'Date',
+                    'title': 'Due Date',
+                },
+            ],
+        },
+    ],
+})
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "results": [
+    {"operation": "create-lookup", "schema-name": "UsrTodoStatus", "success": true},
+    {"operation": "seed-data", "schema-name": "UsrTodoStatus", "success": true},
+    {"operation": "update-entity", "schema-name": "UsrTodoList", "success": true}
+  ]
+}
+```
+
+**After Success:** Call `application-get-info` once to refresh full context.
+
+### 9b. Page Sync (page-sync)
+
+**Purpose:** Update multiple Freedom UI page schemas in a single MCP call with built-in validation.
+
+**Tool name:** `page-sync`
+
+**⚠️ Parameter naming:** `page-sync` uses **kebab-case** for `environment-name` and page objects use `schema-name` (unlike individual page tools that use camelCase).
+
+**Required parameters:**
+- `environment-name` — registered clio environment name
+- `pages` — array of page objects to update
+
+**Optional parameters:**
+- `validate` — run client-side validation (markers + JS syntax) before saving. Default: `true`
+- `verify` — re-read each page after saving to confirm. Default: `false`
+
+**Page object:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `schema-name` | string | Yes | Page schema name (e.g., "UsrTodoList_FormPage") |
+| `body` | string | Yes | Full JavaScript page body with all 8 marker pairs |
+
+**Execution behavior:**
+- Validates each page client-side (if `validate: true`) before sending to Creatio
+- Saves each page via DesignerService
+- If verify is enabled, re-reads each page after save to confirm
+- Continues processing remaining pages on failure (unlike `schema-sync` which stops)
+- Single lock acquisition and single Thread.Sleep for entire batch
+
+**Workflow:**
+1. Read current page bodies via individual `page-get` calls
+2. Edit bodies using `page_body_edit.py`
+3. Send all edited pages via `page-sync` in one call
+
+**Example:**
+
+```python
+r = call_mcp_tool('page-sync', {
+    'environment-name': 'local',
+    'pages': [
+        {
+            'schema-name': 'UsrTodoList_FormPage',
+            'body': edited_form_body,
+        },
+        {
+            'schema-name': 'UsrTodoList_ListPage',
+            'body': edited_list_body,
+        },
+    ],
+    'validate': True,
+})
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "pages": [
+    {
+      "schema-name": "UsrTodoList_FormPage",
+      "success": true,
+      "body-length": 3775,
+      "validation": {"markers-ok": true, "js-syntax-ok": true}
+    },
+    {
+      "schema-name": "UsrTodoList_ListPage",
+      "success": true,
+      "body-length": 2181,
+      "validation": {"markers-ok": true, "js-syntax-ok": true}
+    }
+  ]
+}
+```
+
+**Note:** `page-get` and `page-list` are still used individually for reading pages and discovering page schemas. `page-sync` replaces only the write portion of the page workflow.
 
 ## Error Handling
 
 ### Common Errors
 
-**1. Not Acceptable (Missing Accept header)**
-
-```json
-{
-  "error": {
-    "code": -32000,
-    "message": "Not Acceptable: Client must accept both application/json and text/event-stream"
-  }
-}
-```
-
-**Fix:** Include both content types in Accept header:
-```bash
--H "Accept: application/json, text/event-stream"
-```
-
-**2. Tool Invocation Error**
+**1. Tool Invocation Error**
 
 ```json
 {
   "result": {
-    "content": [{"type": "text", "text": "An error occurred invoking 'entity.create_lookup'."}],
+    "content": [{"type": "text", "text": "An error occurred invoking 'create-lookup'."}],
     "isError": true
   }
 }
@@ -893,108 +798,80 @@ Look for patterns like:
 
 After inactivity, session may expire. Re-initialize with `initialize` method.
 
+**Default Types — Mandatory Policy:**
+
+- `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value` in `update-entity-schema` operations.
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`. Every `defaults to X` requirement must have an explicit `schema default` or `ui default` implementation step.
+
 ## Common Pitfalls
 
-### ❌ Wrong Parameter Names
+### ❌ Wrong Parameter Names — Entity Tools
 
-**Problem:** `ArgumentException: missing value for required parameter 'packageUId'`
+**Problem:** `"An error occurred invoking 'create-lookup'"` or `"Package is required."` or `"Schema title is required."`
 
-**Causes:**
-- Using `packageName` instead of `packageUId` (GUID required!)
-- Using `entitySchemaUId` instead of `entityUId`
-- Using `entityName` instead of `name`
-- Using `displayName` instead of `caption`
+**Causes and fixes:**
 
-**Solution:** Always verify parameter names against C# tool signatures in `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/`:
-- `EntityCreateLookupTool.cs` (line 13-23)
-- `EntityCreateTool.cs`
-- `EntityUpdateTool.cs` (line 13-26)
+| ❌ Wrong | ✅ Correct | Tool |
+|---------|-----------|------|
+| `packageUId` (GUID) | `package-name` (string) | `create-lookup`, `update-entity-schema`, `create-data-binding-db` |
+| `name` | `schema-name` | `create-lookup` |
+| `caption` | `title` | `create-lookup` |
+| `operationsJson` (string) | `operations` (list) | `update-entity-schema` |
+| `operation: "addColumn"` | `action: "add"` | each operation in `operations` |
+| `name: "UsrField"` (in op) | `column-name: "UsrField"` | each operation in `operations` |
+| `dataValueTypeName: "Lookup"` | `type: "Lookup"` | each operation in `operations` |
+| `caption: "Status"` (in op) | `title: "Status"` | each operation in `operations` |
+| `referenceSchemaName` | `reference-schema-name` | each operation in `operations` |
+| `isRequired` | `required` (boolean) | each operation in `operations` |
+| `defaultValueSource` | `default-value-source` | each operation in `operations` |
+| `defaultValue` | `default-value` | each operation in `operations` |
+| `rowsJson` | `rows` | `create-data-binding-db` |
+| `bindingName` | `binding-name` | `create-data-binding-db` |
+| `[[{columnName,value}]]` format | `[{"values":{...}}]` format | `create-data-binding-db` rows |
 
-**Correct Parameters:**
-```json
-{
-  "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",  // ✅ GUID!
-  "name": "UsrEventStatus",                             // ✅ not entityName
-  "caption": "Event Status",                            // ✅ not displayName
-  "columnsJson": "[]"                                   // ✅
-}
-```
+### ❌ Wrong Parameter Names — Application Tools
 
-### ❌ Wrong JSON Structure for Operations
+**Problem:** `"template-code is required."` or `"icon-background is required."`
 
-**Problem:** `Unsupported operation ''. Allowed values: addColumn, updateColumn, removeColumn`
+**Causes and fixes:**
 
-**Cause:** Using flat structure instead of nested `{operation, column}`:
+| ❌ Wrong | ✅ Correct |
+|---------|-----------|
+| `templateCode` | `template-code` |
+| `iconBackground` | `icon-background` |
+| `optionalTemplateDataJson` | `optional-template-data-json` |
 
-```json
-// ❌ WRONG
-{
-  "type": "addColumn",
-  "name": "UsrField",
-  "caption": "Field",
-  "dataValueTypeName": "ShortText"
-}
+### ❌ operations Passed as JSON String
 
-// ✅ CORRECT
-{
-  "operation": "addColumn",
-  "column": {
-    "name": "UsrField",
-    "caption": "Field",
-    "dataValueTypeName": "ShortText"
-  }
-}
-```
+**Problem:** `update-entity-schema` silently ignores operations or throws error.
 
-**Solution:** Use correct structure from `EntityColumnOperation.cs` model:
+**Cause:** Passing `json.dumps([...])` instead of a native Python list.
 
-```bash
-entity.update(
-  entityUId: "...",
-  packageUId: "...",
-  operationsJson: '[{"operation":"addColumn","column":{...}}]'
-)
-```
+```python
+# ❌ WRONG
+ops = json.dumps([{'action': 'add', ...}])
+call_mcp_tool('update-entity-schema', {'operations': ops})  # string!
 
-### ❌ Missing UId Extraction
-
-**Problem:** Using package/entity names instead of UIds
-
-**Solution:** Extract UIds from `application.create` / `application.get_info` responses using new flat format:
-
-```bash
-# Method 1: Ultra-simple with helper script (recommended)
-bash ~/scripts/mcp-response-to-env.sh /tmp/mcp-response.json > /tmp/.mcp-env
-source /tmp/.mcp-env
-
-# Method 2: Direct jq extraction
-PACKAGE_UID=$(jq -r '.packageUId' /tmp/mcp-response.json)
-MAIN_ENTITY_UID=$(jq -r '.entities[0].uId' /tmp/mcp-response.json)
-
-# Validate extraction
-if [[ -z "$PACKAGE_UID" || "$PACKAGE_UID" == "null" ]]; then
-  echo "ERROR: Failed to extract package UId"
-  exit 1
-fi
-
-echo "Package UId: $PACKAGE_UID"
-echo "Entity UId: $MAIN_ENTITY_UID"
+# ✅ CORRECT
+call_mcp_tool('update-entity-schema', {
+    'operations': [{'action': 'add', ...}]  # native list
+})
 ```
 
 ### ❌ Not Refreshing Context After Mutations
 
-**Problem:** Schema exists in DB but not visible in `application.get_info`
+**Problem:** Schema exists in DB but not visible in `application-get-info`
 
-**Cause:** Not calling `application.get_info` after each successful entity mutation
+**Cause:** Not calling `application.get_info` after entity mutations
 
-**Solution:** Always refresh context:
+**Solution:** Refresh context once after all entity mutations complete (after `schema-sync` batch or after all individual entity tool calls):
 
-```bash
-# After entity.create_lookup or entity.update
-curl ... application.get_info | ... > output/App/mcp-application-result.json
-
-# Verify entity is present
-jq '.packages.UsrApp.entities.UsrNewEntity' output/App/mcp-application-result.json
+```python
+r = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+ctx = r['data']
+ctx['contractType'] = 'short'
+json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 ```
 
 ### Validation Checklist
@@ -1022,83 +899,133 @@ done
 
 ## Complete Workflow Example
 
-```bash
-#!/bin/bash
+### Using composite tools (preferred)
 
-# 1. Initialize session
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"app-creator","version":"1.0"}}}' \
-  -D /tmp/mcp-init-headers.txt > /tmp/mcp-init.txt
+```python
+import json, uuid, sys
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
 
-SESSION_ID=$(grep -i 'Mcp-Session-Id:' /tmp/mcp-init-headers.txt | sed 's/.*: //' | tr -d '\r')
+# 1. Create application
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'MyApp',
+    'code': 'UsrMyApp',
+    'template-code': 'AppFreedomUI',
+    'icon-background': '#1F5F8B',
+}, timeout=180)
+data = r['data']
+package_name = data['packageName']
+json.dump(data | {'contractType': 'short', 'schemaSync': [], 'editableContext': {}},
+          open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 
-# 2. Verify tools
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | \
-  grep 'application.create' || { echo "Required tools missing"; exit 1; }
+# 2. Schema sync — create lookup + seed + extend main entity in ONE call
+new_id = str(uuid.uuid4())
+r2 = call_mcp_tool('schema-sync', {
+    'environment-name': 'local',
+    'package-name': package_name,
+    'operations': [
+        {
+            'type': 'create-lookup',
+            'schema-name': 'UsrMyStatus',
+            'title': 'My Status',
+            'seed-rows': [
+                {'values': {'Id': new_id, 'Name': 'New'}},
+                {'values': {'Name': 'In Progress'}},
+                {'values': {'Name': 'Done'}},
+            ],
+        },
+        {
+            'type': 'update-entity',
+            'schema-name': 'UsrMyApp',
+            'update-operations': [
+                {'action': 'add', 'column-name': 'UsrStatus', 'type': 'Lookup',
+                 'title': 'Status', 'reference-schema-name': 'UsrMyStatus',
+                 'required': True, 'default-value-source': 'Const', 'default-value': new_id},
+            ],
+        },
+    ],
+})
+assert r2['data']['success'], f"schema-sync failed: {r2}"
 
-# 3. Create application
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc":"2.0","id":3,"method":"tools/call",
-    "params":{
-      "name":"application.create",
-      "arguments":{
-        "name":"MyApp",
-        "code":"UsrMyApp",
-        "templateCode":"AppFreedomUI",
-        "iconBackground":"#1F5F8B"
-      }
-    }
-  }' | grep 'data: ' | sed 's/^data: //' | \
-  jq -r '.result.content[0].text' | \
-  jq '. + {contractType:"short",schemaSync:[],editableContext:{}}' > output/MyApp/mcp-application-result.json
+# 3. Refresh context ONCE after all schema operations
+r3 = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+ctx = r3['data']
+ctx['contractType'] = 'short'
+ctx.setdefault('schemaSync', [])
+json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 
-# 4. Create lookup
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d "{
-    \"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",
-    \"params\":{
-      \"name\":\"entity.create_lookup\",
-      \"arguments\":{
-        \"packageUId\":\"$PACKAGE_UID\",
-        \"name\":\"UsrMyStatus\",
-        \"caption\":\"My Status\",
-        \"columnsJson\":\"[]\"
-      }
-    }
-  }"
+# 4. Read pages, edit bodies, then sync via page-sync
+form_r = call_mcp_tool('page-get', {'environmentName': 'local', 'schemaName': 'UsrMyApp_FormPage'})
+list_r = call_mcp_tool('page-get', {'environmentName': 'local', 'schemaName': 'UsrMyApp_ListPage'})
+# ... edit bodies with page_body_edit.py ...
+r4 = call_mcp_tool('page-sync', {
+    'environment-name': 'local',
+    'pages': [
+        {'schema-name': 'UsrMyApp_FormPage', 'body': edited_form_body},
+        {'schema-name': 'UsrMyApp_ListPage', 'body': edited_list_body},
+    ],
+    'validate': True,
+})
+assert r4['data']['success'], f"page-sync failed: {r4}"
+```
+
+### Using individual tools (fallback)
+
+```python
+import json
+import sys
+sys.path.insert(0, 'scripts')
+from mcp_client import call_mcp_tool
+
+# 1. Create application
+r = call_mcp_tool('application-create', {
+    'environment-name': 'local',
+    'name': 'MyApp',
+    'code': 'UsrMyApp',
+    'template-code': 'AppFreedomUI',
+    'icon-background': '#1F5F8B',
+}, timeout=180)
+data = r['data']
+package_name = data['packageName']
+json.dump(data | {'contractType': 'short', 'schemaSync': [], 'editableContext': {}},
+          open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
+
+# 2. Create lookup
+r2 = call_mcp_tool('create-lookup', {
+    'environment-name': 'local',
+    'package-name': package_name,
+    'schema-name': 'UsrMyStatus',
+    'title': 'My Status',
+})
+
+# 3. Seed lookup
+rows = json.dumps([{'values': {'Name': 'New'}}, {'values': {'Name': 'Done'}}])
+r3 = call_mcp_tool('create-data-binding-db', {
+    'environment-name': 'local',
+    'package-name': package_name,
+    'schema-name': 'UsrMyStatus',
+    'binding-name': 'UsrMyStatus_Lookup',
+    'rows': rows,
+})
+
+# 4. Add columns to main entity
+r4 = call_mcp_tool('update-entity-schema', {
+    'environment-name': 'local',
+    'package-name': package_name,
+    'schema-name': 'UsrMyApp',
+    'operations': [
+        {'action': 'add', 'column-name': 'UsrStatus', 'type': 'Lookup',
+         'title': 'Status', 'reference-schema-name': 'UsrMyStatus', 'required': True},
+    ],
+})
 
 # 5. Refresh context
-curl -s http://localhost:5001/mcp \
-  -u Supervisor:Supervisor \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc":"2.0","id":5,"method":"tools/call",
-    "params":{
-      "name":"application.get_info",
-      "arguments":{"appCode":"UsrMyApp"}
-    }
-  }' | grep 'data: ' | sed 's/^data: //' | \
-  jq -r '.result.content[0].text' | \
-  jq '. + {contractType:"short",schemaSync:[{tool:"entity.create_lookup",target:"UsrMyStatus",status:"success"}],editableContext:{}}' > output/MyApp/mcp-application-result.json
+r5 = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
+ctx = r5['data']
+ctx['contractType'] = 'short'
+ctx.setdefault('schemaSync', [])
+json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 ```
 
 ## Best Practices
@@ -1120,10 +1047,10 @@ fi
 
 ### 2. Maintain Context Integrity
 
-After every entity mutation:
+After entity mutations complete (after `schema-sync` batch or all individual calls):
 1. Call `application.get_info`
 2. Overwrite `mcp-application-result.json`
-3. Add entry to `schemaSync` array
+3. Add entries to `schemaSync` array
 
 ### 3. Use Temporary Files
 
@@ -1161,6 +1088,167 @@ python3 scripts/mcp_schema_sync.py apply \
   --env output/MyApp/.creatio-env.json
 ```
 
+## Page Tools
+
+### 10. List Pages (page-list)
+
+**Purpose:** Discover Freedom UI pages belonging to a package.
+
+**Tool name:** `page-list`
+
+**⚠️ Parameter naming:** Page tools use **camelCase** parameters, unlike entity tools which use kebab-case.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `environmentName` | string | **Yes** | Registered clio environment name |
+| `packageName` | string | **Yes** | Package name (e.g., "UsrTodoList") |
+
+**Example:**
+
+```python
+r = call_mcp_tool('page-list', {
+    'environmentName': 'local',
+    'packageName': 'UsrTodoList',
+})
+# Response: list of page schemas in the package
+```
+
+### 11. Get Page (page-get)
+
+**Purpose:** Read the full JavaScript body of a Freedom UI page schema.
+
+**Tool name:** `page-get`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `environmentName` | string | **Yes** | Registered clio environment name |
+| `schemaName` | string | **Yes** | Page schema name (e.g., "UsrTodoList_FormPage") |
+
+**Response (success):**
+
+```json
+{
+  "success": true,
+  "schemaName": "UsrTodoList_FormPage",
+  "schemaUId": "eda909b1-...",
+  "packageName": "UsrTodoList",
+  "parentSchemaName": "BaseModulePage",
+  "body": "define(\"UsrTodoList_FormPage\", ..."
+}
+```
+
+**Example:**
+
+```python
+r = call_mcp_tool('page-get', {
+    'environmentName': 'local',
+    'schemaName': 'UsrTodoList_FormPage',
+})
+body = r['data']['body']  # Full JS body with markers
+```
+
+**Known Issue:** `page-get` may fail with "Error reading JObject from JsonReader" for template-created pages whose bodies haven't been loaded by the designer service. Workaround: read body directly from PostgreSQL `SysSchemaContent` table (ContentType=0, Content column as UTF-8).
+
+### 12. Update Page (page-update)
+
+**Purpose:** Save a modified Freedom UI page body.
+
+**Tool name:** `page-update`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `environmentName` | string | **Yes** | Registered clio environment name |
+| `schemaName` | string | **Yes** | Page schema name |
+| `body` | string | **Yes** | Complete JS body with all 8 marker pairs |
+| `dryRun` | boolean | No | `True` to validate without saving (Python `True`/`False`, **NOT** string `"true"`) |
+
+**⚠️ Boolean Parameters:** `dryRun` must be Python `True`/`False`. String `"true"`/`"false"` causes MCP SDK deserialization failure.
+
+**Response (success):**
+
+```json
+{
+  "success": true,
+  "schemaName": "UsrTodoList_FormPage",
+  "bodyLength": 5236,
+  "dryRun": false
+}
+```
+
+**Workflow — always validate first:**
+
+```python
+# Step 1: Dry run to validate markers and structure
+r = call_mcp_tool('page-update', {
+    'environmentName': 'local',
+    'schemaName': 'UsrTodoList_FormPage',
+    'body': new_body,
+    'dryRun': True,   # ✅ Python boolean, NOT "true"
+})
+assert r['data']['success'], f"Dry run failed: {r['data'].get('error')}"
+
+# Step 2: Save
+r = call_mcp_tool('page-update', {
+    'environmentName': 'local',
+    'schemaName': 'UsrTodoList_FormPage',
+    'body': new_body,
+})
+```
+
+**Required marker pairs in body (all 8 must be present):**
+
+```
+/**SCHEMA_DEPS*/ ... /**SCHEMA_DEPS*/
+/**SCHEMA_ARGS*/ ... /**SCHEMA_ARGS*/
+/**SCHEMA_VIEW_CONFIG_DIFF*/ ... /**SCHEMA_VIEW_CONFIG_DIFF*/
+/**SCHEMA_VIEW_MODEL_CONFIG*/ or /**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/ ... (matching close)
+/**SCHEMA_MODEL_CONFIG*/ or /**SCHEMA_MODEL_CONFIG_DIFF*/ ... (matching close)
+/**SCHEMA_HANDLERS*/ ... /**SCHEMA_HANDLERS*/
+/**SCHEMA_CONVERTERS*/ ... /**SCHEMA_CONVERTERS*/
+/**SCHEMA_VALIDATORS*/ ... /**SCHEMA_VALIDATORS*/
+```
+
+**Known Issue:** `page-update` save (non-dryRun) may fail with "Error reading JObject" for template-created pages — same root cause as `page-get`. The tool internally calls `GetSchema` to read existing schema before saving, and this call returns empty. Workaround: update page body directly in PostgreSQL `SysSchemaContent` table using psycopg2.
+
+**Direct DB Workaround Example:**
+
+```python
+import psycopg2, datetime
+conn = psycopg2.connect(dbname='dev', user='postgres', host='localhost', port=5432)
+cur = conn.cursor()
+now = datetime.datetime.now(datetime.UTC)
+cur.execute("""
+    UPDATE "SysSchemaContent" sc
+    SET "Content" = %s, "ModifiedOn" = %s
+    FROM "SysSchema" s
+    WHERE s."Id" = sc."SysSchemaId"
+      AND s."Name" = %s AND sc."ContentType" = 0
+""", (new_body.encode('utf-8'), now, 'UsrTodoList_FormPage'))
+cur.execute("""
+    UPDATE "SysSchema"
+    SET "ClientContentModifiedOn" = %s, "ModifiedOn" = %s
+    WHERE "Name" = %s
+""", (now, now, 'UsrTodoList_FormPage'))
+conn.commit()
+```
+
+### Page Tool Parameter Convention
+
+| Tool Category | Parameter Style | Example |
+|--------------|----------------|---------|
+| Entity tools | kebab-case | `environment-name`, `schema-name`, `package-name` |
+| Page tools | camelCase | `environmentName`, `schemaName`, `packageName` |
+
+Mixing these styles causes silent failures or "Error reading JObject" errors.
+
+---
+
 ## Reference
 
 **Short Contract Structure:**
@@ -1188,7 +1276,7 @@ python3 scripts/mcp_schema_sync.py apply \
   },
   "schemaSync": [
     {
-      "tool": "entity.create_lookup",
+      "tool": "create-lookup",
       "target": "UsrEventStatus",
       "status": "success",
       "entityUId": "..."
@@ -1200,15 +1288,36 @@ python3 scripts/mcp_schema_sync.py apply \
 
 **Data Value Type Names:**
 
-- `MediumText` - string up to 250 chars
-- `MaxSizeText` - unlimited text
-- `ShortText` - string up to 50 chars
+Primary types:
+- `Guid` - globally unique identifier
+- `Text` - generic text (defaults to MediumText)
+- `Integer` - whole number
+- `Boolean` - true/false
+- `DateTime` - date and time
+- `Lookup` - reference to another entity (requires `reference-schema-name`)
+
+Text variants (with aliases):
+- `ShortText` (alias: `Text50`) - up to 50 chars
+- `MediumText` (alias: `Text250`) - up to 250 chars
+- `LongText` (alias: `Text500`) - up to 500 chars
+- `MaxSizeText` (alias: `TextUnlimited`) - unlimited text
+- `PhoneNumber` - phone number format
+- `WebLink` - URL format
+- `Email` - email address format
+- `RichText` - rich/HTML text
+
+Date/Time variants:
 - `DateTime` - date and time
 - `Date` - date only
+- `Time` - time only
+
+Numeric variants:
 - `Integer` - whole number
-- `Float` - decimal number
-- `Boolean` - true/false
-- `Lookup` - reference to another entity (requires `referenceSchemaName`)
+- `Float` (alias: `Decimal2`) - decimal with 2 places
+- `Decimal0` through `Decimal8` - decimal with 0-8 places
+- `Currency0` through `Currency3` - currency with 0-3 decimal places
+
+Both the primary name and alias are accepted (e.g., `ShortText` and `Text50` are equivalent).
 
 **Template Codes:**
 

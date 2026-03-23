@@ -344,6 +344,8 @@ What should feel easy in the MVP:
                 "TodoList",
                 "tester",
                 "http://localhost:5001",
+                "Supervisor",
+                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -398,6 +400,8 @@ What should feel easy in the MVP:
                 "TodoList",
                 "tester",
                 "http://localhost:5001",
+                "Supervisor",
+                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -437,6 +441,8 @@ What should feel easy in the MVP:
                 "TodoList",
                 "tester",
                 "http://localhost:5001",
+                "Supervisor",
+                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)

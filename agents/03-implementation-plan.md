@@ -114,7 +114,7 @@ Rules:
 - Resolve whether `application.create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
 - For existing-app work, include explicit discovery through `application.get_list` and `application.get_info`.
 - Create lookup entities before entities that reference them.
-- Use `binding.create` immediately after each lookup that needs seed data.
+- Prefer inline lookup `seed-rows` in `schema-sync`; use `binding.create` only when the workflow explicitly needs a separate binding artifact.
 - Extend the template-created main entity via `entity.update`.
 - Use `entity.create` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `entity.update`, plan explicit operations only.
@@ -152,7 +152,7 @@ Required execution sequence for each page:
 
 1. `page.list`
 2. `page.get`
-3. `page.update` with `dryRun: "true"`
+3. `page.update` with `dryRun: True`
 4. `page.update`
 5. `page.get` again for verification
 
@@ -164,14 +164,13 @@ When page sync is required:
 
 ### Validation Rules
 
-- Use `packageUId`, not `packageName`, in executable entity and binding payloads.
-- Use `entityUId` for `entity.update`.
-- Use `name` for create tools and `schemaName` for `entity.update`.
-- Use `caption`, not `displayName` or `description`, in entity tool payloads.
-- Use nested `{operation, column}` structures in `operationsJson`.
+- Prefer `schema-sync` for entity mutations and keep `operations` / `update-operations` as native arrays.
+- Use `environment-name` and `package-name` for executable entity payloads, and `schema-name` for schema targets.
+- Use `action` / `column-name` keys inside `update-operations`.
+- For fallback `create-data-binding-db`, use `binding-name` plus `rows` as a JSON string of `[{"values": {...}}]`.
+- Pass MCP booleans such as `dryRun`, `required`, and `extendParent` as booleans, not strings.
 - Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
 - Never treat seeded rows as implementation of a default rule.
-- For binding payloads, use `bindingName`, `rowsJson`, and deployed schema metadata only.
 
 ## Plan Output
 

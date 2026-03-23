@@ -2,6 +2,7 @@ import contextlib
 import json
 import shutil
 import sys
+import tempfile
 import unittest
 import uuid
 from pathlib import Path
@@ -13,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
-from scripts.mcp_schema_sync import WorkflowError, apply_sync_plan, build_create_action, build_sync_plan
+from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
 
 
 @contextlib.contextmanager
@@ -471,6 +472,18 @@ class FakeMcpClientRefreshFailure(FakeMcpClient):
                     "columns": []
                 }
             }
+        if tool_name == "entity.update":
+            return {
+                "success": True,
+                "packageUId": arguments["packageUId"],
+                "entity": {
+                    "uId": arguments["entityUId"],
+                    "name": arguments["schemaName"],
+                    "caption": arguments["caption"],
+                    "columns": {}
+                },
+                "appliedOperations": []
+            }
         if tool_name == "application.get_info":
             raise WorkflowError(
                 'Instance of workspace item with type "Terrasoft.Configuration.UsrMyEntityTypeSchema" cannot be obtained from server metadata'
@@ -586,7 +599,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         ):
             build_sync_plan(current_context, build_edited_context_with_invalid_lookup_default())
 
-    def test_apply_sync_plan_refreshes_canonical_result_after_each_mutation(self):
+    def test_apply_sync_plan_refreshes_canonical_result_after_batch(self):
         result_document = build_current_result_document()
         fake_client = FakeMcpClient(build_current_result_document())
         with temp_workdir() as workdir:
@@ -604,7 +617,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(persisted["schemaSync"][1]["evidence"]["entity"]["columns"], ["UsrName", "UsrType"])
         self.assertEqual(
             [call[0] for call in fake_client.calls],
-            ["entity.create_lookup", "application.get_info", "entity.update", "application.get_info"]
+            ["entity.create_lookup", "entity.update", "application.get_info"]
         )
 
     def test_apply_sync_plan_raises_actionable_error_when_metadata_refresh_fails(self):
@@ -614,7 +627,7 @@ class McpSchemaSyncTests(unittest.TestCase):
             result_path = workdir / "mcp-application-result.json"
             with self.assertRaisesRegex(
                 WorkflowError,
-                "application.get_info failed after entity.create_lookup for UsrMyEntityType"
+                "application.get_info failed after entity.update for UsrMyEntity"
             ):
                 apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
 
@@ -627,6 +640,44 @@ class McpSchemaSyncTests(unittest.TestCase):
         refresh_calls = [call for call in fake_client.calls if call[0] == "application.get_info"]
         self.assertTrue(refresh_calls)
         self.assertEqual(refresh_calls[0][1], {"appCode": "UsrMyApp"})
+
+
+class LoadMcpClientTests(unittest.TestCase):
+    def test_load_mcp_client_returns_http_client_when_mcp_url_present(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpUrl": "http://localhost:5001/mcp", "environment": "local"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, McpHttpClient)
+
+    def test_load_mcp_client_returns_stdio_client_for_stdio_transport(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpTransport": "stdio", "environment": "local"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, ClioStdioClient)
+        self.assertEqual(client.environment_name, "local")
+
+    def test_load_mcp_client_raises_without_environment_for_stdio(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpTransport": "stdio"}, f)
+            f.flush()
+            with self.assertRaisesRegex(WorkflowError, "environment name is missing"):
+                load_mcp_client(f.name)
+
+    def test_load_mcp_client_raises_for_unknown_transport(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpTransport": "grpc", "environment": "local"}, f)
+            f.flush()
+            with self.assertRaisesRegex(WorkflowError, "Unsupported mcpTransport"):
+                load_mcp_client(f.name)
+
+    def test_load_mcp_client_prefers_mcp_url_over_stdio(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpUrl": "http://localhost:5001/mcp", "mcpTransport": "stdio", "environment": "local"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, McpHttpClient)
 
 
 if __name__ == "__main__":

@@ -51,9 +51,14 @@ Do not replace, omit, or reorder these sections. Do not wrap them in a generic S
 
 ---
 
+## Context Navigation
+
+Before reading any context or agent files, read `context/INDEX.md` first.
+It maps every file to line ranges per phase so you can load only the relevant sections.
+
 ## Execution Rules
 
-1. Read `AGENTS.md` first.
+1. Read `context/INDEX.md` first, then `AGENTS.md`.
 2. Use natural-language interaction as primary UX.
 3. Start Gate P with a routing question: `site-ready-now` or `planning-first`.
 4. On the first turn for a new app request, respond immediately from the prompt. Do not spend the first turn reading repo files or doing a long preflight unless the user explicitly asks about repository internals.
@@ -93,7 +98,7 @@ Do not replace, omit, or reorder these sections. Do not wrap them in a generic S
 
 ## Agent 4 Implementation
 
-Agent 4 executes MCP tools directly via curl commands. All instructions and examples are in:
+Agent 4 executes MCP tools through the documented MCP client flow. All instructions and examples are in:
 - `agents/04-implementation.md`
 - `context/mcp-application-tools-reference.md`
 
