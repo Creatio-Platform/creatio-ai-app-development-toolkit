@@ -28,6 +28,7 @@ Returns JSON: {"success": bool, "data": dict|None, "raw": str}
 import subprocess
 import json
 import os
+import shlex
 import shutil
 import sys
 import time
@@ -37,7 +38,7 @@ import threading
 def _build_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
     if env_cmd:
-        return env_cmd.split() + ["mcp-server"]
+        return shlex.split(env_cmd) + ["mcp-server"]
     if shutil.which("clio"):
         return ["clio", "mcp-server"]
     if not shutil.which("dotnet"):
@@ -52,10 +53,12 @@ def _build_clio_cmd():
 
 
 def _parse_tool_response(collected):
+    skipped = []
     for line in collected:
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
+            skipped.append(line)
             continue
         if not isinstance(msg.get("id"), int) or msg["id"] < 2:
             continue
@@ -64,12 +67,18 @@ def _parse_tool_response(collected):
         content = result.get("content", [])
         raw = content[0].get("text", "") if content else ""
         if not raw:
-            return {"success": False, "data": None, "raw": "empty response"}
+            diag = f"empty response"
+            if skipped:
+                diag += f"; skipped non-JSON lines: {skipped}"
+            return {"success": False, "data": None, "raw": diag}
         try:
             data = json.loads(raw)
             return {"success": not is_error, "data": data, "raw": raw}
         except json.JSONDecodeError:
             return {"success": not is_error, "data": None, "raw": raw}
+    diag = "no matching response"
+    if skipped:
+        diag += f"; skipped non-JSON lines: {skipped}"
     return None
 
 
@@ -158,10 +167,12 @@ class PersistentMcpClient:
             except Exception:
                 self._kill()
                 raise
+        skipped = []
         for line in collected:
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
+                skipped.append(line)
                 continue
             if msg.get("id") != call_id:
                 continue
@@ -170,14 +181,20 @@ class PersistentMcpClient:
             content = result.get("content", [])
             raw = content[0].get("text", "") if content else ""
             if not raw:
-                return {"success": False, "data": None, "raw": "empty response"}
+                diag = "empty response"
+                if skipped:
+                    diag += f"; skipped non-JSON lines: {skipped}"
+                return {"success": False, "data": None, "raw": diag}
             try:
                 data = json.loads(raw)
                 return {"success": not is_error, "data": data, "raw": raw}
             except json.JSONDecodeError:
                 return {"success": not is_error, "data": None, "raw": raw}
+        diag = f"no response. lines: {collected}"
+        if skipped:
+            diag += f"; skipped non-JSON lines: {skipped}"
         self._kill()
-        return {"success": False, "data": None, "raw": f"no response. lines: {collected}"}
+        return {"success": False, "data": None, "raw": diag}
 
     def call_tools_batch(self, calls):
         results = []
