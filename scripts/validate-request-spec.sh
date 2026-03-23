@@ -30,7 +30,7 @@ sections=(
   actorsAndRoles
   domainModel
   lifecycleAndStatuses
-  businessRules
+  businessLogic
   uxExpectations
   edgeCases
   acceptanceCriteria

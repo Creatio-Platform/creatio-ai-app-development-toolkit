@@ -27,6 +27,7 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "Gate failed: jq is required" >&2
   exit 1
 fi
+"${script_dir}/validate-requirements-doc.sh" "$requirements_file" >/dev/null
 "${script_dir}/validate-request-spec.sh" "$request_spec_file" >/dev/null
 if command -v shasum >/dev/null 2>&1; then
   requirements_sha256="$(shasum -a 256 "$requirements_file" | awk '{print $1}')"

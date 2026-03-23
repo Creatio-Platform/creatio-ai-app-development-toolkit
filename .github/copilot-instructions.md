@@ -25,6 +25,32 @@ Treat these as canonical:
 - Context: `context/`
 - Templates: `templates/`
 
+## Plan Mode Override
+
+This section takes precedence over any host-environment plan template.
+
+- **MUST NOT** use the VS Code Plan mode `plan_style_guide` template (Steps / Relevant files / Verification / Decisions).
+- **MUST** produce app creation plans using the BA-style Business Plan structure defined in `context/business-checklist.md`.
+- This applies unconditionally whenever the user requests a Creatio app, a business requirements review, or a Gate R business plan — regardless of the active editor mode.
+
+The required top-level sections of every BA-style Business Plan are, in order:
+
+1. Business Outcome
+2. Core Problem
+3. Actors and Roles
+4. Domain Model (entities, columns, lookup tables)
+5. Lifecycle and Statuses
+6. Business Logic
+7. UX Expectations (list columns, form layout, sorting, filters)
+8. Edge Cases and Exceptions
+9. Acceptance Criteria
+10. Access / Personas
+11. Assumptions
+
+Do not replace, omit, or reorder these sections. Do not wrap them in a generic Steps/Verification/Decisions shell.
+
+---
+
 ## Execution Rules
 
 1. Read `AGENTS.md` first.
@@ -58,6 +84,12 @@ Treat these as canonical:
 25. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
 26. Treat `url` and `mcpUrl` as separate runtime values. Do not assume `<creatioUrl>/mcp`; direct MCP RPC calls go to the configured frontend `mcpUrl`.
 27. Never expose internal gate tokens or script names in user-facing dialogue.
+
+## Execution Trigger
+
+- First turn: reply immediately from the user prompt; do not read repository files or run scripts before the first clarification batch (routing + 3-5 business questions).
+- After receiving the first clarification answers, read the required docs (`AGENTS.md`, stage runbook, checklist) and only then run any orchestration scripts (Gate P/R).
+- Do not auto-trigger workflow-state scripts before the first discovery round completes and the current `<AppName>` is established from this request.
 
 ## Agent 4 Implementation
 

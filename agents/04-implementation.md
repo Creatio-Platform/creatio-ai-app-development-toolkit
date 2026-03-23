@@ -125,4 +125,6 @@ Use `scripts/mcp_result_evidence.py` and the normalized result document as the s
 - `pageEvidence`
 - `acceptanceEvidence`
 
+Persist page and report evidence using explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
+
 Never hand-write success claims once runtime evidence exists.
