@@ -569,6 +569,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 1. Call `page.list` with the app's package name to discover generated pages
 2. For each page that needs customization:
    a. Call `page.get(schemaName)` to get the full JS body
+   a1. **CRITICAL — Page body marker parsing:** Always use `page_body_tools.parse_marker_json(body, marker)` to parse marker content. **Never** use raw `json.loads()` — page bodies contain JavaScript with trailing commas that are valid JS but invalid strict JSON. The helper `strip_trailing_commas()` handles this automatically.
    b. Edit the body using the **Page Body Editing Algorithm** below — never use ad-hoc string manipulation
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
    d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
