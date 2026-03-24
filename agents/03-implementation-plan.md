@@ -23,9 +23,12 @@ The business contract for this agent is the BA-style requirements draft approved
 - `output/<AppName>/page-sync/*.body.js` when page bodies are materialized outside `plan.md`
 
 ## Read First
+Preferred: read `context/.cache/agent-3-bundle.md` (single file).
 
+Fallback (if bundle unavailable):
 - `AGENTS.md`
-- `context/essentials.md`
+- `context/essentials.md` L166-229 (MCP Tools)
+- `context/schema-reference.md` L7-90 (Parents + DataValueTypes)
 - `context/business-checklist.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`

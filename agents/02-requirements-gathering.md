@@ -22,6 +22,9 @@ Operate as a Business Analyst Requirements Agent. The approved artifact from thi
 
 ## Read First
 
+Preferred: read `context/.cache/agent-2-bundle.md` (single file).
+
+Fallback (if bundle unavailable):
 - `AGENTS.md`
 - `context/essentials.md`
 - `context/business-checklist.md`
