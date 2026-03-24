@@ -2,11 +2,11 @@
 
 ## Role
 
-Configure clio CLI and establish connection to Creatio instance.
+Configure clio CLI and establish connection to the target Creatio runtime for the current app workflow.
 
 ## Input/Output
 
-- **Input:** Developer request with Creatio URL, `<AppName>`
+- **Input:** Developer request with Creatio URL, frontend MCP URL when available, and `<AppName>`
 - **Output:** `output/<AppName>/.creatio-env.json`
 
 ## Context
@@ -53,7 +53,7 @@ Note the version and proceed. No additional configuration needed.
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
-clio ver 2>/dev/null || dotnet $CLIO_PATH ver  # verify it works
+dotnet /full/path/to/clio.dll ver
 ```
 `scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
 
@@ -123,6 +123,7 @@ Create the file `output/<AppName>/.creatio-env.json`:
   "environment": "<env_name>",
   "url": "<URL>",
   "isNetCore": true,
+  "mcpUrl": "<frontend MCP URL>",
   "mcpTransport": "stdio",
   "mcpCommand": "clio mcp-server"
 }
@@ -131,6 +132,7 @@ Create the file `output/<AppName>/.creatio-env.json`:
 Replace `true` with `false` if .NET Framework was detected in Step 4.
 
 `mcpCommand` is `clio mcp-server` for the standard global install. If the user provided a custom clio path at startup (e.g. `CLIO_CMD="dotnet /path/to/clio.dll"`), document that in `.creatio-env.json` as a `note` field — do NOT change `mcpCommand`.
+When the workflow provides a frontend endpoint, persist it as `mcpUrl` exactly as given. Never derive `mcpUrl` from the Creatio site URL.
 
 ### 7. Verify MCP via clio stdio (MANDATORY)
 
@@ -142,6 +144,8 @@ python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_n
 
 - **Success** (response has `"success": true`) — environment setup is complete.
 - **Failure** — stop and report blocker to developer. Check that clio is installed (`clio ver`) and the environment name is correct.
+
+If the workflow also provides a frontend MCP endpoint, probe `initialize` against `mcpUrl` and require an `Mcp-Session-Id` header before declaring setup complete.
 
 ## Error Handling
 
@@ -157,5 +161,6 @@ python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_n
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
-✅ `output/<AppName>/.creatio-env.json` exists with `mcpTransport: "stdio"` and correct `environment`  
+✅ `output/<AppName>/.creatio-env.json` exists with correct `environment` and persisted runtime MCP details  
 ✅ `python3 scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
+✅ when `mcpUrl` is provided, frontend `initialize` succeeds and returns `Mcp-Session-Id`  

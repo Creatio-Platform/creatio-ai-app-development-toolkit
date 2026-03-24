@@ -2,9 +2,58 @@
 
 Use this checklist for natural-language app requests before moving to implementation planning.
 
+## Output Format
+
+Every BA-style Business Plan presented to the developer **MUST** contain the following top-level sections in this order. Do not substitute these with a VS Code plan template (Steps / Relevant files / Verification / Decisions) or any other host-injected structure.
+
+| # | Section | Required |
+|---|---------|----------|
+| 1 | Business Outcome | yes |
+| 2 | Core Problem | yes |
+| 3 | Actors and Roles | yes |
+| 4 | Domain Model | yes |
+| 5 | Lifecycle and Statuses | yes |
+| 6 | Business Logic | yes |
+| 7 | UX Expectations | yes |
+| 8 | Edge Cases and Exceptions | default/assumed |
+| 9 | Acceptance Criteria | yes |
+| 10 | Access / Personas | yes |
+| 11 | Assumptions | yes |
+
+Sections 1–7 and 9–11 may never be omitted. Section 8 may be captured as an explicit assumption when no edge cases arise.
+
+The plan body shown for Gate R approval must follow this structure exactly. A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
+
+---
+
 ## Goal
 
 Ensure business requirements are complete enough to generate a usable Creatio composable app without hidden product decisions.
+
+Use a Business Analyst discovery style:
+
+- start by analyzing the request in business terms
+- ask only the minimum critical questions
+- keep discovery within 3-7 questions
+- prioritize: business goal, core problem, key users/roles, scope, success criteria
+- avoid minor implementation questions unless they are true blockers
+- if a gap is non-critical, make an explicit assumption and continue
+- ask the routing question and the main discovery questions in the first user-facing clarification turn
+- do not derail discovery with internal workflow-state or app-code discussions unless they create a real product-level ambiguity
+- apply domain expertise when the app category is recognizable; do not produce an unrealistically thin model when standard business attributes are normally expected for that domain
+
+## Domain Expertise Expectation
+
+When the request clearly maps to a familiar business domain, the BA draft should reflect standard business expectations for that domain even if the developer did not enumerate every obvious field.
+
+Examples:
+- for client/customer or partner registries, expect core profile and contact attributes for the legal entity or person unless explicitly out of scope
+- for case, request, or service workflows, expect at least the issue summary, status, owner, dates, and basic resolution trail
+- for product or catalog scenarios, expect at least title, category, status, and key commercial or operational attributes
+
+Use domain expertise to propose these baseline fields and behaviors in the draft.
+If they materially change scope, ask.
+If they do not materially change scope, include them as explicit assumptions instead of silently omitting them.
 
 ## Checklist Items
 
@@ -12,15 +61,28 @@ Ensure business requirements are complete enough to generate a usable Creatio co
 
 Required:
 - app purpose
-- expected result/KPI or success signal
+- business goal
+- core problem / pain point
+- expected result, KPI, or success signal
+- MVP scope boundaries when they materially affect the first release
 
-## 2. Actors and Roles
+The first discovery questions should focus here before moving into lower-level detail.
+
+## 2. Core Problem
+
+Required:
+- current operational pain points
+- visibility, coordination, manual work, or system gaps the app should address
+- why the current process is insufficient
+
+## 3. Actors and Roles
 
 Required:
 - who uses the app
 - who can create/update/close records
+- who owns key approvals or responsibilities
 
-## 3. Domain Model
+## 4. Domain Model
 
 Required:
 - main entities
@@ -28,24 +90,40 @@ Required:
 - lookup entities for enum-like fields
 - key relationships
 - record title / primary display field for each entity and lookup
+- standard profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects
 
-## 4. Lifecycle and Statuses
+Resolve these ambiguities explicitly when they appear in the request:
+- if multiple counterparty categories are mentioned, clarify whether they belong in one universal registry with a type lookup or in separate main business objects
+- if a secondary entity is proposed, state why it is a distinct business object instead of additional fields on the main entity
+- if contact-like records are present, state whether they are subordinate to one parent record or may exist independently
 
-Required:
+## 5. Lifecycle and Statuses
+
+Default unless critical:
 - lifecycle stages/statuses
-- transition expectations (if any restrictions exist)
+- transition expectations when restrictions matter
 
-## 5. Business Rules
+If the request mentions a pipeline, funnel, or stages, clarify whether the lifecycle state belongs to the main record or to a separate transactional record.
 
-Required:
+If the developer does not define lifecycle detail, propose a practical default and mark it as an assumption.
+
+## 6. Business Logic
+
+Default unless critical:
 - required fields
 - defaults
-- validation rules
+- validation expectations
 - restrictions and edge constraints
+- minimum fields required to create the main record
+- duplicate handling posture
+- archive/close posture
+- ownership/editing posture
 
-## 6. UX Expectations
+If a requirement changes compliance, ownership, or acceptance outcome, treat it as required clarification instead of a default.
 
-Required:
+## 7. UX Expectations
+
+Default unless critical:
 - list page columns
 - form page field groups/layout notes
 - which field is shown as the record title in lists and forms
@@ -58,23 +136,90 @@ If the developer omits exact page fields or gives only a partial list, resolve d
 - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
 - Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
-## 7. Edge Cases and Exceptions
+The BA draft must surface these defaults in the `UX assumptions` section:
+- default list columns
+- default sorting
+- default main filters
+- form field groups
 
-Required:
+The visible BA draft should render the UX section as a short bullet list, not as a table.
+
+## 8. Edge Cases and Exceptions
+
+Ask only if business-critical:
 - exceptional flows
 - invalid input behavior
 - conflict/duplicate handling if relevant
 
-## 8. Acceptance Criteria
+If the omission does not affect compliance or acceptance, capture the default handling as an assumption.
+
+## 9. Acceptance Criteria
 
 Required:
-- concrete business-level checks that define “done”
+- concrete business-level checks that define "done"
+
+## 10. Personas, Access Restrictions, and Ownership Boundaries
+
+Required:
+- the main personas and their business responsibilities
+- whether record ownership or confidentiality rules are required
+
+If restrictions are not essential, explicitly state:
+- `No specific access restrictions are required by default.`
+
+Do not suggest optional restrictions without a business reason.
+
+## 11. Analytics
+
+Required at least at draft level:
+- operational metrics
+- usage or participation metrics when relevant
+- business impact metrics or KPI signals when relevant
+- a simple business funnel when the process naturally supports one
+
+If full metric detail is missing, define a practical draft set and mark it as an assumption.
+In the BA draft, analytics may be captured as a compact subsection of the core process and business logic section instead of a separate top-level section when that reduces repetition.
+
+## Business Logic Quality Bar
+
+The business logic section is incomplete if it only restates the workflow.
+
+It must explicitly define:
+- what is the minimum record needed to start work
+- what statuses or lifecycle states matter operationally
+- what is considered inactive, archived, overdue, duplicate, or unresolved when relevant
+- what the team must see or control in day-to-day work
+- which supporting records are required to make the process operationally usable
+
+## Pre-analysis Pass
+
+Before presenting the BA draft to the developer, run a pre-analysis pass across all draft sections and assumptions.
+
+The pre-analysis must check for:
+- contradictions between business context, process, data model, UX assumptions, and assumptions
+- business logic that is not reflected in the data model or cannot be supported by the described UX
+- required fields in business logic that are not marked as required in the data model
+- defaults that do not identify a concrete `schema default`, `ui default`, or explicit absence of default
+- sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
+- lookup usage that is inconsistent across entities or too broad for the stated business scope
+- supporting entities whose required parent links or cross-field constraints are not explicitly captured
+- assumptions that contradict confirmed answers
+- visible BA draft formatting that violates the fixed document contract
+- markdown tables outside the data model section
+- checklist-source language leaking into the visible BA draft
+
+If pre-analysis finds a material issue:
+- ask a targeted follow-up question when the issue changes business intent or acceptance
+- otherwise resolve it as an explicit assumption before showing the draft
+
+Do not present the BA draft while known cross-section contradictions or missing carriers still exist.
 
 ## Completion Criteria
 
 Set `businessChecklistComplete=true` only when:
-- all required checklist items are answered, or
-- unresolved items are documented in assumptions and explicitly accepted by developer.
+- all required checklist items are answered, and
+- optional/defaulted items are either answered or documented in assumptions and explicitly accepted by the developer.
+- the pre-analysis pass has been completed without unresolved cross-section contradictions
 
 For each checklist group, persist:
 - `source: "confirmed"` when the developer answered it directly
@@ -89,14 +234,20 @@ If not complete, continue clarification and do not proceed to implementation pla
 ## Clarification Strategy
 
 - Ask questions in themed batches, not all at once.
+- Prefer 3-5 decision-driving questions for the initial discovery pass.
+- Keep the full discovery within 3-7 questions unless the request is unusually ambiguous.
 - Keep each question tied to one checklist gap.
 - If answer is ambiguous, rephrase and request concrete values.
 - Prefer business language; avoid technical implementation details unless required as blockers.
+- Prefer option-based prompts over open-ended questions whenever deterministic defaults are possible.
+- when the request contains category, lifecycle, or secondary-entity ambiguity, resolve it explicitly before finalizing the BA draft
 
 ## Technical Minimalism Boundary
 
 Technical questions are allowed only for:
 - execution blockers (URL, access, credentials)
+
+In `planning-first`, those runtime inputs may remain deferred until implementation is requested.
 
 All other technical values should use deterministic defaults and be documented later in plan artifacts.
 

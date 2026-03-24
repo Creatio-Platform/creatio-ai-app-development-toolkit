@@ -1,15 +1,30 @@
+import contextlib
 import json
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_TMP_ROOT = ROOT / ".tmp-tests"
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
 from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
+
+
+@contextlib.contextmanager
+def temp_workdir():
+    workdir = TEST_TMP_ROOT / f"tmp-{uuid.uuid4().hex}"
+    workdir.mkdir(parents=True, exist_ok=False)
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def build_current_result_document():
@@ -587,8 +602,8 @@ class McpSchemaSyncTests(unittest.TestCase):
     def test_apply_sync_plan_refreshes_canonical_result_after_batch(self):
         result_document = build_current_result_document()
         fake_client = FakeMcpClient(build_current_result_document())
-        with tempfile.TemporaryDirectory() as temp_dir:
-            result_path = Path(temp_dir) / "mcp-application-result.json"
+        with temp_workdir() as workdir:
+            result_path = workdir / "mcp-application-result.json"
             apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         entity_names = [entity["name"] for entity in persisted["editableContext"]["packages"][0]["entities"]]
@@ -608,8 +623,8 @@ class McpSchemaSyncTests(unittest.TestCase):
     def test_apply_sync_plan_raises_actionable_error_when_metadata_refresh_fails(self):
         result_document = build_current_result_document()
         fake_client = FakeMcpClientRefreshFailure(build_current_result_document())
-        with tempfile.TemporaryDirectory() as temp_dir:
-            result_path = Path(temp_dir) / "mcp-application-result.json"
+        with temp_workdir() as workdir:
+            result_path = workdir / "mcp-application-result.json"
             with self.assertRaisesRegex(
                 WorkflowError,
                 "application.get_info failed after entity.update for UsrMyEntity"
@@ -619,8 +634,8 @@ class McpSchemaSyncTests(unittest.TestCase):
     def test_apply_sync_plan_supports_flat_result_document(self):
         result_document = build_current_flat_result_document()
         fake_client = FakeMcpClient(build_current_result_document())
-        with tempfile.TemporaryDirectory() as temp_dir:
-            result_path = Path(temp_dir) / "mcp-application-result.json"
+        with temp_workdir() as workdir:
+            result_path = workdir / "mcp-application-result.json"
             apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
         refresh_calls = [call for call in fake_client.calls if call[0] == "application.get_info"]
         self.assertTrue(refresh_calls)

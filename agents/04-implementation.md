@@ -1,154 +1,137 @@
-# Agent 04 — Implementation Orchestrator
+# Agent 04 - Implementation
 
 ## Role
 
-Read `plan.md`, call MCP application tools, initialize canonical context in `mcp-application-result.json`, execute ordered entity sync calls when required, synchronize planned FormPage/ListPage updates, refresh context via `application.get_info`, and validate output.
+Execute the approved MCP workflow synchronously, persist runtime evidence, synchronize required pages, and generate the final report and docs from persisted evidence.
 
-Agent 4 runs synchronously. It must write only `output/<AppName>/` artifacts during app generation.
+During app-generation execution, write only inside `output/<AppName>/`.
 
-## Input/Output
+## Input
 
-- Input: `output/<AppName>/plan.md`, `output/<AppName>/workflow-state.json`, `output/<AppName>/.creatio-env.json`
-- Output:
-  - `output/<AppName>/mcp-application-result.json`
-  - `output/<AppName>/mcp-application-report.md`
+- `output/<AppName>/technical-annex.md` or `output/<AppName>/plan.md`
+- `output/<AppName>/workflow-state.json`
+- `output/<AppName>/.creatio-env.json`
+- `output/<AppName>/page-sync-plan.json` when page sync is required
 
-## Context
+## Output
 
-Read:
+- `output/<AppName>/mcp-application-result.json`
+- `output/<AppName>/mcp-application-report.md`
+- `output/<AppName>/docs/**`
 
-**Preferred:** Read `context/.cache/agent-4-bundle.md` — a precompiled bundle with all required context
-in one file. Generate it first if missing: `python3 scripts/build_context_bundle.py --agent 4`
+## Read First
 
-**Individual files (only if bundle unavailable):**
+- `AGENTS.md`
+- `context/.cache/agent-4-bundle.md` when available
 - `context/essentials.md`
-- `context/mcp-application-tools-reference.md` — MCP tool parameters and payload reference
+- `context/app-documentation-contract.md`
+- `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
-- `scripts/mcp_client.py` — Reusable stdio MCP client (persistent connection, use this, not curl)
-- `scripts/mcp_full_sync.py` — Combined entity + page sync in one process
+- `scripts/mcp_client.py`
+- `scripts/mcp_full_sync.py`
 - `scripts/page_body_tools.py`
 - `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
+- `scripts/app_docs.py`
 
-## MCP Workflow (via scripts/mcp_client.py)
+## MCP Transport And Tooling
 
-**Primary transport:** clio MCP uses **stdio** (`clio mcp-server`), not HTTP/SSE. Use `scripts/mcp_client.py` for all MCP calls. Do NOT use curl for clio MCP.
+- Prefer `scripts/mcp_client.py` for clio stdio transport; it handles MCP initialization internally.
+- Prefer `scripts/mcp_full_sync.py` when the plan batches schema and page synchronization in one process.
+- Respect `CLIO_CMD` when a custom clio binary is configured; otherwise use global `clio`.
+- Do not use raw curl for clio stdio transport.
+- Pass boolean MCP parameters such as `dryRun` as booleans, not strings.
 
-### clio Resolution Order
+## Preconditions
 
-`scripts/mcp_client.py` resolves clio in this priority:
+- `scripts/check-approval-gate.sh <AppName>` passes.
+- `output/<AppName>/.creatio-env.json` exists and is valid.
+- `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists.
+- Agent 4 runs in the foreground. Do not background it.
 
-| Scenario | Resolution |
-|----------|-----------|
-| User provided custom clio path | Set `CLIO_CMD` env var: `CLIO_CMD="dotnet /path/to/clio.dll"` |
-| Standard install (most users) | `clio` in PATH — installed via `dotnet tool install clio -g` |
-| clio not found | `RuntimeError` with install instructions — stop and ask user to install |
+## Execution Order
 
-### clio stdio Transport — Critical Constraints
+1. Verify MCP is reachable, either through explicit `initialize` or via `scripts/mcp_client.py`.
+2. Call `tools/list` and verify required tools exist.
+3. Resolve the execution branch:
+   - new app: `application.create`
+   - existing app: `application.get_list` -> `application.get_info`
+4. Parse the short MCP contract from `result.content[0].text`.
+5. Initialize `output/<AppName>/mcp-application-result.json`.
+6. Execute ordered schema sync from the plan, preferably via `schema-sync` / `scripts/mcp_full_sync.py` when the plan batches operations:
+   - `entity.create_lookup`
+   - `binding.create`
+   - `entity.create`
+   - `entity.update`
+7. After each successful entity mutation or schema-sync batch, call `application.get_info` and overwrite `mcp-application-result.json`.
+8. If the plan requires page sync, run:
+   - `page.list`
+   - `page.get`
+   - `page.update` with `dryRun: True`
+   - `page.update`
+   - `page.get` again for verification
+9. Persist page evidence and verification results.
+10. Validate the final result contract.
+11. Build `mcp-application-report.md` from persisted evidence only.
+12. Sync and validate docs under `output/<AppName>/docs/`.
 
-❌ **NEVER** pass `-e` flag to `mcp-server` — it is NOT supported (causes exit code 1)
-❌ **NEVER** use shell variable expansion (`$VAR`) in pipes to `mcp-server` — blocked by security scanner
-❌ **NEVER** send `notifications/initialized` — clio does not support it
-❌ **NEVER** use dot-separated tool names (`application.create`) — clio uses **dashes** (`application-create`)
-❌ **NEVER** pass boolean parameters as strings (`'true'`/`'false'`) — use Python `True`/`False`. String booleans cause MCP SDK deserialization failure with generic `"An error occurred invoking..."` error.
-✅ **ALWAYS** use `scripts/mcp_client.py` which handles all transport details correctly
+## Branching Rules
 
-### Quick Start Pattern
+- If `application.create` reports that the app or configuration schema already exists, stop the create flow and switch to the documented existing-app discovery flow.
+- Surface which branch actually ran in the persisted evidence and final report.
 
-```bash
-# All MCP calls go through the stdio client — same interface for every tool
-python3 scripts/mcp_client.py <tool-name> '<args-json>' [timeout]
+## Schema Sync Rules
 
-# Returns JSON: {"success": bool, "data": {...}|null, "raw": "..."}
+- Treat the template-created section entity from `application.create` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
+- Use `entity.update` to extend that main entity.
+- Use `entity.create` only for additional business objects with distinct meaning.
+- Create lookup entities before entities that reference them.
+- After each `entity.create_lookup`, validate that inherited `Name` exists in refreshed metadata.
+- Do not add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
+- If the refreshed entity snapshot already contains `Name`, do not add duplicate title-like columns unless the plan explicitly requires a separate field.
+- Treat schema mutations as successful only when refreshed metadata is available immediately and the schema is not left in `Database update required`.
+- If post-mutation refresh fails, stop with a blocker.
 
-# Example: create application
-python3 scripts/mcp_client.py application-create '{
-  "environment-name": "local",
-  "name": "My App",
-  "code": "UsrMyApp"
-}' | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['data'] if r['success'] else r['raw'])"
+## Default Rules
 
-# Example: after entity mutations, refresh context
-python3 scripts/mcp_client.py application-get-info '{
-  "environment-name": "local",
-  "app-code": "UsrMyApp"
-}' | python3 -c "
-import json, sys
-r = json.load(sys.stdin)
-if r['success']:
-    json.dump(r['data'], open('output/UsrMyApp/mcp-application-result.json','w'), indent=2)
-else:
-    print('ERROR:', r['raw'])
-"
-```
+- A `schema default` must be implemented through the entity schema contract.
+- A `ui default` must be implemented through page logic such as `crt.CreateRecordRequest.defaultValues` or a handler.
+- Lookup seed rows alone do not satisfy a default requirement.
+- For lookup-backed schema defaults, use the seeded row GUID, not the caption.
 
-**When creating mcp_client.py calls in bash scripts — always use the two-step pattern:**
-```bash
-# Step 1: write the script to a file
-cat > /tmp/run_mcp.py << 'PYEOF'
-import sys
-sys.path.insert(0, '/Users/a.kravchuk/Projects/ai-driven-app-creation/scripts')
-from mcp_client import call_mcp_tool
-result = call_mcp_tool('application-create', {
-    'environment-name': 'local',
-    'name': 'My App',
-    'code': 'UsrMyApp',
-})
-import json
-print(json.dumps(result, indent=2))
-PYEOF
+## Page Sync Rules
 
-# Step 2: run it
-python3 /tmp/run_mcp.py
-```
+Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
+If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
 
-### MCP Protocol Flow
+FormPage:
 
-All calls use `scripts/mcp_client.py`. Transport details (initialize handshake, stdio framing) are handled internally by the script.
+- Keep `Name` as the header when present.
+- Include all required non-inherited business fields.
+- Append only missing fields to the live page body.
+- Preserve existing handlers, imports, and live bindings unless the plan explicitly changes them.
 
-1. verify `application-get-list` responds (confirms clio MCP is reachable)
-2. check if target app already exists: `application-get-list` → search by `code`
-3. **if app does not exist** → `application-create`; if it returns a collision, surface the branch and switch to update flow
-4. **if app exists** → use `application-get-info` directly (skip `application-create`)
-5. parse response `data` field as the short contract
-6. initialize `mcp-application-result.json`
-7. if needed, execute entity sync via `schema-sync` composite tool (batches create-lookup + seed + create-entity + update-entity into one call)
-8. after `schema-sync` completes, call `application-get-info` once and overwrite `mcp-application-result.json`
-9. if the plan creates or extends the main entity for a new app, read current page bodies via `page-get`, edit them, then execute `page-sync` composite tool to update all pages in one call
-10. persist page sync results and stop with blocker if required fields or resolved grid columns are missing
+ListPage:
 
-Implementation execution is synchronous. Do not background Agent 4, and do not mix repo-maintenance edits with the app-generation run.
+- Include `Name`.
+- Include all required non-inherited business fields.
+- Keep optional defaults compact and within the planned cap.
+- Exclude inherited audit/system fields and long/rich/blob fields unless explicitly required.
 
-### Response Handling
+Sorting:
 
-`tools/call` response content is text.
+- Use plain DataGrid sorting only for plain sortable-column requirements.
+- If the requirement is semantic business ordering without an explicit technical carrier, stop with a blocker instead of improvising.
 
-**CRITICAL — Response Validation (before any parsing):**
-1. Check `isError` flag first: if `result.isError === true`, the call failed — do NOT attempt to parse `result.content[0].text` as a success payload.
-2. On `isError: true`: extract the error message from `result.content[0].text`, log it, and decide: retry with fixed params, or stop with blocker.
-3. On empty or missing `result.content[0].text`: treat as error — do NOT call `json.loads("")` or `jq` on empty input.
-4. Only parse the text content as JSON after confirming `isError` is absent or `false` and the text is non-empty.
+## Evidence Rules
 
-Expected contract (when `isError` is absent or false):
-- `success`
-- flat runtime fields: `packageUId`, `packageName`, `entities[]`
-- optional selectors: `app`, `appId`, or `appCode`
-- optional `error`
+Use `scripts/mcp_result_evidence.py` and the normalized result document as the source for:
 
-Normalize and persist:
-- `contractType`
-- `success`
-- `app` when available or inferable
-- `packageUId`
-- `packageName`
-- `entities`
-- `error`
 - `schemaSync`
-- `editableContext`
 - `operationLog`
 - `pageEvidence`
 - `acceptanceEvidence`

@@ -1,12 +1,27 @@
+import contextlib
 import json
 import os
+import shutil
 import subprocess
-import tempfile
 import unittest
+import uuid
 from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_TMP_ROOT = ROOT / ".tmp-tests"
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+BASH = shutil.which("bash")
+
+
+@contextlib.contextmanager
+def temp_workflow_root():
+    workdir = TEST_TMP_ROOT / f"tmp-{uuid.uuid4().hex}"
+    workdir.mkdir(parents=True, exist_ok=False)
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def write_file(path, content):
@@ -19,16 +34,20 @@ def build_valid_request_spec():
         "sourcePrompt": "Generate a Todo app",
         "businessChecklist": {
             "businessOutcome": {"complete": True, "value": "Track daily work", "source": "confirmed"},
+            "coreProblem": {"complete": True, "value": "Work is scattered across notes and chat", "source": "confirmed"},
             "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks", "source": "confirmed"},
             "domainModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
             "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
-            "businessRules": {"complete": True, "value": "Status and priority are required", "source": "confirmed"},
+            "businessLogic": {"complete": True, "value": "Title is required; duplicates are handled manually; tasks can be archived; editing is shared", "source": "confirmed"},
             "uxExpectations": {"complete": True, "value": "List and form pages are required", "source": "confirmed"},
             "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp", "source": "confirmed"},
             "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks", "source": "confirmed"},
+            "analytics": {"complete": True, "value": "Track tasks created and completed by period", "source": "confirmed"},
+            "accessRestrictions": {"complete": True, "value": "No specific access restrictions are required by default.", "source": "confirmed"},
             "complete": True
         },
         "technicalInputs": {
+            "environmentMode": "site-ready-now",
             "creatioUrl": "http://localhost:5001",
             "credentialsStatus": "existing_env"
         },
@@ -38,12 +57,120 @@ def build_valid_request_spec():
     }
 
 
+def build_valid_requirements_doc(app_name="TodoList"):
+    return f"""# {app_name} - Requirements
+
+## 1. Business context
+
+Short business opening paragraph.
+
+System value:
+- Shared registry instead of scattered notes
+- Clear owner, status, and activity visibility
+
+MVP success criteria:
+- New records are created quickly
+- Team can filter and manage the shared base
+
+## 2. Users, access and ownership
+
+Primary roles:
+- Sales manager: creates and updates records
+- Team lead: reviews and controls activity
+
+Access model:
+- Shared workspace for the team
+- Each key record has an owner
+- Archiving is used instead of deletion
+
+## 3. Core process and business logic
+
+Typical process:
+1. Create the main record.
+2. Add contacts.
+3. Log interactions.
+4. Create a follow-up action.
+
+Lifecycle:
+- Main record: New, Active, Archived
+- Follow-up task: Planned, Completed
+
+Key business logic:
+- Records live in one shared registry
+- Duplicate handling is advisory only
+- Archived records are not deleted
+
+Operational metrics:
+- Active records by owner
+- Open follow-up tasks by period
+
+## 4. Data model
+
+### 4.1 Main entity: Task
+
+Title: Task
+Code: `UsrTask`
+Entity role: `main`
+Primary display field: `Name`
+Description: Main work item.
+Purpose: Main work item.
+
+| Title | Code | Description | Data type | Required | Default |
+| --- | --- | --- | --- | --- | --- |
+| Name | `Name` | Task title | Short text | Yes | - |
+| Status | `UsrStatusId` | Task lifecycle state | Lookup | Yes | ui default: New |
+
+Minimum to create:
+- Name
+- Status
+
+### 4.2 Supporting entity: Follow-up Task
+
+Title: Follow-up Task
+Code: `UsrFollowUpTask`
+Entity role: `supporting`
+Primary display field: `Name`
+Description: Next action tied to the main record.
+Purpose: Next action tied to the main record.
+
+| Title | Code | Description | Data type | Required | Default |
+| --- | --- | --- | --- | --- | --- |
+| Name | `Name` | Follow-up title | Short text | Yes | - |
+| Parent task | `UsrParentTask` | Main record link | Lookup | Yes | - |
+| Due date | `UsrDueDate` | Task deadline | Date/Time | No | - |
+
+### 4.3 Lookups
+
+- Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
+
+### 4.4 Relationships
+
+- Source entity: Task; Target entity: Follow-up Task; Cardinality: 1:N; Required child-side link: required; Business rationale: follow-up actions are tracked separately from the main record.
+
+## 5. UX assumptions
+
+What should feel easy in the MVP:
+- default list columns: Name, Status
+- default sorting: Updated date descending
+- default main filters: Status
+- form field groups: Main information, Follow-up actions
+- shared list filtering by status
+- quick access to follow-up actions
+
+## Assumptions used for the draft requirements
+
+- MVP uses a single workflow.
+"""
+
+
 def run_script(script_name, *args, workflow_root):
+    if not BASH:
+        raise unittest.SkipTest("bash is required to run workflow gate scripts on this platform")
     env = os.environ.copy()
     env["WORKFLOW_ROOT_DIR"] = workflow_root
     env["WORKFLOW_STATE_DIR"] = str(Path(workflow_root) / ".workflow-state")
     return subprocess.run(
-        ["bash", str(ROOT / "scripts" / script_name), *args],
+        [BASH, str(ROOT / "scripts" / script_name), *args],
         cwd=ROOT,
         env=env,
         text=True,
@@ -52,20 +179,124 @@ def run_script(script_name, *args, workflow_root):
 
 
 class WorkflowGateTests(unittest.TestCase):
-    def test_validate_request_spec_rejects_missing_checklist_source(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+    def test_validate_requirements_doc_accepts_minimal_valid_structure(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
+            result = run_script("validate-requirements-doc.sh", str(app_dir / "requirements.md"), workflow_root=str(workflow_root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_validate_requirements_doc_rejects_missing_required_section(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            write_file(app_dir / "requirements.md", "# TodoList - Requirements\n\n## 1. Business context\n")
+            result = run_script("validate-requirements-doc.sh", str(app_dir / "requirements.md"), workflow_root=str(workflow_root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing required section", result.stderr)
+
+    def test_validate_requirements_doc_rejects_prose_only_entity_without_field_table(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            write_file(
+                app_dir / "requirements.md",
+                """# TodoList - Requirements
+
+## 1. Business context
+
+Short business opening paragraph.
+
+System value:
+- Shared registry instead of scattered notes
+
+MVP success criteria:
+- New records are created quickly
+
+## 2. Users, access and ownership
+
+Primary roles:
+- Sales manager: creates and updates records
+
+Access model:
+- Shared workspace for the team
+
+## 3. Core process and business logic
+
+Typical process:
+1. Create the main record.
+
+Lifecycle:
+- Main record: New, Active, Archived
+
+Key business logic:
+- Records live in one shared registry
+
+Operational metrics:
+- Active records by owner
+
+## 4. Data model
+
+### 4.1 Main entity: Task
+Title: Task
+Code: `UsrTask`
+Entity role: `main`
+Primary display field: `Name`
+Description: Main work item.
+Purpose: Main work item.
+
+This entity stores the main work item and its status.
+
+Minimum to create:
+- Name
+
+### 4.2 Lookups
+
+- Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
+
+### 4.3 Relationships
+
+- Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
+
+## 5. UX assumptions
+
+What should feel easy in the MVP:
+- default list columns: Name, Status
+- default main filters: Status
+- quick access to main records
+- easy filtering
+
+## Assumptions used for the draft requirements
+
+- MVP uses a single workflow.
+""",
+            )
+            result = run_script("validate-requirements-doc.sh", str(app_dir / "requirements.md"), workflow_root=str(workflow_root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("field table", result.stderr)
+
+    def test_validate_request_spec_accepts_planning_first_without_url(self):
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             request_spec = build_valid_request_spec()
-            request_spec["businessChecklist"]["businessRules"].pop("source")
+            request_spec["technicalInputs"] = {
+                "environmentMode": "planning-first",
+                "credentialsStatus": "deferred"
+            }
+            write_file(app_dir / "request-spec.json", json.dumps(request_spec))
+            result = run_script("validate-request-spec.sh", str(app_dir / "request-spec.json"), workflow_root=str(workflow_root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_validate_request_spec_rejects_missing_checklist_source(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            request_spec = build_valid_request_spec()
+            request_spec["businessChecklist"]["businessLogic"].pop("source")
             write_file(app_dir / "request-spec.json", json.dumps(request_spec))
             result = run_script("validate-request-spec.sh", str(app_dir / "request-spec.json"), workflow_root=str(workflow_root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("businessChecklist.businessRules.source must be confirmed or assumed", result.stderr)
+            self.assertIn("businessChecklist.businessLogic.source must be confirmed or assumed", result.stderr)
 
     def test_validate_request_spec_rejects_assumed_section_without_explicit_assumption(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
             request_spec = build_valid_request_spec()
             request_spec["businessChecklist"]["edgeCases"]["source"] = "assumed"
@@ -76,20 +307,37 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("businessChecklist.edgeCases.assumption must be listed in assumptions", result.stderr)
 
     def test_write_approval_state_requires_planning_gate(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
-            write_file(app_dir / "requirements.md", "# TodoList\n")
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
             write_file(app_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
             result = run_script("write-approval-state.sh", "TodoList", "tester", "Approved, proceed", workflow_root=str(workflow_root))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Planning gate failed", result.stderr)
 
+    def test_write_planning_state_accepts_planning_first_without_url(self):
+        with temp_workflow_root() as workflow_root:
+            result = run_script(
+                "write-planning-state.sh",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=str(workflow_root)
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            planning_file = Path(workflow_root) / ".workflow-state" / "TodoList" / "planning-state.json"
+            payload = json.loads(planning_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["routingMode"], "planning-first")
+            self.assertTrue(payload["environmentInputsDeferred"])
+            self.assertEqual(payload["technicalInputs"]["creatioUrl"], "")
+
     def test_check_approval_gate_rejects_incomplete_request_spec(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
-            write_file(app_dir / "requirements.md", "# TodoList\n")
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
             write_file(app_dir / "request-spec.json", json.dumps({"businessChecklist": {"complete": True}}))
             planning = run_script(
                 "write-planning-state.sh",
@@ -128,10 +376,9 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("Request spec failed", result.stderr)
 
     def test_check_approval_gate_rejects_url_and_proceed_only_flow(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
-            write_file(app_dir / "requirements.md", "# TodoList\n")
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
             write_file(
                 app_dir / "request-spec.json",
                 json.dumps(
@@ -185,10 +432,9 @@ class WorkflowGateTests(unittest.TestCase):
             self.assertIn("Request spec failed", result.stderr)
 
     def test_check_approval_gate_accepts_full_request_spec(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workflow_root = Path(temp_dir)
+        with temp_workflow_root() as workflow_root:
             app_dir = workflow_root / "output" / "TodoList"
-            write_file(app_dir / "requirements.md", "# TodoList\n")
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
             write_file(app_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
             planning = run_script(
                 "write-planning-state.sh",

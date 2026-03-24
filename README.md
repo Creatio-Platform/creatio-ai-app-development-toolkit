@@ -7,9 +7,11 @@ Supported agents: GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code.
 ## Source of Truth
 
 Use these files as canonical:
+
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md`
+- `context/app-documentation-contract.md`
 - `context/schema-reference.md`
 - `context/ui-reference.md`
 - `context/data-bindings-reference.md`
@@ -19,34 +21,42 @@ Use these files as canonical:
 ## Developer UX
 
 Primary workflow is natural language:
+
 1. Developer sends one free-form prompt.
-2. Agent returns a short “What I understood”.
-3. Agent persists Gate P only after natural-language confirmation and a concrete Creatio URL.
-4. Agent asks business clarifications in batches until checklist is complete.
-5. Agent asks minimal technical questions only (blockers).
-6. Agent runs the pipeline and returns final artifacts/results.
-7. Internal gate tokens and scripts stay hidden from developer-facing dialogue.
+2. Agent returns a short "What I understood".
+3. On the first turn, the agent responds directly from the prompt instead of doing a long repo preflight.
+4. Agent asks a routing question first: `site-ready-now` or `planning-first`.
+5. Agent runs a compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
+6. The routing question and the main discovery questions appear in that same first user-facing response.
+7. Agent persists a fresh Gate P for the current request after natural-language confirmation; `planning-first` may defer runtime endpoints until implementation.
+8. Agent asks minimal technical questions only for blockers.
+9. After Gate R, the agent initializes `output/<AppName>/docs/**` as a draft skeleton before implementation starts.
+10. Agent runs the remaining pipeline and returns final artifacts/results.
+11. Internal gate tokens, old workflow-state details, and scripts stay hidden from developer-facing dialogue unless they are real blockers.
 
 Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
 
 ## Workflow
 
 Orchestrator flow:
+
 1. Planning start with natural-language confirmation and persisted Gate P in `.workflow-state/<AppName>/planning-state.json`.
-2. Environment setup: creates `output/<AppName>/.creatio-env.json`.
-3. Requirements gathering: builds a full `request-spec.json`, then writes approved `workflow-state.json`.
-4. Implementation plan: prepares deterministic MCP payload plan in `output/<AppName>/plan.md`.
-5. Implementation: runs synchronously, uses MCP `application.create`, or branches explicitly into `application.get_list` → `application.get_info` for existing apps, initializes canonical context in `mcp-application-result.json`, builds `editableContext`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
+2. If the route is `site-ready-now`, environment setup creates `output/<AppName>/.creatio-env.json`; if the route is `planning-first`, this step waits until implementation is requested.
+3. Requirements gathering produces a BA-style `requirements.md`, writes `request-spec.json`, persists approved `workflow-state.json`, and initializes draft docs under `output/<AppName>/docs/**`.
+   The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`.
+4. Implementation plan generates `output/<AppName>/technical-annex.md` and `output/<AppName>/plan.md` when implementation is explicitly requested.
+5. Implementation runs synchronously, uses MCP `application.create`, or branches explicitly into `application.get_list` -> `application.get_info` for existing apps, initializes canonical context in `mcp-application-result.json`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
 
 All generated artifacts are under `output/<AppName>/`.
 
 ## Runtime Scripts
 
-- `bash scripts/write-planning-state.sh <AppName> "<approvedBy>" "<creatioUrl>" "<understandingText>" "<confirmationText>"`
+- `bash scripts/write-planning-state.sh <AppName> "<approvedBy>" "<routingMode>" "<creatioUrlOrDeferred>" "<understandingText>" "<confirmationText>"`
 - `bash scripts/check-planning-gate.sh <AppName>`
 - `bash scripts/validate-request-spec.sh output/<AppName>/request-spec.json`
 - `bash scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
 - `bash scripts/check-approval-gate.sh <AppName>`
+- `python3 scripts/app_docs.py init --app-dir output/<AppName> --request-spec output/<AppName>/request-spec.json`
 - `python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json`
 - `python3 scripts/mcp_result_evidence.py report output/<AppName>/mcp-application-result.json output/<AppName>/mcp-application-report.md`
 - `python3 scripts/page_body_tools.py build-update-args <SchemaName> <body-file> --dry-run`
@@ -61,18 +71,18 @@ When page sync is required, `plan.md` must contain an embedded machine-readable 
 
 ## Architecture
 
-```
+```text
 Orchestrator (AGENTS.md)
-├── Agent 1: Environment Setup           -> .creatio-env.json
-├── Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
-├── Agent 3: Implementation Plan         -> plan.md
-├── Agent 4: Implementation              -> mcp-application-result.json + report (FINAL)
-│   └── Direct MCP tools via curl (see context/mcp-application-tools-reference.md)
+|-- Agent 1: Environment Setup           -> .creatio-env.json
+|-- Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
+|-- Agent 3: Implementation Plan         -> technical-annex.md + plan.md
+|-- Agent 4: Implementation              -> mcp-application-result.json + report
+|   `-- Direct MCP tools via curl (see context/mcp-application-tools-reference.md)
 ```
 
 ## Repository Structure
 
-```
+```text
 AGENTS.md
 .github/copilot-instructions.md
 agents/
@@ -80,24 +90,21 @@ agents/
   02-requirements-gathering.md
   03-implementation-plan.md
   04-implementation.md
-skills/
-  entity-creation/SKILL.md
-  page-creation/SKILL.md
-  data-bindings-creation/SKILL.md
-  package-descriptor-creation/SKILL.md
 scripts/
   check-planning-gate.sh
   check-approval-gate.sh
   validate-request-spec.sh
   write-planning-state.sh
   write-approval-state.sh
+  app_docs.py
   mcp_context_adapter.py
   mcp_schema_sync.py
+  mcp_page_sync.py
 .workflow-state/
 context/
   business-checklist.md
   essentials.md
-  mcp-application-tools-reference.md  (✨ Complete MCP tools guide)
+  mcp-application-tools-reference.md
   schema-reference.md
   ui-reference.md
   data-bindings-reference.md
