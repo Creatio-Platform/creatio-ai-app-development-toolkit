@@ -82,8 +82,8 @@ class DefaultContractDocsTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             self.assertIn("first", content.lower(), str(path))
             self.assertIn("latency", content.lower(), str(path))
-        self.assertIn("structured input", content.lower(), str(path))
-        self.assertIn("do not read large repository files or run orchestration scripts", content.lower(), str(path))
+            self.assertIn("structured input", content.lower(), str(path))
+            self.assertIn("do not read large repository files or run orchestration scripts", content.lower(), str(path))
 
     def test_docs_require_domain_expertise_for_recognizable_app_types(self):
         for path in DOMAIN_EXPERTISE_DOCS:
