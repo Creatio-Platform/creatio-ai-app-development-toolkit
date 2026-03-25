@@ -11,6 +11,7 @@ from scripts.page_body_edit import (
     add_form_fields,
     add_list_columns,
     detect_vm_marker,
+    discover_form_container,
     find_max_row_index,
     replace_marker_content,
     validate_body_structure,
@@ -159,6 +160,88 @@ class TestDetectVmMarker(unittest.TestCase):
 
     def test_detects_diff_variant(self):
         self.assertEqual(detect_vm_marker(LIST_PAGE_BODY), "SCHEMA_VIEW_MODEL_CONFIG_DIFF")
+
+
+class TestDiscoverFormContainer(unittest.TestCase):
+    def test_standard_form_page(self):
+        view_config = [
+            {"operation": "insert", "name": "Name", "parentName": "SideAreaProfileContainer",
+             "propertyName": "items", "index": 0, "values": {"layoutConfig": {"row": 1}, "type": "crt.Input"}},
+            {"operation": "insert", "name": "Status", "parentName": "SideAreaProfileContainer",
+             "propertyName": "items", "index": 1, "values": {"layoutConfig": {"row": 2}, "type": "crt.ComboBox"}},
+            {"operation": "merge", "name": "Feed", "values": {"type": "crt.Feed"}},
+        ]
+        self.assertEqual(discover_form_container(view_config), "SideAreaProfileContainer")
+
+    def test_custom_container(self):
+        view_config = [
+            {"operation": "insert", "name": "Name", "parentName": "GeneralInfoTab",
+             "propertyName": "items", "index": 0, "values": {"layoutConfig": {"row": 1}, "type": "crt.Input"}},
+            {"operation": "insert", "name": "Code", "parentName": "GeneralInfoTab",
+             "propertyName": "items", "index": 1, "values": {"layoutConfig": {"row": 2}, "type": "crt.Input"}},
+        ]
+        self.assertEqual(discover_form_container(view_config), "GeneralInfoTab")
+
+    def test_empty_view_config(self):
+        self.assertIsNone(discover_form_container([]))
+
+    def test_no_field_inserts(self):
+        view_config = [
+            {"operation": "merge", "name": "SomeWidget", "values": {"visible": True}},
+            {"operation": "insert", "name": "Tab1", "parentName": "TabPanel",
+             "propertyName": "items", "index": 0, "values": {"type": "crt.TabPanel"}},
+        ]
+        self.assertIsNone(discover_form_container(view_config))
+
+    def test_multiple_containers_picks_most_frequent(self):
+        view_config = [
+            {"operation": "insert", "name": "F1", "parentName": "ContainerA",
+             "propertyName": "items", "index": 0, "values": {"layoutConfig": {"row": 1}, "type": "crt.Input"}},
+            {"operation": "insert", "name": "F2", "parentName": "ContainerB",
+             "propertyName": "items", "index": 0, "values": {"layoutConfig": {"row": 1}, "type": "crt.Input"}},
+            {"operation": "insert", "name": "F3", "parentName": "ContainerB",
+             "propertyName": "items", "index": 1, "values": {"layoutConfig": {"row": 2}, "type": "crt.ComboBox"}},
+            {"operation": "insert", "name": "F4", "parentName": "ContainerB",
+             "propertyName": "items", "index": 2, "values": {"layoutConfig": {"row": 3}, "type": "crt.DateTimePicker"}},
+        ]
+        self.assertEqual(discover_form_container(view_config), "ContainerB")
+
+    def test_ignores_non_field_inserts(self):
+        view_config = [
+            {"operation": "insert", "name": "Btn1", "parentName": "ButtonContainer",
+             "propertyName": "items", "index": 0, "values": {"layoutConfig": {"row": 1}, "type": "crt.Button"}},
+            {"operation": "insert", "name": "F1", "parentName": "FieldContainer",
+             "propertyName": "items", "index": 0, "values": {"layoutConfig": {"row": 1}, "type": "crt.Input"}},
+        ]
+        self.assertEqual(discover_form_container(view_config), "FieldContainer")
+
+
+class TestAddFormFieldsDynamicContainer(unittest.TestCase):
+    def test_discovers_container_from_existing_fields(self):
+        body_with_custom = FORM_PAGE_BODY.replace("SideAreaProfileContainer", "CustomFormContainer")
+        fields = [
+            {"name": "UsrNew", "type": "crt.Input", "path": "PDS.UsrNew"},
+        ]
+        result = add_form_fields(body_with_custom, fields)
+        view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
+        new_insert = next(op for op in view_config if op.get("name") == "UsrNew")
+        self.assertEqual(new_insert["parentName"], "CustomFormContainer")
+
+    def test_explicit_parent_overrides_discovery(self):
+        fields = [
+            {"name": "UsrNew", "type": "crt.Input", "path": "PDS.UsrNew", "parentName": "MyExplicitContainer"},
+        ]
+        result = add_form_fields(FORM_PAGE_BODY, fields)
+        view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
+        new_insert = next(op for op in view_config if op.get("name") == "UsrNew")
+        self.assertEqual(new_insert["parentName"], "MyExplicitContainer")
+
+    def test_missing_path_raises_error(self):
+        fields = [{"name": "UsrBadField", "type": "crt.Input", "label": "Bad"}]
+        with self.assertRaises(Exception) as ctx:
+            add_form_fields(FORM_PAGE_BODY, fields)
+        self.assertIn("missing required 'path'", str(ctx.exception))
+        self.assertIn("UsrBadField", str(ctx.exception))
 
 
 class TestAddFormFields(unittest.TestCase):

@@ -1,7 +1,7 @@
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with `page.update`.
+Used by coding agents with `page-update`.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -39,37 +39,88 @@ When inserting a new generic element, ask the user for:
 1. **Parent container name** (`parentName`) — where to place the element. The user must provide the exact container name from the target page.
 2. **Action** — what the element should do when clicked/activated (e.g., "open AppFeature_ListPage", "create a new Contact record").
 
-Use `page.get` to inspect the current page structure and identify available containers if the user is unsure.
+Use `page-get` to inspect the current page structure and identify available containers if the user is unsure.
+
+### Deep Container Discovery
+
+`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `page-get`.
+
+**Step 1 — Build a container map from `bundle.viewConfig`:**
+
+```python
+def map_containers(node, parent='(root)', depth=0):
+    if isinstance(node, list):
+        for item in node:
+            map_containers(item, parent, depth)
+        return
+    if not isinstance(node, dict):
+        return
+    name = node.get('name', '')
+    typ = node.get('type', '')
+    is_container = ('Container' in typ or 'Panel' in typ
+                    or 'Tab' in typ or 'Area' in typ)
+    if name and is_container:
+        print(f"{'  '*depth}{name}: {typ}")
+    child_parent = name or parent
+    for v in node.values():
+        if isinstance(v, (list, dict)):
+            map_containers(v, child_parent, depth + (1 if name and is_container else 0))
+
+r = call_mcp_tool('page-get', {'schema-name': '<PageName>', 'environment-name': '<env>'})
+map_containers(r['data']['bundle']['viewConfig'])
+```
+
+This reveals the full inherited hierarchy: side areas, center areas, tab panels, tab containers, grid containers — regardless of page type.
+
+**Step 2 — When `bundle.viewConfig` is shallow or missing deep containers:**
+
+Some page templates expose a minimal bundle tree. In that case, use these fallback heuristics:
+
+1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
+2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
+3. Use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+
+**Step 3 — Choosing the right container for new elements:**
+
+| Element type | Where to insert | How to find |
+|-------------|----------------|-------------|
+| Fields for entity columns | Primary field container (most field-type inserts in viewConfigDiff) | See "Entity-Field Sync" below |
+| Custom tabs | `Tabs` (crt.TabPanel) | Confirmed when any `*TabContainer` parentName exists in raw body |
+| Widgets inside a tab | GridContainer inside a TabContainer | Insert a `crt.GridContainer` into your tab first, then insert widgets into it |
+| Buttons / actions | ActionButtonsContainer or toolbar area | Look for `crt.Button` inserts in viewConfigDiff |
 
 ### Exception: Entity-Field Sync on Live Form Pages
 
 When the task is "entity columns were added and the FormPage must surface them", do **not** ask the user for `parentName`. Use this deterministic workflow instead:
 
-1. Call `page.get` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
-2. Append missing field controls to `SideAreaProfileContainer`.
-3. Keep `propertyName: "items"`.
-4. Continue `row` and `index` from the current maximum values already present in `SideAreaProfileContainer`.
-5. Add matching attributes in `SCHEMA_VIEW_MODEL_CONFIG_DIFF` for every inserted field.
-6. Keep the live naming pattern already present in the page body. `Name` is often a special case. For datasource-bound `crt.ComboBox`, add only the main bound attribute; preserve existing materialized `*_List` attributes or nested actions only if they already exist in the live page body.
-7. Prefer minimal raw config for preprocessor-backed components. Do not manually duplicate auto-generated requests or bindings unless the current page body already stores them explicitly.
+1. Call `page-get` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
+2. **Identify the primary field container** — the container that already holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`, `crt.DateTimePicker`). This is typically `SideAreaProfileContainer` for standard templates, but may differ for custom or non-standard pages.
+3. Append missing field controls to **that discovered container**.
+4. Keep `propertyName: "items"`.
+5. Continue `row` and `index` from the current maximum values already present in the discovered container.
+6. Add matching attributes in `SCHEMA_VIEW_MODEL_CONFIG_DIFF` for every inserted field.
+7. Keep the live naming pattern already present in the page body. `Name` is often a special case. For datasource-bound `crt.ComboBox`, add only the main bound attribute; preserve existing materialized `*_List` attributes or nested actions only if they already exist in the live page body.
+8. Prefer minimal raw config for preprocessor-backed components. Do not manually duplicate auto-generated requests or bindings unless the current page body already stores them explicitly.
 
 ### Exception: Main-Entity Grid Sync on Live List Pages
 
 When the task is "main entity columns were added and the ListPage must show the main columns", do **not** ask the user for the DataGrid node name or column order. Use this deterministic workflow instead:
 
-1. Call `page.get` and inspect the live `crt.DataGrid` configuration and its current `columns`.
+1. Call `page-get` and inspect the live `crt.DataGrid` configuration and its current `columns`.
 2. Resolve the target column set from the explicit plan first. If the plan is partial or missing, use the canonical default policy from `context/ui-reference.md`.
 3. Preserve existing grid columns and their order.
 4. Append only the missing resolved columns.
 5. Keep the live `items` binding, `primaryColumnName`, and collection path intact unless the plan explicitly changes them.
 6. Exclude inherited audit/system fields and long/rich/blob fields from default auto-selection unless they are explicitly requested or required.
-7. After `page.update`, re-read the page and verify the required fields and resolved selected columns are present in the live DataGrid.
+7. After `page-update`, re-read the page and verify the required fields and resolved selected columns are present in the live DataGrid.
 
 ---
 
 ## Runtime FormPage Field Recipes
 
-Use these recipes when syncing entity fields into a live FormPage through `page.update`.
+Use these recipes when syncing entity fields into a live FormPage through `page-update`.
+
+If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `component-info` for that exact type before changing container-specific properties or children.
 
 | Field shape | Control type | Binding property | Default properties | Notes |
 |-------------|--------------|------------------|--------------------|-------|
@@ -87,6 +138,8 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 | Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. The frontend can auto-add `bindTo`, `crt.ToImageLink`, `imageSelected`, and `imageClear`. |
 
 ### Generic Runtime Field Insert Example
+
+> `parentName` below is a placeholder. Use the actual container discovered from the live page's `viewConfigDiff` (the container with the most field-type inserts).
 
 ```json
 {
@@ -108,7 +161,7 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 		"multiline": false,
 		"labelPosition": "auto"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 1
 }
@@ -138,7 +191,7 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 		"tooltip": "",
 		"control": "$PDS_UsrStatus_ab12cd3"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 9
 }
@@ -189,7 +242,7 @@ If you omit `listActions` and keep `isAddAllowed: true`, the frontend can genera
 		"borderRadius": "medium",
 		"positioning": "cover"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 12
 }
@@ -265,7 +318,7 @@ When the user does not specify style/size, use these defaults:
 | Property | Type | Default | Valid Values |
 |----------|------|---------|--------------|
 | `type` | string | — | `"crt.Button"` (required) |
-| `caption` | string | `""` | Any string or `#ResourceString(...)#` |
+| `caption` | string | `""` | Any string or `#ResourceString(...)#`. For custom elements, use `#ResourceString(UsrKey_caption)#` with `resources` param — clio auto-registers the localizableString. |
 | `color` | string | `"default"` | `"primary"`, `"accent"`, `"warn"`, `"default"`, `"outline"` |
 | `size` | string | `"large"` | `"small"`, `"medium"`, `"large"`, `"extra-large"` |
 | `iconPosition` | string | `"only-text"` | `"only-text"`, `"left-icon"`, `"right-icon"`, `"only-icon"` |
@@ -335,10 +388,11 @@ When editing page bodies via `page-update`, always use marker-based section extr
 
 ```
 1. Extract SCHEMA_VIEW_CONFIG_DIFF content between markers → parse as JSON array
-2. Find max row/index among existing SideAreaProfileContainer inserts
-3. Append new insert object with incremented row/index to parsed array
-4. Serialize array back to JSON → replace content between markers
-5. Extract viewModelConfig(Diff) content → parse → add attribute → serialize → replace
+2. Identify the primary field container (the one with the most field-type inserts)
+3. Find max row/index among existing inserts in that container
+4. Append new insert object with incremented row/index to parsed array
+5. Serialize array back to JSON → replace content between markers
+6. Extract viewModelConfig(Diff) content → parse → add attribute → serialize → replace
 ```
 
 Result: all existing operations remain intact, new field appears at the correct position.
@@ -382,4 +436,48 @@ FormPage typically uses the object variant; ListPage typically uses the array va
 
 ---
 
-*Last updated: 2026-03-20*
+## ResourceString Localization for Custom Elements
+
+When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `page-update`/`page-sync`.
+
+### How it works
+
+1. Set `"caption": "#ResourceString(UsrDetailsTab_caption)#"` in viewConfigDiff
+2. Pass `resources` param: `'{"UsrDetailsTab_caption": "Details"}'`
+3. Clio auto-registers the localizableString in the child schema
+4. Frontend resolves the macro at runtime via the resources bundle
+
+### Auto-derive behavior
+
+Usr-prefixed keys without explicit values in `resources` are auto-derived from key name:
+- `UsrDetailsTab_caption` → "Details Tab"
+- `UsrFinanceInfo_caption` → "Finance Info"
+
+### Do NOT register
+
+- **Parent template resources** (`GeneralInfoTab_caption`, `FeedTabContainerCaption`) — already inherited
+- **PDS-prefixed captions** (`#ResourceString(PDS_Name)#`) — resolved by data source, not localizableStrings
+
+### Tab example
+
+```json
+{
+  "operation": "insert",
+  "name": "UsrDetailsTab",
+  "values": {
+    "type": "crt.TabContainer",
+    "caption": "#ResourceString(UsrDetailsTab_caption)#",
+    "items": [],
+    "visible": true
+  },
+  "parentName": "Tabs",
+  "propertyName": "items",
+  "index": 1
+}
+```
+
+Save via: `call_mcp_tool('page-update', {'schema-name': '...', 'body': body, 'resources': '{"UsrDetailsTab_caption": "Details"}', 'environment-name': 'local'})`
+
+---
+
+*Last updated: 2026-03-24*

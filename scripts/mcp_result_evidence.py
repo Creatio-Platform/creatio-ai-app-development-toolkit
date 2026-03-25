@@ -36,11 +36,25 @@ def summarize_response(response):
     if not isinstance(response, dict):
         raise EvidenceError("Response summary requires an object")
     summary = {}
-    for key in ("success", "packageUId", "packageName", "schemaName", "bodyLength", "dryRun", "count", "uId", "parentSchemaName"):
-        if key in response:
-            summary[key] = copy.deepcopy(response[key])
-    if "bodyLength" not in summary and isinstance(response.get("body"), str):
-        summary["bodyLength"] = len(response["body"])
+    field_map = {
+        "success": ("success",),
+        "packageUId": ("packageUId", "package-u-id"),
+        "packageName": ("packageName", "package-name"),
+        "schemaName": ("schemaName", "schema-name", "name"),
+        "bodyLength": ("bodyLength", "body-length"),
+        "dryRun": ("dryRun", "dry-run"),
+        "count": ("count",),
+        "uId": ("uId", "u-id"),
+        "parentSchemaName": ("parentSchemaName", "parent-schema-name"),
+    }
+    for target_key, source_keys in field_map.items():
+        for source_key in source_keys:
+            if source_key in response:
+                summary[target_key] = copy.deepcopy(response[source_key])
+                break
+    raw_body = response.get("raw", {}).get("body") if isinstance(response.get("raw"), dict) else response.get("body")
+    if "bodyLength" not in summary and isinstance(raw_body, str):
+        summary["bodyLength"] = len(raw_body)
     entity = response.get("entity")
     if isinstance(entity, dict):
         entity_summary = {}
@@ -138,11 +152,13 @@ def status_label(status):
 
 def build_report_markdown(result_document):
     document = ensure_result_document(result_document)
-    title = document.get("appTitle") or document.get("appName") or document.get("packageName") or "Application"
+    title = document.get("appTitle") or document.get("appName") or document.get("app-name") or document.get("packageName") or document.get("package-name") or "Application"
     lines = [f"# {title} — MCP Application Report", "", "## Summary", ""]
     lines.append(f"- Success: {'yes' if document.get('success') else 'no'}")
-    if document.get("packageUId"):
-        lines.append(f"- Package: {document.get('packageName')} ({document.get('packageUId')})")
+    package_u_id = document.get("packageUId") or document.get("package-u-id")
+    package_name = document.get("packageName") or document.get("package-name")
+    if package_u_id:
+        lines.append(f"- Package: {package_name} ({package_u_id})")
     if document.get("operationLog"):
         lines.append(f"- Operations recorded: {len(document['operationLog'])}")
     if document.get("pageEvidence"):

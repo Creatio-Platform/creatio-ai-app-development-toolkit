@@ -10,8 +10,8 @@ Usage:
       --page-plan output/<App>/plan.md \
       --report output/<App>/mcp-application-report.md
 
-Runs all entity mutations (create-lookup, entity.create, entity.update)
-and page sync (page.list, page.get, page.update) in one process using
+Runs all entity mutations through schema-sync/create-lookup/create-entity-schema/update-entity-schema
+and page sync through page-list/page-get/page-update/page-sync in one process using
 a single persistent MCP connection.
 
 Skipping phases:

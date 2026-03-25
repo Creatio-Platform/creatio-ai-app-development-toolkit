@@ -6,24 +6,15 @@ import sys
 import uuid
 from pathlib import Path
 
-try:
-    from scripts.page_body_tools import (
-        PageBodyError,
-        extract_marker_text,
-        load_text,
-        parse_marker_json,
-        parse_first_available_marker,
-        strip_trailing_commas,
-    )
-except ImportError:
-    from page_body_tools import (
-        PageBodyError,
-        extract_marker_text,
-        load_text,
-        parse_marker_json,
-        parse_first_available_marker,
-        strip_trailing_commas,
-    )
+sys.path.insert(0, str(Path(__file__).parent))
+from page_body_tools import (
+    PageBodyError,
+    extract_marker_text,
+    load_text,
+    parse_marker_json,
+    parse_first_available_marker,
+    strip_trailing_commas,
+)
 
 
 REQUIRED_MARKERS = [
@@ -114,6 +105,35 @@ def validate_body_structure(body):
     return {"valid": len(errors) == 0, "errors": errors}
 
 
+FIELD_CONTROL_TYPES = {
+    "crt.Input", "crt.NumberInput", "crt.Checkbox", "crt.DateTimePicker",
+    "crt.ComboBox", "crt.RichTextEditor", "crt.PhoneInput", "crt.EmailInput",
+    "crt.WebInput", "crt.ColorPicker", "crt.ImageInput", "crt.FileInput",
+    "crt.EncryptedInput", "crt.Slider",
+}
+
+
+def discover_form_container(view_config_diff):
+    counts = {}
+    for item in view_config_diff:
+        if not isinstance(item, dict):
+            continue
+        if item.get("operation") != "insert":
+            continue
+        values = item.get("values") or {}
+        if values.get("layoutConfig") is None:
+            continue
+        control_type = values.get("type", "")
+        if control_type not in FIELD_CONTROL_TYPES:
+            continue
+        parent = item.get("parentName")
+        if parent:
+            counts[parent] = counts.get(parent, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=counts.get)
+
+
 def find_max_row_index(view_config_diff, parent_name):
     max_row = 0
     max_index = -1
@@ -134,7 +154,7 @@ def find_max_row_index(view_config_diff, parent_name):
     return max_row, max_index
 
 
-def build_form_field_insert(field, row, index):
+def build_form_field_insert(field, row, index, parent_name):
     values = {
         "layoutConfig": {
             "column": 1,
@@ -158,19 +178,29 @@ def build_form_field_insert(field, row, index):
         "operation": "insert",
         "name": field["name"],
         "values": values,
-        "parentName": field.get("parentName", "SideAreaProfileContainer"),
+        "parentName": field.get("parentName") or parent_name,
         "propertyName": "items",
         "index": index,
     }
 
 
 def add_form_fields(body, fields):
+    for field in fields:
+        if "path" not in field:
+            raise PageBodyError(
+                f"Field '{field.get('name', '?')}' missing required 'path' "
+                f"(e.g. 'PDS.{field.get('name', 'UsrColumnName')}')"
+            )
     view_config = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
     vm_marker = detect_vm_marker(body)
     if vm_marker is None:
         raise PageBodyError("No viewModelConfig marker found")
     vm_data = parse_marker_json(body, vm_marker)
-    parent = fields[0].get("parentName", "SideAreaProfileContainer") if fields else "SideAreaProfileContainer"
+    explicit_parent = fields[0].get("parentName") if fields else None
+    if explicit_parent:
+        parent = explicit_parent
+    else:
+        parent = discover_form_container(view_config) or "SideAreaProfileContainer"
     max_row, max_index = find_max_row_index(view_config, parent)
     existing_names = {item.get("name") for item in view_config if isinstance(item, dict)}
     for field in fields:
@@ -178,7 +208,7 @@ def add_form_fields(body, fields):
             continue
         max_row += 1
         max_index += 1
-        insert = build_form_field_insert(field, max_row, max_index)
+        insert = build_form_field_insert(field, max_row, max_index, parent)
         view_config.append(insert)
     body = replace_marker_content(body, "SCHEMA_VIEW_CONFIG_DIFF",
                                   serialize_json_indented(view_config, base_indent=2))

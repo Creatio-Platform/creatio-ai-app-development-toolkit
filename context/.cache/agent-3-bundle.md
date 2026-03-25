@@ -331,6 +331,7 @@ Create `plan.md` with sections:
 - Business Decisions Locked
 - Assumptions
 - MCP Payload (resolved and validated)
+- Executable MCP Payloads (see below)
 - Schema Sync Plan
 - Page Sync Plan
 - Embedded `page-sync-plan.json` block when page sync is required
@@ -338,6 +339,52 @@ Create `plan.md` with sections:
 - Expected Output Artifacts
 - Validation Rules
 - Blocker Conditions
+
+**Executable MCP Payloads** — MANDATORY section that contains exact JSON payloads
+Agent 4 will copy-paste and execute. This eliminates parameter guessing.
+
+Format:
+````markdown
+## Executable MCP Payloads
+
+### Step 1: application-create
+```json
+{
+  "environment-name": "ENV_PLACEHOLDER",
+  "code": "UsrMyApp",
+  "name": "My App",
+  "template-code": "AppFreedomUI",
+  "icon-background": "#1F5F8B",
+  "description": "App description",
+  "optional-template-data-json": "{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"Section description\",\"useAIContentGeneration\":false}"
+}
+```
+
+### Step 2: schema-sync
+```json
+{
+  "environment-name": "ENV_PLACEHOLDER",
+  "package-name": "UsrMyApp",
+  "operations": [...]
+}
+```
+
+### Step 3: application-get-info (refresh)
+```json
+{
+  "environment-name": "ENV_PLACEHOLDER",
+  "app-code": "UsrMyApp"
+}
+```
+````
+
+Rules for executable payloads:
+- `ENV_PLACEHOLDER` is replaced by Agent 4 with the actual environment name from `.creatio-env.json`
+- All parameter names must be **kebab-case** (e.g. `template-code`, NOT `templateCode`)
+- `template-code` must be `AppFreedomUI` unless explicitly overridden by requirements
+- All lookup seed-row UUIDs must be pre-generated (use deterministic v4 UUIDs)
+- `schema-sync` operations array must be complete and ordered
+- Boolean values must be native JSON booleans (`true`/`false`), not strings
 
 ### 6. Validation Checks
 

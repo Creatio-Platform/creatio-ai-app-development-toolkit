@@ -66,24 +66,26 @@ in one file. Generate it first if missing: `python3 scripts/build_context_bundle
 
 ### Quick Start Pattern
 
+> **Cross-platform:** Before running any Python command, `PYTHON_CMD` must be resolved via Step 1a of Agent 1 (`scripts/find_python.ps1` on Windows, `scripts/find_python.sh` on macOS/Linux). Replace `python3` in every example below with `$env:PYTHON_CMD` (PowerShell) or `"$PYTHON_CMD"` (bash).
+
 ```bash
 # All MCP calls go through the stdio client — same interface for every tool
-python3 scripts/mcp_client.py <tool-name> '<args-json>' [timeout]
+"$PYTHON_CMD" scripts/mcp_client.py <tool-name> '<args-json>' [timeout]
 
 # Returns JSON: {"success": bool, "data": {...}|null, "raw": "..."}
 
 # Example: create application
-python3 scripts/mcp_client.py application-create '{
+"$PYTHON_CMD" scripts/mcp_client.py application-create '{
   "environment-name": "local",
   "name": "My App",
   "code": "UsrMyApp"
-}' | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['data'] if r['success'] else r['raw'])"
+}' | "$PYTHON_CMD" -c "import json,sys; r=json.load(sys.stdin); print(r['data'] if r['success'] else r['raw'])"
 
 # Example: after entity mutations, refresh context
-python3 scripts/mcp_client.py application-get-info '{
+"$PYTHON_CMD" scripts/mcp_client.py application-get-info '{
   "environment-name": "local",
   "app-code": "UsrMyApp"
-}' | python3 -c "
+}' | "$PYTHON_CMD" -c "
 import json, sys
 r = json.load(sys.stdin)
 if r['success']:
@@ -94,22 +96,44 @@ else:
 ```
 
 **When creating mcp_client.py calls in bash scripts — always use the two-step pattern:**
-```bash
+```powershell
 # Step 1: write the script to a file
-cat > /tmp/run_mcp.py << 'PYEOF'
-import sys
-sys.path.insert(0, '/Users/a.kravchuk/Projects/ai-driven-app-creation/scripts')
+# Use a cross-platform temp directory (never hardcode /tmp/ — it does not exist on Windows)
+$tmpScript = Join-Path ([System.IO.Path]::GetTempPath()) "run_mcp.py"
+Set-Content -Path $tmpScript -Value @'
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 from mcp_client import call_mcp_tool
+import json
 result = call_mcp_tool('application-create', {
     'environment-name': 'local',
     'name': 'My App',
     'code': 'UsrMyApp',
 })
-import json
-print(json.dumps(result, indent=2))
-PYEOF
+- Omission never implies deletion.
 
-# Step 2: run it
+### Related Binding Tools
+
+- `get-entity-schema-properties` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`. Requires `environment-name`, `package-name`, `schema-name`.
+- `get-entity-schema-column-properties` returns detailed metadata for a single column. Requires `environment-name`, `package-name`, `schema-name`, `column-name`.
+- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
+- Schemas created earlier in the same flow are DB-first and should be queried through `get-entity-schema-properties`; do not use raw mode.
+- For lookup seed rows, the format is `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
+- When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`:
+
+```python
+import uuid
+new_id = str(uuid.uuid4())
+# In schema-sync, use seed-rows inline:
+# 'seed-rows': [{'values': {'Id': new_id, 'Name': 'New'}}, ...]
+# Then in update-entity operation:
+# 'default-value-source': 'Const', 'default-value': new_id
+```
+- Never pass partial `columnsJson` for lookup seed bindings.
+
+### Parameter Validation Checklist
+
+**For `schema-sync` calls, validate:**
 
 1. ✅ `environment-name` matches registered clio env name
 2. ✅ `package-name` is the string package name (NOT a GUID)
@@ -347,29 +371,6 @@ Stop and report blocker when:
 
 ### 6. Initialize canonical context
 
-**See:** `context/mcp-application-tools-reference.md` section "Initialize Canonical Context File"
-
-Write normalized MCP result:
-
-```bash
-echo "$RESPONSE" | jq '. + {
-  contractType: "short",
-  schemaSync: [],
-  editableContext: {}
-}' > output/<AppName>/mcp-application-result.json
-```
-
-Or use Python helper:
-
-```bash
-python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json
-```
-
-Normalized result shape:
-- `contractType` (`short`)
-- `success` (boolean)
-- `app` (object when available or inferable)
-
 <!-- FILE: context/mcp-application-tools-reference.md (L1-50, L66-412, L708-879) -->
 
 # MCP Application Tools Reference Guide
@@ -399,29 +400,33 @@ Credentials are stored in `.creatio-env.json` and passed via `environment-name` 
 
 **Parameters by tool:**
 - `schema-sync` — `environment-name`, `package-name`, `operations` (array of batch operations)
-- `page-sync` — `environment-name`, `pages` (array), `validate` (bool), `verify` (bool)
+- `page-sync` — `environment-name`, `pages` (array with optional `resources`), `validate` (bool), `verify` (bool)
 - `create-lookup` — `package-name`, `schema-name`, `title`
 - `update-entity-schema` — `package-name`, `schema-name`, `operations` (list)
 - `create-data-binding-db` — `package-name`, `schema-name`, `binding-name`, `rows` (JSON string)
-- `page-get` / `page-update` — `schemaName`, `environmentName` (camelCase, page tools are different!)
-- `page-update` extra params: `body` (string, required), `dryRun` (boolean `True`/`False`, optional)
+- `page-get` — `schema-name` (required), `environment-name` (optional)
+- `page-update` — `schema-name`, `body` (required); `resources` (JSON string, optional), `dry-run` (boolean, optional), `environment-name` (optional)
+- `page-list` — `package-name`, `search-pattern`, `limit`, `environment-name` (all optional)
+- `application-delete` — `environment-name`, `app-name` (both required)
+
+**All parameters use kebab-case.** No exceptions.
 
 **Why this matters:** clio MCP SDK maps JSON argument names to C# parameters. Names must match exactly (case-sensitive). Mismatch causes a silent error:
 ```
 An error occurred invoking 'create-lookup'.
 ```
 
-**Boolean parameters** (e.g. `dryRun`, `required`, `extendParent`) MUST be native booleans (`True`/`False` in Python), NOT strings (`'true'`/`'false'`). Passing a string causes MCP SDK deserialization failure with the same generic error.
+**Boolean parameters** (e.g. `dry-run`, `required`, `extend-parent`) MUST be native booleans (`True`/`False` in Python), NOT strings (`'true'`/`'false'`). Passing a string causes MCP SDK deserialization failure with the same generic error.
 
 ## Response Format
 
 `call_mcp_tool` parses the clio stdio response automatically and returns a dict:
 
 ```python
-r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
-# r['data'] — parsed result dict
-# r['raw']  — raw text response
 ```
+
+### 2. List Available Tools
+
 **Purpose:** Verify required tools are available.
 
 ```python
@@ -439,6 +444,7 @@ python3 scripts/mcp_client.py tools/list '{}' 30
 application-create
 application-get-info
 application-get-list
+application-delete
 schema-sync
 page-sync
 create-entity-schema
@@ -764,14 +770,15 @@ r = call_mcp_tool('create-lookup', {
 r = call_mcp_tool('update-entity-schema', {
     'environment-name': 'local',
     'package-name': 'UsrTodoList',    # ✅ string name, NOT GUID
-    'schema-name': 'UsrTodoList',
-    'operations': [                   # ✅ native list, NOT 'operationsJson'
-        {
-            'action': 'add',                              # ✅ NOT 'operation'/'addColumn'
-            'column-name': 'UsrStatus',                   # ✅ NOT 'name'
+- `verify` — re-read each page after saving to confirm. Default: `false`
+
+**Page object:**
+
+| Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `schema-name` | string | Yes | Page schema name (e.g., "UsrTodoList_FormPage") |
 | `body` | string | Yes | Full JavaScript page body with all 8 marker pairs |
+| `resources` | string | No | JSON object of `#ResourceString(key)#` values, e.g. `'{"UsrDetailsTab_caption": "Details"}'`. Usr-prefixed keys without explicit values are auto-derived from key names. |
 
 **Execution behavior:**
 - Validates each page client-side (if `validate: true`) before sending to Creatio
@@ -781,7 +788,7 @@ r = call_mcp_tool('update-entity-schema', {
 - Single lock acquisition and single Thread.Sleep for entire batch
 
 **Workflow:**
-1. Read current page bodies via individual `page-get` calls
+1. Read current page raw bodies via individual `page-get` calls (extract from `raw.body`)
 2. Edit bodies using `page_body_edit.py`
 3. Send all edited pages via `page-sync` in one call
 
@@ -794,6 +801,7 @@ r = call_mcp_tool('page-sync', {
         {
             'schema-name': 'UsrTodoList_FormPage',
             'body': edited_form_body,
+            'resources': '{"UsrDetailsTab_caption": "Details", "UsrFinanceTab_caption": "Finance"}',
         },
         {
             'schema-name': 'UsrTodoList_ListPage',
@@ -814,7 +822,8 @@ r = call_mcp_tool('page-sync', {
       "schema-name": "UsrTodoList_FormPage",
       "success": true,
       "body-length": 3775,
-      "validation": {"markers-ok": true, "js-syntax-ok": true}
+      "validation": {"markers-ok": true, "js-syntax-ok": true},
+      "resources-registered": 2
     },
     {
       "schema-name": "UsrTodoList_ListPage",
@@ -933,14 +942,6 @@ call_mcp_tool('update-entity-schema', {
 
 ```python
 r = call_mcp_tool('application-get-info', {'environment-name': 'local', 'app-code': 'UsrMyApp'})
-ctx = r['data']
-ctx['contractType'] = 'short'
-json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
-```
-
-### Validation Checklist
-
-Before proceeding to next step:
 
 <!-- FILE: context/ui-reference.md (L508-605, L192-278) -->
 
@@ -998,7 +999,7 @@ The frontend also supports these field controls:
 | PageWithRightAreaAndTabsFreedomTemplate | `5f8dd430-acf2-4e1a-80c8-77cf57e245ce` | Form with right area + tabs |
 | LightFormPage | `ec5fd902-66ce-4139-a241-10ebd8addc40` | Light/mini form |
 
-Do not infer runtime field container names only from the parent template. A live page can still place field inserts in `SideAreaProfileContainer` even when `page.get` reports `PageWithTabsFreedomTemplate`.
+Do not infer runtime field container names only from the parent template. Always inspect the live page's `viewConfigDiff` to discover the actual primary field container. For standard templates it is typically `SideAreaProfileContainer`, but custom pages may use a different container.
 
 ---
 
@@ -1132,6 +1133,7 @@ Use this pattern when the live page body already materializes a sibling sorting 
 
 <!-- FILE: context/viewconfig-reference.md (L68-215) -->
 
+
 ---
 
 ## Runtime FormPage Field Recipes
@@ -1155,6 +1157,8 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 
 ### Generic Runtime Field Insert Example
 
+> `parentName` below is a placeholder. Use the actual container discovered from the live page's `viewConfigDiff` (the container with the most field-type inserts).
+
 ```json
 {
 	"operation": "insert",
@@ -1175,7 +1179,7 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 		"multiline": false,
 		"labelPosition": "auto"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 1
 }
@@ -1205,7 +1209,7 @@ Use these recipes when syncing entity fields into a live FormPage through `page.
 		"tooltip": "",
 		"control": "$PDS_UsrStatus_ab12cd3"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 9
 }
@@ -1256,7 +1260,7 @@ If you omit `listActions` and keep `isAddAllowed: true`, the frontend can genera
 		"borderRadius": "medium",
 		"positioning": "cover"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 12
 }
@@ -1277,9 +1281,6 @@ These field components are also available in the frontend:
 | Component | Type String | Binding property | Typical extras |
 |-----------|-------------|------------------|----------------|
 | File input | `crt.FileInput` | `control` | `accept`, `maxFileSize`, upload/download/preview outputs |
-| Encrypted input | `crt.EncryptedInput` | `control` | `state`, `unmaskingDisabled`, `toggleMaskValue` |
-| Slider | `crt.Slider` | `control` | `minValue`, `maxValue`, `step`, `color` |
-
 
 <!-- FILE: context/schema-reference.md (L7-29, L64-111) -->
 
@@ -1397,7 +1398,16 @@ import threading
 def _build_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
     if env_cmd:
-        return shlex.split(env_cmd) + ["mcp-server"]
+        # shlex.split() in POSIX mode (the default) treats backslashes as escape chars,
+        # mangling Windows paths: "dotnet C:\path" → ['dotnet', 'C:path'].
+        # On Windows: use posix=False (preserves backslashes) + strip outer quotes (handles
+        # paths with spaces like "C:\Program Files\...").
+        # On macOS/Linux: use posix=True (default) which handles quoted paths natively.
+        if sys.platform == "win32":
+            parts = [p.strip('"').strip("'") for p in shlex.split(env_cmd, posix=False)]
+        else:
+            parts = shlex.split(env_cmd)
+        return parts + ["mcp-server"]
     if shutil.which("clio"):
         return ["clio", "mcp-server"]
     if not shutil.which("dotnet"):
@@ -1601,6 +1611,121 @@ def _get_shared_client():
         return _shared_client
 
 
+_TOOL_REQUIRED_PARAMS = {
+    "application-create": {
+        "required": ["environment-name", "code", "name", "template-code", "icon-background"],
+        "hints": {
+            "template-code": "Technical template code: 'AppFreedomUI' or 'AppFreedomUIv2' (NOT display names like 'Records & business processes')",
+            "icon-background": "Hex color string, e.g. '#1F5F8B'",
+            "environment-name": "Registered clio environment name, e.g. 'local'",
+            "code": "Application code (e.g. 'UsrMyApp'). Use 'code', NOT 'app-code'",
+            "name": "Display name (e.g. 'My App'). Use 'name', NOT 'app-name'",
+        },
+        "reject": {
+            "app-code": "Use 'code' instead of 'app-code'",
+            "app-name": "Use 'name' instead of 'app-name'",
+        },
+    },
+    "create-lookup": {
+        "required": ["environment-name", "package-name", "schema-name", "title"],
+        "hints": {
+            "environment-name": "Registered clio environment name, e.g. 'local'",
+            "package-name": "Package string name (NOT a GUID)",
+        },
+    },
+    "create-entity-schema": {
+        "required": ["environment-name", "package-name", "schema-name", "title"],
+        "hints": {},
+    },
+    "update-entity-schema": {
+        "required": ["environment-name", "package-name", "schema-name", "operations"],
+        "hints": {
+            "operations": "Array of {action, column-name, type, title, ...} objects",
+        },
+    },
+    "schema-sync": {
+        "required": ["environment-name", "package-name", "operations"],
+        "hints": {
+            "operations": "Array of {type, schema-name, ...} objects. Types: create-lookup, create-entity, update-entity",
+        },
+    },
+    "page-sync": {
+        "required": ["environment-name", "pages"],
+        "hints": {
+            "pages": "Array of {schema-name, body, resources?} objects. resources is optional JSON string for #ResourceString(key)# macros.",
+        },
+    },
+    "application-get-info": {
+        "required": ["environment-name", "app-code"],
+        "hints": {
+            "app-code": "Application code (NOT 'application-code' or 'code')",
+        },
+    },
+    "application-get-list": {
+        "required": ["environment-name"],
+        "hints": {},
+    },
+    "page-get": {
+        "required": ["environment-name", "schema-name"],
+        "hints": {
+            "environment-name": "Registered clio environment name, e.g. 'local'",
+            "schema-name": "e.g. 'UsrMyApp_FormPage' or 'UsrMyApp_ListPage'",
+        },
+        "reject": {
+            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
+            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
+        },
+    },
+    "page-update": {
+        "required": ["environment-name", "schema-name", "body"],
+        "hints": {
+            "environment-name": "Registered clio environment name, e.g. 'local'",
+            "schema-name": "e.g. 'UsrMyApp_FormPage'",
+            "body": "Full page body string with markers",
+            "resources": "Optional. JSON string of {key: value} for #ResourceString(key)# macros. Usr-prefixed keys auto-derive if omitted.",
+        },
+        "reject": {
+            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
+            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
+            "dryRun": "Use 'dry-run' (kebab-case) instead of 'dryRun'",
+        },
+    },
+    "page-list": {
+        "required": [],
+        "hints": {},
+        "reject": {
+            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
+            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
+            "searchPattern": "Use 'search-pattern' (kebab-case) instead of 'searchPattern'",
+        },
+    },
+    "application-delete": {
+        "required": ["environment-name", "app-name"],
+        "hints": {
+            "app-name": "Application name or code to uninstall, e.g. 'UsrMyApp'",
+        },
+    },
+}
+
+
+def _validate_params(tool_name: str, arguments: dict) -> list[str]:
+    spec = _TOOL_REQUIRED_PARAMS.get(tool_name)
+    if not spec:
+        return []
+    errors = []
+    for wrong_name, fix in spec.get("reject", {}).items():
+        if wrong_name in arguments:
+            errors.append(f"Wrong parameter '{wrong_name}': {fix}")
+    for param in spec["required"]:
+        if param not in arguments or arguments[param] is None or arguments[param] == "":
+            hint = spec["hints"].get(param, "")
+            msg = f"Missing required parameter '{param}'"
+            if hint:
+                msg += f". Hint: {hint}"
+            errors.append(msg)
+    return errors
+
+
 def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     """
     Call a clio MCP tool via stdio transport.
@@ -1608,6 +1733,9 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     Uses a persistent clio mcp-server process under the hood.
     The process is started on first call and reused for subsequent calls,
     eliminating ~0.5-1s subprocess spawn + initialize overhead per call.
+
+    Validates required parameters before sending to prevent trial-and-error
+    with the MCP server. Returns an error dict with hints if params are missing.
 
     Args:
         tool_name: dash-separated tool name (e.g. 'application-create')
@@ -1622,6 +1750,13 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
         (True/False), NOT strings ('true'/'false'). Passing a string causes
         MCP SDK deserialization failure and a generic invocation error.
     """
+    validation_errors = _validate_params(tool_name, arguments)
+    if validation_errors:
+        return {
+            "success": False,
+            "data": None,
+            "raw": "Parameter validation failed:\n" + "\n".join(f"  - {e}" for e in validation_errors),
+        }
     client = _get_shared_client()
     try:
         return client.call_tool(tool_name, arguments, timeout)
@@ -1752,13 +1887,18 @@ def extract_list_columns(body):
     return []
 
 
-def build_page_update_arguments(schema_name, body, dry_run=False):
+def build_page_update_arguments(schema_name, body, dry_run=False, environment_name=None, resources=None):
     arguments = {
-        "schemaName": schema_name,
+        "schema-name": schema_name,
         "body": body
     }
+    if environment_name:
+        arguments["environment-name"] = environment_name
     if dry_run:
-        arguments["dryRun"] = True
+        arguments["dry-run"] = True
+    if resources:
+        import json
+        arguments["resources"] = json.dumps(resources) if isinstance(resources, dict) else resources
     return arguments
 
 
@@ -1959,6 +2099,35 @@ def validate_body_structure(body):
     return {"valid": len(errors) == 0, "errors": errors}
 
 
+FIELD_CONTROL_TYPES = {
+    "crt.Input", "crt.NumberInput", "crt.Checkbox", "crt.DateTimePicker",
+    "crt.ComboBox", "crt.RichTextEditor", "crt.PhoneInput", "crt.EmailInput",
+    "crt.WebInput", "crt.ColorPicker", "crt.ImageInput", "crt.FileInput",
+    "crt.EncryptedInput", "crt.Slider",
+}
+
+
+def discover_form_container(view_config_diff):
+    counts = {}
+    for item in view_config_diff:
+        if not isinstance(item, dict):
+            continue
+        if item.get("operation") != "insert":
+            continue
+        values = item.get("values") or {}
+        if values.get("layoutConfig") is None:
+            continue
+        control_type = values.get("type", "")
+        if control_type not in FIELD_CONTROL_TYPES:
+            continue
+        parent = item.get("parentName")
+        if parent:
+            counts[parent] = counts.get(parent, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=counts.get)
+
+
 def find_max_row_index(view_config_diff, parent_name):
     max_row = 0
     max_index = -1
@@ -1979,7 +2148,7 @@ def find_max_row_index(view_config_diff, parent_name):
     return max_row, max_index
 
 
-def build_form_field_insert(field, row, index):
+def build_form_field_insert(field, row, index, parent_name):
     values = {
         "layoutConfig": {
             "column": 1,
@@ -1988,7 +2157,7 @@ def build_form_field_insert(field, row, index):
             "rowSpan": 1,
         },
         "type": field["type"],
-        "label": field.get("label", f"$Resources.Strings.{field['name']}"),
+        "label": field.get("label") or field.get("title") or field["name"],
         "labelPosition": "auto",
     }
     binding_prop = "value" if field["type"] == "crt.ImageInput" else "control"
@@ -2003,19 +2172,65 @@ def build_form_field_insert(field, row, index):
         "operation": "insert",
         "name": field["name"],
         "values": values,
-        "parentName": field.get("parentName", "SideAreaProfileContainer"),
+        "parentName": field.get("parentName") or parent_name,
         "propertyName": "items",
         "index": index,
     }
 
 
+def build_tab_inserts(tab_name, caption, parent_name="Tabs", index=1):
+    resource_key = f"{tab_name}_caption"
+    container_name = f"{tab_name}Container"
+    resources = {resource_key: caption}
+    inserts = [
+        {
+            "operation": "insert",
+            "name": tab_name,
+            "values": {
+                "type": "crt.TabContainer",
+                "caption": f"#ResourceString({resource_key})#",
+                "items": [],
+                "visible": True
+            },
+            "parentName": parent_name,
+            "propertyName": "items",
+            "index": index,
+        },
+        {
+            "operation": "insert",
+            "name": container_name,
+            "values": {
+                "type": "crt.GridContainer",
+                "columns": ["minmax(32px, 1fr)", "minmax(32px, 1fr)"],
+                "rows": "minmax(max-content, 32px)",
+                "gap": {"columnGap": "large", "rowGap": "none"},
+                "items": [],
+            },
+            "parentName": tab_name,
+            "propertyName": "items",
+            "index": 0,
+        },
+    ]
+    return inserts, resources
+
+
 def add_form_fields(body, fields):
+    for field in fields:
+        if "path" not in field:
+            raise PageBodyError(
+                f"Field '{field.get('name', '?')}' missing required 'path' "
+                f"(e.g. 'PDS.{field.get('name', 'UsrColumnName')}')"
+            )
     view_config = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
     vm_marker = detect_vm_marker(body)
     if vm_marker is None:
         raise PageBodyError("No viewModelConfig marker found")
     vm_data = parse_marker_json(body, vm_marker)
-    parent = fields[0].get("parentName", "SideAreaProfileContainer") if fields else "SideAreaProfileContainer"
+    explicit_parent = fields[0].get("parentName") if fields else None
+    if explicit_parent:
+        parent = explicit_parent
+    else:
+        parent = discover_form_container(view_config) or "SideAreaProfileContainer"
     max_row, max_index = find_max_row_index(view_config, parent)
     existing_names = {item.get("name") for item in view_config if isinstance(item, dict)}
     for field in fields:
@@ -2023,7 +2238,7 @@ def add_form_fields(body, fields):
             continue
         max_row += 1
         max_index += 1
-        insert = build_form_field_insert(field, max_row, max_index)
+        insert = build_form_field_insert(field, max_row, max_index, parent)
         view_config.append(insert)
     body = replace_marker_content(body, "SCHEMA_VIEW_CONFIG_DIFF",
                                   serialize_json_indented(view_config, base_indent=2))
@@ -2071,7 +2286,7 @@ def add_list_columns(body, columns):
         entry = {
             "id": col.get("id", str(uuid.uuid4())),
             "code": col["code"],
-            "caption": col.get("caption", f"#ResourceString({col['code']})#"),
+            "caption": col.get("caption") or col.get("title") or col["code"],
             "dataValueType": col["dataValueType"],
         }
         if col.get("width"):

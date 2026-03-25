@@ -1,7 +1,7 @@
 ﻿---
 name: page-schema-editing
-description: Edit Freedom UI page schemas by modifying the full JS body directly. Agent gets the raw body, makes changes, and sends it back to MCP for saving.
-compatibility: Requires running Creatio MCP endpoint with `page.get`, `page.update`, and `page.list` available.
+description: Edit Freedom UI page schemas by modifying the full JS body directly. Agent gets the raw body, inspects unfamiliar component types when needed, makes changes, and sends it back to MCP for saving.
+compatibility: Requires clio MCP with `page-get`, `page-update`, `page-list`, and `component-info` available.
 metadata:
   version: "2.0"
   category: creatio-schema-generation
@@ -21,41 +21,62 @@ Read before executing:
 
 ## MCP Tools Reference
 
-### `page.list` — Discover Pages
+### `page-list` — Discover Pages
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `searchPattern` | string | No | Filter by schema name (case-insensitive contains) |
-| `packageName` | string | No | Filter by exact package name |
+| `search-pattern` | string | No | Filter by schema name (case-insensitive contains) |
+| `package-name` | string | No | Filter by exact package name |
 | `limit` | string | No | Max results (default: `"25"`) |
+| `environment-name` | string | No | Registered clio environment name |
 
 **All parameters are strings.**
 
-### `page.get` — Read Page
+### `page-get` — Read Page
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `schemaName` | string | **Yes** | Exact page schema name |
+| `schema-name` | string | **Yes** | Exact page schema name |
+| `environment-name` | string | No | Registered clio environment name |
 
 Response:
 ```json
 {
   "success": true,
-  "schemaName": "UsrMyApp_FormPage",
-  "schemaUId": "...",
-  "packageName": "UsrMyApp",
-  "parentSchemaName": "PageWithTabsFreedomTemplate",
-  "body": "define(\"UsrMyApp_FormPage\", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, ...full JS body...)"
+  "page": {
+    "schemaName": "UsrMyApp_FormPage",
+    "schemaUId": "...",
+    "packageName": "UsrMyApp",
+    "parentSchemaName": "PageWithTabsFreedomTemplate"
+  },
+  "raw": {
+    "body": "define(\"UsrMyApp_FormPage\", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, ...full JS body...)"
+  }
 }
 ```
 
-### `page.update` — Save Complete Body
+Use `raw.body` as the editable source of truth. The `page` block is metadata only.
+
+When the response `bundle.viewConfig` contains an unfamiliar `crt.*` component type, call `component-info` with that exact `component-type` before editing nested properties or child items.
+
+### `component-info` — Inspect Component Contract
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `schemaName` | string | **Yes** | Page schema name |
+| `component-type` | string | No | Exact Freedom UI component type, e.g. `crt.TabContainer`. Omit it or use `list` to return the grouped catalog. |
+| `search` | string | No | Optional keyword filter for list mode. |
+
+Use this tool to inspect supported properties, parent types, typical children, and example payloads for unfamiliar container or control types found in `bundle.viewConfig`.
+
+### `page-update` — Save Complete Body
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `schema-name` | string | **Yes** | Page schema name |
 | `body` | string | **Yes** | Complete JS body with all 8 marker pairs |
-| `dryRun` | boolean | No | `True` to validate without saving |
+| `dry-run` | boolean | No | `True` to validate without saving |
+| `resources` | string | No | JSON object for `#ResourceString(key)#` captions |
+| `environment-name` | string | No | Registered clio environment name |
 
 Response (success):
 ```json
@@ -63,9 +84,13 @@ Response (success):
   "success": true,
   "schemaName": "UsrMyApp_FormPage",
   "bodyLength": 3456,
-  "dryRun": false
+  "dryRun": false,
+  "resourcesRegistered": 1,
+  "registeredResourceKeys": ["UsrDetailsTab_caption"]
 }
 ```
+
+If the edited body introduces `#ResourceString(UsrKey_caption)#`, pass `resources` with explicit `{key: value}` pairs or rely on `page-update` auto-derivation for Usr-prefixed keys.
 
 ## Schema Body Format
 
@@ -112,7 +137,7 @@ Notes:
 ### Step 1: Discover Pages
 
 ```
-page.list(searchPattern: "TestApp1")
+page-list(search-pattern: "TestApp1")
 ```
 
 ### Step 2: Read Current Body
@@ -120,7 +145,7 @@ page.list(searchPattern: "TestApp1")
 **Always read before editing.** Never construct a body from scratch.
 
 ```
-page.get(schemaName: "TestApp1_ListPage")
+page-get(schema-name: "TestApp1_ListPage")
 ```
 
 ### Step 3: Modify the Body
@@ -152,26 +177,25 @@ page.get(schemaName: "TestApp1_ListPage")
 | viewModel section | `viewModelConfig` — plain object with `attributes: {}` | `viewModelConfigDiff` — array of merge operations with `path` and `values` |
 | model section | `modelConfig` — plain object | `modelConfigDiff` — array of merge operations |
 | Adding attributes | Merge into `attributes` object directly | Merge into the operation's `values` object where `path` contains `"attributes"` |
-| Field container | `SideAreaProfileContainer` with `insert` operations | `DataTable` merge with `columns` array |
+| Field container | Discovered from live `viewConfigDiff` (container with most field-type inserts) | `DataTable` merge with `columns` array |
 
 ### Step 3a: Sync New Entity Fields into a Live FormPage
 
 Use this workflow when the entity gained new columns and the live FormPage must surface them:
 
 1. Parse both `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
-2. Collect existing `insert` operations where:
-   - `parentName == "SideAreaProfileContainer"`
-   - `propertyName == "items"`
-3. Find the current maximum `row` and `index` values in `SideAreaProfileContainer`
-4. For each missing entity field:
+2. If the live page contains unfamiliar `crt.*` container or control types around the target area, inspect them through `component-info` before editing container-specific config.
+3. **Discover the primary field container** — the container with the most field-type `insert` operations (e.g., `crt.Input`, `crt.ComboBox`). Collect existing inserts in that container where `propertyName == "items"`.
+4. Find the current maximum `row` and `index` values in the discovered container
+5. For each missing entity field:
    - choose the control recipe from `context/viewconfig-reference.md`
-   - append a new `insert` to `SideAreaProfileContainer`
+   - append a new `insert` to the discovered container
    - continue `row` and `index` from the current maximum values
    - keep the live page naming pattern for the field attribute key
    - add a matching attribute to `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
    - keep raw config minimal for preprocessor-backed controls unless the current page body already contains explicit richer config
-5. Preserve existing inserts and bindings — append only missing fields
-6. Keep `Name` as a special case when it already exists in the page body
+6. Preserve existing inserts and bindings — append only missing fields
+7. Keep `Name` as a special case when it already exists in the page body
 
 Special cases from live schema:
 - Lookup fields need:
@@ -194,24 +218,24 @@ Guardrails for FormPage lookup sync:
 
 Use this workflow when the task is to change default row sorting on a live ListPage:
 
-1. Read the canonical section `ListPage DataGrid Sorting via page.update` in `context/ui-reference.md`
+1. Read the canonical section `ListPage DataGrid Sorting via page-update` in `context/ui-reference.md`
 2. Parse the live `SCHEMA_VIEW_MODEL_CONFIG_DIFF` and identify the DataGrid collection attribute bound through the grid `items` property
 3. Inspect that collection attribute's `modelConfig.sortingConfig`
 4. Keep the live data-source binding path such as `PDS` unless the task explicitly changes the data source
 5. Use entity column names in sort options such as `CreatedOn` or `UsrDueDate`
 6. Add or update `sortingConfig.default` when the requirement is plain column ordering
 7. Preserve an explicit sibling sorting attribute only when the live page body already materializes it or the task requires deterministic raw-body output
-8. Run `page.update(..., dryRun: True)` before save
+8. Run `page-update(..., dry-run: True)` before save
 
 Do not reuse FormPage lookup `*_List` sorting as the pattern for ListPage DataGrid row sorting. If the requested order is semantic or business-specific rather than plain column ordering, stop and treat it as a blocker unless there is an explicit technical sort key or separate runtime logic in scope.
 
 ### Step 4: Validate with Dry Run
 
 ```
-page.update(
-  schemaName: "TestApp1_ListPage",
+page-update(
+  schema-name: "TestApp1_ListPage",
   body: "...full modified body...",
-  dryRun: True
+  dry-run: True
 )
 ```
 
@@ -220,27 +244,27 @@ Check `success: true` before saving.
 ### Step 5: Save
 
 ```
-page.update(
-  schemaName: "TestApp1_ListPage",
+page-update(
+  schema-name: "TestApp1_ListPage",
   body: "...full modified body..."
 )
 ```
 
 ## Critical Rules
 
-1. **Always read first** — use `page.get` before any edit
+1. **Always read first** — use `page-get` before any edit
 2. **Preserve all 8 marker pairs** — MCP validates their presence; missing markers = rejection
 3. **Preserve structure outside markers** — don't modify `define(...)` wrapper, `return {`, or `};`
 4. **Balance all delimiters** — `[]`, `{}`, `()` must be balanced within each section
 5. **By default, call `await next?.handle(request)`** to preserve the request chain, but omit it intentionally when canceling or overriding the default flow
 6. **Prefix entity columns with `PDS_`** (e.g., `PDS_UsrName`, `PDS_UsrStatus`)
 7. **Deps ↔ handlers correlation** — if handler uses SDK services, ensure deps and args include the required import and preserve the live alias style (`sdk`, `devkit`, etc.)
-8. **For runtime entity-field sync, use `SideAreaProfileContainer`** when the live page already follows that pattern
+8. **For runtime entity-field sync, discover the primary field container** from the live page's `viewConfigDiff` (the container with the most field-type inserts) instead of assuming a fixed container name
 9. **Every new field insert needs a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute**
 10. **For datasource-bound FormPage ComboBox fields, add only the main bound attribute unless the live schema already materializes extra lookup-list bindings**
 11. **Do not manually duplicate frontend-generated ComboBox/ImageInput request wiring unless the live schema already stores it explicitly**
 12. **Use `request.$context.executeRequest(...)` for secondary programmatic requests and `setValue(...)` / `setAttributePropertyValue(...)` for runtime attribute state changes**
-13. **Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body via `page.update`**
+13. **Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body via `page-update`**
 14. **Treat `converters` and `validators` as conservative object sections, not the default place for new validation logic without live schema evidence**
 15. **For ListPage sorting, use the canonical contract in `context/ui-reference.md` and do not infer business order from lookup sorting direction**
 16. **Treat any newly introduced FormPage attribute ending with `_List` as a blocker unless the live page already contained it before editing**
@@ -248,7 +272,7 @@ page.update(
 ## Validation Checklist
 
 ### Pre-edit
-- [ ] `page.get` called before edit
+- [ ] `page-get` called before edit
 - [ ] Section variant detected (`viewModelConfig` vs `viewModelConfigDiff`)
 
 ### Structural integrity (before calling page-update)
@@ -259,7 +283,7 @@ page.update(
 - [ ] `define(...)` wrapper and `return {` structure preserved
 - [ ] Every `insert` operation in viewConfigDiff has: `name`, `values`, `parentName`, `propertyName`, `index`
 - [ ] Every field using `control: "$X"` has a matching attribute `X` in viewModelConfig(Diff)
-- [ ] For FormPage: insert operations targeting `SideAreaProfileContainer` have monotonically increasing `row` values
+- [ ] For FormPage: insert operations targeting the primary field container have monotonically increasing `row` values
 - [ ] For ListPage: `DataTable` merge contains all required column codes
 
 ### Content correctness
@@ -267,7 +291,7 @@ page.update(
 - [ ] Each handler either preserves the chain intentionally, stops it intentionally, or documents cleanup via `finally`
 - [ ] Entity attributes prefixed with `PDS_`
 - [ ] Every inserted field has a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute
-- [ ] Runtime FormPage field sync appends to `SideAreaProfileContainer`
+- [ ] Runtime FormPage field sync appends to the discovered primary field container
 - [ ] Datasource-bound FormPage ComboBox fields do not introduce new `*_List` bindings unless the live page already persisted them
 - [ ] Existing live lookup-list bindings or nested actions are preserved instead of regenerated or renamed
 - [ ] ListPage sorting changes follow the canonical `context/ui-reference.md` contract instead of FormPage lookup-list patterns
@@ -277,13 +301,13 @@ page.update(
 - [ ] Dynamic validation and UI state updates use `setValue(...)` or `setAttributePropertyValue(...)` when appropriate
 - [ ] `converters` and `validators` were only edited when the live schema already used them or the task provided concrete evidence
 - [ ] Deps and args were updated if handlers use external modules, and the live SDK alias style was preserved
-- [ ] `dryRun: True` passed first to validate
+- [ ] `dry-run: True` passed first to validate
 - [ ] `success: true` confirmed after save
 
 ## Example: Add Handler + Update Deps in One Operation
 
 ```
-1. page.get(schemaName: "TestApp1_ListPage")
+1. page-get(schema-name: "TestApp1_ListPage")
    → get body
 
 2. Modify body:
@@ -294,9 +318,9 @@ page.update(
    - Replace /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/
      with    /**SCHEMA_HANDLERS*/[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => { await next?.handle(request); console.log("Welcome!"); } }]/**SCHEMA_HANDLERS*/
 
-3. page.update(schemaName: "TestApp1_ListPage", body: "...modified body...", dryRun: True)
+3. page-update(schema-name: "TestApp1_ListPage", body: "...modified body...", dry-run: True)
    → success: true
 
-4. page.update(schemaName: "TestApp1_ListPage", body: "...modified body...")
+4. page-update(schema-name: "TestApp1_ListPage", body: "...modified body...")
    → saved to DB + decorated file written to disk + browser notified
 ```

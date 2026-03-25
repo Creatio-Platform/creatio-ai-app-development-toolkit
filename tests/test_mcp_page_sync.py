@@ -2,6 +2,7 @@ import contextlib
 import json
 import shutil
 import sys
+import tempfile
 import unittest
 import uuid
 from pathlib import Path
@@ -135,17 +136,19 @@ class FakePageClient:
 
     def list_tools(self):
         return [
-            {"name": "page.list"},
-            {"name": "page.get"},
-            {"name": "page.update"}
+            {"name": "page-list"},
+            {"name": "page-get"},
+            {"name": "page-update"},
+            {"name": "page-sync"}
         ]
 
     def call_tool_json(self, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
-        if tool_name == "page.list":
+        if tool_name == "page-list":
+            pkg = arguments.get("package-name") or arguments.get("packageName")
             return {
                 "success": True,
-                "packageName": arguments["packageName"],
+                "packageName": pkg,
                 "pages": [
                     {
                         "name": name,
@@ -155,36 +158,59 @@ class FakePageClient:
                         "parentSchemaName": page["parentSchemaName"]
                     }
                     for name, page in sorted(self.pages.items())
-                    if page["packageName"] == arguments["packageName"]
+                    if page["packageName"] == pkg
                 ]
             }
-        if tool_name == "page.get":
-            page = self.pages[arguments["schemaName"]]
+        if tool_name == "page-get":
+            sn = arguments.get("schema-name") or arguments.get("schemaName")
+            page = self.pages[sn]
             return {
                 "success": True,
-                "schemaName": arguments["schemaName"],
-                "uId": page["uId"],
-                "packageName": page["packageName"],
-                "parentSchemaName": page["parentSchemaName"],
-                "body": page["body"],
-                "bodyLength": len(page["body"])
+                "page": {
+                    "schemaName": sn,
+                    "schemaUId": page["uId"],
+                    "packageName": page["packageName"],
+                    "parentSchemaName": page["parentSchemaName"],
+                },
+                "bundle": {},
+                "raw": {
+                    "body": page["body"],
+                },
             }
-        if tool_name == "page.update":
-            if arguments["schemaName"] not in self.pages:
+        if tool_name == "page-update":
+            sn = arguments.get("schema-name") or arguments.get("schemaName")
+            if sn not in self.pages:
                 return {
                     "success": False,
                     "error": {
                         "message": "Unknown page"
                     }
                 }
-            if arguments.get("dryRun") != "true":
-                self.pages[arguments["schemaName"]]["body"] = arguments["body"]
+            dry = arguments.get("dry-run") or arguments.get("dryRun")
+            if dry is not True:
+                self.pages[sn]["body"] = arguments["body"]
             return {
                 "success": True,
-                "schemaName": arguments["schemaName"],
-                "dryRun": arguments.get("dryRun"),
+                "schemaName": sn,
+                "dryRun": dry,
                 "bodyLength": len(arguments["body"])
             }
+        if tool_name == "page-sync":
+            results = []
+            for page_payload in arguments["pages"]:
+                sn = page_payload["schema-name"]
+                page = self.pages[sn]
+                page["body"] = page_payload["body"]
+                results.append({
+                    "schema-name": sn,
+                    "schemaName": sn,
+                    "success": True,
+                    "verifiedBody": page_payload["body"],
+                    "uId": page["uId"],
+                    "packageName": page["packageName"],
+                    "parentSchemaName": page["parentSchemaName"]
+                })
+            return {"success": True, "pages": results}
         raise AssertionError(tool_name)
 
 
@@ -296,8 +322,8 @@ class McpPageSyncTests(unittest.TestCase):
         self.assertTrue(list_entry["status"]["machineChecked"])
         self.assertEqual(form_entry["parentSchemaName"], "PageWithTabsFreedomTemplate")
         self.assertEqual(list_entry["uId"], "33333333-3333-3333-3333-333333333333")
-        self.assertEqual(len(persisted["schemaSync"]), 9)
-        self.assertEqual([call[0] for call in fake_client.calls].count("page.update"), 4)
+        self.assertEqual(len(persisted["schemaSync"]), 4)
+        self.assertEqual([call[0] for call in fake_client.calls].count("page-sync"), 1)
         self.assertIn("UsrTodoList_FormPage=machineChecked", report)
         self.assertIn("manualCheckPending=true", report)
 
@@ -353,7 +379,7 @@ class McpPageSyncTests(unittest.TestCase):
         with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             result_path.write_text(json.dumps(result_document), encoding="utf-8")
-            with self.assertRaisesRegex(WorkflowError, "page.list did not return required page UsrTodoList_ListPage"):
+            with self.assertRaisesRegex(WorkflowError, "page-list did not return required page UsrTodoList_ListPage"):
                 apply_page_sync_plan(
                     fake_client,
                     result_document,
@@ -371,7 +397,7 @@ class McpPageSyncTests(unittest.TestCase):
                     result_path
                 )
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
-        self.assertEqual(persisted["schemaSync"][0]["tool"], "page.list")
+        self.assertEqual(persisted["schemaSync"][0]["tool"], "page-list")
 
     def test_apply_page_sync_plan_accepts_markdown_embedded_plan_payload(self):
         pages = {
@@ -414,6 +440,40 @@ class McpPageSyncTests(unittest.TestCase):
             )
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertIn("UsrTodoList_ListPage", persisted["pageEvidence"])
+
+    def test_apply_page_sync_plan_does_not_invent_environment_name(self):
+        pages = {
+            "UsrTodoList_ListPage": {
+                "uId": "33333333-3333-3333-3333-333333333333",
+                "packageName": "UsrTodoList",
+                "parentSchemaName": "BaseSectionTemplate",
+                "body": build_list_body(False)
+            }
+        }
+        fake_client = FakePageClient(pages)
+        result_document = build_result_document()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            result_path = temp_path / "mcp-application-result.json"
+            result_path.write_text(json.dumps(result_document), encoding="utf-8")
+            apply_page_sync_plan(
+                fake_client,
+                result_document,
+                {
+                    "packageName": "UsrTodoList",
+                    "pages": [
+                        {
+                            "schemaName": "UsrTodoList_ListPage",
+                            "kind": "list",
+                            "body": build_list_body(True),
+                            "requiredCodes": ["PDS_Name", "PDS_UsrStatus"]
+                        }
+                    ]
+                },
+                result_path
+            )
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        self.assertNotIn("environment-name", page_sync_call[1])
 
 
 if __name__ == "__main__":

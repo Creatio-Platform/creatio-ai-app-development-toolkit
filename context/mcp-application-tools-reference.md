@@ -4,6 +4,7 @@
 > The HTTP endpoint examples in this file are **parameter reference only** — do NOT copy curl commands as execution patterns.
 > Use `python3 scripts/mcp_client.py <tool-name> '<args-json>'` for all actual calls.
 > Tool names use dashes: `application-create`, `create-lookup`, `update-entity-schema` (not dots).
+> Supported released runtime is `clio` `8.0.2.37+`. `CLIO_CMD` may override the executable path, but it must still resolve to a compatible released version.
 
 ## Overview
 
@@ -11,7 +12,7 @@ MCP (Model Context Protocol) application tools provide DB-first integration for 
 
 ## Authentication
 
-Credentials are stored in `.creatio-env.json` and passed via `environment-name` parameter to all clio MCP tools.
+Standard ADAC flow stores credentials in `.creatio-env.json` and passes the registered environment via `environment-name`. Some tools also accept explicit `uri` / `login` / `password` connection overrides.
 
 ## Parameter Naming Convention
 
@@ -25,19 +26,24 @@ Credentials are stored in `.creatio-env.json` and passed via `environment-name` 
 
 **Parameters by tool:**
 - `schema-sync` — `environment-name`, `package-name`, `operations` (array of batch operations)
-- `page-sync` — `environment-name`, `pages` (array), `validate` (bool), `verify` (bool)
+- `page-sync` — `environment-name`, `pages` (array with optional `resources`), `validate` (bool), `verify` (bool)
 - `create-lookup` — `package-name`, `schema-name`, `title`
 - `update-entity-schema` — `package-name`, `schema-name`, `operations` (list)
 - `create-data-binding-db` — `package-name`, `schema-name`, `binding-name`, `rows` (JSON string)
-- `page-get` / `page-update` — `schemaName`, `environmentName` (camelCase, page tools are different!)
-- `page-update` extra params: `body` (string, required), `dryRun` (boolean `True`/`False`, optional)
+- `component-info` — `component-type` (optional), `search` (optional)
+- `page-get` — `schema-name` (required), `environment-name` (optional)
+- `page-update` — `schema-name`, `body` (required); `resources` (JSON string, optional), `dry-run` (boolean, optional), `environment-name` (optional)
+- `page-list` — `package-name`, `search-pattern`, `limit`, `environment-name` (all optional)
+- `application-delete` — `app-name` (required) plus either `environment-name` or explicit `uri` / `login` / `password`
+
+**All parameters use kebab-case.** No exceptions.
 
 **Why this matters:** clio MCP SDK maps JSON argument names to C# parameters. Names must match exactly (case-sensitive). Mismatch causes a silent error:
 ```
 An error occurred invoking 'create-lookup'.
 ```
 
-**Boolean parameters** (e.g. `dryRun`, `required`, `extendParent`) MUST be native booleans (`True`/`False` in Python), NOT strings (`'true'`/`'false'`). Passing a string causes MCP SDK deserialization failure with the same generic error.
+**Boolean parameters** (e.g. `dry-run`, `required`, `extend-parent`) MUST be native booleans (`True`/`False` in Python), NOT strings (`'true'`/`'false'`). Passing a string causes MCP SDK deserialization failure with the same generic error.
 
 ## Response Format
 
@@ -80,12 +86,14 @@ python3 scripts/mcp_client.py tools/list '{}' 30
 application-create
 application-get-info
 application-get-list
+application-delete
 schema-sync
 page-sync
 create-entity-schema
 create-lookup
 update-entity-schema
 create-data-binding-db
+component-info
 page-list
 page-get
 page-update
@@ -111,7 +119,7 @@ r = call_mcp_tool('application-create', {
 if not r['success']:
     raise RuntimeError(f"application-create failed: {r['raw']}")
 data = r['data']
-package_name = data['packageName']
+package_name = data['package-name']
 main_entity_name = data['entities'][0]['name']
 ```
 
@@ -132,36 +140,29 @@ main_entity_name = data['entities'][0]['name']
 ```json
 {
   "success": true,
-  "app": {
-    "id": "7030c825-59bd-49c6-8a6b-5ff260687a87",
-    "code": "UsrEvents"
-  },
-  "packages": {
-    "UsrEvents": {
-      "uId": "cdb130a9-8c77-4e80-ad1b-529cc23a750a",
-      "isPrimary": true,
-      "entities": {
-        "UsrEvents": {
-          "uId": "688a3176-2830-45d7-bfbb-18e922600e7b",
-          "caption": "Events",
-          "columns": {
-            "Name": {
-              "uId": "9fce872c-24c2-47a8-9805-081de85e33d1",
-              "caption": "Name",
-              "dataValueTypeName": "MediumText"
-            }
-          }
+  "package-u-id": "cdb130a9-8c77-4e80-ad1b-529cc23a750a",
+  "package-name": "UsrEvents",
+  "entities": [
+    {
+      "uId": "688a3176-2830-45d7-bfbb-18e922600e7b",
+      "name": "UsrEvents",
+      "caption": "Events",
+      "columns": [
+        {
+          "name": "Name",
+          "caption": "Name",
+          "dataValueTypeName": "MediumText"
         }
-      }
+      ]
     }
-  }
+  ]
 }
 ```
 
 **Canonical main-entity rule:**
-- For a new Freedom UI app, `application.create` materializes the initial section entity whose schema name normally matches the app code, for example `code=UsrTodoList` → entity `UsrTodoList`.
+- For a new Freedom UI app, `application-create` materializes the initial section entity whose schema name normally matches the app code, for example `code=UsrTodoList` → entity `UsrTodoList`.
 - If the app has one primary record type, treat that template-created entity as the canonical main entity and extend it via `update-entity-schema`.
-- Use `entity.create` only for additional business objects that are distinct from the template-created section records. Do not create a synonym entity such as `UsrTodoTask` beside `UsrTodoList` for the same records.
+- Use `create-entity-schema` only for additional business objects that are distinct from the template-created section records. Do not create a synonym entity such as `UsrTodoTask` beside `UsrTodoList` for the same records.
 
 **Initialize Canonical Context File:**
 
@@ -178,7 +179,7 @@ cat > output/Events/mcp-application-result.json << 'EOF'
 EOF
 ```
 
-### 4. Get Application Info (application.get_info)
+### 4. Get Application Info (application-get-info)
 
 **Purpose:** Refresh application context after schema changes. This is the canonical DB refresh operation.
 
@@ -210,17 +211,17 @@ json.dump(data, open('output/Events/mcp-application-result.json', 'w'), indent=2
 
 **Context Refresh Pattern:** Call `application-get-info` once after all entity mutations complete (after `schema-sync` batch or after all individual entity tool calls) and overwrite `mcp-application-result.json`. Per-mutation refresh is no longer required when using `schema-sync`.
 
-### 4.1. List Applications (application.get_list)
+### 4.1. List Applications (application-get-list)
 
 **Purpose:** Discover existing Creatio applications for update workflows.
 
 **Tool Signature:**
 ```
-application.get_list()  // No parameters
+application-get-list({'environment-name': 'local'})
 ```
 
 **Use Cases:**
-- Discover application IDs before calling `application.get_info`
+- Discover application IDs before calling `application-get-info`
 - List available applications for user selection
 - Validate application existence before workflows
 
@@ -251,7 +252,7 @@ apps = r['data']['applications']
 }
 ```
 
-**Integration with get_info:**
+**Integration with application-get-info:**
 
 ```python
 r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
@@ -268,7 +269,7 @@ Extract from `application-create` response:
 
 ```python
 data = r['data']  # from call_mcp_tool('application-create', ...)
-package_name = data['packageName']     # e.g., "UsrTodoList"
+package_name = data['package-name']     # e.g., "UsrTodoList"
 main_entity_name = data['entities'][0]['name']  # e.g., "UsrTodoList"
 ```
 
@@ -276,8 +277,8 @@ main_entity_name = data['entities'][0]['name']  # e.g., "UsrTodoList"
 ```json
 {
   "success": true,
-  "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
-  "packageName": "UsrTodoList",
+  "package-u-id": "597944b2-c71f-4cdb-9510-0216c1e214a6",
+  "package-name": "UsrTodoList",
   "entities": [
     {
       "uId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
@@ -435,27 +436,23 @@ r = call_mcp_tool('update-entity-schema', {
 
 **After Success:** Refresh context with `application-get-info` once all entity mutations are complete.
 
-### 8. Get Entity Columns (binding.get_columns)
+### 8. Schema Inspection Tools
 
 **Purpose:** Discover column names, UIds, and data types for deployed entities (e.g., Contact, SysModule, SysModuleEntity).
 
-**Tool Signature:**
-```
-binding.get_columns(
-  schemaName: string        // REQUIRED: Entity schema name (e.g., "Contact", "UsrTodoList")
-)
-```
+#### `get-entity-schema-properties`
 
-**Use Cases:**
-- Query metadata for system entities (Contact, Account, SysModule, etc.)
-- Prepare column mappings for create-data-binding-db
-- Validate schema deployment status
+**Required parameters (kebab-case):**
+- `environment-name` — registered clio environment name
+- `package-name` — package string name (NOT a GUID)
+- `schema-name` — entity schema name (e.g., `Contact`, `UsrTodoList`)
 
 **Example:**
 
 ```python
-r = call_mcp_tool('binding-get-columns', {
+r = call_mcp_tool('get-entity-schema-properties', {
     'environment-name': 'local',
+    'package-name': 'UsrMyApp',
     'schema-name': 'Contact',
 })
 columns = r['data']
@@ -481,6 +478,14 @@ columns = r['data']
 ]
 ```
 
+#### `get-entity-schema-column-properties`
+
+Returns detailed metadata for a single column.
+
+**Required parameters (kebab-case):**
+- `environment-name`, `package-name`, `schema-name` — same as above
+- `column-name` — column to inspect, e.g. `UsrStatus`
+
 ### 9. Create Data Binding (create-data-binding-db)
 
 **Purpose:** Seed lookup data or create data bindings in the DB and install them immediately.
@@ -504,7 +509,7 @@ columns = r['data']
 ]
 ```
 
-This format is **different** from the old `binding.create` HTTP format. There are no `columnName`/`value` pairs. When a seed row does not include `Id`, the tool auto-generates a GUID server-side.
+This format is **different** from old HTTP binding formats. There are no `columnName`/`value` pairs. When a seed row does not include `Id`, the tool auto-generates a GUID server-side.
 
 **Deterministic GUID for schema defaults:** When a seed row will be referenced later as `default-value` for a lookup column, generate UUID client-side and include `Id` in the row's `values`:
 
@@ -692,7 +697,7 @@ r = call_mcp_tool('schema-sync', {
 
 **Tool name:** `page-sync`
 
-**⚠️ Parameter naming:** `page-sync` uses **kebab-case** for `environment-name` and page objects use `schema-name` (unlike individual page tools that use camelCase).
+**⚠️ Parameter naming:** `page-sync` uses the same **kebab-case** request contract as the individual page tools: `environment-name`, `schema-name`, `search-pattern`, `package-name`, `dry-run`.
 
 **Required parameters:**
 - `environment-name` — registered clio environment name
@@ -708,6 +713,7 @@ r = call_mcp_tool('schema-sync', {
 |-------|------|----------|-------------|
 | `schema-name` | string | Yes | Page schema name (e.g., "UsrTodoList_FormPage") |
 | `body` | string | Yes | Full JavaScript page body with all 8 marker pairs |
+| `resources` | string | No | JSON object of `#ResourceString(key)#` values, e.g. `'{"UsrDetailsTab_caption": "Details"}'`. Usr-prefixed keys without explicit values are auto-derived from key names. |
 
 **Execution behavior:**
 - Validates each page client-side (if `validate: true`) before sending to Creatio
@@ -717,7 +723,7 @@ r = call_mcp_tool('schema-sync', {
 - Single lock acquisition and single Thread.Sleep for entire batch
 
 **Workflow:**
-1. Read current page bodies via individual `page-get` calls
+1. Read current page raw bodies via individual `page-get` calls (extract from `raw.body`)
 2. Edit bodies using `page_body_edit.py`
 3. Send all edited pages via `page-sync` in one call
 
@@ -730,6 +736,7 @@ r = call_mcp_tool('page-sync', {
         {
             'schema-name': 'UsrTodoList_FormPage',
             'body': edited_form_body,
+            'resources': '{"UsrDetailsTab_caption": "Details", "UsrFinanceTab_caption": "Finance"}',
         },
         {
             'schema-name': 'UsrTodoList_ListPage',
@@ -750,7 +757,8 @@ r = call_mcp_tool('page-sync', {
       "schema-name": "UsrTodoList_FormPage",
       "success": true,
       "body-length": 3775,
-      "validation": {"markers-ok": true, "js-syntax-ok": true}
+      "validation": {"markers-ok": true, "js-syntax-ok": true},
+      "resources-registered": 2
     },
     {
       "schema-name": "UsrTodoList_ListPage",
@@ -863,7 +871,7 @@ call_mcp_tool('update-entity-schema', {
 
 **Problem:** Schema exists in DB but not visible in `application-get-info`
 
-**Cause:** Not calling `application.get_info` after entity mutations
+**Cause:** Not calling `application-get-info` after entity mutations
 
 **Solution:** Refresh context once after all entity mutations complete (after `schema-sync` batch or after all individual entity tool calls):
 
@@ -879,7 +887,7 @@ json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 Before proceeding to next step:
 
 1. ✅ Response contains `"success": true` or valid result
-2. ✅ For entity tools: schema is visible in `application.get_info` response
+2. ✅ For entity tools: schema is visible in `application-get-info` response
 3. ✅ Context file `mcp-application-result.json` is updated with latest state
 4. ✅ `schemaSync` array contains entry for completed operation
 
@@ -915,7 +923,7 @@ r = call_mcp_tool('application-create', {
     'icon-background': '#1F5F8B',
 }, timeout=180)
 data = r['data']
-package_name = data['packageName']
+package_name = data['package-name']
 json.dump(data | {'contractType': 'short', 'schemaSync': [], 'editableContext': {}},
           open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 
@@ -955,9 +963,11 @@ ctx['contractType'] = 'short'
 ctx.setdefault('schemaSync', [])
 json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 
-# 4. Read pages, edit bodies, then sync via page-sync
-form_r = call_mcp_tool('page-get', {'environmentName': 'local', 'schemaName': 'UsrMyApp_FormPage'})
-list_r = call_mcp_tool('page-get', {'environmentName': 'local', 'schemaName': 'UsrMyApp_ListPage'})
+# 4. Read page raw bodies, edit, then sync via page-sync
+form_r = call_mcp_tool('page-get', {'environment-name': 'local', 'schema-name': 'UsrMyApp_FormPage'})
+form_body = form_r['data']['raw']['body']
+list_r = call_mcp_tool('page-get', {'environment-name': 'local', 'schema-name': 'UsrMyApp_ListPage'})
+list_body = list_r['data']['raw']['body']
 # ... edit bodies with page_body_edit.py ...
 r4 = call_mcp_tool('page-sync', {
     'environment-name': 'local',
@@ -987,7 +997,7 @@ r = call_mcp_tool('application-create', {
     'icon-background': '#1F5F8B',
 }, timeout=180)
 data = r['data']
-package_name = data['packageName']
+package_name = data['package-name']
 json.dump(data | {'contractType': 'short', 'schemaSync': [], 'editableContext': {}},
           open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 
@@ -1034,7 +1044,7 @@ json.dump(ctx, open('output/MyApp/mcp-application-result.json', 'w'), indent=2)
 
 ```bash
 # Parse response
-RESPONSE=$(curl ... | grep 'data: ' | sed 's/^data: //' | jq -r '.result.content[0].text')
+RESPONSE=$(python3 scripts/mcp_client.py application-get-info '{"environment-name":"local","app-code":"UsrMyApp"}' | jq -r '.data')
 
 # Validate
 if echo "$RESPONSE" | jq -e '.success == true' > /dev/null; then
@@ -1048,7 +1058,7 @@ fi
 ### 2. Maintain Context Integrity
 
 After entity mutations complete (after `schema-sync` batch or all individual calls):
-1. Call `application.get_info`
+1. Call `application-get-info`
 2. Overwrite `mcp-application-result.json`
 3. Add entries to `schemaSync` array
 
@@ -1056,10 +1066,10 @@ After entity mutations complete (after `schema-sync` batch or all individual cal
 
 ```bash
 # Save raw response for debugging
-curl ... 2>&1 | tee /tmp/mcp-raw-response.txt
+python3 scripts/mcp_client.py application-get-info '{"environment-name":"local","app-code":"UsrMyApp"}' 2>&1 | tee /tmp/mcp-raw-response.txt
 
 # Parse from saved file
-grep 'data: ' /tmp/mcp-raw-response.txt | ...
+cat /tmp/mcp-raw-response.txt
 ```
 
 ### 4. Verify Schema Materialization
@@ -1068,7 +1078,7 @@ After entity tools, verify the schema is NOT in "Database update required" state
 
 ```bash
 # Check if entity exists in get_info response
-curl ... application.get_info | grep '"UsrMyEntity"'
+python3 scripts/mcp_client.py application-get-info '{"environment-name":"local","app-code":"UsrMyApp"}' | grep '"UsrMyEntity"'
 ```
 
 If missing, this is a core MCP blocker - stop and report.
@@ -1096,28 +1106,61 @@ python3 scripts/mcp_schema_sync.py apply \
 
 **Tool name:** `page-list`
 
-**⚠️ Parameter naming:** Page tools use **camelCase** parameters, unlike entity tools which use kebab-case.
+**⚠️ Parameter naming:** All parameters use kebab-case, consistent with all other clio MCP tools.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `environmentName` | string | **Yes** | Registered clio environment name |
-| `packageName` | string | **Yes** | Package name (e.g., "UsrTodoList") |
+| `environment-name` | string | **Yes** | Registered clio environment name |
+| `package-name` | string | **Yes** | Package name (e.g., "UsrTodoList") |
 
 **Example:**
 
 ```python
 r = call_mcp_tool('page-list', {
-    'environmentName': 'local',
-    'packageName': 'UsrTodoList',
+    'environment-name': 'local',
+    'package-name': 'UsrTodoList',
 })
 # Response: list of page schemas in the package
 ```
 
+### 11a. Inspect Freedom UI Component Type (component-info)
+
+**Purpose:** Read curated metadata for an unfamiliar Freedom UI component type without connecting to Creatio.
+
+**Tool name:** `component-info`
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `component-type` | string | No | Exact component type, e.g. `crt.TabContainer`. Omit it or pass `list` to return the grouped catalog. |
+| `search` | string | No | Keyword filter for list mode, e.g. `tab`. |
+
+**Notes:**
+- This tool is local and read-only. It does **not** require `environment-name`, `uri`, `login`, or `password`.
+- Use it after `page-get` when `bundle.viewConfig` contains an unfamiliar `crt.*` type and you need the property contract before editing.
+
+**Examples:**
+
+```python
+r = call_mcp_tool('component-info', {
+    'component-type': 'crt.TabContainer',
+})
+# Response: description, parent types, properties, typical children, example insert payload
+```
+
+```python
+r = call_mcp_tool('component-info', {
+    'search': 'tab',
+})
+# Response: grouped list of matching component types such as crt.TabPanel and crt.TabContainer
+```
+
 ### 11. Get Page (page-get)
 
-**Purpose:** Read the full JavaScript body of a Freedom UI page schema.
+**Purpose:** Read the merged page bundle (effective layout) and raw schema body of a Freedom UI page.
 
 **Tool name:** `page-get`
 
@@ -1125,30 +1168,63 @@ r = call_mcp_tool('page-list', {
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `environmentName` | string | **Yes** | Registered clio environment name |
-| `schemaName` | string | **Yes** | Page schema name (e.g., "UsrTodoList_FormPage") |
+| `schema-name` | string | **Yes** | Page schema name (e.g., "UsrTodoList_FormPage") |
+| `environment-name` | string | No | Registered clio environment name |
+| `uri` | string | No | Explicit URI (connection override) |
+| `login` | string | No | Login (connection override) |
+| `password` | string | No | Password (connection override) |
 
 **Response (success):**
 
 ```json
 {
   "success": true,
-  "schemaName": "UsrTodoList_FormPage",
-  "schemaUId": "eda909b1-...",
-  "packageName": "UsrTodoList",
-  "parentSchemaName": "BaseModulePage",
-  "body": "define(\"UsrTodoList_FormPage\", ..."
+  "page": {
+    "schemaName": "UsrTodoList_FormPage",
+    "schemaUId": "eda909b1-...",
+    "packageName": "UsrTodoList",
+    "packageUId": "e5f6a7b8-...",
+    "parentSchemaName": "BaseModulePage"
+  },
+  "bundle": {
+    "name": "UsrTodoList_FormPage",
+    "viewConfig": [ "..." ],
+    "viewModelConfig": { },
+    "modelConfig": { },
+    "resources": { },
+    "handlers": "[]",
+    "converters": "{}",
+    "validators": "{}",
+    "parameters": [ ]
+  },
+  "raw": {
+    "body": "define(\"UsrTodoList_FormPage\", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, ...)"
+  },
+  "error": null
 }
+```
+
+**Response sections:**
+- `page` — schema metadata (name, UId, package info, parent)
+- `bundle` — merged page bundle from the full inheritance hierarchy (effective layout). **Read-only** — use for understanding the current page structure, not for editing.
+- `raw.body` — original raw JavaScript body of the current schema. **Use this for editing** — modify markers and save via `page-update` or `page-sync`.
+
+If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, call `component-info` for that exact type before editing nested items or container-specific properties.
+
+**Roundtrip workflow:**
+```
+page-get → extract raw.body → modify markers → page-update (or page-sync)
 ```
 
 **Example:**
 
 ```python
 r = call_mcp_tool('page-get', {
-    'environmentName': 'local',
-    'schemaName': 'UsrTodoList_FormPage',
+    'environment-name': 'local',
+    'schema-name': 'UsrTodoList_FormPage',
 })
-body = r['data']['body']  # Full JS body with markers
+body = r['data']['raw']['body']  # Raw JS body with markers — use for editing
+bundle = r['data'].get('bundle', {})  # Merged layout — use for reading/understanding
 ```
 
 **Known Issue:** `page-get` may fail with "Error reading JObject from JsonReader" for template-created pages whose bodies haven't been loaded by the designer service. Workaround: read body directly from PostgreSQL `SysSchemaContent` table (ContentType=0, Content column as UTF-8).
@@ -1163,12 +1239,16 @@ body = r['data']['body']  # Full JS body with markers
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `environmentName` | string | **Yes** | Registered clio environment name |
-| `schemaName` | string | **Yes** | Page schema name |
+| `environment-name` | string | No | Registered clio environment name |
+| `schema-name` | string | **Yes** | Page schema name |
 | `body` | string | **Yes** | Complete JS body with all 8 marker pairs |
-| `dryRun` | boolean | No | `True` to validate without saving (Python `True`/`False`, **NOT** string `"true"`) |
+| `resources` | string | No | JSON object of `#ResourceString(key)#` caption values, e.g. `'{"UsrDetailsTab_caption": "Details"}'`. Usr-prefixed keys without explicit values are auto-derived. |
+| `dry-run` | boolean | No | `True` to validate without saving (Python `True`/`False`, **NOT** string `"true"`) |
+| `uri` | string | No | Explicit URI (connection override) |
+| `login` | string | No | Login (connection override) |
+| `password` | string | No | Password (connection override) |
 
-**⚠️ Boolean Parameters:** `dryRun` must be Python `True`/`False`. String `"true"`/`"false"` causes MCP SDK deserialization failure.
+**⚠️ Boolean Parameters:** `dry-run` must be Python `True`/`False`. String `"true"`/`"false"` causes MCP SDK deserialization failure.
 
 **Response (success):**
 
@@ -1177,26 +1257,32 @@ body = r['data']['body']  # Full JS body with markers
   "success": true,
   "schemaName": "UsrTodoList_FormPage",
   "bodyLength": 5236,
-  "dryRun": false
+  "dryRun": false,
+  "resourcesRegistered": 2,
+  "registeredResourceKeys": ["UsrDetailsTab_caption", "UsrFinanceTab_caption"]
 }
 ```
+
+**Resource auto-registration:** When body contains `#ResourceString(key)#` macros, `page-update` automatically registers missing localizableStrings in the child schema. Behavior:
+- **Explicit:** provide `resources` JSON with `{key: value}` pairs
+- **Auto-derive:** Usr-prefixed keys get captions derived from name (e.g. `UsrDetailsTab_caption` → "Details Tab")
+- **Skipped:** non-Usr keys (parent template resources like `GeneralInfoTab_caption`) are never touched
+- PDS-prefixed captions (`#ResourceString(PDS_Name)#`) are data-source resolved — not localizableStrings
 
 **Workflow — always validate first:**
 
 ```python
-# Step 1: Dry run to validate markers and structure
 r = call_mcp_tool('page-update', {
-    'environmentName': 'local',
-    'schemaName': 'UsrTodoList_FormPage',
+    'environment-name': 'local',
+    'schema-name': 'UsrTodoList_FormPage',
     'body': new_body,
-    'dryRun': True,   # ✅ Python boolean, NOT "true"
+    'dry-run': True,
 })
 assert r['data']['success'], f"Dry run failed: {r['data'].get('error')}"
 
-# Step 2: Save
 r = call_mcp_tool('page-update', {
-    'environmentName': 'local',
-    'schemaName': 'UsrTodoList_FormPage',
+    'environment-name': 'local',
+    'schema-name': 'UsrTodoList_FormPage',
     'body': new_body,
 })
 ```
@@ -1214,7 +1300,7 @@ r = call_mcp_tool('page-update', {
 /**SCHEMA_VALIDATORS*/ ... /**SCHEMA_VALIDATORS*/
 ```
 
-**Known Issue:** `page-update` save (non-dryRun) may fail with "Error reading JObject" for template-created pages — same root cause as `page-get`. The tool internally calls `GetSchema` to read existing schema before saving, and this call returns empty. Workaround: update page body directly in PostgreSQL `SysSchemaContent` table using psycopg2.
+**Known Issue:** `page-update` save (`dry-run` false) may fail with "Error reading JObject" for template-created pages — same root cause as `page-get`. The tool internally calls `GetSchema` to read existing schema before saving, and this call returns empty. Workaround: update page body directly in PostgreSQL `SysSchemaContent` table using psycopg2.
 
 **Direct DB Workaround Example:**
 
@@ -1243,9 +1329,9 @@ conn.commit()
 | Tool Category | Parameter Style | Example |
 |--------------|----------------|---------|
 | Entity tools | kebab-case | `environment-name`, `schema-name`, `package-name` |
-| Page tools | camelCase | `environmentName`, `schemaName`, `packageName` |
+| Page tools | kebab-case | `environment-name`, `schema-name`, `package-name`, `search-pattern`, `dry-run` |
 
-Mixing these styles causes silent failures or "Error reading JObject" errors.
+Mixing these styles causes silent failures or local ADAC validation failures before the request reaches clio.
 
 ---
 

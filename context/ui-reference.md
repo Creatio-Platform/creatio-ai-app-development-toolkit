@@ -43,13 +43,13 @@ Array of operations that modify the parent page template:
 		"control": "$Name",
 		"labelPosition": "auto"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 0
 }
 ```
 
----
+> In the examples above and below, `<primary-field-container>` is a placeholder. Replace it with the actual container name discovered from the live page's `viewConfigDiff`.
 
 ## Control Types
 
@@ -80,7 +80,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
 
-When editing raw page bodies through `page.update`, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output.
+When editing raw page bodies through `page-update`, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `page-get` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
 
 ---
 
@@ -121,7 +121,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`
+- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` param in `page-update`/`page-sync` to register the localizableString.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -139,9 +139,9 @@ Use this policy when a new app is generated or the main section entity gains app
 - If the requirements are partial, keep the explicit columns and fill only the missing columns with this default policy.
 - When editing a live page, preserve existing DataGrid columns and order. Append only the missing resolved columns unless the requirements explicitly demand reordering.
 
-### ListPage DataGrid Sorting via `page.update`
+### ListPage DataGrid Sorting via `page-update`
 
-This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through `page.update`.
+This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through `page-update`.
 
 The runtime contract is centered on the DataGrid collection attribute, not on the visual `sorting` property stored inside the DataGrid node:
 
@@ -171,7 +171,7 @@ The frontend preprocessor can auto-inject DataGrid view properties from this met
 - `viewConfig.sorting`
 - `viewConfig.sortingChange`
 
-When editing raw page bodies through `page.update`, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
+When editing raw page bodies through `page-update`, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
 
 #### Minimal Safe Example
 
@@ -326,9 +326,9 @@ Binds page attributes to data source:
 
 ### Runtime Binding Pattern for Preserving Live Form Page Lookup Lists
 
-When editing an existing FormPage via `page.update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
+When editing an existing FormPage via `page-update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
 
-This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting via page.update` above.
+This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting via page-update` above.
 
 ```json
 {
@@ -420,9 +420,9 @@ Use this policy when a new app is generated or the main section entity gains app
 - If the requirements are partial, keep the explicit fields and fill only the missing fields with this default policy.
 - Preserve existing live fields and append only missing resolved fields unless the requirements explicitly demand removal or re-layout.
 
-### Runtime Field Insertion via `page.update`
+### Runtime Field Insertion via `page-update`
 
-Use the current page body from `page.get` as the source of truth. For live FormPage field sync, append missing resolved field controls to `SideAreaProfileContainer`.
+Use the current page body from `page-get` as the source of truth. For live FormPage field sync, identify the **primary field container** by inspecting the existing `viewConfigDiff` — it is the container that holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`). Append missing resolved field controls to that discovered container.
 
 ```json
 {
@@ -440,7 +440,7 @@ Use the current page body from `page.get` as the source of truth. For live FormP
 		"control": "$Name",
 		"labelPosition": "auto"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 0
 }
@@ -466,16 +466,16 @@ Use the current page body from `page.get` as the source of truth. For live FormP
 		"multiline": false,
 		"labelPosition": "auto"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 1
 }
 ```
 
 Rules:
-- `parentName` is `SideAreaProfileContainer` for runtime entity-field sync on live FormPages.
+- `parentName` is the **primary field container** discovered from the live page's `viewConfigDiff` (the container with the most field-type inserts). For standard templates this is typically `SideAreaProfileContainer`, but it may differ for custom pages.
 - `propertyName` is `items`.
-- `row` and `index` continue from the current maximum values already present in `SideAreaProfileContainer`.
+- `row` and `index` continue from the current maximum values already present in the discovered container.
 - Default grid placement for new fields is `column=1`, `colSpan=1`, `rowSpan=1`.
 - For numeric fields, add `format.decimalPrecision` when the target column scale is known.
 - For date and time fields, set `pickerType` to match the underlying data value type.
@@ -503,7 +503,7 @@ Rules:
 		"tooltip": "",
 		"control": "$PDS_UsrStatus_ab12cd3"
 	},
-	"parentName": "SideAreaProfileContainer",
+	"parentName": "<primary-field-container>",
 	"propertyName": "items",
 	"index": 9
 }
@@ -546,7 +546,7 @@ The frontend also supports these field controls:
 
 ### Template Note
 
-`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime `page.update` edits. When editing a live page, trust `page.get` and preserve the current container and binding pattern.
+`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime `page-update` edits. When editing a live page, trust `page-get` and preserve the current container and binding pattern.
 
 ---
 
@@ -559,7 +559,7 @@ The frontend also supports these field controls:
 | PageWithRightAreaAndTabsFreedomTemplate | `5f8dd430-acf2-4e1a-80c8-77cf57e245ce` | Form with right area + tabs |
 | LightFormPage | `ec5fd902-66ce-4139-a241-10ebd8addc40` | Light/mini form |
 
-Do not infer runtime field container names only from the parent template. A live page can still place field inserts in `SideAreaProfileContainer` even when `page.get` reports `PageWithTabsFreedomTemplate`.
+Do not infer runtime field container names only from the parent template. Always inspect the live page's `viewConfigDiff` to discover the actual primary field container. For standard templates it is typically `SideAreaProfileContainer`, but custom pages may use a different container.
 
 ---
 
@@ -635,21 +635,23 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
 
 | Tool | Description |
 |------|-------------|
-| `page.list` | Discover page schemas by package or name pattern |
-| `page.get` | Read a page schema's metadata and raw JS body |
-| `page.update` | Save the complete JS body — agent handles all edits (saves to DB, no compile needed) |
+| `page-list` | Discover page schemas by package or name pattern |
+| `page-get` | Read a page schema's metadata and raw JS body |
+| `page-update` | Save the complete JS body — agent handles all edits (saves to DB, no compile needed) |
+| `component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
 
 See `skills/page-schema-editing/SKILL.md` for the full workflow:
 ```
-1. page.list(searchPattern: "MyApp")
-2. page.get(schemaName: "UsrMyApp_FormPage")
+1. call `page-list` with `search-pattern: "MyApp"`
+2. call `page-get` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. page.update(schemaName: "UsrMyApp_FormPage", body: "...modified body...")
+4. If the page contains unfamiliar `crt.*` components, inspect them with `component-info` and `component-type: "..."`
+5. call `page-update` with `schema-name: "UsrMyApp_FormPage"` and the full modified `body`
 ```
 
-**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page.get`.
+**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page-get`.
 
 ---
 

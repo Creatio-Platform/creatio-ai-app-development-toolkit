@@ -38,7 +38,7 @@ def infer_contract_type(document):
         return contract_type
     if "app" in document and "packages" in document:
         return "short"
-    if document.get("success") is True and "packageUId" in document and "entities" in document:
+    if document.get("success") is True and ("packageUId" in document or "package-u-id" in document) and "entities" in document:
         return "short"
     if "success" in document and "error" in document:
         return "short"
@@ -50,45 +50,49 @@ def infer_contract_type(document):
 def normalize_column(column, name=None):
     if not isinstance(column, dict):
         raise ContextError("Column must be an object")
-    name = name or first_text_value(column, "name", "Name")
+    name = name or first_text_value(column, "name", "Name", "column-name")
     if not name:
         raise ContextError("Column name is required")
     normalized = {
         "name": name,
-        "caption": first_text_value(column, "caption", "Caption") or name
+        "caption": first_text_value(column, "caption", "Caption", "title") or name
     }
     data_value_type_name = first_text_value(
         column,
         "dataValueTypeName",
         "DataValueTypeName",
         "dataValueType",
-        "DataValueType"
+        "DataValueType",
+        "data-value-type-name",
+        "type"
     )
     reference_schema_name = first_text_value(
         column,
         "referenceSchemaName",
         "ReferenceSchemaName",
         "referenceSchema",
-        "ReferenceSchema"
+        "ReferenceSchema",
+        "reference-schema-name"
     )
     if data_value_type_name:
         normalized["dataValueTypeName"] = data_value_type_name
     if reference_schema_name:
         normalized["referenceSchemaName"] = reference_schema_name
-    u_id = first_text_value(column, "uId", "UId")
+    u_id = first_text_value(column, "uId", "UId", "u-id")
     if u_id:
         normalized["uId"] = u_id
-    is_required_present, is_required = get_present_value(column, "isRequired", "IsRequired")
+    is_required_present, is_required = get_present_value(column, "isRequired", "IsRequired", "required")
     if is_required_present:
         normalized["isRequired"] = bool(is_required)
     default_value_source_present, default_value_source = get_present_value(
         column,
         "defaultValueSource",
-        "DefaultValueSource"
+        "DefaultValueSource",
+        "default-value-source"
     )
     if default_value_source_present and default_value_source not in (None, ""):
         normalized["defaultValueSource"] = default_value_source
-    default_value_present, default_value = get_present_value(column, "defaultValue", "DefaultValue")
+    default_value_present, default_value = get_present_value(column, "defaultValue", "DefaultValue", "default-value")
     if default_value_present:
         normalized["defaultValue"] = default_value
     if normalized.get("referenceSchemaName") and not normalized.get("dataValueTypeName"):
@@ -117,17 +121,17 @@ def merge_columns(left_columns, right_columns):
 
 
 def normalize_entity_node(node, kind, name=None):
-    name = name or node.get("entitySchemaName") or node.get("name")
+    name = name or node.get("entitySchemaName") or node.get("entity-schema-name") or node.get("schema-name") or node.get("name")
     if not name:
         raise ContextError("Entity schema name is required")
     entity = {
         "name": name,
-        "caption": node.get("caption") or node.get("Caption") or name,
+        "caption": node.get("caption") or node.get("Caption") or node.get("title") or name,
         "kind": kind,
         "columns": normalize_columns(node.get("columns", []))
     }
-    entity_u_id = node.get("entityUId") or node.get("uId")
-    parent_schema_name = node.get("parentSchemaName")
+    entity_u_id = node.get("entityUId") or node.get("uId") or node.get("entity-u-id") or node.get("u-id")
+    parent_schema_name = node.get("parentSchemaName") or node.get("parent-schema-name")
     if entity_u_id:
         entity["entityUId"] = entity_u_id
     if parent_schema_name:
@@ -174,9 +178,9 @@ def build_app_context(document):
     if isinstance(document.get("app"), dict) and document["app"]:
         return copy.deepcopy(document["app"])
     app = {}
-    app_id = document.get("appId")
-    app_name = document.get("appName")
-    app_code = document.get("appCode") or document.get("packageName")
+    app_id = document.get("appId") or document.get("app-id")
+    app_name = document.get("appName") or document.get("app-name")
+    app_code = document.get("appCode") or document.get("app-code") or document.get("packageName") or document.get("package-name")
     if app_id:
         app["id"] = app_id
     if app_name:
@@ -193,13 +197,13 @@ def build_editable_context(document):
         if isinstance(raw_packages, dict):
             items = raw_packages.items()
         else:
-            items = [(pkg.get("packageName") or pkg.get("name"), pkg) for pkg in raw_packages]
-    elif document.get("packageUId") and isinstance(document.get("entities"), list):
+            items = [(pkg.get("packageName") or pkg.get("package-name") or pkg.get("name"), pkg) for pkg in raw_packages]
+    elif (document.get("packageUId") or document.get("package-u-id")) and isinstance(document.get("entities"), list):
         items = [(
-            document.get("packageName"),
+            document.get("packageName") or document.get("package-name"),
             {
-                "packageUId": document.get("packageUId"),
-                "packageName": document.get("packageName"),
+                "packageUId": document.get("packageUId") or document.get("package-u-id"),
+                "packageName": document.get("packageName") or document.get("package-name"),
                 "isPrimary": True,
                 "entities": document.get("entities", [])
             }
@@ -207,10 +211,10 @@ def build_editable_context(document):
     else:
         items = []
     for pkg_name, package in items:
-        package_u_id = package.get("packageUId") or package.get("uId")
+        package_u_id = package.get("packageUId") or package.get("package-u-id") or package.get("uId") or package.get("u-id")
         packages.append({
             "packageUId": package_u_id,
-            "name": pkg_name or package.get("packageName") or package.get("name"),
+            "name": pkg_name or package.get("packageName") or package.get("package-name") or package.get("name"),
             "isPrimary": bool(package.get("isPrimary")),
             "entities": collect_package_entities(package)
         })

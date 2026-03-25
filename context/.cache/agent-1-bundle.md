@@ -26,7 +26,30 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.m
 
 ### 1. Verify prerequisites
 
-**Step 1a — Check .NET SDK:**
+**Step 1a — Resolve Python (FIRST — before any other check):**
+
+Python 3 is required for all MCP calls. Resolve it immediately at session start — **before** checking .NET, clio, or anything else. Run the discovery script for the current OS:
+
+**Windows (PowerShell):**
+```powershell
+. scripts\find_python.ps1
+# $env:PYTHON_CMD is now set to a full path, e.g. "C:\Users\...\Python312\python.exe"
+```
+
+**macOS / Linux (bash):**
+```bash
+source scripts/find_python.sh
+# $PYTHON_CMD is now exported, e.g. "python3" or "/opt/homebrew/bin/python3"
+```
+
+**⛔ If the script exits with an error, stop immediately and tell the user:**
+> Python 3 is not installed on this machine. Please install it from **https://www.python.org/downloads/** and restart your terminal, then retry.
+
+**Do NOT search for Python elsewhere.** Python bundled with pgAdmin, Anaconda, Miniconda, VS Code, or any other application is off-limits — it lacks required packages and will cause unexpected failures.
+
+**Never invoke `python` or `python3` directly.** Always use `$env:PYTHON_CMD` (Windows) or `"$PYTHON_CMD"` (macOS/Linux) for every Python call in this session.
+
+**Step 1b — Check .NET SDK:**
 ```bash
 dotnet --version
 ```
@@ -35,7 +58,7 @@ If not found — stop and tell the developer:
 > **https://dotnet.microsoft.com/download**
 > Then restart the terminal and retry.
 
-**Step 1b — Check clio (after .NET is confirmed):**
+**Step 1c — Check clio (after .NET is confirmed):**
 
 Three scenarios:
 
@@ -144,7 +167,11 @@ Replace `true` with `false` if .NET Framework was detected in Step 4.
 Verify that clio MCP responds correctly using the stdio client:
 
 ```bash
-python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
+# Windows PowerShell:
+& $env:PYTHON_CMD scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
+
+# macOS / Linux:
+"$PYTHON_CMD" scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
 ```
 
 - **Success** (response has `"success": true`) — environment setup is complete.
@@ -165,7 +192,7 @@ python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_n
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ `output/<AppName>/.creatio-env.json` exists with `mcpTransport: "stdio"` and correct `environment`  
-✅ `python3 scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
+✅ `$PYTHON_CMD scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
 
 <!-- FILE: context/essentials.md (L230-277) -->
 

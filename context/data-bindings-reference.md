@@ -1,24 +1,22 @@
 # Data Bindings Reference
 
-Data bindings register sections, connect entities to navigation, and seed lookup values. In the current MCP flow, the primary binding tools are `binding.get_columns` and `binding.create`.
+Data bindings register sections, connect entities to navigation, and seed lookup values. In the current MCP flow, the primary tools are `get-entity-schema-properties`, `get-entity-schema-column-properties`, and `create-data-binding-db`.
 
 **📁 Stable system column UIds → `context/bindings-lookup.json`**  
 **📁 Template examples → `templates/data-bindings/`**
 
 ---
 
-## MCP Binding Tools
+## MCP Binding & Schema Inspection Tools
 
-### `binding.get_columns`
+### `get-entity-schema-properties`
 
-Use this first for deployed schemas when you need column names, UIds, and data value types.
+Returns column names, UIds, and data value types for a deployed entity schema.
 
-Request:
-```json
-{
-  "schemaName": "SysModule"
-}
-```
+Parameters (all kebab-case):
+- `environment-name` — registered clio environment name
+- `package-name` — package string name (NOT a GUID)
+- `schema-name` — entity schema name, e.g. `SysModule`
 
 Response shape:
 ```json
@@ -34,18 +32,24 @@ Response shape:
 ]
 ```
 
-### `binding.create`
+### `get-entity-schema-column-properties`
 
-Creates or updates a binding in the DB for any deployed entity schema, stores `descriptor.json`, `data.json`, and `filter.json` payloads in `SysPackageSchemaData`, and installs data immediately. If `outputPath` is supplied, the same files are also written on the server.
+Returns detailed metadata for a single column.
 
-Request fields:
-- `packageUId` — package GUID that owns the binding
-- `schemaName` — target schema such as `SysModule`, `SysModuleEntity`, or a lookup entity
-- `bindingName` — output folder name such as `SysModule_UsrTodoTask`
-- `rowsJson` — JSON array of rows, each row being an array of `{columnName, value, displayValue?}`
-- `columnsJson` — optional explicit descriptor columns `{columnName, isKey?, isForceUpdate?}`; if provided, only these columns are written to the descriptor
-- `installType` — optional descriptor install type, default `0`
-- `outputPath` — optional server filesystem destination
+Parameters (all kebab-case):
+- `environment-name` — registered clio environment name
+- `package-name` — package string name
+- `schema-name` — entity schema name
+- `column-name` — column to inspect, e.g. `UsrStatus`
+
+### `create-data-binding-db`
+
+Creates or updates a data binding in the DB, stores payload, and installs data immediately.
+
+Parameters (all kebab-case):
+- `environment-name` — registered clio environment name
+- `package-name` — package string name
+- `schema-name` — target schema such as `SysModule`, `SysModuleEntity`, or a lookup entity
 
 Response shape:
 ```json
@@ -60,10 +64,20 @@ Error shape:
   "success": false,
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "packageUId must be a valid GUID."
+    "message": "..."
   }
 }
 ```
+
+### `upsert-data-binding-row-db`
+
+Upserts a single row in an existing data binding.
+
+Parameters (all kebab-case):
+- `environment-name` — registered clio environment name
+- `package-name` — package string name
+- `schema-name` — target schema
+- `values` — JSON object of column-name → value pairs, must include `Id`
 
 ---
 
@@ -122,19 +136,11 @@ Key columns:
 - `Name`
 - `Description`
 
-Example `rowsJson`:
+Example seed rows (new format for `create-data-binding-db` and `schema-sync` `seed-rows`):
 ```json
 [
-  [
-    {"columnName": "Id", "value": "<fresh-guid-1>"},
-    {"columnName": "Name", "value": "New"},
-    {"columnName": "Description", "value": ""}
-  ],
-  [
-    {"columnName": "Id", "value": "<fresh-guid-2>"},
-    {"columnName": "Name", "value": "In Progress"},
-    {"columnName": "Description", "value": ""}
-  ]
+  {"values": {"Id": "<fresh-guid-1>", "Name": "New", "Description": ""}},
+  {"values": {"Id": "<fresh-guid-2>", "Name": "In Progress", "Description": ""}}
 ]
 ```
 
@@ -150,8 +156,8 @@ Example `rowsJson`:
 
 ## Practical Guidance
 
-- Prefer `binding.get_columns` for deployed system schemas such as `SysModule` and `SysModuleEntity`.
-- Newly created schemas from `entity.create` or `entity.create_lookup` are DB-first and should be discoverable through `binding.get_columns`; raw mode is not supported.
+- Prefer `get-entity-schema-properties` for deployed system schemas such as `SysModule` and `SysModuleEntity`.
+- Newly created schemas from `create-entity-schema` or `create-lookup` are DB-first and should be discoverable through `get-entity-schema-properties`; raw mode is not supported.
 - Treat `packageUId + bindingName` as the binding identity for create/update flow.
 - Leave `filter.json` as `""` for standard SysModule, SysModuleEntity, and lookup seed bindings.
 - Treat `outputPath` as optional. The primary effect is DB persistence plus immediate install; server-side files are only a side effect.

@@ -1,184 +1,174 @@
 # MCP Testing Guide — Програматичне тестування
 
-> 💡 **Для візуального UI-тестування** дивіться [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md) (MCP Inspector)
+> Для візуального UI-тестування дивіться [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md).
 
-Цей документ описує **програматичне** тестування MCP tools через Python/curl для автоматизації та CI/CD.
+Цей документ описує програматичне тестування released clio MCP contract через `scripts/mcp_client.py`.
 
-## Ключові моменти
+## Базові правила
 
-### 1. HTTP Basic Authentication
-MCP endpoint вимагає HTTP Basic Auth:
-```python
-AUTH = ("Supervisor", "Supervisor")
-requests.post(MCP_URL, auth=AUTH, ...)
+- Підтримуваний runtime: released `clio` `8.0.2.37+`
+- `CLIO_CMD` можна використовувати лише як override шляху до сумісного `clio`
+- Виконання MCP іде через clio stdio, не через HTTP/SSE
+- Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
+- Назви tools у dash-style: `application-create`, `application-get-list`, `application-get-info`, `schema-sync`, `page-sync`, `page-list`, `page-get`, `page-update`
+- Аргументи entity/page tools у kebab-case
+
+## Швидка перевірка середовища
+
+```bash
+clio ver
+python3 scripts/mcp_client.py tools/list '{}' 30
+python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}' 30
 ```
 
-### 2. Session Management
-**КРИТИЧНО:** Після `initialize` сервер повертає `Mcp-Session-Id` в **headers**, НЕ в body!
+Очікування:
+- `clio ver` повертає `8.0.2.37` або новіше
+- `tools/list` повертає non-empty manifest
+- `application-get-list` повертає `success: true`
 
-```python
-# ❌ WRONG
-session_id = response.json()["result"]["sessionId"]
+## Типові виклики
 
-# ✅ CORRECT
-session_id = response.headers.get("Mcp-Session-Id")
+### Отримати manifest tools
+
+```bash
+python3 scripts/mcp_client.py tools/list '{}' 30
 ```
 
-### 3. SSE Response Format
-MCP повертає відповіді у форматі **Server-Sent Events** (Content-Type: `text/event-stream`):
+### Отримати список applications
 
-```
-event: message
-data: {"result": {...}}
+```bash
+python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}' 30
 ```
 
-**Парсинг:**
-```python
-if "text/event-stream" in response.headers.get("Content-Type", ""):
-    lines = response.text.strip().split("\n")
-    for line in lines:
-        if line.startswith("data: "):
-            json_data = json.loads(line[6:])  # Skip "data: " prefix
-            break
+### Отримати application context
+
+```bash
+python3 scripts/mcp_client.py application-get-info '{
+  "environment-name":"local",
+  "app-code":"UsrTodoList"
+}' 30
 ```
 
-### 4. MCP Protocol Flow
+### Батч schema sync
 
-#### Step 1: Initialize
-```python
-response = requests.post(
-    "http://localhost:5001/mcp",
-    auth=AUTH,
-    headers={"Content-Type": "application/json"},
-    json={
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0"}
-        },
-        "id": 1
-    }
-)
-
-session_id = response.headers.get("Mcp-Session-Id")
-```
-
-#### Step 2: List Tools
-```python
-response = requests.post(
-    "http://localhost:5001/mcp",
-    auth=AUTH,
-    headers={
-        "Content-Type": "application/json",
-        "Mcp-Session-Id": session_id  # ← REQUIRED!
+```bash
+python3 scripts/mcp_client.py schema-sync '{
+  "environment-name":"local",
+  "package-name":"UsrTodoList",
+  "operations":[
+    {
+      "type":"create-lookup",
+      "schema-name":"UsrTodoStatus",
+      "title":"Todo Status"
     },
-    json={
-        "jsonrpc": "2.0",
-        "method": "tools/list",
-        "params": {},
-        "id": 2
+    {
+      "type":"update-entity",
+      "schema-name":"UsrTodoList",
+      "update-operations":[
+        {
+          "action":"add",
+          "column-name":"UsrStatus",
+          "type":"Lookup",
+          "title":"Status",
+          "reference-schema-name":"UsrTodoStatus"
+        }
+      ]
     }
-)
+  ]
+}' 120
 ```
 
-#### Step 3: Call Tool
-```python
-response = requests.post(
-    "http://localhost:5001/mcp",
-    auth=AUTH,
-    headers={
-        "Content-Type": "application/json",
-        "Mcp-Session-Id": session_id  # ← REQUIRED!
-    },
-    json={
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "application.create",
-            "arguments": {
-                "name": "My App",
-                "code": "UsrMyApp",
-                "description": "Test",
-                "templateCode": "AppFreedomUIv2",
-                "iconBackground": "#0052CC"
-            }
-        },
-        "id": 3
+### Батч page sync
+
+```bash
+python3 scripts/mcp_client.py page-sync '{
+  "environment-name":"local",
+  "pages":[
+    {
+      "schema-name":"UsrTodoList_FormPage",
+      "body":"define(...)"
     }
-)
+  ],
+  "validate":true,
+  "verify":true
+}' 120
 ```
 
-### 5. Tool Response Format
-Інструменти повертають результат в `result.content[0].text` як JSON string:
+## Очікувані формати відповіді
 
-```python
-response_data = parse_sse(response)  # {"result": {"content": [...]}}
-content = response_data["result"]["content"]
-text = content[0]["text"]  # JSON string
-result = json.loads(text)  # {"success": true, "app": {...}}
-```
+### `application-get-list`
 
-## Доступні інструменти
-
-| Tool | Опис |
-|------|------|
-| `application.create` | Створення повного застосунку в БД |
-| `application.get_list` | Список існуючих applications |
-| `application.get_info` | Інфо про application з БД |
-| `entity.get_schema_info` | UId та деталі існуючої entity схеми |
-| `entity.create` | Створення entity з колонками |
-| `entity.create_lookup` | Створення lookup entity |
-| `entity.update` | Оновлення entity через операції |
-| `entity.list_parents` | Список батьківських схем |
-| `entity.check_name` | Перевірка унікальності імені |
-| `binding.get_columns` | Колонки та UId для існуючої schema |
-| `binding.create` | DB-first створення або оновлення binding records з негайною інсталяцією даних |
-
-## Приклади тестових скриптів
-
-### Базовий тест одного інструменту
-Див. `test_application_create_fix.py`
-
-### Повний набір тестів всіх інструментів
-Див. `test_all_mcp_tools.py`
-
-## Типові помилки
-
-### HTTP 400 Bad Request
-**Причина:** Не передано `Mcp-Session-Id` в headers після initialize
-
-**Рішення:**
-```python
-headers = {
-    "Content-Type": "application/json",
-    "Mcp-Session-Id": session_id  # ← Додати цей header!
+```json
+{
+  "success": true,
+  "applications": [
+    {
+      "id": "7030c825-59bd-49c6-8a6b-5ff260687a87",
+      "code": "UsrEvents",
+      "name": "Events"
+    }
+  ]
 }
 ```
 
-### "AUTH_REQUIRED" error
-**Причина:** `RequestUserConnection` = null (McpAuthenticationMiddleware не спрацював)
+### `application-get-info`
 
-**Рішення:** Перевірити Basic Auth credentials
+```json
+{
+  "success": true,
+  "package-u-id": "597944b2-c71f-4cdb-9510-0216c1e214a6",
+  "package-name": "UsrTodoList",
+  "entities": [
+    {
+      "uId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
+      "name": "UsrTodoList",
+      "caption": "Todo"
+    }
+  ]
+}
+```
 
-### Actor System error "Failed to get context"
-**Причина (ВИРІШЕНО):** `HttpContext.Items["CurrentWebOperationIdentityName"]` не встановлений
+## Перевірки після schema/page sync
 
-**Рішення:** Оновити до версії з виправленням в `McpAuthenticationMiddleware.cs` (lines 96-97)
+- Після `schema-sync` обов’язково викличте `application-get-info`
+- Після `page-sync` перевірте, що всі page results мають `success: true`
+- Якщо потрібна детальна перевірка сторінок, дочитайте сторінки через `page-get`
+- Якщо `tools/list` не містить `schema-sync`, `page-sync` або `component-info`, вважайте встановлений `clio` несумісним
 
-## Порівняння з MCP Inspector
+## Типові помилки
 
-| Аспект | Програматичне (curl/Python) | MCP Inspector |
-|--------|---------------------------|--------------|
-| Візуальність | ❌ Тільки CLI | ✅ Веб-інтерфейс |
-| Швидкість тестування | ❌ Писати код | ✅ Клік → результат |
-| Автоматизація | ✅ Скрипти, CI/CD | ❌ Тільки інтерактивно |
-| Дебаг | ✅ Повний контроль | ✅ History з JSON |
-| Використання | Автотести, CI/CD, скрипти | Розробка, дебаг, demo |
+### Unsupported clio version
+
+Причина:
+- встановлено `clio` старіше за `8.0.2.37`
+
+Рішення:
+- оновити `clio`
+- або вказати сумісний released binary через `CLIO_CMD`
+
+### `tools/list` повертає помилку або порожній manifest
+
+Причина:
+- використовується несумісна версія `clio`
+- `clio mcp-server` не запускається коректно
+
+Рішення:
+- перевірити `clio ver`
+- перевірити `python3 scripts/mcp_client.py tools/list '{}' 30`
+
+### Generic `An error occurred invoking ...`
+
+Причина:
+- неправильні назви параметрів
+- старий payload contract
+
+Рішення:
+- перевірити dash-style tool name
+- перевірити kebab-case аргументи
+- для `update-entity-schema` передавати native list у `operations`
+- для `page-update` передавати `dry-run`, а не `dryRun`
 
 ## Дивіться також
 
-- **[MCP Inspector Guide](../context/mcp-inspector-guide.md)** — візуальне тестування через веб-UI
-- `test_application_create_fix.py` — приклад тесту application.create
-- `test_all_mcp_tools.py` — тест всіх доступних інструментів
+- [`context/mcp-application-tools-reference.md`](../context/mcp-application-tools-reference.md)
+- [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md)

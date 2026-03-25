@@ -192,22 +192,27 @@ class ClioStdioClient:
     def __init__(self, environment_name, clio_cmd=None):
         self.environment_name = environment_name
         self.clio_cmd = clio_cmd
+        self._initialized = False
 
     def initialize(self):
-        pass
+        if self._initialized:
+            return
+        if self.clio_cmd and self.clio_cmd != "clio mcp-server" and not os.environ.get("CLIO_CMD"):
+            os.environ["CLIO_CMD"] = self.clio_cmd
+        _ensure_supported_clio_version_import()()
+        self._initialized = True
 
     def list_tools(self):
-        r = _call_mcp_tool_import()("tools/list", {})
+        self.initialize()
+        r = _list_mcp_tools_import()()
         return r.get("data", {}).get("tools", []) if r.get("success") else []
 
     def call_tool_json(self, tool_name, arguments):
-        tool_name_dashed = tool_name.replace(".", "-")
-        if "environmentName" not in arguments and "environment-name" not in arguments:
-            if tool_name.startswith("page"):
-                arguments["environmentName"] = self.environment_name
-            else:
-                arguments["environment-name"] = self.environment_name
-        r = _call_mcp_tool_import()(tool_name_dashed, arguments)
+        self.initialize()
+        merged = dict(arguments)
+        if "environment-name" not in merged:
+            merged["environment-name"] = self.environment_name
+        r = _call_mcp_tool_import()(tool_name, merged)
         if not r.get("success"):
             raw = r.get("raw", "unknown error")
             error_data = r.get("data") or {}
@@ -217,11 +222,23 @@ class ClioStdioClient:
 
 
 def _call_mcp_tool_import():
+    return _mcp_client_import().call_mcp_tool
+
+
+def _list_mcp_tools_import():
+    return _mcp_client_import().list_mcp_tools
+
+
+def _ensure_supported_clio_version_import():
+    return _mcp_client_import().ensure_supported_clio_version
+
+
+def _mcp_client_import():
     try:
-        from scripts.mcp_client import call_mcp_tool
+        import scripts.mcp_client as module
     except ImportError:
-        from mcp_client import call_mcp_tool
-    return call_mcp_tool
+        import mcp_client as module
+    return module
 
 
 def load_mcp_client(env_path):
@@ -413,51 +430,112 @@ def build_column_operations(current_entity, edited_entity, available_names):
     return operations
 
 
+def build_create_columns(columns):
+    converted = []
+    for column in columns:
+        item = {
+            "name": column["name"],
+            "type": column.get("dataValueTypeName"),
+            "title": column.get("caption") or column["name"]
+        }
+        if column.get("referenceSchemaName"):
+            item["reference-schema-name"] = column["referenceSchemaName"]
+        if "isRequired" in column:
+            item["required"] = bool(column["isRequired"])
+        if "defaultValueSource" in column:
+            item["default-value-source"] = column["defaultValueSource"]
+        if "defaultValue" in column:
+            item["default-value"] = column["defaultValue"]
+        converted.append({key: value for key, value in item.items() if value is not None})
+    return converted
+
+
+def build_update_operations_payload(operations):
+    payload = []
+    for operation in operations:
+        if operation["operation"] == "removeColumn":
+            payload.append({
+                "action": "remove",
+                "column-name": operation["column"]["name"]
+            })
+            continue
+        column = operation["column"]
+        item = {
+            "action": "add" if operation["operation"] == "addColumn" else "modify",
+            "column-name": column["name"],
+            "type": column.get("dataValueTypeName"),
+            "title": column.get("caption") or column["name"]
+        }
+        if column.get("referenceSchemaName"):
+            item["reference-schema-name"] = column["referenceSchemaName"]
+        if "isRequired" in column:
+            item["required"] = bool(column["isRequired"])
+        if "defaultValueSource" in column:
+            item["default-value-source"] = column["defaultValueSource"]
+        if "defaultValue" in column:
+            item["default-value"] = column["defaultValue"]
+        payload.append({key: value for key, value in item.items() if value is not None})
+    return payload
+
+
 def build_create_action(entity):
-    tool_name = "entity.create_lookup" if entity.get("kind") == "lookup" else "entity.create"
+    tool_name = "create-lookup" if entity.get("kind") == "lookup" else "create-entity-schema"
     filtered_columns = filter_mutable_columns(entity.get("columns", []))
     for column in filtered_columns:
         validate_column_default(column)
-    if tool_name == "entity.create_lookup" and any(column["name"] == "UsrName" for column in filtered_columns):
+    if tool_name == "create-lookup" and any(column["name"] == "UsrName" for column in filtered_columns):
         raise WorkflowError(
             f"Lookup {entity['name']} must use inherited Name as PrimaryDisplayColumn; do not add UsrName"
         )
-    create_columns = json.dumps(filtered_columns, ensure_ascii=True, separators=(",", ":"))
     arguments = {
-        "packageUId": entity["packageUId"],
-        "name": entity["name"],
-        "caption": entity.get("caption") or entity["name"],
-        "columnsJson": create_columns
+        "package-name": entity["packageName"],
+        "schema-name": entity["name"],
+        "title": entity.get("caption") or entity["name"]
     }
-    if tool_name == "entity.create":
-        arguments["parentSchemaName"] = entity.get("parentSchemaName") or "BaseEntity"
+    create_columns = build_create_columns(filtered_columns)
+    if create_columns:
+        arguments["columns"] = create_columns
+    if tool_name == "create-entity-schema" and entity.get("parentSchemaName"):
+        arguments["parent-schema-name"] = entity["parentSchemaName"]
     return {
         "toolName": tool_name,
         "target": entity["name"],
-        "packageUId": entity["packageUId"],
+        "packageName": entity["packageName"],
         "arguments": arguments
     }
+
+
+def validate_existing_entity_metadata(current_entity, edited_entity):
+    entity_name = edited_entity["name"]
+    current_caption = current_entity.get("caption") or entity_name
+    edited_caption = edited_entity.get("caption") or entity_name
+    if edited_caption != current_caption:
+        raise WorkflowError(
+            f"Updating caption for existing entity {entity_name} is not supported by update-entity-schema"
+        )
+    current_parent = current_entity.get("parentSchemaName") or "BaseEntity"
+    edited_parent = edited_entity.get("parentSchemaName") or "BaseEntity"
+    if edited_parent != current_parent:
+        raise WorkflowError(
+            f"Updating parentSchemaName for existing entity {entity_name} is not supported by update-entity-schema"
+        )
 
 
 def build_update_action(current_entity, edited_entity, available_names):
     if current_entity.get("packageUId") != edited_entity.get("packageUId"):
         raise WorkflowError(f"Moving entity {edited_entity['name']} between packages is not supported")
-    entity_u_id = edited_entity.get("entityUId") or current_entity.get("entityUId")
-    if not entity_u_id:
-        raise WorkflowError(f"Existing entity {edited_entity['name']} does not have entityUId")
+    validate_existing_entity_metadata(current_entity, edited_entity)
     operations = build_column_operations(current_entity, edited_entity, available_names)
-    if not operations and edited_entity.get("caption") == current_entity.get("caption") and (edited_entity.get("parentSchemaName") or "BaseEntity") == (current_entity.get("parentSchemaName") or "BaseEntity"):
+    if not operations:
         return None
     return {
-        "toolName": "entity.update",
+        "toolName": "update-entity-schema",
         "target": edited_entity["name"],
-        "packageUId": edited_entity["packageUId"],
+        "packageName": edited_entity["packageName"],
         "arguments": {
-            "entityUId": entity_u_id,
-            "packageUId": edited_entity["packageUId"],
-            "schemaName": edited_entity["name"],
-            "caption": edited_entity.get("caption") or edited_entity["name"],
-            "operationsJson": json.dumps(operations, ensure_ascii=True, separators=(",", ":"))
+            "package-name": edited_entity["packageName"],
+            "schema-name": edited_entity["name"],
+            "operations": build_update_operations_payload(operations)
         }
     }
 
@@ -510,82 +588,137 @@ def build_sync_plan(current_context, edited_context):
 
 def resolve_app_selector(result_document):
     app = result_document.get("app") or {}
-    if app.get("id"):
-        return {
-            "appId": app["id"]
-        }
     if app.get("code"):
         return {
-            "appCode": app["code"]
+            "app-code": app["code"]
+        }
+    if app.get("id"):
+        return {
+            "app-id": app["id"]
         }
     if result_document.get("appId"):
         return {
-            "appId": result_document["appId"]
+            "app-id": result_document["appId"]
         }
     if result_document.get("appCode"):
         return {
-            "appCode": result_document["appCode"]
+            "app-code": result_document["appCode"]
         }
     if result_document.get("packageName"):
         return {
-            "appCode": result_document["packageName"]
+            "app-code": result_document["packageName"]
+        }
+    if result_document.get("package-name"):
+        return {
+            "app-code": result_document["package-name"]
         }
     raise WorkflowError("Application identifier is missing in current result document")
 
 
-def ensure_required_tools(client):
+def resolve_tool_strategy(client, sync_plan):
     tools = client.list_tools()
     tool_names = {tool["name"] for tool in tools}
-    required = {
-        "application.get_info",
-        "entity.create",
-        "entity.create_lookup",
-        "entity.update"
-    }
+    required = {"application-get-info"}
+    if "schema-sync" in tool_names:
+        return "schema-sync"
+    required.update(action["toolName"] for action in sync_plan["actions"])
     missing = sorted(required - tool_names)
     if missing:
         raise WorkflowError(f"Required MCP tools are missing: {', '.join(missing)}")
+    return "individual"
 
 
 def build_refresh_failure(action, error):
     message = str(error)
     if "cannot be obtained from server metadata" in message:
         return WorkflowError(
-            f"application.get_info failed after {action['toolName']} for {action['target']}: "
+            f"application-get-info failed after {action['toolName']} for {action['target']}: "
             f"the schema is still missing from server metadata after a successful mutation. "
             f"This usually means the MCP entity tool did not fully materialize database/runtime metadata. "
             f"Original error: {message}"
         )
     return WorkflowError(
-        f"application.get_info failed after {action['toolName']} for {action['target']}: {message}"
+        f"application-get-info failed after {action['toolName']} for {action['target']}: {message}"
     )
+
+
+def build_schema_sync_operation(action):
+    arguments = action["arguments"]
+    if action["toolName"] == "create-lookup":
+        operation = {
+            "type": "create-lookup",
+            "schema-name": arguments["schema-name"],
+            "title": arguments["title"]
+        }
+        if arguments.get("columns"):
+            operation["columns"] = arguments["columns"]
+        return operation
+    if action["toolName"] == "create-entity-schema":
+        operation = {
+            "type": "create-entity",
+            "schema-name": arguments["schema-name"],
+            "title": arguments["title"],
+            "parent-schema-name": arguments.get("parent-schema-name") or "BaseEntity"
+        }
+        if arguments.get("columns"):
+            operation["columns"] = arguments["columns"]
+        return operation
+    if action["toolName"] == "update-entity-schema":
+        return {
+            "type": "update-entity",
+            "schema-name": arguments["schema-name"],
+            "update-operations": arguments["operations"]
+        }
+    raise WorkflowError(f"Unsupported schema action {action['toolName']}")
 
 
 def apply_sync_plan(client, result_document, edited_context, result_path):
     current_document = ensure_result_document(result_document)
     current_context = extract_editable_context(current_document)
     sync_plan = build_sync_plan(current_context, edited_context)
-    ensure_required_tools(client)
-    app_selector = resolve_app_selector(current_document)
     if not sync_plan["actions"]:
         write_json(result_path, current_document)
         return current_document
-    for action in sync_plan["actions"]:
-        tool_response = client.call_tool_json(action["toolName"], action["arguments"])
-        if tool_response.get("success") is not True:
-            error = tool_response.get("error") or {}
-            raise WorkflowError(error.get("message") or f"{action['toolName']} failed")
-        current_document = append_operation(
-            current_document,
-            action["toolName"],
-            action["target"],
-            "success",
-            response=tool_response,
-            phase="schema",
-            refreshed_by="application.get_info"
-        )
+    tool_strategy = resolve_tool_strategy(client, sync_plan)
+    app_selector = resolve_app_selector(current_document)
+    if tool_strategy == "schema-sync":
+        actions_by_package = {}
+        for action in sync_plan["actions"]:
+            actions_by_package.setdefault(action["packageName"], []).append(action)
+        for package_name, package_actions in actions_by_package.items():
+            tool_response = client.call_tool_json("schema-sync", {
+                "package-name": package_name,
+                "operations": [build_schema_sync_operation(action) for action in package_actions]
+            })
+            if tool_response.get("success") is not True:
+                error = tool_response.get("error") or {}
+                raise WorkflowError(error.get("message") or "schema-sync failed")
+            current_document = append_operation(
+                current_document,
+                "schema-sync",
+                package_name,
+                "success",
+                response=tool_response,
+                phase="schema",
+                refreshed_by="application-get-info"
+            )
+    else:
+        for action in sync_plan["actions"]:
+            tool_response = client.call_tool_json(action["toolName"], action["arguments"])
+            if tool_response.get("success") is not True:
+                error = tool_response.get("error") or {}
+                raise WorkflowError(error.get("message") or f"{action['toolName']} failed")
+            current_document = append_operation(
+                current_document,
+                action["toolName"],
+                action["target"],
+                "success",
+                response=tool_response,
+                phase="schema",
+                refreshed_by="application-get-info"
+            )
     try:
-        refreshed_context = client.call_tool_json("application.get_info", app_selector)
+        refreshed_context = client.call_tool_json("application-get-info", app_selector)
     except WorkflowError as error:
         last_action = sync_plan["actions"][-1]
         raise build_refresh_failure(last_action, error)

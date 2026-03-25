@@ -11,21 +11,21 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - Packages can depend on other packages (via `DependsOn` in descriptor.json)
 
 **MCP Application Creation (DB-first)**
-- Primary generation path is MCP tool `application.create`
-- Discovery path for existing apps is `application.get_list`
-- Canonical DB refresh path is `application.get_info`
+- Primary generation path is MCP tool `application-create`
+- Discovery path for existing apps is `application-get-list`
+- Canonical DB refresh path is `application-get-info`
 - Tool creates application artifacts directly in Creatio DB (PostgreSQL)
-- For new Freedom UI apps, `application.create` also materializes the initial section entity whose schema name normally matches the app code
-- Entity tools (`entity.create_lookup`, `entity.create`, `entity.update`) execute CREATE TABLE and ALTER TABLE directly
+- For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- Released schema tools (`create-lookup`, `create-entity-schema`, `update-entity-schema`) execute CREATE TABLE and ALTER TABLE directly
 - Schemas are immediately runtime-accessible — no compilation or deployment step required
-- Tool returns short compact context JSON (`success`, `app`, `packages` dict, `error`)
+- Tool returns short compact context JSON (`success`, `package-u-id`, `package-name`, `entities`, `error`)
 - Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
-- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application.create` or `application.get_info`
+- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application-create` or `application-get-info`
 
 **Entity Schema Sync (DB-first)**
-- Secondary generation path is MCP `entity.create`, `entity.create_lookup`, `entity.update`
+- Secondary generation path is MCP `create-entity-schema`, `create-lookup`, `update-entity-schema`
 - These tools mutate entity schemas in Creatio DB and return persisted schema snapshots
-- `entity.update` accepts explicit `operationsJson` entries: `addColumn`, `updateColumn`, `removeColumn`
+- `update-entity-schema` accepts explicit `operations` entries with `action: add|modify|remove`
 - New lookup entities must be created before entities or updates that reference them
 
 **Default Semantics**
@@ -34,11 +34,11 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
 - For lookup-backed `schema default`, use the seeded row GUID in `defaultValue`
 
-**Data Binding Generation (MCP-assisted)**
-- `binding.get_columns` returns column names, UIds, and data value types for deployed schemas
-- `binding.create` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately
-- `binding.create` requires `packageUId` and supports optional `outputPath` only when files must also be written on the server
-- If `columnsJson` is supplied to `binding.create`, it becomes the authoritative descriptor column list; omitted row columns are not inferred back from `rowsJson`
+**Data Binding & Schema Inspection (MCP-assisted)**
+- `get-entity-schema-properties` returns column names, UIds, and data value types for deployed schemas (requires `environment-name`, `package-name`, `schema-name`)
+- `get-entity-schema-column-properties` returns detailed metadata for a single column (also requires `column-name`)
+- `create-data-binding-db` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately (requires `environment-name`, `package-name`, `schema-name`)
+- `upsert-data-binding-row-db` upserts a single row in an existing data binding (requires `environment-name`, `package-name`, `schema-name`, `values`)
 
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)
@@ -184,13 +184,16 @@ r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
 - `update-entity-schema` — Add/update columns (individual, prefer `schema-sync`)
 - `binding-get-columns` — Query deployed schema metadata
 - `create-data-binding-db` — Seed lookup data (individual, prefer `schema-sync` with `seed-rows`)
+- `component-info` — Inspect curated Freedom UI component contracts locally
 - `page-list` — Discover Freedom UI pages
 - `page-get` — Read page body (still individual — needed before `page-sync`)
 - `page-update` — Save page body (individual, prefer `page-sync`)
 
 **Complete reference with Python examples:** `context/mcp-application-tools-reference.md`
 
-### MCP `application.create` Input
+Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+
+### MCP `application-create` Input
 
 Required:
 - `name`
@@ -294,8 +297,8 @@ clio clear-redis-db myenv
 # System settings
 clio set-syssetting MySetting "Value" -e myenv
 
-# Install cliogate (for advanced features)
-clio install-gate -e myenv
+# Install cliogate (deprecated — entity MCP tools no longer require cliogate)
+# clio install-gate -e myenv
 ```
 
 ---
@@ -303,7 +306,7 @@ clio install-gate -e myenv
 ## MCP Workflow (DB-First)
 
 ```
-MCP application.create or application.get_info → initialize canonical context → [optional] entity.create_lookup/entity.create/entity.update → application.get_info refresh → [optional] binding.get_columns/binding.create → schemas immediately usable
+MCP application-create or application-get-info → initialize canonical context → [optional] schema-sync or create-lookup/create-entity-schema/update-entity-schema → application-get-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
 ```
 
 **Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.

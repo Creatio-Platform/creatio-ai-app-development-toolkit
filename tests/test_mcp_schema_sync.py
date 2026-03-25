@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_TMP_ROOT = ROOT / ".tmp-tests"
@@ -59,18 +60,18 @@ def build_current_result_document():
 def build_current_flat_result_document():
     return normalize_result_document({
         "success": True,
-        "packageUId": "22222222-2222-2222-2222-222222222222",
-        "packageName": "UsrMyApp",
+        "package-u-id": "22222222-2222-2222-2222-222222222222",
+        "package-name": "UsrMyApp",
         "entities": [
             {
-                "uId": "33333333-3333-3333-3333-333333333333",
+                "u-id": "33333333-3333-3333-3333-333333333333",
                 "name": "UsrMyEntity",
-                "caption": "My Entity",
+                "title": "My Entity",
                 "columns": [
                     {
                         "name": "UsrName",
-                        "caption": "Name",
-                        "dataValueType": "Text"
+                        "title": "Name",
+                        "type": "Text"
                     }
                 ]
             }
@@ -330,6 +331,38 @@ def build_edited_context_with_default_update():
     }
 
 
+def build_edited_context_with_caption_update():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "entityUId": "33333333-3333-3333-3333-333333333333",
+                        "name": "UsrMyEntity",
+                        "caption": "My Renamed Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "UsrName",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
 def build_edited_context_with_invalid_lookup_default():
     return {
         "app": {
@@ -390,104 +423,163 @@ class FakeMcpClient:
 
     def list_tools(self):
         return [
-            {"name": "application.get_info"},
-            {"name": "entity.create"},
-            {"name": "entity.create_lookup"},
-            {"name": "entity.update"}
+            {"name": "application-get-info"},
+            {"name": "schema-sync"}
         ]
 
     def call_tool_json(self, tool_name, arguments):
-        self.calls.append((tool_name, arguments))
-        if tool_name == "entity.create_lookup":
-            package = next(iter(self.context_document["packages"].values()))
-            package["entities"][arguments["name"]] = {
-                "uId": "66666666-6666-6666-6666-666666666666",
-                "caption": arguments["caption"],
-                "columns": {
-                    "Name": {
-                        "caption": "Name",
-                        "dataValueTypeName": "Text"
-                    }
-                }
-            }
-            return {
-                "success": True,
-                "packageUId": arguments["packageUId"],
-                "entity": {
-                    "uId": "66666666-6666-6666-6666-666666666666",
-                    "name": arguments["name"],
-                    "caption": arguments["caption"],
-                    "parentSchemaName": "BaseLookup",
-                    "columns": [
-                        {
-                            "name": "Name",
+        self.calls.append((tool_name, dict(arguments)))
+        if tool_name == "schema-sync":
+            package = self.context_document["packages"][arguments["package-name"]]
+            results = []
+            for operation in arguments["operations"]:
+                schema_name = operation["schema-name"]
+                if operation["type"] == "create-lookup":
+                    columns = {
+                        "Name": {
                             "caption": "Name",
                             "dataValueTypeName": "Text"
                         }
-                    ]
-                }
-            }
-        if tool_name == "entity.update":
-            package = next(iter(self.context_document["packages"].values()))
-            entity = package["entities"][arguments["schemaName"]]
-            operations = json.loads(arguments["operationsJson"])
-            for operation in operations:
-                if operation["operation"] == "addColumn":
-                    col = operation["column"]
-                    entity["columns"][col["name"]] = {k: v for k, v in col.items() if k != "name"}
-                if operation["operation"] == "updateColumn":
-                    col = operation["column"]
-                    existing = entity["columns"][col["name"]]
-                    existing.update({k: v for k, v in col.items() if k != "name"})
-                if operation["operation"] == "removeColumn":
-                    entity["columns"].pop(operation["column"]["name"], None)
-            return {
-                "success": True,
-                "packageUId": arguments["packageUId"],
-                "entity": {
-                    "uId": arguments["entityUId"],
-                    "name": arguments["schemaName"],
-                    "caption": arguments["caption"],
-                    "columns": entity["columns"]
-                },
-                "appliedOperations": operations
-            }
-        if tool_name == "application.get_info":
+                    }
+                    for column in operation.get("columns", []):
+                        columns[column["name"]] = {
+                            "caption": column.get("title") or column["name"],
+                            "dataValueTypeName": column.get("type")
+                        }
+                    package["entities"][schema_name] = {
+                        "uId": "66666666-6666-6666-6666-666666666666",
+                        "caption": operation["title"],
+                        "parentSchemaName": "BaseLookup",
+                        "columns": columns
+                    }
+                    results.append({"operation": "create-lookup", "schema-name": schema_name, "success": True})
+                if operation["type"] == "update-entity":
+                    entity = package["entities"][schema_name]
+                    for update in operation["update-operations"]:
+                        if update["action"] == "remove":
+                            entity["columns"].pop(update["column-name"], None)
+                            continue
+                        payload = {
+                            "caption": update.get("title") or update["column-name"],
+                            "dataValueTypeName": update.get("type")
+                        }
+                        if update.get("reference-schema-name"):
+                            payload["referenceSchemaName"] = update["reference-schema-name"]
+                        if "default-value-source" in update:
+                            payload["defaultValueSource"] = update["default-value-source"]
+                        if "default-value" in update:
+                            payload["defaultValue"] = update["default-value"]
+                        entity["columns"][update["column-name"]] = payload
+                    results.append({"operation": "update-entity", "schema-name": schema_name, "success": True})
+            return {"success": True, "results": results}
+        if tool_name == "application-get-info":
             return self.context_document
         raise AssertionError(tool_name)
 
 
 class FakeMcpClientRefreshFailure(FakeMcpClient):
     def call_tool_json(self, tool_name, arguments):
-        self.calls.append((tool_name, arguments))
-        if tool_name == "entity.create_lookup":
-            return {
-                "success": True,
-                "packageUId": arguments["packageUId"],
-                "entity": {
-                    "uId": "66666666-6666-6666-6666-666666666666",
-                    "name": arguments["name"],
-                    "caption": arguments["caption"],
-                    "parentSchemaName": "BaseLookup",
-                    "columns": []
-                }
-            }
-        if tool_name == "entity.update":
-            return {
-                "success": True,
-                "packageUId": arguments["packageUId"],
-                "entity": {
-                    "uId": arguments["entityUId"],
-                    "name": arguments["schemaName"],
-                    "caption": arguments["caption"],
-                    "columns": {}
-                },
-                "appliedOperations": []
-            }
-        if tool_name == "application.get_info":
+        self.calls.append((tool_name, dict(arguments)))
+        if tool_name == "schema-sync":
+            return {"success": True, "results": [{"operation": "update-entity", "schema-name": "UsrMyEntity", "success": True}]}
+        if tool_name == "application-get-info":
             raise WorkflowError(
                 'Instance of workspace item with type "Terrasoft.Configuration.UsrMyEntityTypeSchema" cannot be obtained from server metadata'
             )
+        raise AssertionError(tool_name)
+
+
+class FakeMcpClientWithoutSchemaSync:
+    def __init__(self, context_document):
+        self.context_document = context_document
+        self.calls = []
+
+    def list_tools(self):
+        return [
+            {"name": "application-get-info"},
+            {"name": "create-lookup"},
+            {"name": "create-entity-schema"},
+            {"name": "update-entity-schema"}
+        ]
+
+    def call_tool_json(self, tool_name, arguments):
+        self.calls.append((tool_name, dict(arguments)))
+        package = self.context_document["packages"][arguments["package-name"]] if tool_name != "application-get-info" else None
+        if tool_name == "create-lookup":
+            columns = {
+                "Name": {
+                    "caption": "Name",
+                    "dataValueTypeName": "Text"
+                }
+            }
+            for column in arguments.get("columns", []):
+                columns[column["name"]] = {
+                    "caption": column.get("title") or column["name"],
+                    "dataValueTypeName": column.get("type")
+                }
+            package["entities"][arguments["schema-name"]] = {
+                "uId": "66666666-6666-6666-6666-666666666666",
+                "caption": arguments["title"],
+                "parentSchemaName": "BaseLookup",
+                "columns": columns
+            }
+            return {
+                "success": True,
+                "package-name": arguments["package-name"],
+                "entity": {
+                    "uId": "66666666-6666-6666-6666-666666666666",
+                    "name": arguments["schema-name"],
+                    "caption": arguments["title"],
+                    "parentSchemaName": "BaseLookup",
+                    "columns": columns
+                }
+            }
+        if tool_name == "create-entity-schema":
+            package["entities"][arguments["schema-name"]] = {
+                "uId": "66666666-6666-6666-6666-666666666666",
+                "caption": arguments["title"],
+                "parentSchemaName": arguments.get("parent-schema-name") or "BaseEntity",
+                "columns": {}
+            }
+            return {
+                "success": True,
+                "package-name": arguments["package-name"],
+                "entity": {
+                    "uId": "66666666-6666-6666-6666-666666666666",
+                    "name": arguments["schema-name"],
+                    "caption": arguments["title"],
+                    "parentSchemaName": arguments.get("parent-schema-name") or "BaseEntity",
+                    "columns": {}
+                }
+            }
+        if tool_name == "update-entity-schema":
+            entity = package["entities"][arguments["schema-name"]]
+            for operation in arguments["operations"]:
+                if operation["action"] == "remove":
+                    entity["columns"].pop(operation["column-name"], None)
+                    continue
+                payload = {
+                    "caption": operation.get("title") or operation["column-name"],
+                    "dataValueTypeName": operation.get("type")
+                }
+                if operation.get("reference-schema-name"):
+                    payload["referenceSchemaName"] = operation["reference-schema-name"]
+                if "default-value-source" in operation:
+                    payload["defaultValueSource"] = operation["default-value-source"]
+                if "default-value" in operation:
+                    payload["defaultValue"] = operation["default-value"]
+                entity["columns"][operation["column-name"]] = payload
+            return {
+                "success": True,
+                "package-name": arguments["package-name"],
+                "entity": {
+                    "name": arguments["schema-name"],
+                    "caption": entity["caption"],
+                    "columns": entity["columns"]
+                }
+            }
+        if tool_name == "application-get-info":
+            return self.context_document
         raise AssertionError(tool_name)
 
 
@@ -495,6 +587,7 @@ class McpSchemaSyncTests(unittest.TestCase):
     def test_build_create_action_skips_inherited_lookup_columns(self):
         action = build_create_action({
             "packageUId": "22222222-2222-2222-2222-222222222222",
+            "packageName": "UsrMyPkg",
             "name": "UsrMyEntityType",
             "caption": "My Entity Type",
             "kind": "lookup",
@@ -511,14 +604,14 @@ class McpSchemaSyncTests(unittest.TestCase):
                 }
             ]
         })
-        self.assertEqual(action["toolName"], "entity.create_lookup")
+        self.assertEqual(action["toolName"], "create-lookup")
         self.assertEqual(
-            json.loads(action["arguments"]["columnsJson"]),
+            action["arguments"]["columns"],
             [
                 {
                     "name": "UsrColor",
-                    "caption": "Color",
-                    "dataValueTypeName": "Text"
+                    "type": "Text",
+                    "title": "Color"
                 }
             ]
         )
@@ -530,6 +623,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         ):
             build_create_action({
                 "packageUId": "22222222-2222-2222-2222-222222222222",
+                "packageName": "UsrMyPkg",
                 "name": "UsrMyEntityType",
                 "caption": "My Entity Type",
                 "kind": "lookup",
@@ -548,13 +642,13 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(len(sync_plan["actions"]), 2)
         create_lookup = sync_plan["actions"][0]
         update_entity = sync_plan["actions"][1]
-        self.assertEqual(create_lookup["toolName"], "entity.create_lookup")
+        self.assertEqual(create_lookup["toolName"], "create-lookup")
         self.assertEqual(create_lookup["target"], "UsrMyEntityType")
-        self.assertEqual(update_entity["toolName"], "entity.update")
-        operations = json.loads(update_entity["arguments"]["operationsJson"])
+        self.assertEqual(update_entity["toolName"], "update-entity-schema")
+        operations = update_entity["arguments"]["operations"]
         self.assertEqual(len(operations), 1)
-        self.assertEqual(operations[0]["operation"], "addColumn")
-        self.assertEqual(operations[0]["column"]["referenceSchemaName"], "UsrMyEntityType")
+        self.assertEqual(operations[0]["action"], "add")
+        self.assertEqual(operations[0]["reference-schema-name"], "UsrMyEntityType")
 
     def test_build_sync_plan_stops_on_missing_lookup_reference(self):
         current_context = build_current_result_document()["editableContext"]
@@ -573,23 +667,29 @@ class McpSchemaSyncTests(unittest.TestCase):
         current_context = build_current_result_document_with_lookup_status()["editableContext"]
         sync_plan = build_sync_plan(current_context, build_edited_context_with_default_update())
         self.assertEqual(len(sync_plan["actions"]), 1)
-        self.assertEqual(sync_plan["actions"][0]["toolName"], "entity.update")
-        operations = json.loads(sync_plan["actions"][0]["arguments"]["operationsJson"])
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+        operations = sync_plan["actions"][0]["arguments"]["operations"]
         self.assertEqual(
             operations,
             [
                 {
-                    "operation": "updateColumn",
-                    "column": {
-                        "name": "UsrName",
-                        "caption": "Name",
-                        "dataValueTypeName": "Text",
-                        "defaultValueSource": "Const",
-                        "defaultValue": "Draft"
-                    }
+                    "action": "modify",
+                    "column-name": "UsrName",
+                    "type": "Text",
+                    "title": "Name",
+                    "default-value-source": "Const",
+                    "default-value": "Draft"
                 }
             ]
         )
+
+    def test_build_sync_plan_rejects_existing_entity_caption_update(self):
+        current_context = build_current_result_document()["editableContext"]
+        with self.assertRaisesRegex(
+            WorkflowError,
+            "Updating caption for existing entity UsrMyEntity is not supported"
+        ):
+            build_sync_plan(current_context, build_edited_context_with_caption_update())
 
     def test_build_sync_plan_rejects_lookup_default_caption_instead_of_guid(self):
         current_context = build_current_result_document_with_lookup_status()["editableContext"]
@@ -611,13 +711,26 @@ class McpSchemaSyncTests(unittest.TestCase):
         my_entity = persisted["editableContext"]["packages"][0]["entities"][0]
         self.assertEqual(my_entity["columns"][1]["name"], "UsrType")
         self.assertEqual(my_entity["columns"][1]["referenceSchemaName"], "UsrMyEntityType")
-        self.assertEqual(len(persisted["schemaSync"]), 2)
-        self.assertEqual(len(persisted["operationLog"]), 2)
-        self.assertEqual(persisted["schemaSync"][0]["tool"], "entity.create_lookup")
-        self.assertEqual(persisted["schemaSync"][1]["evidence"]["entity"]["columns"], ["UsrName", "UsrType"])
+        self.assertEqual(len(persisted["schemaSync"]), 1)
+        self.assertEqual(len(persisted["operationLog"]), 1)
+        self.assertEqual(persisted["schemaSync"][0]["tool"], "schema-sync")
         self.assertEqual(
             [call[0] for call in fake_client.calls],
-            ["entity.create_lookup", "entity.update", "application.get_info"]
+            ["schema-sync", "application-get-info"]
+        )
+
+    def test_apply_sync_plan_falls_back_to_individual_tools_when_schema_sync_missing(self):
+        result_document = build_current_result_document()
+        fake_client = FakeMcpClientWithoutSchemaSync(build_current_result_document())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result_path = Path(temp_dir) / "mcp-application-result.json"
+            apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
+            persisted = json.loads(result_path.read_text(encoding="utf-8"))
+        entity_names = [entity["name"] for entity in persisted["editableContext"]["packages"][0]["entities"]]
+        self.assertEqual(entity_names, ["UsrMyEntity", "UsrMyEntityType"])
+        self.assertEqual(
+            [call[0] for call in fake_client.calls],
+            ["create-lookup", "update-entity-schema", "application-get-info"]
         )
 
     def test_apply_sync_plan_raises_actionable_error_when_metadata_refresh_fails(self):
@@ -627,7 +740,7 @@ class McpSchemaSyncTests(unittest.TestCase):
             result_path = workdir / "mcp-application-result.json"
             with self.assertRaisesRegex(
                 WorkflowError,
-                "application.get_info failed after entity.update for UsrMyEntity"
+                "application-get-info failed after update-entity-schema for UsrMyEntity"
             ):
                 apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
 
@@ -637,9 +750,18 @@ class McpSchemaSyncTests(unittest.TestCase):
         with temp_workdir() as workdir:
             result_path = workdir / "mcp-application-result.json"
             apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
-        refresh_calls = [call for call in fake_client.calls if call[0] == "application.get_info"]
+        refresh_calls = [call for call in fake_client.calls if call[0] == "application-get-info"]
         self.assertTrue(refresh_calls)
-        self.assertEqual(refresh_calls[0][1], {"appCode": "UsrMyApp"})
+        self.assertEqual(refresh_calls[0][1], {"app-code": "UsrMyApp"})
+
+    def test_clio_stdio_client_lists_tools_via_mcp_tools_list(self):
+        with patch("scripts.mcp_client.ensure_supported_clio_version"), patch(
+            "scripts.mcp_client.list_mcp_tools",
+            return_value={"success": True, "data": {"tools": [{"name": "schema-sync"}]}, "raw": "{}"}
+        ):
+            client = ClioStdioClient("local")
+            tools = client.list_tools()
+        self.assertEqual(tools, [{"name": "schema-sync"}])
 
 
 class LoadMcpClientTests(unittest.TestCase):
@@ -678,6 +800,18 @@ class LoadMcpClientTests(unittest.TestCase):
             f.flush()
             client = load_mcp_client(f.name)
         self.assertIsInstance(client, McpHttpClient)
+
+
+    def test_clio_stdio_client_does_not_mutate_input_arguments(self):
+        original_args = {"schema-name": "UsrFoo", "package-name": "MyPkg"}
+        args_copy = dict(original_args)
+        with patch("scripts.mcp_schema_sync._mcp_client_import") as mock_import:
+            mock_module = mock_import.return_value
+            mock_module.call_mcp_tool.return_value = {"success": True, "data": {"ok": True}, "raw": "{}"}
+            client = ClioStdioClient("test-env")
+            client._initialized = True
+            client.call_tool_json("schema-sync", original_args)
+        self.assertEqual(original_args, args_copy)
 
 
 if __name__ == "__main__":

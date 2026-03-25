@@ -104,7 +104,7 @@ Rules:
 
 ### Main Entity And Lookup Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `application.create` as the canonical main entity.
+- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Reuse `Name` when it already exists.
 - Never plan duplicate title-like columns when `Name` is already present.
@@ -114,19 +114,19 @@ Rules:
 
 ### Schema Sync Plan
 
-- Resolve whether `application.create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
-- For existing-app work, include explicit discovery through `application.get_list` and `application.get_info`.
+- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
-- Prefer inline lookup `seed-rows` in `schema-sync`; use `binding.create` only when the workflow explicitly needs a separate binding artifact.
-- Extend the template-created main entity via `entity.update`.
-- Use `entity.create` only for genuinely additional business objects.
-- Treat omission as non-deletion. For `entity.update`, plan explicit operations only.
-- After each schema mutation, require refresh through `application.get_info`.
+- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Extend the template-created main entity via `update-entity-schema`.
+- Use `create-entity-schema` only for genuinely additional business objects.
+- Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
+- After each schema mutation, require refresh through `application-get-info`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
 ### Default Rules
 
-- `schema default` means the backend/entity schema contract sets the value through `entity.create` or `entity.update`.
+- `schema default` means the backend/entity schema contract sets the value through `create-entity-schema` or `update-entity-schema`.
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - A requirement such as `UsrStatus defaults to New` is complete only when the plan contains an explicit `schema default` or `ui default` step.
 - Lookup seed rows alone do not satisfy a default requirement.
@@ -153,11 +153,11 @@ ListPage defaults:
 
 Required execution sequence for each page:
 
-1. `page.list`
-2. `page.get`
-3. `page.update` with `dryRun: True`
-4. `page.update`
-5. `page.get` again for verification
+1. `page-list`
+2. `page-get`
+3. `page-update` with `dry-run: true`
+4. `page-update`
+5. `page-get` again for verification
 
 When page sync is required:
 
@@ -171,7 +171,7 @@ When page sync is required:
 - Use `environment-name` and `package-name` for executable entity payloads, and `schema-name` for schema targets.
 - Use `action` / `column-name` keys inside `update-operations`.
 - For fallback `create-data-binding-db`, use `binding-name` plus `rows` as a JSON string of `[{"values": {...}}]`.
-- Pass MCP booleans such as `dryRun`, `required`, and `extendParent` as booleans, not strings.
+- Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
 - Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
 - Never treat seeded rows as implementation of a default rule.
 

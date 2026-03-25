@@ -44,7 +44,7 @@ During app-generation execution, write only inside `output/<AppName>/`.
 - Prefer `scripts/mcp_full_sync.py` when the plan batches schema and page synchronization in one process.
 - Respect `CLIO_CMD` when a custom clio binary is configured; otherwise use global `clio`.
 - Do not use raw curl for clio stdio transport.
-- Pass boolean MCP parameters such as `dryRun` as booleans, not strings.
+- Pass boolean MCP parameters such as `dry-run` as booleans, not strings.
 
 ## Preconditions
 
@@ -58,22 +58,22 @@ During app-generation execution, write only inside `output/<AppName>/`.
 1. Verify MCP is reachable, either through explicit `initialize` or via `scripts/mcp_client.py`.
 2. Call `tools/list` and verify required tools exist.
 3. Resolve the execution branch:
-   - new app: `application.create`
-   - existing app: `application.get_list` -> `application.get_info`
+   - new app: `application-create`
+   - existing app: `application-get-list` -> `application-get-info`
 4. Parse the short MCP contract from `result.content[0].text`.
 5. Initialize `output/<AppName>/mcp-application-result.json`.
 6. Execute ordered schema sync from the plan, preferably via `schema-sync` / `scripts/mcp_full_sync.py` when the plan batches operations:
-   - `entity.create_lookup`
-   - `binding.create`
-   - `entity.create`
-   - `entity.update`
-7. After each successful entity mutation or schema-sync batch, call `application.get_info` and overwrite `mcp-application-result.json`.
+   - `create-lookup`
+   - `create-data-binding-db`
+   - `create-entity-schema`
+   - `update-entity-schema`
+7. After each successful entity mutation or schema-sync batch, call `application-get-info` and overwrite `mcp-application-result.json`.
 8. If the plan requires page sync, run:
-   - `page.list`
-   - `page.get`
-   - `page.update` with `dryRun: True`
-   - `page.update`
-   - `page.get` again for verification
+   - `page-list`
+   - `page-get`
+   - `page-update` with `dry-run: true`
+   - `page-update`
+   - `page-get` again for verification
 9. Persist page evidence and verification results.
 10. Validate the final result contract.
 11. Build `mcp-application-report.md` from persisted evidence only.
@@ -81,16 +81,16 @@ During app-generation execution, write only inside `output/<AppName>/`.
 
 ## Branching Rules
 
-- If `application.create` reports that the app or configuration schema already exists, stop the create flow and switch to the documented existing-app discovery flow.
+- If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the documented existing-app discovery flow.
 - Surface which branch actually ran in the persisted evidence and final report.
 
 ## Schema Sync Rules
 
-- Treat the template-created section entity from `application.create` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
-- Use `entity.update` to extend that main entity.
-- Use `entity.create` only for additional business objects with distinct meaning.
+- Treat the template-created section entity from `application-create` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
+- Use `update-entity-schema` to extend that main entity.
+- Use `create-entity-schema` only for additional business objects with distinct meaning.
 - Create lookup entities before entities that reference them.
-- After each `entity.create_lookup`, validate that inherited `Name` exists in refreshed metadata.
+- After each `create-lookup`, validate that inherited `Name` exists in refreshed metadata.
 - Do not add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
 - If the refreshed entity snapshot already contains `Name`, do not add duplicate title-like columns unless the plan explicitly requires a separate field.
 - Treat schema mutations as successful only when refreshed metadata is available immediately and the schema is not left in `Database update required`.
@@ -165,9 +165,10 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### Related Binding Tools
 
-- `binding.get_columns` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`.
+- `get-entity-schema-properties` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`. Requires `environment-name`, `package-name`, `schema-name`.
+- `get-entity-schema-column-properties` returns detailed metadata for a single column. Requires `environment-name`, `package-name`, `schema-name`, `column-name`.
 - `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
-- Schemas created earlier in the same flow are DB-first and should be queried through `binding.get_columns`; do not use raw mode.
+- Schemas created earlier in the same flow are DB-first and should be queried through `get-entity-schema-properties`; do not use raw mode.
 - For lookup seed rows, the format is `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
 - When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`:
 
@@ -192,7 +193,7 @@ new_id = str(uuid.uuid4())
 5. ✅ Each operation has `schema-name`
 6. ✅ `update-operations` within `update-entity` uses same format as `update-entity-schema` `operations`
 7. ✅ `seed-rows` uses `[{"values": {...}}]` format (not JSON string — native list)
-8. ✅ Booleans (`required`, `extend-parent`) are Python `True`/`False`, not strings
+8. ✅ Booleans (`is-required`, `extend-parent`) are Python `True`/`False`, not strings
 
 **For `page-sync` calls, validate:**
 
@@ -217,7 +218,7 @@ Before EVERY `update-entity-schema` call, validate:
 3. ✅ `schema-name` is the entity schema name
 4. ✅ `operations` is a Python **list** (NOT a JSON-encoded string)
 5. ✅ Each operation uses `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`)
-6. ✅ `required` is a boolean (`True`/`False`), not a string
+6. ✅ `is-required` is a boolean (`True`/`False`), not a string
 7. ✅ Schema defaults use `default-value-source` and `default-value` (kebab-case)
 8. ✅ For existing/template-created entities, no `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
 
@@ -291,7 +292,7 @@ Always verify against C# source files:
 - if `success=true`, `entities` is non-empty
 - if `success=false`, `error.message` is non-empty
 - each lookup creation response confirms inherited `Name` exists before seed data is installed
-- each successful entity tool call is followed by a successful `application.get_info` refresh
+- each successful entity tool call is followed by a successful `application-get-info` refresh
 - no duplicate title-like columns are added when the refreshed main entity snapshot already contains `Name`
 - no second BaseEntity is created for the same primary record type already covered by the template-created section entity
 - result and report are persisted
@@ -302,10 +303,10 @@ Always verify against C# source files:
 - Retry MCP calls up to 3 times with 10s delay for transient failures.
 - If required application tools are missing in `tools/list`, stop with blocker.
 - If any tool returns `success=false`, stop with blocker and surface `error.message`.
-- If `application.create` returns an existing-app collision and the plan does not explicitly allow update flow, stop with blocker.
-- If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing `entity.create`.
+- If `application-create` returns an existing-app collision and the plan does not explicitly allow update flow, stop with blocker.
+- If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing `create-entity-schema`.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
-- If `application.get_info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
+- If `application-get-info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
 - Never synthesize success for `create-data-binding-db`; if the response cannot be parsed or does not contain `success=true` or `exit-code: 0`, stop with blocker.
 
 ## Steps
@@ -535,7 +536,7 @@ python3 scripts/mcp_schema_sync.py apply \
 **Fallback to individual tools:** If `schema-sync` is unavailable (older clio), use individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls sequentially, refreshing context after each mutation.
 
 **Critical validation:**
-- Created/updated schema MUST be immediately queryable through `application.get_info`
+- Created/updated schema MUST be immediately queryable through `application-get-info`
 - If schema is missing from server metadata after successful entity tool response, this is a core MCP blocker - stop immediately
 - Do NOT proceed if schema is in "Database update required" state
 
@@ -549,14 +550,14 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 
 - Stop with blocker if this run requires page sync but `plan.md` does not define explicit `FormPage` and `ListPage` sync steps.
 
-1. Call `page.list` with the app's package name to discover generated pages
+1. Call `page-list` with the app's package name to discover generated pages
 2. For each page that needs customization:
-   a. Call `page.get(schemaName)` to get the full JS body
+   a. Call `page-get` with `schema-name` to get the full JS body
    a1. **CRITICAL — Page body marker parsing:** Always use `page_body_tools.parse_marker_json(body, marker)` to parse marker content. **Never** use raw `json.loads()` — page bodies contain JavaScript with trailing commas that are valid JS but invalid strict JSON. The helper `strip_trailing_commas()` handles this automatically.
    b. Edit the body using the **Page Body Editing Algorithm** below — never use ad-hoc string manipulation
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
    d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
-   d1. If the page must change ListPage default sorting, use the canonical `ListPage DataGrid Sorting via page.update` contract from `context/ui-reference.md`
+   d1. If the page must change ListPage default sorting, use the canonical `ListPage DataGrid Sorting via page-update` contract from `context/ui-reference.md`
    d2. Read the live DataGrid `items` binding and identify the real collection attribute before changing sorting metadata
    d3. Only implement plain sortable-column order through DataGrid sorting metadata; if the requirement is semantic business order without an explicit sort key or approved runtime logic, stop with blocker instead of improvising
    e. For runtime FormPage field sync, append missing field inserts to `SideAreaProfileContainer` and continue `row` and `index` from the current maximum values
@@ -808,7 +809,7 @@ Include:
 - resolved payload fields
 - icon resolution details
 - MCP result (`contractType=short`, `success`, `packageUId`, `packageName`)
-- schema sync steps executed and refreshed through `application.get_info`
+- schema sync steps executed and refreshed through `application-get-info`
 - page sync steps executed and verification results for `FormPage` and `ListPage`
 - validation results for normalized contract
 - whether the run completed via create flow or existing-app update flow
@@ -819,7 +820,7 @@ Include:
 
 - Gate R passed
 - MCP initialize and tools/list succeeded
-- `application.create` executed successfully
+- `application-create` executed successfully
 - Result persisted to `mcp-application-result.json`
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`

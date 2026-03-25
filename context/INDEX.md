@@ -17,10 +17,10 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 
 | Task | Skill | Read | MCP Tools Used |
 |------|-------|------|----------------|
-| **Add/update entity columns** | `skills/entity-creation/SKILL.md` (139 lines) | L14-78 (What + Rules + Shapes), L101-139 (Response + Validation) | `entity.create`, `entity.create_lookup`, `entity.update`, `application.get_info` |
-| **Edit Freedom UI page** (add fields, handlers, buttons) | `skills/page-schema-editing/SKILL.md` (302 lines) | L14-69 (Context + MCP Tools), L110-227 (Workflow Steps), L229-280 (Rules + Validation) | `page.list`, `page.get`, `page.update` |
+| **Add/update entity columns** | `skills/entity-creation/SKILL.md` (139 lines) | L14-78 (What + Rules + Shapes), L101-139 (Response + Validation) | `schema-sync`, `create-entity-schema`, `create-lookup`, `update-entity-schema`, `application-get-info` |
+| **Edit Freedom UI page** (add fields, handlers, buttons) | `skills/page-schema-editing/SKILL.md` (302 lines) | L14-69 (Context + MCP Tools), L110-227 (Workflow Steps), L229-280 (Rules + Validation) | `page-list`, `page-get`, `component-info`, `page-update` |
 | **Generate new page schema** | `skills/page-creation/SKILL.md` (80 lines) | Full | None (file generation from templates) |
-| **Seed lookup data / create bindings** | `skills/data-bindings-creation/SKILL.md` (68 lines) | Full | `binding.get_columns`, `binding.create` |
+| **Seed lookup data / create bindings** | `skills/data-bindings-creation/SKILL.md` (68 lines) | Full | `get-entity-schema-properties`, `get-entity-schema-column-properties`, `create-data-binding-db` |
 | **Generate package descriptor** | `skills/package-descriptor-creation/SKILL.md` (60 lines) | Full | None (file generation) |
 
 **For targeted changes, also read:**
@@ -34,7 +34,7 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 |-------|------|-------------|
 | Naming rules, Usr prefix | `context/essentials.md` | L59-90 |
 | Clio CLI commands | `context/essentials.md` | L230-277 |
-| MCP client usage | `scripts/mcp_client.py` | Full (168 lines) |
+| MCP client usage | `scripts/mcp_client.py` | Full |
 | MCP tool API (all tools) | `context/mcp-application-tools-reference.md` | See per-tool index below |
 | Entity parent GUIDs | `context/schema-reference.md` | L7-29 |
 | DataValueType GUIDs | `context/schema-reference.md` | L64-111 |
@@ -43,8 +43,10 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | UI control types | `context/ui-reference.md` | L95-191 |
 | FormPage layout + fields | `context/ui-reference.md` | L508-605 |
 | ListPage DataTable | `context/ui-reference.md` | L192-278 |
-| viewConfigDiff field recipes | `context/viewconfig-reference.md` | L68-215 |
-| viewConfigDiff Button recipe | `context/viewconfig-reference.md` | L216-329 |
+| Deep container discovery | `context/viewconfig-reference.md` | L44-91 |
+| viewConfigDiff field recipes | `context/viewconfig-reference.md` | L119-263 |
+| viewConfigDiff Button recipe | `context/viewconfig-reference.md` | L271-383 |
+| Freedom UI component contracts | `context/mcp-application-tools-reference.md` | `component-info` section |
 | Handlers + SDK reference | `context/devkit-common-reference.md` | L1-30 (scope), L115-145 (safe defaults) |
 | Data bindings (SysModule, lookups) | `context/data-bindings-reference.md` | L81-141 |
 
@@ -72,7 +74,7 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | Agent 4 (Implementation) | agents/04-implementation.md | L1-105 (Role + MCP Workflow), then L204-462 (Steps) |
 | | context/mcp-application-tools-reference.md | L1-50 (Overview + Params), then per-tool sections below |
 | | context/ui-reference.md | L508-605 (FormPage Layout), L192-278 (ListPage DataTable) |
-| | context/viewconfig-reference.md | L68-215 (FormPage Field Recipes) |
+| | context/viewconfig-reference.md | L44-91 (Container Discovery), L119-263 (FormPage Field Recipes) |
 | | scripts/mcp_client.py | Full (168 lines) |
 
 ## File Map
@@ -184,14 +186,17 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | 606-658 | Lookup Special Cases + Field Types | Lookup binding, additional components |
 | 659-700 | Page Parents + Handlers + MCP | Template parents, handler specs, page tools |
 
-### context/viewconfig-reference.md (385 lines) — viewConfigDiff Recipes
+### context/viewconfig-reference.md (483 lines) — viewConfigDiff Recipes
 | Lines | Section | Description |
 |-------|---------|-------------|
 | 1-31 | Operations + Naming | 4 operation types, element naming conventions |
-| 32-67 | User Input + Exceptions | Parent container, entity-field sync, grid sync |
-| 68-215 | FormPage Field Recipes | All field types: Input, ComboBox, Checkbox, Date, Number, etc. |
-| 216-329 | Components (Button) | crt.Button with full property reference |
-| 330-385 | Editing Safety Contract | Safe JSON editing procedures |
+| 32-43 | User Input | Parent container requirement, `page-get` for discovery |
+| 44-91 | Deep Container Discovery | bundle.viewConfig parsing, fallback heuristics, container selection table |
+| 92-118 | Entity-Field / Grid Sync | Deterministic field and grid sync workflows |
+| 119-263 | FormPage Field Recipes | All field types: Input, ComboBox, Checkbox, Date, Number, etc. |
+| 271-383 | Components (Button) | crt.Button with full property reference |
+| 383-438 | Editing Safety Contract | Safe JSON editing procedures |
+| 439-483 | ResourceString Localization | #ResourceString(key)# macros, auto-derive, tab example |
 
 ### context/schema-reference.md (315 lines) — Schema GUIDs
 | Lines | Section | Description |
@@ -206,7 +211,7 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 ### context/data-bindings-reference.md (160 lines) — Data Bindings
 | Lines | Section | Description |
 |-------|---------|-------------|
-| 1-69 | MCP Binding Tools | get_columns and binding.create APIs |
+| 1-69 | MCP Binding & Schema Inspection Tools | get-entity-schema-properties, get-entity-schema-column-properties, create-data-binding-db, upsert-data-binding-row-db APIs |
 | 70-141 | Binding Structure + Targets | Directory layout, SysModule, SysModuleEntity, lookups |
 | 142-160 | ID Rules + Guidance | GUID generation, best practices |
 
@@ -257,7 +262,7 @@ When you need a specific MCP tool's API, read only its section from `context/mcp
 ### skills/page-schema-editing/SKILL.md (302 lines) — Edit Live Pages
 | Lines | Section | Description |
 |-------|---------|-------------|
-| 14-69 | Context + MCP Tools | Required reads, page.list/get/update signatures |
+| 14-69 | Context + MCP Tools | Required reads, page-list/page-get/page-update signatures |
 | 70-109 | Schema Body Format | AMD markers, section anatomy |
 | 110-156 | Workflow Steps 1-3 | Discover → Read → Modify body |
 | 157-207 | Steps 3a-3b | Sync entity fields into FormPage, adjust ListPage sorting |

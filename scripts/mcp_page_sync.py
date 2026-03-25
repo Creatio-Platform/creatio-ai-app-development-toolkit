@@ -125,20 +125,24 @@ def normalize_page_sync_plan(plan_payload, result_document):
             raise WorkflowError(f"Duplicate page sync entry for {page['schemaName']}")
         seen_page_names.add(page["schemaName"])
         normalized_pages.append(page)
-    return {
+    normalized = {
         "packageName": resolve_package_name(plan_payload, result_document),
         "pages": normalized_pages
     }
+    environment_name = plan_payload.get("environmentName") or plan_payload.get("environment-name")
+    if isinstance(environment_name, str) and environment_name:
+        normalized["environmentName"] = environment_name
+    return normalized
 
 
 def ensure_required_tools(client):
     tools = client.list_tools()
     tool_names = {tool["name"] for tool in tools}
-    required = {"page.list", "page.get", "page.update"}
+    required = {"page-list", "page-get", "page-update"}
     missing = sorted(required - tool_names)
     if missing:
         raise WorkflowError(f"Required MCP page tools are missing: {', '.join(missing)}")
-    return "page.sync" in tool_names or "page-sync" in tool_names
+    return "page-sync" in tool_names
 
 
 def ensure_success(tool_name, response):
@@ -157,7 +161,7 @@ def append_operation_and_persist(current_document, result_path, tool_name, targe
 def build_page_index(page_list_response):
     pages = page_list_response.get("pages")
     if not isinstance(pages, list):
-        raise WorkflowError("page.list response must contain pages array")
+        raise WorkflowError("page-list response must contain pages array")
     index = {}
     for page in pages:
         if not isinstance(page, dict):
@@ -169,9 +173,9 @@ def build_page_index(page_list_response):
 
 
 def get_page_body(page_response, schema_name):
-    body = page_response.get("body")
+    body = page_response.get("raw", {}).get("body")
     if not isinstance(body, str) or not body:
-        raise WorkflowError(f"page.get for {schema_name} did not return body")
+        raise WorkflowError(f"page-get for {schema_name} did not return body")
     return body
 
 
@@ -184,13 +188,17 @@ def verify_page_sync(page, original_body, updated_body):
 def merge_page_metadata(discovered_page, page_response):
     merged = copy.deepcopy(discovered_page)
     for key, value in page_response.items():
-        if key == "body":
+        if key in ("body", "raw"):
             continue
         merged[key] = copy.deepcopy(value)
     if "schemaName" not in merged and discovered_page.get("name"):
         merged["schemaName"] = discovered_page["name"]
-    if "bodyLength" not in merged and isinstance(page_response.get("body"), str):
-        merged["bodyLength"] = len(page_response["body"])
+    if "bodyLength" not in merged and isinstance(page_response.get("raw", {}).get("body"), str):
+        merged["bodyLength"] = len(page_response["raw"]["body"])
+    for meta_key in ("schemaUId", "packageName", "packageUId", "parentSchemaName"):
+        page_section = page_response.get("page", {})
+        if meta_key in page_section and meta_key not in merged:
+            merged[meta_key] = copy.deepcopy(page_section[meta_key])
     return merged
 
 
@@ -198,18 +206,18 @@ def sync_page(client, current_document, result_path, discovered_pages, page):
     schema_name = page["schemaName"]
     discovered_page = discovered_pages.get(schema_name)
     if not discovered_page:
-        raise WorkflowError(f"page.list did not return required page {schema_name}")
-    original_response = ensure_success("page.get", client.call_tool_json("page.get", {"schemaName": schema_name}))
-    current_document = append_operation_and_persist(current_document, result_path, "page.get", schema_name, "success", response=original_response)
+        raise WorkflowError(f"page-list did not return required page {schema_name}")
+    original_response = ensure_success("page-get", client.call_tool_json("page-get", {"schema-name": schema_name}))
+    current_document = append_operation_and_persist(current_document, result_path, "page-get", schema_name, "success", response=original_response)
     original_body = get_page_body(original_response, schema_name)
     dry_run_args = build_page_update_arguments(schema_name, page["body"], dry_run=True)
-    dry_run_response = ensure_success("page.update", client.call_tool_json("page.update", dry_run_args))
-    current_document = append_operation_and_persist(current_document, result_path, "page.update", schema_name, "validated", response=dry_run_response)
+    dry_run_response = ensure_success("page-update", client.call_tool_json("page-update", dry_run_args))
+    current_document = append_operation_and_persist(current_document, result_path, "page-update", schema_name, "validated", response=dry_run_response)
     save_args = build_page_update_arguments(schema_name, page["body"], dry_run=False)
-    save_response = ensure_success("page.update", client.call_tool_json("page.update", save_args))
-    current_document = append_operation_and_persist(current_document, result_path, "page.update", schema_name, "success", response=save_response)
-    verify_response = ensure_success("page.get", client.call_tool_json("page.get", {"schemaName": schema_name}))
-    current_document = append_operation_and_persist(current_document, result_path, "page.get", f"{schema_name}#verify", "success", response=verify_response)
+    save_response = ensure_success("page-update", client.call_tool_json("page-update", save_args))
+    current_document = append_operation_and_persist(current_document, result_path, "page-update", schema_name, "success", response=save_response)
+    verify_response = ensure_success("page-get", client.call_tool_json("page-get", {"schema-name": schema_name}))
+    current_document = append_operation_and_persist(current_document, result_path, "page-get", f"{schema_name}#verify", "success", response=verify_response)
     verification = verify_page_sync(page, original_body, get_page_body(verify_response, schema_name))
     evidence_response = merge_page_metadata(discovered_page, verify_response)
     current_document = attach_page_evidence(current_document, schema_name, verification, response=evidence_response)
@@ -225,27 +233,28 @@ def sync_pages_composite(client, current_document, result_path, discovered_pages
         schema_name = page["schemaName"]
         discovered_page = discovered_pages.get(schema_name)
         if not discovered_page:
-            raise WorkflowError(f"page.list did not return required page {schema_name}")
-        original_response = ensure_success("page.get", client.call_tool_json("page.get", {"schemaName": schema_name}))
-        current_document = append_operation_and_persist(current_document, result_path, "page.get", schema_name, "success", response=original_response)
+            raise WorkflowError(f"page-list did not return required page {schema_name}")
+        original_response = ensure_success("page-get", client.call_tool_json("page-get", {"schema-name": schema_name}))
+        current_document = append_operation_and_persist(current_document, result_path, "page-get", schema_name, "success", response=original_response)
         original_bodies[schema_name] = get_page_body(original_response, schema_name)
     page_sync_pages = []
     for page in pages:
-        page_sync_pages.append({
+        entry = {
             "schema-name": page["schemaName"],
             "body": page["body"]
-        })
-    sync_args = {
-        "environment-name": env_name,
-        "pages": page_sync_pages,
-        "validate": True,
-        "verify": True
-    }
-    sync_response = client.call_tool_json("page.sync", sync_args)
+        }
+        if page.get("resources"):
+            import json
+            entry["resources"] = json.dumps(page["resources"]) if isinstance(page["resources"], dict) else page["resources"]
+        page_sync_pages.append(entry)
+    sync_args = {"pages": page_sync_pages, "validate": True, "verify": True}
+    if env_name:
+        sync_args["environment-name"] = env_name
+    sync_response = client.call_tool_json("page-sync", sync_args)
     if sync_response.get("success") is not True:
         error = sync_response.get("error") or {}
         raise WorkflowError(error.get("message") or "page-sync failed")
-    current_document = append_operation_and_persist(current_document, result_path, "page.sync", "batch", "success", response=sync_response)
+    current_document = append_operation_and_persist(current_document, result_path, "page-sync", "batch", "success", response=sync_response)
     page_results = sync_response.get("pages") or []
     result_by_name = {pr.get("schemaName") or pr.get("schema-name"): pr for pr in page_results}
     for page in pages:
@@ -274,11 +283,11 @@ def apply_page_sync_plan(client, result_document, page_plan, result_path, report
     current_document = ensure_result_document(result_document)
     normalized_plan = normalize_page_sync_plan(page_plan, current_document)
     has_composite = ensure_required_tools(client)
-    page_list_response = ensure_success("page.list", client.call_tool_json("page.list", {"packageName": normalized_plan["packageName"]}))
-    current_document = append_operation_and_persist(current_document, result_path, "page.list", normalized_plan["packageName"], "success", response=page_list_response)
+    page_list_response = ensure_success("page-list", client.call_tool_json("page-list", {"package-name": normalized_plan["packageName"]}))
+    current_document = append_operation_and_persist(current_document, result_path, "page-list", normalized_plan["packageName"], "success", response=page_list_response)
     discovered_pages = build_page_index(page_list_response)
     if has_composite and len(normalized_plan["pages"]) > 0:
-        env_name = normalized_plan.get("environmentName") or "local"
+        env_name = normalized_plan.get("environmentName") or getattr(client, "environment_name", None)
         current_document = sync_pages_composite(client, current_document, result_path, discovered_pages, normalized_plan["pages"], env_name)
     else:
         for page in normalized_plan["pages"]:

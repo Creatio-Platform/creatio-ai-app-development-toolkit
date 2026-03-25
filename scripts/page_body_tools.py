@@ -108,13 +108,18 @@ def extract_list_columns(body):
     return []
 
 
-def build_page_update_arguments(schema_name, body, dry_run=False):
+def build_page_update_arguments(schema_name, body, dry_run=False, environment_name=None, resources=None):
     arguments = {
-        "schemaName": schema_name,
+        "schema-name": schema_name,
         "body": body
     }
+    if environment_name:
+        arguments["environment-name"] = environment_name
     if dry_run:
-        arguments["dryRun"] = True
+        arguments["dry-run"] = True
+    if resources:
+        import json
+        arguments["resources"] = json.dumps(resources) if isinstance(resources, dict) else resources
     return arguments
 
 

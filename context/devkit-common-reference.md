@@ -13,7 +13,7 @@ Important guardrails:
 - The root package barrel (`src/lib/index.ts`) also re-exports `base-exports`, `external/*`, and `internal/*`.
 - For generated code and instructions, treat the `public/**` subtree as the stable surface.
 - Do not switch to `internal/*` imports just because the root package technically exposes them.
-- For `page.get/page.update` tasks, this guide tells you which `sdk.*` exports are safe to use in page-body handlers, but it does not replace marker-based page-body editing.
+- For `page-get` / `page-update` tasks, this guide tells you which `sdk.*` exports are safe to use in page-body handlers, but it does not replace marker-based page-body editing.
 - For frontend-source tasks, this guide also covers decorators, bootstrap helpers, module registration, validators, converters, and custom view elements.
 
 ## Verified category map
@@ -29,7 +29,7 @@ Important guardrails:
 
 ## How to use this reference
 
-### For page-body handler work (`page.get/page.update`)
+### For page-body handler work (`page-get` / `page-update`)
 
 Most practical imports come from the services layer:
 
@@ -288,6 +288,5 @@ Prefer these exports when generating custom frontend modules or controls:
 ### What not to do by default
 
 - Do not treat root-barrel access to `internal/*` as permission to generate internal imports.
-- Do not replace page-body marker editing with frontend-source decorators when the task is specifically `page.get/page.update`.
+- Do not replace page-body marker editing with frontend-source decorators when the task is specifically `page-get` / `page-update`.
 - Do not assume every exported helper is appropriate for page-body handlers; many decorator and bootstrap helpers are meaningful only in frontend-source modules.
-

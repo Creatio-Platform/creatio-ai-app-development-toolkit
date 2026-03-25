@@ -84,8 +84,8 @@ class PageBodyToolsTests(unittest.TestCase):
 
     def test_build_page_update_arguments_uses_boolean_true_for_dry_run(self):
         arguments = build_page_update_arguments("UsrTest_FormPage", "body", dry_run=True)
-        self.assertEqual(arguments["schemaName"], "UsrTest_FormPage")
-        self.assertIs(arguments["dryRun"], True)
+        self.assertEqual(arguments["schema-name"], "UsrTest_FormPage")
+        self.assertIs(arguments["dry-run"], True)
 
     def test_verify_form_page_sync_rejects_new_lookup_actions(self):
         verification = verify_form_page_sync(
@@ -115,6 +115,91 @@ class PageBodyToolsTests(unittest.TestCase):
         self.assertEqual(attribute_paths["Name"], "PDS.Name")
         self.assertEqual(attribute_paths["PDS_Column16_lcbi4nq"], "PDS.Column16")
         self.assertNotIn("PDS_Column16_lcbi4nq_List", attribute_paths)
+
+    def test_build_page_update_arguments_accepts_environment_name(self):
+        args = build_page_update_arguments("UsrTest_FormPage", "body", environment_name="local")
+        self.assertEqual(args["environment-name"], "local")
+        self.assertNotIn("dry-run", args)
+
+    def test_build_page_update_arguments_without_environment_name(self):
+        args = build_page_update_arguments("UsrTest_FormPage", "body", dry_run=True)
+        self.assertNotIn("environment-name", args)
+        self.assertIs(args["dry-run"], True)
+
+
+class McpClientValidationTests(unittest.TestCase):
+    def test_rejects_wrong_param_names_for_application_create(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("application-create", {
+            "environment-name": "local",
+            "app-code": "UsrTest",
+            "app-name": "Test",
+            "template-code": "AppFreedomUI",
+            "icon-background": "#fff",
+        })
+        self.assertTrue(any("Use 'code'" in e for e in errors))
+        self.assertTrue(any("Use 'name'" in e for e in errors))
+        self.assertTrue(any("Missing required parameter 'code'" in e for e in errors))
+        self.assertTrue(any("Missing required parameter 'name'" in e for e in errors))
+
+    def test_validates_page_get_requires_kebab_case(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("page-get", {"environmentName": "local", "schemaName": "X"})
+        self.assertTrue(any("environment-name" in e for e in errors))
+        self.assertTrue(any("schema-name" in e for e in errors))
+
+    def test_application_delete_accepts_explicit_connection_without_environment_name(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("application-delete", {
+            "app-name": "UsrTest",
+            "uri": "http://localhost:5001",
+            "login": "Supervisor",
+            "password": "Supervisor",
+        })
+        self.assertEqual(errors, [])
+
+    def test_application_delete_requires_environment_or_explicit_connection(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("application-delete", {
+            "app-name": "UsrTest",
+        })
+        self.assertTrue(any("connection parameters" in e for e in errors))
+
+    def test_component_info_accepts_empty_args(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("component-info", {})
+        self.assertEqual(errors, [])
+
+    def test_component_info_rejects_camel_case_param_name(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("component-info", {"componentType": "crt.TabContainer"})
+        self.assertTrue(any("component-type" in e for e in errors))
+
+    def test_passes_valid_application_create(self):
+        from scripts.mcp_client import _validate_params
+        errors = _validate_params("application-create", {
+            "environment-name": "local",
+            "code": "UsrTest",
+            "name": "Test",
+            "template-code": "AppFreedomUI",
+            "icon-background": "#1F5F8B",
+        })
+        self.assertEqual(errors, [])
+
+    def test_build_page_update_arguments_with_resources_dict(self):
+        args = build_page_update_arguments("UsrTest_FormPage", "body",
+                                           environment_name="local",
+                                           resources={"UsrTab_caption": "My Tab"})
+        self.assertEqual(args["resources"], '{"UsrTab_caption": "My Tab"}')
+
+    def test_build_page_update_arguments_with_resources_string(self):
+        args = build_page_update_arguments("UsrTest_FormPage", "body",
+                                           resources='{"UsrTab_caption": "My Tab"}')
+        self.assertEqual(args["resources"], '{"UsrTab_caption": "My Tab"}')
+
+    def test_build_page_update_arguments_without_resources(self):
+        args = build_page_update_arguments("UsrTest_FormPage", "body")
+        self.assertNotIn("resources", args)
 
 
 if __name__ == "__main__":
