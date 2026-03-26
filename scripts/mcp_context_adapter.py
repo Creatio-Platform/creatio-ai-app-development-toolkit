@@ -18,8 +18,16 @@ class ContextError(ValueError):
 
 def first_text_value(payload, *keys):
     for key in keys:
-        if key in payload and payload[key] not in (None, ""):
-            return payload[key]
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+            continue
+        if value not in (None, ""):
+            return value
     return None
 
 
@@ -126,7 +134,7 @@ def normalize_entity_node(node, kind, name=None):
         raise ContextError("Entity schema name is required")
     entity = {
         "name": name,
-        "caption": node.get("caption") or node.get("Caption") or node.get("title") or name,
+        "caption": first_text_value(node, "caption", "Caption", "title") or name,
         "kind": kind,
         "columns": normalize_columns(node.get("columns", []))
     }

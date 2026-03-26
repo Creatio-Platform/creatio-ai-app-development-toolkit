@@ -130,9 +130,10 @@ def build_list_body(include_status):
 
 
 class FakePageClient:
-    def __init__(self, pages):
+    def __init__(self, pages, include_verified_body=True):
         self.pages = pages
         self.calls = []
+        self.include_verified_body = include_verified_body
 
     def list_tools(self):
         return [
@@ -201,15 +202,17 @@ class FakePageClient:
                 sn = page_payload["schema-name"]
                 page = self.pages[sn]
                 page["body"] = page_payload["body"]
-                results.append({
+                result = {
                     "schema-name": sn,
                     "schemaName": sn,
                     "success": True,
-                    "verifiedBody": page_payload["body"],
                     "uId": page["uId"],
                     "packageName": page["packageName"],
                     "parentSchemaName": page["parentSchemaName"]
-                })
+                }
+                if self.include_verified_body:
+                    result["verifiedBody"] = page_payload["body"]
+                results.append(result)
             return {"success": True, "pages": results}
         raise AssertionError(tool_name)
 
@@ -364,6 +367,40 @@ class McpPageSyncTests(unittest.TestCase):
         verification = persisted["pageEvidence"]["UsrTodoList_FormPage"]["verification"]
         self.assertTrue(verification["forbiddenComboboxActionsIntroduced"])
         self.assertFalse(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["machineChecked"])
+
+    def test_apply_page_sync_plan_falls_back_to_page_get_when_composite_response_has_no_verified_body(self):
+        pages = {
+            "UsrTodoList_FormPage": {
+                "uId": "11111111-1111-1111-1111-111111111111",
+                "packageName": "UsrTodoList",
+                "parentSchemaName": "PageWithTabsFreedomTemplate",
+                "body": build_form_body(False)
+            }
+        }
+        fake_client = FakePageClient(pages, include_verified_body=False)
+        result_document = build_result_document()
+        with temp_workdir() as temp_path:
+            result_path = temp_path / "mcp-application-result.json"
+            result_path.write_text(json.dumps(result_document), encoding="utf-8")
+            apply_page_sync_plan(
+                fake_client,
+                result_document,
+                {
+                    "packageName": "UsrTodoList",
+                    "pages": [
+                        {
+                            "schemaName": "UsrTodoList_FormPage",
+                            "kind": "form",
+                            "body": build_form_body(True),
+                            "requiredModelPaths": ["PDS.UsrStatus"]
+                        }
+                    ]
+                },
+                result_path
+            )
+            persisted = json.loads(result_path.read_text(encoding="utf-8"))
+        self.assertTrue(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["machineChecked"])
+        self.assertEqual([call[0] for call in fake_client.calls].count("page-get"), 2)
 
     def test_apply_page_sync_plan_rejects_missing_discovered_page(self):
         pages = {

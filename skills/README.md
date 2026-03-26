@@ -4,8 +4,8 @@ This directory contains **reference documents** that describe workflows and best
 
 ## Current Approach
 
-Agent 4 executes MCP `application.create` directly via curl commands documented in:
-- `agents/04-implementation.md` — Agent instructions with curl examples
+Agent 4 executes MCP `application-create` through the clio stdio client flow documented in:
+- `agents/04-implementation.md` — Agent instructions with stdio execution guidance
 - `context/mcp-application-tools-reference.md` — Complete MCP tools guide
 
 ## Skills as Reference Documentation

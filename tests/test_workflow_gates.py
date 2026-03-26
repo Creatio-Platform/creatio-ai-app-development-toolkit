@@ -29,6 +29,16 @@ def write_file(path, content):
     path.write_text(content, encoding="utf-8")
 
 
+@contextlib.contextmanager
+def temp_mode(path, mode):
+    original_mode = path.stat().st_mode
+    path.chmod(mode)
+    try:
+        yield
+    finally:
+        path.chmod(original_mode)
+
+
 def build_valid_request_spec():
     return {
         "sourcePrompt": "Generate a Todo app",
@@ -343,9 +353,8 @@ What should feel easy in the MVP:
                 "write-planning-state.sh",
                 "TodoList",
                 "tester",
+                "site-ready-now",
                 "http://localhost:5001",
-                "Supervisor",
-                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -399,9 +408,8 @@ What should feel easy in the MVP:
                 "write-planning-state.sh",
                 "TodoList",
                 "tester",
+                "site-ready-now",
                 "http://localhost:5001",
-                "Supervisor",
-                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -440,9 +448,8 @@ What should feel easy in the MVP:
                 "write-planning-state.sh",
                 "TodoList",
                 "tester",
+                "site-ready-now",
                 "http://localhost:5001",
-                "Supervisor",
-                "Supervisor",
                 "Todo app for daily work",
                 "Yes, proceed",
                 workflow_root=str(workflow_root)
@@ -459,6 +466,62 @@ What should feel easy in the MVP:
             result = run_script("check-approval-gate.sh", "TodoList", workflow_root=str(workflow_root))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("GATE_OK TodoList", result.stdout)
+
+    def test_write_approval_state_works_when_requirements_validator_is_not_executable(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(app_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            planning = run_script(
+                "write-planning-state.sh",
+                "TodoList",
+                "tester",
+                "site-ready-now",
+                "http://localhost:5001",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=str(workflow_root)
+            )
+            self.assertEqual(planning.returncode, 0, planning.stderr)
+            validator_path = ROOT / "scripts" / "validate-requirements-doc.sh"
+            with temp_mode(validator_path, 0o644):
+                approval = run_script(
+                    "write-approval-state.sh",
+                    "TodoList",
+                    "tester",
+                    "Approved, proceed",
+                    workflow_root=str(workflow_root)
+                )
+            self.assertEqual(approval.returncode, 0, approval.stderr)
+
+    def test_check_approval_gate_works_when_requirements_validator_is_not_executable(self):
+        with temp_workflow_root() as workflow_root:
+            app_dir = workflow_root / "output" / "TodoList"
+            write_file(app_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(app_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            planning = run_script(
+                "write-planning-state.sh",
+                "TodoList",
+                "tester",
+                "site-ready-now",
+                "http://localhost:5001",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=str(workflow_root)
+            )
+            self.assertEqual(planning.returncode, 0, planning.stderr)
+            approval = run_script(
+                "write-approval-state.sh",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=str(workflow_root)
+            )
+            self.assertEqual(approval.returncode, 0, approval.stderr)
+            validator_path = ROOT / "scripts" / "validate-requirements-doc.sh"
+            with temp_mode(validator_path, 0o644):
+                result = run_script("check-approval-gate.sh", "TodoList", workflow_root=str(workflow_root))
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

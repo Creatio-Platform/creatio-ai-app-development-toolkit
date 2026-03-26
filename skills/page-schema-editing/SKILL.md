@@ -166,9 +166,13 @@ page-get(schema-name: "TestApp1_ListPage")
 
 - ❌ Never use `body.find("}")` or brace-counting to locate insertion points — nested JS structures make positional brace search unreliable
 - ❌ Never insert raw JSON strings into the body without parsing the target section first — splicing text into unparsed JSON causes structural corruption (fields land inside wrong objects, attributes escape their parent container)
+- ❌ Never use `str.replace()` or string concatenation to inject JSON fragments — Creatio template bodies contain trailing commas (valid JS, invalid strict JSON); appending after a trailing comma produces double-comma `},,{` corruption that breaks the page at runtime
 - ❌ Never assume the viewModelConfig section type — always detect whether it is `viewModelConfig` (object) or `viewModelConfigDiff` (array); FormPage typically uses the object variant, ListPage uses the array variant
+- ❌ Never add columns to `viewConfigDiff` DataTable without adding matching `PDS_*` bindings to `viewModelConfigDiff` — columns without model paths render as empty/broken; every column `PDS_X` needs a corresponding attribute with `modelConfig.path: "PDS.X"`
 - ❌ Never verify edits by substring search alone (e.g., `"UsrStatus" in body`) — a field name can appear in a structurally broken body; always re-parse each edited section as JSON to confirm integrity
 - ❌ Never insert content at a position found by counting closing braces from an anchor string — the correct anchor is the marker boundary, not a brace position
+
+**Mandatory tooling:** Page body editing MUST use `scripts/page_body_edit.py` functions (`add_form_fields`, `add_list_columns`) or `scripts/page_body_tools.py` marker utilities (`parse_marker_json`, `extract_marker_text`). Direct string manipulation of page bodies is prohibited.
 
 **FormPage vs ListPage structural differences:**
 

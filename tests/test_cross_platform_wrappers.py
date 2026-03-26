@@ -1,0 +1,255 @@
+import contextlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import unittest
+import uuid
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_TMP_ROOT = ROOT / ".tmp-tests"
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+BASH = shutil.which("bash")
+PWSH = shutil.which("pwsh") or shutil.which("powershell")
+
+
+@contextlib.contextmanager
+def temp_workflow_root():
+    workdir = TEST_TMP_ROOT / f"tmp-{uuid.uuid4().hex}"
+    workdir.mkdir(parents=True, exist_ok=False)
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def write_file(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def build_valid_request_spec():
+    return {
+        "sourcePrompt": "Generate a Todo app",
+        "businessChecklist": {
+            "businessOutcome": {"complete": True, "value": "Track daily work", "source": "confirmed"},
+            "coreProblem": {"complete": True, "value": "Work is scattered across notes and chat", "source": "confirmed"},
+            "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks", "source": "confirmed"},
+            "domainModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
+            "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
+            "businessLogic": {"complete": True, "value": "Title is required; duplicates are handled manually; tasks can be archived; editing is shared", "source": "confirmed"},
+            "uxExpectations": {"complete": True, "value": "List and form pages are required", "source": "confirmed"},
+            "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp", "source": "confirmed"},
+            "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks", "source": "confirmed"},
+            "analytics": {"complete": True, "value": "Track tasks created and completed by period", "source": "confirmed"},
+            "accessRestrictions": {"complete": True, "value": "No specific access restrictions are required by default.", "source": "confirmed"},
+            "complete": True,
+        },
+        "technicalInputs": {
+            "environmentMode": "planning-first",
+            "credentialsStatus": "deferred",
+        },
+        "assumptions": [
+            "Single user scope for MVP",
+        ],
+    }
+
+
+def build_valid_requirements_doc(app_name="TodoList"):
+    return f"""# {app_name} - Requirements
+
+## 1. Business context
+
+Short business opening paragraph.
+
+System value:
+- Shared registry instead of scattered notes
+
+MVP success criteria:
+- New records are created quickly
+
+## 2. Users, access and ownership
+
+Primary roles:
+- Sales manager: creates and updates records
+
+Access model:
+- Shared workspace for the team
+
+## 3. Core process and business logic
+
+Typical process:
+1. Create the main record.
+
+Lifecycle:
+- Main record: New, Active, Archived
+
+Key business logic:
+- Records live in one shared registry
+
+Operational metrics:
+- Active records by owner
+
+## 4. Data model
+
+### 4.1 Main entity: Task
+
+Title: Task
+Code: `UsrTask`
+Entity role: `main`
+Primary display field: `Name`
+Description: Main work item.
+Purpose: Main work item.
+
+| Title | Code | Description | Data type | Required | Default |
+| --- | --- | --- | --- | --- | --- |
+| Name | `Name` | Task title | Short text | Yes | - |
+| Status | `UsrStatusId` | Task lifecycle state | Lookup | Yes | ui default: New |
+
+Minimum to create:
+- Name
+- Status
+
+### 4.2 Lookups
+
+- Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
+
+### 4.3 Relationships
+
+- Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
+
+## 5. UX assumptions
+
+What should feel easy in the MVP:
+- default list columns: Name, Status
+- default main filters: Status
+
+## Assumptions used for the draft requirements
+
+- MVP uses a single workflow.
+"""
+
+
+def wrapper_env(workflow_root):
+    env = os.environ.copy()
+    env["WORKFLOW_ROOT_DIR"] = str(workflow_root)
+    env["WORKFLOW_STATE_DIR"] = str(Path(workflow_root) / ".workflow-state")
+    return env
+
+
+def run_bash_script(script_name, *args, workflow_root):
+    if not BASH:
+        raise unittest.SkipTest("bash is required")
+    return subprocess.run(
+        [BASH, str(ROOT / "scripts" / script_name), *args],
+        cwd=ROOT,
+        env=wrapper_env(workflow_root),
+        text=True,
+        capture_output=True,
+    )
+
+
+def run_powershell_script(script_name, *args, workflow_root):
+    if not PWSH:
+        raise unittest.SkipTest("PowerShell is required")
+    return subprocess.run(
+        [PWSH, "-NoProfile", "-File", str(ROOT / "scripts" / script_name), *args],
+        cwd=ROOT,
+        env=wrapper_env(workflow_root),
+        text=True,
+        capture_output=True,
+    )
+
+
+class UnixWrapperSmokeTests(unittest.TestCase):
+    def test_find_python_sh_exports_python_cmd(self):
+        if not BASH:
+            raise unittest.SkipTest("bash is required")
+        result = subprocess.run(
+            [BASH, "-lc", f"source '{ROOT / 'scripts' / 'find_python.sh'}' >/dev/null && test -n \"$PYTHON_CMD\" && \"$PYTHON_CMD\" --version"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_workflow_gate_sh_runs_full_gate_flow(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir = Path(workflow_root) / "output" / "TodoList"
+            write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            planning = run_bash_script(
+                "workflow_gate.sh",
+                "plan-approve",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(planning.returncode, 0, planning.stderr)
+            approval = run_bash_script(
+                "workflow_gate.sh",
+                "requirements-approve",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(approval.returncode, 0, approval.stderr)
+            self.assertIn("GATE_OK TodoList", approval.stdout)
+
+
+class PowerShellWrapperSmokeTests(unittest.TestCase):
+    def test_planning_wrappers_work_in_powershell(self):
+        with temp_workflow_root() as workflow_root:
+            write_result = run_powershell_script(
+                "write-planning-state.ps1",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(write_result.returncode, 0, write_result.stderr)
+            check_result = run_powershell_script("check-planning-gate.ps1", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(check_result.returncode, 0, check_result.stderr)
+            self.assertIn("PLANNING_GATE_OK TodoList", check_result.stdout)
+
+    def test_approval_wrappers_work_in_powershell(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir = Path(workflow_root) / "output" / "TodoList"
+            write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            planning_result = run_powershell_script(
+                "write-planning-state.ps1",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
+            approval_result = run_powershell_script(
+                "write-approval-state.ps1",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
+            check_result = run_powershell_script("check-approval-gate.ps1", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(check_result.returncode, 0, check_result.stderr)
+            self.assertIn("GATE_OK TodoList", check_result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

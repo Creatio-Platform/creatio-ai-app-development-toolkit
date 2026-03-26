@@ -33,9 +33,10 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
 - For lookup-backed `schema default`, use the seeded row GUID in `defaultValue`
+- `Binary`, `Image`, `File`, and `Blob` columns do not support `defaultValueSource=Const`
 
 **Data Binding & Schema Inspection (MCP-assisted)**
-- `get-entity-schema-properties` returns column names, UIds, and data value types for deployed schemas (requires `environment-name`, `package-name`, `schema-name`)
+- `get-entity-schema-properties` returns a schema summary object with column entries for deployed schemas; use the returned columns for machine-readable verification and respect each column's `source` (`own` or `inherited`) (requires `environment-name`, `package-name`, `schema-name`)
 - `get-entity-schema-column-properties` returns detailed metadata for a single column (also requires `column-name`)
 - `create-data-binding-db` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately (requires `environment-name`, `package-name`, `schema-name`)
 - `upsert-data-binding-row-db` upserts a single row in an existing data binding (requires `environment-name`, `package-name`, `schema-name`, `values`)
@@ -139,7 +140,7 @@ packages/<PackageName>/
 ├── Data/
 │   ├── SysModule_UsrEntity/           ← register section
 │   ├── SysModuleEntity_UsrEntity/     ← bind entity to section
-│   └── UsrLookup_Lookup/              ← seed lookup values
+│   └── UsrLookup/                     ← seed lookup values (default binding name is schema name)
 └── Files/                             ← optional C# code
 ```
 
@@ -158,8 +159,8 @@ Primary generation flow:
    - Use `schema-sync` to batch all entity operations (create-lookup + seed + update-entity) in one MCP call
    - After `schema-sync` completes, refresh context once with `application-get-info`
    - Overwrite `mcp-application-result.json` with updated state
-   - Fallback: individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls
-7. If explicit data bindings required, use `binding-get-columns` and `create-data-binding-db`
+   - Fallback: individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls, omitting `binding-name` for default lookup seed bindings
+7. If explicit data bindings required, use `create-data-binding-db`
 
 **Critical pattern:** Always call `application-get-info` after entity mutations complete and verify schema is immediately queryable (not in "Database update required" state).
 **Critical pattern:** Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity with `update-entity-schema` unless requirements define an additional distinct business object.
@@ -182,8 +183,7 @@ r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
 - `create-lookup` — Create BaseLookup entity (individual, prefer `schema-sync`)
 - `create-entity-schema` — Create BaseEntity entity (individual, prefer `schema-sync`)
 - `update-entity-schema` — Add/update columns (individual, prefer `schema-sync`)
-- `binding-get-columns` — Query deployed schema metadata
-- `create-data-binding-db` — Seed lookup data (individual, prefer `schema-sync` with `seed-rows`)
+- `create-data-binding-db` — Seed lookup data (individual, prefer `schema-sync` with `seed-rows`; omit `binding-name` by default to reuse `<schema-name>` binding)
 - `component-info` — Inspect curated Freedom UI component contracts locally
 - `page-list` — Discover Freedom UI pages
 - `page-get` — Read page body (still individual — needed before `page-sync`)

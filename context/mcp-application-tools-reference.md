@@ -1,8 +1,7 @@
 # MCP Application Tools Reference Guide
 
 > **⚠️ Transport Notice:** All MCP calls use **clio stdio transport** via `scripts/mcp_client.py`, not HTTP/SSE.
-> The HTTP endpoint examples in this file are **parameter reference only** — do NOT copy curl commands as execution patterns.
-> Use `python3 scripts/mcp_client.py <tool-name> '<args-json>'` for all actual calls.
+> Use `python3 scripts/mcp_client.py <tool-name> <args-json>` for legacy positional mode, or prefer `--args-file` / `--args-stdin` for JSON-heavy payloads. PowerShell examples should use `py -3` or `$env:PYTHON_CMD`. Do not use curl as an MCP execution pattern.
 > Tool names use dashes: `application-create`, `create-lookup`, `update-entity-schema` (not dots).
 > Supported released runtime is `clio` `8.0.2.37+`. `CLIO_CMD` may override the executable path, but it must still resolve to a compatible released version.
 
@@ -26,10 +25,10 @@ Standard ADAC flow stores credentials in `.creatio-env.json` and passes the regi
 
 **Parameters by tool:**
 - `schema-sync` — `environment-name`, `package-name`, `operations` (array of batch operations)
-- `page-sync` — `environment-name`, `pages` (array with optional `resources`), `validate` (bool), `verify` (bool)
+- `page-sync` — `environment-name`, `pages` (array of page objects with `schema-name`, `body`, optional `resources`)
 - `create-lookup` — `package-name`, `schema-name`, `title`
 - `update-entity-schema` — `package-name`, `schema-name`, `operations` (list)
-- `create-data-binding-db` — `package-name`, `schema-name`, `binding-name`, `rows` (JSON string)
+- `create-data-binding-db` — `package-name`, `schema-name`, optional `binding-name`, `rows` (JSON string)
 - `component-info` — `component-type` (optional), `search` (optional)
 - `page-get` — `schema-name` (required), `environment-name` (optional)
 - `page-update` — `schema-name`, `body` (required); `resources` (JSON string, optional), `dry-run` (boolean, optional), `environment-name` (optional)
@@ -299,7 +298,7 @@ main_entity_name = data['entities'][0]['name']  # e.g., "UsrTodoList"
 - Creating entities that inherit from BaseEntity
 - For lookup entities, use `create-lookup` instead (kebab params, inherits from BaseLookup)
 
-**columnsJson supported types:** `ShortText`, `MediumText`, `LongText`, `MaxSizeText`, `Integer`, `Float`, `Boolean`, `Date`, `DateTime`, `Time`, `Lookup` (requires `reference-schema-name`)
+**columnsJson supported types:** `ShortText`, `MediumText`, `LongText`, `MaxSizeText`, `Integer`, `Float`, `Boolean`, `Date`, `DateTime`, `Time`, `Lookup` (requires `reference-schema-name`), `Binary`, `Image`, `File` (`Blob` is accepted as an alias for `Binary`)
 
 **Example:**
 
@@ -388,8 +387,8 @@ r = call_mcp_tool('create-lookup', {
 | `indexed` | `True` / `False` | Optional. Create DB index |
 | `cloneable` | `True` / `False` | Optional. Include when cloning records |
 | `track-changes` | `True` / `False` | Optional. Track column value changes |
-| `default-value` | `"<guid>"` | Optional. Constant default value. NOT `"defaultValue"` |
-| `default-value-source` | `"Const"` / `"None"` | Optional. NOT `"defaultValueSource"` |
+| `default-value` | `"<guid>"` | Optional. Constant default value. NOT `"defaultValue"`. For lookup defaults, use the seeded row GUID. `Binary` (alias: `Blob`), `Image`, and `File` do not support constant defaults |
+| `default-value-source` | `"Const"` / `"None"` | Optional. NOT `"defaultValueSource"`. `Binary` (alias: `Blob`), `Image`, and `File` do not support `Const` |
 | `multiline-text` | `True` / `False` | Optional. Multi-line text flag |
 | `localizable-text` | `True` / `False` | Optional. Localizable text flag |
 | `accent-insensitive` | `True` / `False` | Optional. Accent-insensitive search flag |
@@ -438,7 +437,7 @@ r = call_mcp_tool('update-entity-schema', {
 
 ### 8. Schema Inspection Tools
 
-**Purpose:** Discover column names, UIds, and data types for deployed entities (e.g., Contact, SysModule, SysModuleEntity).
+**Purpose:** Discover schema summary metadata plus machine-readable column entries for deployed entities (e.g., Contact, SysModule, SysModuleEntity).
 
 #### `get-entity-schema-properties`
 
@@ -455,28 +454,49 @@ r = call_mcp_tool('get-entity-schema-properties', {
     'package-name': 'UsrMyApp',
     'schema-name': 'Contact',
 })
-columns = r['data']
+schema = r['data']
+columns = schema['columns']
 ```
 
 **Response Format:**
 ```json
-[
-  {
-    "name": "Id",
-    "uId": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
-    "dataValueTypeName": "Guid",
-    "dataValueTypeUId": "23018567-a13c-4320-8687-fd6f9e3699bd",
-    "isRequired": true,
-    "referenceSchemaName": null
-  },
-  {
-    "name": "Name",
-    "uId": "a5cca792-47dd-428a-83fb-5c92bdd97ff8",
-    "dataValueTypeName": "MediumText",
-    "isRequired": true
-  }
-]
+{
+  "name": "Contact",
+  "title": "Contact",
+  "parent-schema-name": "BaseEntity",
+  "u-id": "688a3176-2830-45d7-bfbb-18e922600e7b",
+  "primary-display-column-name": "Name",
+  "columns": [
+    {
+      "name": "Id",
+      "u-id": "ae0e45ca-c495-4fe7-a39d-3ab7278e1617",
+      "source": "inherited",
+      "title": "Id",
+      "description": null,
+      "type": "Guid",
+      "required": true,
+      "indexed": true,
+      "reference-schema-name": null
+    },
+    {
+      "name": "Name",
+      "u-id": "a5cca792-47dd-428a-83fb-5c92bdd97ff8",
+      "source": "own",
+      "title": "Name",
+      "description": null,
+      "type": "MediumText",
+      "required": true,
+      "indexed": false,
+      "reference-schema-name": null
+    }
+  ]
+}
 ```
+
+**Interpretation rules:**
+- Use the top-level object as the schema summary.
+- Use the returned column entries for machine-readable verification and diff planning.
+- Each column entry includes `source` (`own` or `inherited`); do not turn inherited/base columns into new requirements.
 
 #### `get-entity-schema-column-properties`
 
@@ -496,8 +516,12 @@ Returns detailed metadata for a single column.
 - `environment-name` — registered clio environment name
 - `package-name` — package string name — **NOT a GUID**
 - `schema-name` — entity schema name (e.g., "UsrTodoStatus")
-- `binding-name` — binding folder name (e.g., "UsrTodoStatus_Lookup") — NOT `bindingName`
 - `rows` — JSON **string** of `[{"values": {"Name": "New"}}, ...]` format — NOT `rowsJson`
+
+**Optional parameters:**
+- `binding-name` — binding folder name for explicit/manual scenarios — NOT `bindingName`
+  - Omit it for the default lookup-seeding path so the tool uses `<schema-name>`.
+  - Do not create a second lookup binding for the same `package-name + schema-name` by switching to a different name such as `<schema>_Lookup` unless the task explicitly requires a separate artifact.
 
 **rows format:**
 ```json
@@ -535,7 +559,6 @@ r = call_mcp_tool('create-data-binding-db', {
     'environment-name': 'local',
     'package-name': 'UsrTodoList',          # ✅ string name, NOT GUID
     'schema-name': 'UsrTodoStatus',
-    'binding-name': 'UsrTodoStatus_Lookup', # ✅ NOT 'bindingName', NOT 'dataName'
     'rows': rows,                           # ✅ JSON string, NOT 'rowsJson'
 })
 ```
@@ -554,7 +577,6 @@ r = call_mcp_tool('create-data-binding-db', {
     'environment-name': 'local',
     'package-name': 'UsrTodoList',
     'schema-name': 'UsrTodoStatus',
-    'binding-name': 'UsrTodoStatus_Lookup',
     'rows': rows,
 })
 
@@ -693,19 +715,15 @@ r = call_mcp_tool('schema-sync', {
 
 ### 9b. Page Sync (page-sync)
 
-**Purpose:** Update multiple Freedom UI page schemas in a single MCP call with built-in validation.
+**Purpose:** Update multiple Freedom UI page schemas in a single MCP call.
 
 **Tool name:** `page-sync`
 
-**⚠️ Parameter naming:** `page-sync` uses the same **kebab-case** request contract as the individual page tools: `environment-name`, `schema-name`, `search-pattern`, `package-name`, `dry-run`.
+**⚠️ Parameter naming:** `page-sync` uses the same **kebab-case** request contract as the other MCP tools. The executable payload is `environment-name` plus `pages`.
 
 **Required parameters:**
 - `environment-name` — registered clio environment name
 - `pages` — array of page objects to update
-
-**Optional parameters:**
-- `validate` — run client-side validation (markers + JS syntax) before saving. Default: `true`
-- `verify` — re-read each page after saving to confirm. Default: `false`
 
 **Page object:**
 
@@ -716,11 +734,10 @@ r = call_mcp_tool('schema-sync', {
 | `resources` | string | No | JSON object of `#ResourceString(key)#` values, e.g. `'{"UsrDetailsTab_caption": "Details"}'`. Usr-prefixed keys without explicit values are auto-derived from key names. |
 
 **Execution behavior:**
-- Validates each page client-side (if `validate: true`) before sending to Creatio
 - Saves each page via DesignerService
-- If verify is enabled, re-reads each page after save to confirm
 - Continues processing remaining pages on failure (unlike `schema-sync` which stops)
 - Single lock acquisition and single Thread.Sleep for entire batch
+- `page-sync` is the preferred fast write path; local helpers must keep a fallback `page-get` verification pass when the response does not include a reusable verified body
 
 **Workflow:**
 1. Read current page raw bodies via individual `page-get` calls (extract from `raw.body`)
@@ -743,7 +760,6 @@ r = call_mcp_tool('page-sync', {
             'body': edited_list_body,
         },
     ],
-    'validate': True,
 })
 ```
 
@@ -770,7 +786,7 @@ r = call_mcp_tool('page-sync', {
 }
 ```
 
-**Note:** `page-get` and `page-list` are still used individually for reading pages and discovering page schemas. `page-sync` replaces only the write portion of the page workflow.
+**Note:** `page-get` and `page-list` are still used individually for reading pages and discovering page schemas. `page-sync` is the preferred write portion of the workflow, and helper-level verification must fall back to `page-get` when the server response does not expose a reusable verified body.
 
 ## Error Handling
 
@@ -975,7 +991,6 @@ r4 = call_mcp_tool('page-sync', {
         {'schema-name': 'UsrMyApp_FormPage', 'body': edited_form_body},
         {'schema-name': 'UsrMyApp_ListPage', 'body': edited_list_body},
     ],
-    'validate': True,
 })
 assert r4['data']['success'], f"page-sync failed: {r4}"
 ```
@@ -1015,7 +1030,6 @@ r3 = call_mcp_tool('create-data-binding-db', {
     'environment-name': 'local',
     'package-name': package_name,
     'schema-name': 'UsrMyStatus',
-    'binding-name': 'UsrMyStatus_Lookup',
     'rows': rows,
 })
 
@@ -1381,6 +1395,9 @@ Primary types:
 - `Boolean` - true/false
 - `DateTime` - date and time
 - `Lookup` - reference to another entity (requires `reference-schema-name`)
+- `Binary` - generic binary payload
+- `Image` - image payload
+- `File` - file payload
 
 Text variants (with aliases):
 - `ShortText` (alias: `Text50`) - up to 50 chars
@@ -1403,7 +1420,7 @@ Numeric variants:
 - `Decimal0` through `Decimal8` - decimal with 0-8 places
 - `Currency0` through `Currency3` - currency with 0-3 decimal places
 
-Both the primary name and alias are accepted (e.g., `ShortText` and `Text50` are equivalent).
+Both the primary name and alias are accepted (e.g., `ShortText` and `Text50` are equivalent, `Binary` and `Blob` are equivalent).
 
 **Template Codes:**
 

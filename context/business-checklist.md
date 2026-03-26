@@ -8,19 +8,14 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 
 | # | Section | Required |
 |---|---------|----------|
-| 1 | Business Outcome | yes |
-| 2 | Core Problem | yes |
-| 3 | Actors and Roles | yes |
-| 4 | Domain Model | yes |
-| 5 | Lifecycle and Statuses | yes |
-| 6 | Business Logic | yes |
-| 7 | UX Expectations | yes |
-| 8 | Edge Cases and Exceptions | default/assumed |
-| 9 | Acceptance Criteria | yes |
-| 10 | Access / Personas | yes |
-| 11 | Assumptions | yes |
+| 1 | Business context | yes |
+| 2 | Users, access and ownership | yes |
+| 3 | Core process and business logic | yes |
+| 4 | Data model | yes |
+| 5 | UX assumptions | yes |
+| 6 | Assumptions used for the draft requirements | yes |
 
-Sections 1–7 and 9–11 may never be omitted. Section 8 may be captured as an explicit assumption when no edge cases arise.
+Sections 1–5 and the assumptions block may never be omitted. Edge cases, acceptance criteria, and analytics should be resolved inside sections 1–5 or captured explicitly in assumptions when they do not materially change the business intent.
 
 The plan body shown for Gate R approval must follow this structure exactly. A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
@@ -57,7 +52,7 @@ If they do not materially change scope, include them as explicit assumptions ins
 
 ## Checklist Items
 
-## 1. Business Outcome
+## 1. Business context
 
 Required:
 - app purpose
@@ -68,21 +63,43 @@ Required:
 
 The first discovery questions should focus here before moving into lower-level detail.
 
-## 2. Core Problem
-
-Required:
-- current operational pain points
-- visibility, coordination, manual work, or system gaps the app should address
-- why the current process is insufficient
-
-## 3. Actors and Roles
+## 2. Users, access and ownership
 
 Required:
 - who uses the app
 - who can create/update/close records
 - who owns key approvals or responsibilities
+- whether record ownership or confidentiality rules are required
 
-## 4. Domain Model
+If restrictions are not essential, explicitly state:
+- `No specific access restrictions are required by default.`
+
+Do not suggest optional restrictions without a business reason.
+
+## 3. Core process and business logic
+
+Required:
+- current operational pain points
+- visibility, coordination, manual work, or system gaps the app should address
+- why the current process is insufficient
+- lifecycle stages/statuses
+- transition expectations when restrictions matter
+- required fields
+- defaults
+- validation expectations
+- restrictions and edge constraints
+- minimum fields required to create the main record
+- duplicate handling posture
+- archive/close posture
+- ownership/editing posture
+- operational metrics
+- usage or participation metrics when relevant
+- business impact metrics or KPI signals when relevant
+- a simple business funnel when the process naturally supports one
+
+If full metric detail is missing, define a practical draft set and mark it as an assumption.
+
+## 4. Data model
 
 Required:
 - main entities
@@ -97,31 +114,7 @@ Resolve these ambiguities explicitly when they appear in the request:
 - if a secondary entity is proposed, state why it is a distinct business object instead of additional fields on the main entity
 - if contact-like records are present, state whether they are subordinate to one parent record or may exist independently
 
-## 5. Lifecycle and Statuses
-
-Default unless critical:
-- lifecycle stages/statuses
-- transition expectations when restrictions matter
-
-If the request mentions a pipeline, funnel, or stages, clarify whether the lifecycle state belongs to the main record or to a separate transactional record.
-
-If the developer does not define lifecycle detail, propose a practical default and mark it as an assumption.
-
-## 6. Business Logic
-
-Default unless critical:
-- required fields
-- defaults
-- validation expectations
-- restrictions and edge constraints
-- minimum fields required to create the main record
-- duplicate handling posture
-- archive/close posture
-- ownership/editing posture
-
-If a requirement changes compliance, ownership, or acceptance outcome, treat it as required clarification instead of a default.
-
-## 7. UX Expectations
+## 5. UX assumptions
 
 Default unless critical:
 - list page columns
@@ -144,41 +137,19 @@ The BA draft must surface these defaults in the `UX assumptions` section:
 
 The visible BA draft should render the UX section as a short bullet list, not as a table.
 
-## 8. Edge Cases and Exceptions
+## Assumptions used for the draft requirements
 
-Ask only if business-critical:
-- exceptional flows
-- invalid input behavior
-- conflict/duplicate handling if relevant
+Default unless critical:
+- required fields
+- defaults
+- validation expectations
+- restrictions and edge constraints
+- minimum fields required to create the main record
+- duplicate handling posture
+- archive/close posture
+- ownership/editing posture
 
-If the omission does not affect compliance or acceptance, capture the default handling as an assumption.
-
-## 9. Acceptance Criteria
-
-Required:
-- concrete business-level checks that define "done"
-
-## 10. Personas, Access Restrictions, and Ownership Boundaries
-
-Required:
-- the main personas and their business responsibilities
-- whether record ownership or confidentiality rules are required
-
-If restrictions are not essential, explicitly state:
-- `No specific access restrictions are required by default.`
-
-Do not suggest optional restrictions without a business reason.
-
-## 11. Analytics
-
-Required at least at draft level:
-- operational metrics
-- usage or participation metrics when relevant
-- business impact metrics or KPI signals when relevant
-- a simple business funnel when the process naturally supports one
-
-If full metric detail is missing, define a practical draft set and mark it as an assumption.
-In the BA draft, analytics may be captured as a compact subsection of the core process and business logic section instead of a separate top-level section when that reduces repetition.
+If a requirement changes compliance, ownership, or acceptance outcome, treat it as required clarification instead of a default.
 
 ## Business Logic Quality Bar
 

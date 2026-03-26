@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import json
 import shutil
 import sys
@@ -15,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
-from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
+from scripts.mcp_schema_sync import ClioStdioClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
 
 
 @contextlib.contextmanager
@@ -416,6 +417,45 @@ def build_edited_context_with_invalid_lookup_default():
     }
 
 
+def build_edited_context_with_invalid_binary_default():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "entityUId": "33333333-3333-3333-3333-333333333333",
+                        "name": "UsrMyEntity",
+                        "caption": "My Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "UsrName",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            },
+                            {
+                                "name": "UsrAttachment",
+                                "caption": "Attachment",
+                                "dataValueTypeName": "Blob",
+                                "defaultValueSource": "Const",
+                                "defaultValue": "abc123"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
 class FakeMcpClient:
     def __init__(self, context_document):
         self.context_document = context_document
@@ -683,6 +723,19 @@ class McpSchemaSyncTests(unittest.TestCase):
             ]
         )
 
+    def test_build_sync_plan_omits_modify_title_when_caption_is_whitespace(self):
+        current_context = build_current_result_document_with_lookup_status()["editableContext"]
+        edited_context = copy.deepcopy(build_edited_context_with_default_update())
+        target_entity = edited_context["packages"][0]["entities"][0]
+        target_column = target_entity["columns"][0]
+        target_column["caption"] = "   "
+
+        sync_plan = build_sync_plan(current_context, edited_context)
+        operations = sync_plan["actions"][0]["arguments"]["operations"]
+
+        self.assertEqual(operations[0]["action"], "modify")
+        self.assertNotIn("title", operations[0])
+
     def test_build_sync_plan_rejects_existing_entity_caption_update(self):
         current_context = build_current_result_document()["editableContext"]
         with self.assertRaisesRegex(
@@ -691,6 +744,14 @@ class McpSchemaSyncTests(unittest.TestCase):
         ):
             build_sync_plan(current_context, build_edited_context_with_caption_update())
 
+    def test_build_sync_plan_ignores_caption_update_when_only_whitespace_differs(self):
+        current_context = build_current_result_document()["editableContext"]
+        edited_context = build_edited_context_with_caption_update()
+        edited_context["packages"][0]["entities"][0]["caption"] = "  My Entity  "
+
+        sync_plan = build_sync_plan(current_context, edited_context)
+        self.assertEqual(sync_plan["actions"], [])
+
     def test_build_sync_plan_rejects_lookup_default_caption_instead_of_guid(self):
         current_context = build_current_result_document_with_lookup_status()["editableContext"]
         with self.assertRaisesRegex(
@@ -698,6 +759,19 @@ class McpSchemaSyncTests(unittest.TestCase):
             "Lookup column UsrStatus requires defaultValue as a seeded row GUID"
         ):
             build_sync_plan(current_context, build_edited_context_with_invalid_lookup_default())
+
+    def test_build_sync_plan_rejects_const_default_for_binary_like_columns(self):
+        current_context = build_current_result_document()["editableContext"]
+        for column_type in ("Blob", "Binary", "Image", "File"):
+            with self.subTest(column_type=column_type):
+                edited_context = copy.deepcopy(build_edited_context_with_invalid_binary_default())
+                attachment_column = edited_context["packages"][0]["entities"][0]["columns"][1]
+                attachment_column["dataValueTypeName"] = column_type
+                with self.assertRaisesRegex(
+                    WorkflowError,
+                    f"Column UsrAttachment with type {column_type} does not support defaultValueSource Const"
+                ):
+                    build_sync_plan(current_context, edited_context)
 
     def test_apply_sync_plan_refreshes_canonical_result_after_batch(self):
         result_document = build_current_result_document()
@@ -765,41 +839,37 @@ class McpSchemaSyncTests(unittest.TestCase):
 
 
 class LoadMcpClientTests(unittest.TestCase):
-    def test_load_mcp_client_returns_http_client_when_mcp_url_present(self):
+    def test_load_mcp_client_returns_stdio_client_for_minimal_env(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"mcpUrl": "http://localhost:5001/mcp", "environment": "local"}, f)
-            f.flush()
-            client = load_mcp_client(f.name)
-        self.assertIsInstance(client, McpHttpClient)
-
-    def test_load_mcp_client_returns_stdio_client_for_stdio_transport(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"mcpTransport": "stdio", "environment": "local"}, f)
+            json.dump({"environment": "local"}, f)
             f.flush()
             client = load_mcp_client(f.name)
         self.assertIsInstance(client, ClioStdioClient)
         self.assertEqual(client.environment_name, "local")
 
-    def test_load_mcp_client_raises_without_environment_for_stdio(self):
+    def test_load_mcp_client_preserves_custom_mcp_command(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"mcpTransport": "stdio"}, f)
-            f.flush()
-            with self.assertRaisesRegex(WorkflowError, "environment name is missing"):
-                load_mcp_client(f.name)
-
-    def test_load_mcp_client_raises_for_unknown_transport(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"mcpTransport": "grpc", "environment": "local"}, f)
-            f.flush()
-            with self.assertRaisesRegex(WorkflowError, "Unsupported mcpTransport"):
-                load_mcp_client(f.name)
-
-    def test_load_mcp_client_prefers_mcp_url_over_stdio(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"mcpUrl": "http://localhost:5001/mcp", "mcpTransport": "stdio", "environment": "local"}, f)
+            json.dump({"environment": "local", "mcpCommand": "dotnet /tmp/clio.dll"}, f)
             f.flush()
             client = load_mcp_client(f.name)
-        self.assertIsInstance(client, McpHttpClient)
+        self.assertIsInstance(client, ClioStdioClient)
+        self.assertEqual(client.environment_name, "local")
+        self.assertEqual(client.clio_cmd, "dotnet /tmp/clio.dll")
+
+    def test_load_mcp_client_ignores_unknown_keys(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"environment": "local", "deprecatedField": "legacy", "transportMode": "grpc"}, f)
+            f.flush()
+            client = load_mcp_client(f.name)
+        self.assertIsInstance(client, ClioStdioClient)
+        self.assertEqual(client.environment_name, "local")
+
+    def test_load_mcp_client_raises_without_environment(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"mcpCommand": "dotnet /tmp/clio.dll"}, f)
+            f.flush()
+            with self.assertRaisesRegex(WorkflowError, "environment name is missing in env file"):
+                load_mcp_client(f.name)
 
 
     def test_clio_stdio_client_does_not_mutate_input_arguments(self):

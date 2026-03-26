@@ -24,7 +24,6 @@ During app-generation execution, write only inside `output/<AppName>/`.
 - `AGENTS.md`
 - `context/.cache/agent-4-bundle.md` when available
 - `context/essentials.md`
-- `context/app-documentation-contract.md`
 - `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
@@ -36,7 +35,6 @@ During app-generation execution, write only inside `output/<AppName>/`.
 - `scripts/page_body_tools.py`
 - `scripts/page_body_edit.py`
 - `scripts/mcp_result_evidence.py`
-- `scripts/app_docs.py`
 
 ## MCP Transport And Tooling
 
@@ -157,6 +155,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
 - If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption. Generate UUIDs client-side via `uuid.uuid4()` and include `Id` in the `seed-rows` values within the same `schema-sync` operation, then use the same UUID as `default-value` in the `update-entity` operation.
+- `Binary`, `Image`, `File`, and `Blob` columns do not support `default-value-source: Const`.
 - `update-entity` `update-operations` are explicit:
   - `action: "add"`
   - `action: "update"`
@@ -165,9 +164,9 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### Related Binding Tools
 
-- `get-entity-schema-properties` discovers column names, UIds, and data value types for deployed schemas such as `SysModule` and `SysModuleEntity`. Requires `environment-name`, `package-name`, `schema-name`.
+- `get-entity-schema-properties` returns a schema summary object with column entries for deployed schemas such as `SysModule` and `SysModuleEntity`. Use the returned columns for machine-readable verification; each entry includes `source` (`own` or `inherited`), name, UId, and friendly `type`. Requires `environment-name`, `package-name`, `schema-name`.
 - `get-entity-schema-column-properties` returns detailed metadata for a single column. Requires `environment-name`, `package-name`, `schema-name`, `column-name`.
-- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
+- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. `binding-name` is optional and defaults to `<schema-name>`. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
 - Schemas created earlier in the same flow are DB-first and should be queried through `get-entity-schema-properties`; do not use raw mode.
 - For lookup seed rows, the format is `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
 - When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`:
@@ -194,6 +193,8 @@ new_id = str(uuid.uuid4())
 6. ✅ `update-operations` within `update-entity` uses same format as `update-entity-schema` `operations`
 7. ✅ `seed-rows` uses `[{"values": {...}}]` format (not JSON string — native list)
 8. ✅ Booleans (`is-required`, `extend-parent`) are Python `True`/`False`, not strings
+9. ✅ `title` values for `create-lookup` / `create-entity` are non-empty after trim
+10. ✅ In `update-operations`, `action: add` includes non-empty `title`; `action: modify` omits `title` when not changing caption
 
 **For `page-sync` calls, validate:**
 
@@ -201,7 +202,6 @@ new_id = str(uuid.uuid4())
 2. ✅ `pages` is a Python **list** of page objects
 3. ✅ Each page has `schema-name` and `body`
 4. ✅ `body` contains all 8 required marker pairs
-5. ✅ `validate` and `verify` are Python booleans if provided
 
 **For individual tool fallback — before `create-lookup`, validate:**
 
@@ -210,6 +210,7 @@ new_id = str(uuid.uuid4())
 3. ✅ `schema-name` is the entity schema name (e.g., "UsrTodoStatus")
 4. ✅ `title` is the display name (NOT `caption`)
 5. ✅ No `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns
+6. ✅ `title` is not empty/whitespace (trimmed value must be non-empty)
 
 Before EVERY `update-entity-schema` call, validate:
 
@@ -220,17 +221,21 @@ Before EVERY `update-entity-schema` call, validate:
 5. ✅ Each operation uses `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`)
 6. ✅ `is-required` is a boolean (`True`/`False`), not a string
 7. ✅ Schema defaults use `default-value-source` and `default-value` (kebab-case)
-8. ✅ For existing/template-created entities, no `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
+8. ✅ `Binary`, `Image`, `File`, and `Blob` columns never use `default-value-source: Const`
+9. ✅ For existing/template-created entities, no `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
+10. ✅ For `action: add`, `title` is required and non-empty after trim
+11. ✅ For `action: modify`, never pass blank `title`; omit `title` to keep the existing caption
 
 Before EVERY `create-data-binding-db` call, validate:
 
 1. ✅ `environment-name` matches registered clio env name
 2. ✅ `package-name` is the string package name
 3. ✅ `schema-name` is the entity schema name
-4. ✅ `binding-name` is provided (e.g., "UsrTodoStatus_Lookup")
+4. ✅ `binding-name` is omitted for default lookup seeding so the tool reuses `<schema-name>`
 5. ✅ `rows` is a JSON **string** of `[{"values": {...}}, ...]` format
 6. ✅ Lookup seed rows use `{"values": {"Name": "New"}}` — not `[{columnName, value}]` format
 7. ✅ Target schema is already materialized in DB
+8. ✅ If lookup seed data was already applied in the same run via `schema-sync` `seed-rows`, do not run a second `create-data-binding-db` for that same schema unless a distinct binding artifact is explicitly required
 
 **Pre-execution validation script:**
 
@@ -533,7 +538,7 @@ python3 scripts/mcp_schema_sync.py apply \
   --env output/<AppName>/.creatio-env.json
 ```
 
-**Fallback to individual tools:** If `schema-sync` is unavailable (older clio), use individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls sequentially, refreshing context after each mutation.
+**Fallback to individual tools:** If `schema-sync` is unavailable (older clio), use individual `create-lookup` → `create-data-binding-db` → `update-entity-schema` calls sequentially, refreshing context after each mutation. In this path, prefer omitting `binding-name` for lookup seed data so the binding defaults to `<schema-name>` and updates existing default bindings instead of creating duplicate `<schema>_Lookup` variants.
 
 **Critical validation:**
 - Created/updated schema MUST be immediately queryable through `application-get-info`
@@ -554,6 +559,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 2. For each page that needs customization:
    a. Call `page-get` with `schema-name` to get the full JS body
    a1. **CRITICAL — Page body marker parsing:** Always use `page_body_tools.parse_marker_json(body, marker)` to parse marker content. **Never** use raw `json.loads()` — page bodies contain JavaScript with trailing commas that are valid JS but invalid strict JSON. The helper `strip_trailing_commas()` handles this automatically.
+   a2. **MANDATORY — Use `scripts/page_body_edit.py`:** All page body editing MUST go through `add_form_fields()` or `add_list_columns()` functions. Direct string manipulation (`str.replace()`, string concatenation, brace-counting) is prohibited — it produces double-comma `},,{` corruption and orphaned column bindings.
    b. Edit the body using the **Page Body Editing Algorithm** below — never use ad-hoc string manipulation
    c. Merge new content with existing section content (do NOT replace existing handlers — append)
    d. If the page must surface newly added entity fields, inspect `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF` together
@@ -565,7 +571,7 @@ If `plan.md` contains page customization requirements, or the run creates or ext
    g. For datasource-bound lookup fields, add the `crt.ComboBox` insert and the main view-model attribute only; preserve existing live lookup-list bindings or nested actions only when they are already materialized in the page body
    h. Preserve live special cases such as `Name -> PDS.Name`; do not duplicate `Name` if it already exists
    i. If handlers use SDK services, ensure `deps` and `args` include the required import and preserve the live SDK alias style already used by the page body
-   j. After editing all pages, call `page-sync` composite tool with all edited bodies in one batch (with `validate: True`)
+   j. After editing all pages, call `page-sync` composite tool with all edited bodies in one batch
    k. If page-sync reports validation failure, fix the body and retry
    l. Verify the `page-sync` response shows `success: true` for all pages
    m. Persist page verification with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`
@@ -596,9 +602,9 @@ If `plan.md` contains page customization requirements, or the run creates or ext
 4. Append page customization results to `schemaSync`
 5. Stop with blocker if the plan required page sync but the final verification still shows missing fields or columns
 
-**Page sync via `page-sync` MCP tool (MANDATORY for new apps):**
+**Page sync via `page-sync` MCP tool (preferred fast path with mandatory verification fallback):**
 
-Use the `page-sync` composite tool as the **primary** page write path. Use individual `page-get` for reading and `page-list` for discovery.
+Use the `page-sync` composite tool as the **preferred** page write path. Use individual `page-get` for reading and `page-list` for discovery. If the composite response does not expose a reusable verified body, the local helper must fall back to `page-get` before marking `machineChecked`.
 
 **Step 1 — Read current page bodies via `page-get`:**
 ```bash
@@ -606,7 +612,7 @@ python3 -c "
 import sys, os, json
 sys.path.insert(0, 'scripts')
 from mcp_client import call_mcp_tool
-r = call_mcp_tool('page-get', {'environmentName': '<env_name>', 'schemaName': '<PageName>'})
+r = call_mcp_tool('page-get', {'environment-name': '<env_name>', 'schema-name': '<PageName>'})
 if r['success'] and r.get('data', {}).get('body'):
     open('/tmp/<PageName>.body.js', 'w').write(r['data']['body'])
     print('OK')
@@ -643,7 +649,6 @@ r = call_mcp_tool('page-sync', {
         {'schema-name': 'UsrMyApp_FormPage', 'body': form_body},
         {'schema-name': 'UsrMyApp_ListPage', 'body': list_body},
     ],
-    'validate': True,
 })
 print(json.dumps(r, indent=2))
 assert r.get('data', {}).get('success'), f"page-sync failed: {r}"
@@ -759,7 +764,9 @@ For ListPage column additions, use `scripts/page_body_edit.py add-list-columns` 
 
 - ❌ Never use `body.find("}")` or brace-counting to locate insertion points — nested JS structures make positional brace search unreliable
 - ❌ Never insert raw JSON strings into the body without parsing the target section first — splicing text into unparsed JSON causes structural corruption
+- ❌ Never use `str.replace()` or string concatenation to inject JSON fragments — Creatio template bodies contain trailing commas (valid JS, invalid strict JSON); appending after a trailing comma produces double-comma `},,{` corruption that breaks the page at runtime
 - ❌ Never assume the viewModelConfig section type — always detect whether it is `viewModelConfig` (object `{}`) or `viewModelConfigDiff` (array `[]` of operations); FormPage typically uses the object variant, ListPage the array variant
+- ❌ Never add columns to `viewConfigDiff` DataTable without adding matching `PDS_*` bindings to `viewModelConfigDiff` — columns without model paths render as empty/broken; every column `PDS_X` needs a corresponding attribute with `modelConfig.path: "PDS.X"`
 - ❌ Never verify edits by substring search alone (e.g., `"UsrStatus" in body`) — a field name can be present in a structurally broken body; always re-parse each edited section as JSON to confirm integrity
 - ❌ Never insert content at a position found by counting closing braces from an anchor string — the correct anchor is the marker boundary, not a brace position
 

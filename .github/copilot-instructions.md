@@ -10,7 +10,6 @@ Treat these as canonical:
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md`
-- `context/app-documentation-contract.md`
 - `context/schema-reference.md`
 - `context/ui-reference.md`
 - `context/data-bindings-reference.md`
@@ -87,7 +86,7 @@ It maps every file to line ranges per phase so you can load only the relevant se
 23. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
 24. Final summaries must reflect the materialized result, not only the planned request spec.
 25. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
-26. Treat `url` and `mcpUrl` as separate runtime values. Do not assume `<creatioUrl>/mcp`; direct MCP RPC calls go to the configured frontend `mcpUrl`.
+26. Treat `url` as the Creatio base URL only. MCP execution uses clio stdio transport through `scripts/mcp_client.py` and must not rely on a frontend endpoint.
 27. Never expose internal gate tokens or script names in user-facing dialogue.
 
 ## Execution Trigger

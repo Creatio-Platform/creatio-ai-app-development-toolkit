@@ -170,10 +170,13 @@ When page sync is required:
 - Prefer `schema-sync` for entity mutations and keep `operations` / `update-operations` as native arrays.
 - Use `environment-name` and `package-name` for executable entity payloads, and `schema-name` for schema targets.
 - Use `action` / `column-name` keys inside `update-operations`.
-- For fallback `create-data-binding-db`, use `binding-name` plus `rows` as a JSON string of `[{"values": {...}}]`.
+- For fallback `create-data-binding-db`, prefer omitting `binding-name` for default lookup seeding so the binding defaults to `<schema-name>`; include `binding-name` only when a distinct binding artifact is explicitly required. Always pass `rows` as a JSON string of `[{"values": {...}}]`.
 - Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
 - Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
 - Never treat seeded rows as implementation of a default rule.
+- For `create-lookup`, `create-entity-schema`, and `update-operations` with `action: add`, `title` must be non-empty after trim.
+- If a business title is missing, derive a non-empty fallback from the schema/column code instead of sending blank text.
+- For `action: modify`, never send blank/whitespace `title`; omit `title` to preserve existing caption.
 
 ## Plan Output
 

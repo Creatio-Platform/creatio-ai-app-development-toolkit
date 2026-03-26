@@ -18,7 +18,7 @@ _fpython_test() {
 }
 
 # Already resolved
-if [[ -n "$PYTHON_CMD" ]] && _fpython_test "$PYTHON_CMD"; then
+if [[ -n "${PYTHON_CMD:-}" ]] && _fpython_test "$PYTHON_CMD"; then
     echo "[INFO] Python already resolved: $PYTHON_CMD"
     return 0 2>/dev/null || exit 0
 fi

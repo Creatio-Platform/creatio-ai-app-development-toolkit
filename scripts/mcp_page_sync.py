@@ -7,11 +7,11 @@ from pathlib import Path
 
 try:
     from scripts.mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
-    from scripts.mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, load_mcp_client, load_mcp_url
+    from scripts.mcp_schema_sync import WorkflowError, load_mcp_client
     from scripts.page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 except ImportError:
     from mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
-    from mcp_schema_sync import ClioStdioClient, McpHttpClient, WorkflowError, load_mcp_client, load_mcp_url
+    from mcp_schema_sync import WorkflowError, load_mcp_client
     from page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 
 PAGE_SYNC_PLAN_START = "<!-- PAGE_SYNC_PLAN_JSON_START -->"
@@ -263,12 +263,18 @@ def sync_pages_composite(client, current_document, result_path, discovered_pages
         if page_result.get("success") is False:
             raise WorkflowError(f"page-sync failed for {schema_name}: {page_result.get('error', 'unknown error')}")
         verify_body = page_result.get("verifiedBody") or page_result.get("body")
+        verify_response = None
         if verify_body:
             verification = verify_page_sync(page, original_bodies.get(schema_name, ""), verify_body)
         else:
-            verification = {"implemented": True, "machineChecked": False, "note": "page-sync did not return verified body"}
+            verify_response = ensure_success("page-get", client.call_tool_json("page-get", {"schema-name": schema_name}))
+            current_document = append_operation_and_persist(current_document, result_path, "page-get", f"{schema_name}#verify", "success", response=verify_response)
+            verification = verify_page_sync(page, original_bodies.get(schema_name, ""), get_page_body(verify_response, schema_name))
         discovered_page = discovered_pages.get(schema_name, {})
-        evidence_response = copy.deepcopy(discovered_page)
+        if verify_response:
+            evidence_response = merge_page_metadata(discovered_page, verify_response)
+        else:
+            evidence_response = copy.deepcopy(discovered_page)
         evidence_response.update({k: v for k, v in page_result.items() if k not in ("body", "verifiedBody")})
         if "schemaName" not in evidence_response:
             evidence_response["schemaName"] = schema_name

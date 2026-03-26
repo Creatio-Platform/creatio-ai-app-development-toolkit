@@ -9,7 +9,7 @@
 | 1 | `Thread.Sleep(500)` після кожного tool call | `BaseTool.cs:64` | +7s на сесію |
 | 2 | Global static lock серіалізує ВСІ tools | `BaseTool.cs:16,58` | паралелізм неможливий |
 | 3 | N+1 entity loading в get-info | `ApplicationInfoService` | 13+ HTTP замість 4 |
-| 4 | `call_tools_batch` — фейковий batch | `mcp_client.py:182` | послідовна ітерація |
+| 4 | `call_tools_batch` — фейковий batch | `mcp_client.py:263` | послідовна ітерація |
 | 5 | 28 Prompts + 4 Resources не використовуються | clio → Python client | missed capabilities |
 
 ## Плани (окремі документи)

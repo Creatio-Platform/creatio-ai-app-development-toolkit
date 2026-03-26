@@ -68,8 +68,8 @@ From context and templates:
 
 After generating page files, if `plan.md` specifies handlers, event reactions, or custom logic:
 
-1. Deploy the generated page to Creatio (Agent 5)
-2. Use **`skills/page-schema-editing/SKILL.md`** workflow to add handlers via MCP `page.*` tools
+1. Deploy the generated page to Creatio with the implementation flow used by the repository
+2. Use **`skills/page-schema-editing/SKILL.md`** workflow to add handlers via MCP `page-get`, `page-update`, and `page-sync`
 3. The `page-update` tool writes directly to the running DB — no recompile needed
 4. For runtime `page-update` field sync, trust the live page body from `page-get` instead of template container names. Discover the primary field container by inspecting existing field-type inserts in `viewConfigDiff` — do not assume a fixed container name.
 

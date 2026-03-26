@@ -86,6 +86,8 @@ When editing raw page bodies through `page-update`, prefer minimal explicit conf
 
 ## List Page: DataTable Configuration
 
+> **⚠️ Trailing commas:** Creatio template-generated pages contain trailing commas in JSON arrays (valid JS, invalid strict JSON). Always use `page_body_tools.parse_marker_json()` to parse marker content — never raw `json.loads()` or `str.replace()` insertion. Appending after a trailing comma produces double-comma `},,{` corruption.
+
 Configure visible columns in the DataTable:
 
 ```json

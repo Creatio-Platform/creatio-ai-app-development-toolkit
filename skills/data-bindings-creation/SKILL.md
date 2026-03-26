@@ -38,17 +38,19 @@ From MCP and context:
    - `FolderMode`: `b659d704-3955-e011-981f-00155d043204`
 7. `filter.json` for standard bindings is `""`.
 8. For lookup seed data, create one row per seed value.
-9. `create-data-binding-db` requires `environment-name`, `package-name`, `schema-name`. After `create-entity-schema` or `create-lookup`, use `get-entity-schema-properties` if column discovery is needed.
+9. `create-data-binding-db` requires `environment-name`, `package-name`, `schema-name`. `binding-name` is optional and defaults to `<schema-name>`. After `create-entity-schema` or `create-lookup`, use `get-entity-schema-properties` if column discovery is needed.
 10. Generate a fresh GUID for every lookup seed row. Do not reuse decorative placeholder GUIDs from docs in executable payloads.
 11. For lookup seed bindings via `schema-sync`, prefer inline `seed-rows` format: `[{"values": {"Name": "New"}}, ...]`.
-12. `upsert-data-binding-row-db` upserts a single row and requires `environment-name`, `package-name`, `schema-name`, `values`.
+12. `upsert-data-binding-row-db` upserts a single row and requires `environment-name`, `package-name`, `binding-name`, `values`.
+13. For default lookup seed flows, omit `binding-name` so the tool updates the schema-named binding. Do not create a second binding for the same schema just by using a different name such as `<schema>_Lookup` unless explicitly required.
 
 ## Typical MCP Flow
 
 1. Call `get-entity-schema-properties` for deployed targets such as `SysModule` or `SysModuleEntity`.
 2. Build seed rows in `[{"values": {...}}, ...]` format.
 3. Call `create-data-binding-db` with `environment-name`, `package-name`, `schema-name`.
-4. Validate `{"success": true}`.
+4. Before calling `create-data-binding-db`, verify whether lookup seeding already succeeded in this run through `schema-sync` `seed-rows`; if yes, do not call it again for that schema unless a distinct binding artifact is explicitly required.
+5. Validate `{"success": true}`.
 
 ## Validation Checklist
 

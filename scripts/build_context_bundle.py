@@ -34,7 +34,7 @@ AGENT_READS = {
     ],
     4: [
         ("agents/04-implementation.md", [(1, 105), (204, 462)]),
-        ("context/mcp-application-tools-reference.md", [(1, 50), (66, 412), (708, 879)]),
+        ("context/mcp-application-tools-reference.md", [(1, 50), (104, 1039), (1104, 1327)]),
         ("context/ui-reference.md", [(508, 605), (192, 278)]),
         ("context/viewconfig-reference.md", [(68, 215)]),
         ("context/schema-reference.md", [(7, 29), (64, 111)]),

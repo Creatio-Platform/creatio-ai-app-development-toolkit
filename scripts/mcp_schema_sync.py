@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import http.cookiejar
 import json
 import os
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 from pathlib import Path
 
@@ -25,159 +21,23 @@ KIND_PRIORITY = {
 }
 CUSTOM_COLUMN_PREFIX = "Usr"
 SUPPORTED_DEFAULT_VALUE_SOURCES = {"Const", "None"}
+BINARY_LIKE_DATA_VALUE_TYPES = {"binary", "blob", "image", "file"}
 
 
 class WorkflowError(RuntimeError):
     pass
 
 
-class McpHttpClient:
-    def __init__(self, mcp_url, timeout=30, retries=3, retry_delay_seconds=10):
-        self.mcp_url = mcp_url
-        self.timeout = timeout
-        self.retries = retries
-        self.retry_delay_seconds = retry_delay_seconds
-        self.session_id = None
-        self.request_id = 0
-        self.base_url = self._resolve_base_url(mcp_url)
-        self.auth_login = os.getenv("CREATIO_LOGIN")
-        self.auth_password = os.getenv("CREATIO_PASSWORD")
-        self.cookie_jar = None
-        self.opener = urllib.request.build_opener()
-        self.csrf_token = None
-
-    @staticmethod
-    def _resolve_base_url(mcp_url):
-        parts = urllib.parse.urlsplit(mcp_url)
-        return f"{parts.scheme}://{parts.netloc}"
-
-    def authenticate(self):
-        if not self.auth_login or not self.auth_password or self.csrf_token:
-            return
-        self.cookie_jar = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
-        body = json.dumps({
-            "UserName": self.auth_login,
-            "UserPassword": self.auth_password
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self.base_url}/ServiceModel/AuthService.svc/Login",
-            data=body,
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "Accept": "application/json"
-            },
-            method="POST"
-        )
-        with self.opener.open(request, timeout=self.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if payload.get("Code") not in (0, None):
-            raise WorkflowError(payload.get("Message") or "Creatio login failed")
-        preferred_cookie_names = ["BPMCSRF", "CRT_CSRF", "CsrfToken"]
-        cookies_by_name = {cookie.name: cookie.value for cookie in self.cookie_jar}
-        for cookie_name in preferred_cookie_names:
-            if cookies_by_name.get(cookie_name):
-                self.csrf_token = cookies_by_name[cookie_name]
-                break
-        if not self.csrf_token:
-            raise WorkflowError("Creatio login did not return BPMCSRF cookie")
-
-    def initialize(self):
-        self.authenticate()
-        payload, headers, _ = self.request_rpc("initialize", {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "ai-driven-app-creation",
-                "version": "1.0"
-            }
-        }, use_session=False)
-        self.session_id = headers.get("Mcp-Session-Id") or headers.get("mcp-session-id")
-        if not self.session_id:
-            raise WorkflowError("MCP initialize did not return Mcp-Session-Id header")
-        return payload
-
-    def list_tools(self):
-        payload, _, _ = self.request_rpc("tools/list", {})
-        return payload.get("result", {}).get("tools", [])
-
-    def call_tool_json(self, tool_name, arguments):
-        payload, _, _ = self.request_rpc("tools/call", {
-            "name": tool_name,
-            "arguments": arguments
-        })
-        content = payload.get("result", {}).get("content", [])
-        for item in content:
-            text = item.get("text")
-            if isinstance(text, str):
-                return parse_tool_text(text)
-        raise WorkflowError(f"Tool {tool_name} did not return text content")
-
-    def request_rpc(self, method, params, use_session=True):
-        last_error = None
-        for attempt in range(self.retries):
-            try:
-                return self.request_rpc_once(method, params, use_session)
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as error:
-                last_error = error
-                if attempt + 1 == self.retries:
-                    break
-                time.sleep(self.retry_delay_seconds)
-        raise WorkflowError(str(last_error))
-
-    def request_rpc_once(self, method, params, use_session=True):
-        self.request_id += 1
-        body = json.dumps({
-            "jsonrpc": "2.0",
-            "id": self.request_id,
-            "method": method,
-            "params": params
-        }).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream"
-        }
-        if self.csrf_token:
-            headers["BPMCSRF"] = self.csrf_token
-        if use_session and self.session_id:
-            headers["Mcp-Session-Id"] = self.session_id
-        request = urllib.request.Request(self.mcp_url, data=body, headers=headers, method="POST")
-        with self.opener.open(request, timeout=self.timeout) as response:
-            raw_text = response.read().decode("utf-8")
-            payload = parse_rpc_payload(raw_text)
-            if "error" in payload:
-                error_message = payload["error"].get("message") or str(payload["error"])
-                raise WorkflowError(error_message)
-            return payload, dict(response.headers.items()), raw_text
-
-
-def parse_rpc_payload(raw_text):
-    stripped = raw_text.strip()
-    if not stripped:
-        raise WorkflowError("Empty MCP response")
-    if stripped.startswith("{"):
-        return json.loads(stripped)
-    payloads = []
-    for line in stripped.splitlines():
-        if line.startswith("data:"):
-            payload = line[5:].strip()
-            if payload:
-                payloads.append(payload)
-    for payload in reversed(payloads):
-        try:
-            return json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-    raise WorkflowError("Unable to parse MCP event stream response")
-
-
-def parse_tool_text(text):
-    stripped = text.strip()
-    if stripped.startswith("ERROR:"):
-        raise WorkflowError(stripped)
-    if stripped.startswith("{") or stripped.startswith("["):
-        return json.loads(stripped)
-    raise WorkflowError("Tool response text is not valid JSON")
+def normalize_title(value, fallback=None):
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed:
+            return trimmed
+    if isinstance(fallback, str):
+        fallback_trimmed = fallback.strip()
+        if fallback_trimmed:
+            return fallback_trimmed
+    return None
 
 
 def load_json(path):
@@ -243,25 +103,11 @@ def _mcp_client_import():
 
 def load_mcp_client(env_path):
     payload = load_json(env_path)
-    mcp_url = payload.get("mcpUrl")
-    if mcp_url:
-        return McpHttpClient(mcp_url)
-    transport = payload.get("mcpTransport", "stdio")
-    if transport == "stdio":
-        env_name = payload.get("environment")
-        if not env_name:
-            raise WorkflowError("environment name is missing in env file for stdio transport")
-        clio_cmd = payload.get("mcpCommand")
-        return ClioStdioClient(env_name, clio_cmd=clio_cmd)
-    raise WorkflowError(f"Unsupported mcpTransport: {transport}. Use 'stdio' or provide 'mcpUrl'.")
-
-
-def load_mcp_url(env_path):
-    payload = load_json(env_path)
-    mcp_url = payload.get("mcpUrl")
-    if not mcp_url:
-        raise WorkflowError("mcpUrl is missing in environment file")
-    return mcp_url
+    env_name = payload.get("environment")
+    if not env_name:
+        raise WorkflowError("environment name is missing in env file")
+    clio_cmd = payload.get("mcpCommand")
+    return ClioStdioClient(env_name, clio_cmd=clio_cmd)
 
 
 def extract_editable_context(document):
@@ -313,7 +159,7 @@ def build_entity_index(editable_context):
             indexed_entity = dict(entity)
             indexed_entity["packageUId"] = package_u_id
             indexed_entity["packageName"] = package_name
-            indexed_entity["caption"] = indexed_entity.get("caption") or name
+            indexed_entity["caption"] = normalize_title(indexed_entity.get("caption"), name)
             indexed_entity["kind"] = indexed_entity.get("kind") or "entity"
             indexed_entity["hasNameColumn"] = has_column_named(indexed_entity.get("columns", []), "Name")
             indexed_entity["columns"] = filter_mutable_columns(indexed_entity.get("columns", []))
@@ -333,6 +179,13 @@ def validate_lookup_reference(column, available_names):
 
 def is_lookup_column(column):
     return column.get("referenceSchemaName") or column.get("dataValueTypeName") == "Lookup"
+
+
+def is_binary_like_column(column):
+    data_value_type_name = column.get("dataValueTypeName")
+    if not isinstance(data_value_type_name, str):
+        return False
+    return data_value_type_name.lower() in BINARY_LIKE_DATA_VALUE_TYPES
 
 
 def is_guid_string(value):
@@ -362,6 +215,10 @@ def validate_column_default(column):
         if has_default_value and column["defaultValue"] not in (None, ""):
             raise WorkflowError(f"Column {column_name} cannot set defaultValue when defaultValueSource is None")
         return
+    if is_binary_like_column(column):
+        raise WorkflowError(
+            f"Column {column_name} with type {column['dataValueTypeName']} does not support defaultValueSource Const"
+        )
     if not has_default_value:
         raise WorkflowError(f"Column {column_name} requires defaultValue when defaultValueSource is Const")
     if is_lookup_column(column) and not is_guid_string(column["defaultValue"]):
@@ -433,10 +290,11 @@ def build_column_operations(current_entity, edited_entity, available_names):
 def build_create_columns(columns):
     converted = []
     for column in columns:
+        normalized_title = normalize_title(column.get("caption"), column["name"])
         item = {
             "name": column["name"],
             "type": column.get("dataValueTypeName"),
-            "title": column.get("caption") or column["name"]
+            "title": normalized_title
         }
         if column.get("referenceSchemaName"):
             item["reference-schema-name"] = column["referenceSchemaName"]
@@ -460,12 +318,20 @@ def build_update_operations_payload(operations):
             })
             continue
         column = operation["column"]
+        action = "add" if operation["operation"] == "addColumn" else "modify"
+        if action == "add":
+            normalized_title = normalize_title(column.get("caption"), column["name"])
+        else:
+            normalized_title = normalize_title(column.get("caption"))
+            if normalized_title == column["name"]:
+                normalized_title = None
         item = {
-            "action": "add" if operation["operation"] == "addColumn" else "modify",
+            "action": action,
             "column-name": column["name"],
             "type": column.get("dataValueTypeName"),
-            "title": column.get("caption") or column["name"]
         }
+        if normalized_title is not None:
+            item["title"] = normalized_title
         if column.get("referenceSchemaName"):
             item["reference-schema-name"] = column["referenceSchemaName"]
         if "isRequired" in column:
@@ -490,7 +356,7 @@ def build_create_action(entity):
     arguments = {
         "package-name": entity["packageName"],
         "schema-name": entity["name"],
-        "title": entity.get("caption") or entity["name"]
+        "title": normalize_title(entity.get("caption"), entity["name"])
     }
     create_columns = build_create_columns(filtered_columns)
     if create_columns:
@@ -507,8 +373,8 @@ def build_create_action(entity):
 
 def validate_existing_entity_metadata(current_entity, edited_entity):
     entity_name = edited_entity["name"]
-    current_caption = current_entity.get("caption") or entity_name
-    edited_caption = edited_entity.get("caption") or entity_name
+    current_caption = normalize_title(current_entity.get("caption"), entity_name)
+    edited_caption = normalize_title(edited_entity.get("caption"), entity_name)
     if edited_caption != current_caption:
         raise WorkflowError(
             f"Updating caption for existing entity {entity_name} is not supported by update-entity-schema"

@@ -12,17 +12,12 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 
 The required top-level sections of every BA-style Business Plan are, in order:
 
-1. Business Outcome
-2. Core Problem
-3. Actors and Roles
-4. Domain Model (entities, columns, lookup tables)
-5. Lifecycle and Statuses
-6. Business Logic
-7. UX Expectations (list columns, form layout, sorting, filters)
-8. Edge Cases and Exceptions
-9. Acceptance Criteria
-10. Access / Personas
-11. Assumptions
+1. Business context
+2. Users, access and ownership
+3. Core process and business logic
+4. Data model
+5. UX assumptions
+6. Assumptions used for the draft requirements
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
@@ -80,7 +75,7 @@ Run Gate P once at the start of each app workflow.
 
 - First ask whether the developer wants `site-ready-now` or `planning-first`.
 - On the first turn, this routing question may be asked via structured input when the host mode supports it.
-- If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and frontend MCP URL.
+- If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and any missing credentials.
 - If `planning-first`, defer runtime inputs until implementation is explicitly requested.
 - Before Gate P approval, do not run agents, do not run `clio`, and do not create or modify `output/<AppName>/`.
 - Persist Gate P in `.workflow-state/<AppName>/planning-state.json` with `scripts/write-planning-state.sh`.
@@ -136,12 +131,12 @@ Gate R:
 - All package, page, entity, and custom column names use the `Usr` prefix.
 - MCP entity tools are DB-first. No separate compilation or deployment step is required after successful MCP schema mutations.
 - Generated artifacts under `output/**` are execution evidence, not policy sources.
-- `url` is the Creatio base URL. `mcpUrl` is the frontend MCP endpoint. Never derive `mcpUrl` from `url`.
+- `url` is the Creatio base URL. MCP calls run through clio stdio transport and must not depend on a frontend endpoint derived from `url`.
 - Do not add inherited base columns to requirements.
 - Enum-like business values must be modeled as lookup entities.
 - For lookup schemas, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
 - If a schema already contains `Name`, reuse it as the record title and do not invent `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
-- For a new app with one primary record type, treat the template-created section entity from `application.create` as the canonical main entity.
+- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
 - If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
 - Any requirement phrased as "defaults to X" is incomplete until the plan defines either a `schema default` or a `ui default`.
 - Lookup seed rows alone do not satisfy a default requirement.

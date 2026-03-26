@@ -9,7 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.mcp_client import PersistentMcpClient, call_mcp_tool, validate_clio_version, _validate_params
+from scripts.mcp_client import (
+    PersistentMcpClient,
+    call_mcp_tool,
+    load_cli_arguments,
+    parse_cli_request,
+    validate_clio_version,
+    _validate_params,
+)
 
 
 class McpClientTests(unittest.TestCase):
@@ -44,6 +51,32 @@ class McpClientTests(unittest.TestCase):
         self.assertEqual(result, expected)
         mocked.assert_called_once()
 
+    def test_parse_cli_request_accepts_legacy_positional_mode(self):
+        parsed = parse_cli_request(["application-get-list", '{"environment-name":"local"}', "30"])
+        self.assertEqual(parsed["tool_name"], "application-get-list")
+        self.assertEqual(parsed["arguments"], {"environment-name": "local"})
+        self.assertEqual(parsed["timeout"], 30)
+
+    def test_parse_cli_request_accepts_args_file_mode(self):
+        temp_path = ROOT / ".tmp-tests" / "mcp-client-args.json"
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
+        try:
+            parsed = parse_cli_request(["application-get-list", "--args-file", str(temp_path), "--timeout", "45"])
+        finally:
+            temp_path.unlink(missing_ok=True)
+        self.assertEqual(parsed["tool_name"], "application-get-list")
+        self.assertEqual(parsed["arguments"], {"environment-name": "local"})
+        self.assertEqual(parsed["timeout"], 45)
+
+    def test_load_cli_arguments_accepts_stdin_mode(self):
+        arguments = load_cli_arguments(args_stdin=True, stdin_text='{"environment-name":"local"}')
+        self.assertEqual(arguments, {"environment-name": "local"})
+
+    def test_load_cli_arguments_rejects_multiple_sources(self):
+        with self.assertRaisesRegex(ValueError, "exactly one argument source"):
+            load_cli_arguments(args_json="{}", args_file="args.json")
+
 
 class ParamValidationTests(unittest.TestCase):
     def test_create_data_binding_db_rejects_camel_case(self):
@@ -61,6 +94,15 @@ class ParamValidationTests(unittest.TestCase):
             "environment-name": "local",
             "package-name": "Pkg",
             "schema-name": "UsrFoo",
+        })
+        self.assertEqual(errors, [])
+
+    def test_create_data_binding_db_does_not_require_binding_name(self):
+        errors = _validate_params("create-data-binding-db", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "schema-name": "UsrFoo",
+            "rows": '[{"values":{"Name":"New"}}]',
         })
         self.assertEqual(errors, [])
 
@@ -201,6 +243,74 @@ class ParamValidationTests(unittest.TestCase):
         result = call_mcp_tool("create-data-binding-db", {})
         self.assertFalse(result["success"])
         self.assertIn("Parameter validation failed", result["raw"])
+
+    def test_create_lookup_rejects_whitespace_title(self):
+        errors = _validate_params("create-lookup", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "schema-name": "UsrMyLookup",
+            "title": "   ",
+        })
+        self.assertTrue(any("must not be empty or whitespace" in e for e in errors))
+
+    def test_update_entity_schema_rejects_blank_add_title(self):
+        errors = _validate_params("update-entity-schema", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "schema-name": "UsrVehicle",
+            "operations": [
+                {"action": "add", "column-name": "UsrVehicleStatus", "type": "Lookup", "title": " "}
+            ],
+        })
+        self.assertTrue(any("requires non-empty 'title'" in e for e in errors))
+
+    def test_update_entity_schema_rejects_blank_modify_title(self):
+        errors = _validate_params("update-entity-schema", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "schema-name": "UsrVehicle",
+            "operations": [
+                {"action": "modify", "column-name": "UsrVehicleStatus", "type": "Lookup", "title": ""}
+            ],
+        })
+        self.assertTrue(any("omit 'title' to preserve caption" in e for e in errors))
+
+    def test_schema_sync_rejects_blank_nested_titles(self):
+        errors = _validate_params("schema-sync", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "operations": [
+                {"type": "create-lookup", "schema-name": "UsrVehicleStatus", "title": "   "},
+                {
+                    "type": "update-entity",
+                    "schema-name": "UsrVehicle",
+                    "update-operations": [
+                        {"action": "add", "column-name": "UsrVehicleStatus", "type": "Lookup", "title": " "}
+                    ],
+                },
+            ],
+        })
+        self.assertTrue(any("requires non-empty 'title'" in e for e in errors))
+
+    def test_schema_sync_rejects_create_lookup_when_title_missing(self):
+        errors = _validate_params("schema-sync", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "operations": [
+                {"type": "create-lookup", "schema-name": "UsrVehicleStatus"},
+            ],
+        })
+        self.assertTrue(any("requires non-empty 'title'" in e for e in errors))
+
+    def test_schema_sync_rejects_create_entity_when_title_missing(self):
+        errors = _validate_params("schema-sync", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "operations": [
+                {"type": "create-entity", "schema-name": "UsrVehicle"},
+            ],
+        })
+        self.assertTrue(any("requires non-empty 'title'" in e for e in errors))
 
 
 if __name__ == "__main__":

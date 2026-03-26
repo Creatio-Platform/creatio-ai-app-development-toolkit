@@ -50,6 +50,7 @@ Parameters (all kebab-case):
 - `environment-name` — registered clio environment name
 - `package-name` — package string name
 - `schema-name` — target schema such as `SysModule`, `SysModuleEntity`, or a lookup entity
+- `binding-name` — optional binding folder name for explicit/manual scenarios (default is `<schema-name>`)
 
 Response shape:
 ```json
@@ -76,7 +77,7 @@ Upserts a single row in an existing data binding.
 Parameters (all kebab-case):
 - `environment-name` — registered clio environment name
 - `package-name` — package string name
-- `schema-name` — target schema
+- `binding-name` — target binding folder name
 - `values` — JSON object of column-name → value pairs, must include `Id`
 
 ---
@@ -158,7 +159,9 @@ Example seed rows (new format for `create-data-binding-db` and `schema-sync` `se
 
 - Prefer `get-entity-schema-properties` for deployed system schemas such as `SysModule` and `SysModuleEntity`.
 - Newly created schemas from `create-entity-schema` or `create-lookup` are DB-first and should be discoverable through `get-entity-schema-properties`; raw mode is not supported.
-- Treat `packageUId + bindingName` as the binding identity for create/update flow.
+- Treat `package-name + binding-name` as the binding identity for create/update flow.
+- For standard lookup seed workflows, omit `binding-name` so `create-data-binding-db` targets the default `<schema-name>` binding.
+- Do not create a second lookup binding for the same `package-name + schema-name` only by changing the binding name (for example `<schema>` and `<schema>_Lookup`) unless a separate artifact is explicitly required.
 - Leave `filter.json` as `""` for standard SysModule, SysModuleEntity, and lookup seed bindings.
 - Treat `outputPath` as optional. The primary effect is DB persistence plus immediate install; server-side files are only a side effect.
 - Generate fresh GUID values for lookup seed rows at execution time. Placeholder GUIDs in docs show format only.

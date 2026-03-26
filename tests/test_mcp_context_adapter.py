@@ -89,6 +89,29 @@ def build_flat_short_context():
     }
 
 
+def build_flat_short_context_with_whitespace_caption():
+    return {
+        "success": True,
+        "packageUId": "22222222-2222-2222-2222-222222222222",
+        "packageName": "UsrMyApp",
+        "entities": [
+            {
+                "uId": "33333333-3333-3333-3333-333333333333",
+                "name": "UsrVehicle",
+                "caption": "  Vehicle  ",
+                "columns": [
+                    {
+                        "name": "UsrVehicleStatus",
+                        "caption": "   ",
+                        "dataValueType": "Lookup",
+                        "referenceSchema": "UsrVehicleStatus"
+                    }
+                ]
+            }
+        ]
+    }
+
+
 def build_preview_context():
     return {
         "meta": {
@@ -149,6 +172,14 @@ class McpContextAdapterTests(unittest.TestCase):
     def test_normalize_result_document_rejects_legacy_preview_contract(self):
         with self.assertRaises(ContextError):
             normalize_result_document(build_preview_context())
+
+    def test_normalize_result_document_trims_text_and_falls_back_from_blank_caption(self):
+        normalized = normalize_result_document(build_flat_short_context_with_whitespace_caption())
+        entity = normalized["editableContext"]["packages"][0]["entities"][0]
+        column = entity["columns"][0]
+
+        self.assertEqual(entity["caption"], "Vehicle")
+        self.assertEqual(column["caption"], "UsrVehicleStatus")
 
 
 if __name__ == "__main__":

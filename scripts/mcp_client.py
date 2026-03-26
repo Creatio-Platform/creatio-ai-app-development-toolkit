@@ -4,6 +4,8 @@ Reusable stdio MCP client for clio.
 
 Usage:
     python3 scripts/mcp_client.py <tool-name> <args-json> [timeout]
+    python3 scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
+    python3 scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
 
 Examples:
     python3 scripts/mcp_client.py application-get-list '{"environment-name": "local"}'
@@ -25,15 +27,17 @@ Notes:
 
 Returns JSON: {"success": bool, "data": dict|None, "raw": str}
 """
-import subprocess
+import argparse
 import json
 import os
+from pathlib import Path
 import re
 import shlex
 import shutil
+import subprocess
 import sys
-import time
 import threading
+import time
 
 MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 37)
 MIN_SUPPORTED_CLIO_VERSION_TEXT = ".".join(str(part) for part in MIN_SUPPORTED_CLIO_VERSION)
@@ -549,6 +553,61 @@ def _validate_params(tool_name: str, arguments: dict) -> list[str]:
                 joined = " AND ".join(f"'{param}'" for param in group)
                 group_descriptions.append(f"({joined})")
         errors.append("Missing required connection parameters. Provide " + " or ".join(group_descriptions))
+    errors.extend(_validate_non_blank_titles(tool_name, arguments))
+    return errors
+
+
+def _is_blank_text(value) -> bool:
+    return isinstance(value, str) and value.strip() == ""
+
+
+def _validate_non_blank_titles(tool_name: str, arguments: dict) -> list[str]:
+    errors = []
+
+    if tool_name in {"create-lookup", "create-entity-schema"}:
+        if _is_blank_text(arguments.get("title")):
+            errors.append("Parameter 'title' must not be empty or whitespace")
+        return errors
+
+    def validate_update_operations(operations, context_label):
+        if not isinstance(operations, list):
+            return
+        for index, operation in enumerate(operations):
+            if not isinstance(operation, dict):
+                continue
+            action = str(operation.get("action", "")).strip().lower()
+            has_title = "title" in operation
+            title_value = operation.get("title")
+            if action == "add":
+                if not has_title or _is_blank_text(title_value):
+                    errors.append(
+                        f"{context_label}[{index}] action 'add' requires non-empty 'title'"
+                    )
+            elif action == "modify":
+                if has_title and _is_blank_text(title_value):
+                    errors.append(
+                        f"{context_label}[{index}] action 'modify' has blank 'title'; omit 'title' to preserve caption"
+                    )
+
+    if tool_name == "update-entity-schema":
+        validate_update_operations(arguments.get("operations"), "operations")
+        return errors
+
+    if tool_name == "schema-sync":
+        operations = arguments.get("operations")
+        if not isinstance(operations, list):
+            return errors
+        for index, operation in enumerate(operations):
+            if not isinstance(operation, dict):
+                continue
+            operation_type = str(operation.get("type", "")).strip().lower()
+            if operation_type in {"create-lookup", "create-entity"}:
+                has_title = "title" in operation
+                title_value = operation.get("title")
+                if not has_title or _is_blank_text(title_value):
+                    errors.append(f"operations[{index}] type '{operation_type}' requires non-empty 'title'")
+            if operation_type == "update-entity":
+                validate_update_operations(operation.get("update-operations"), f"operations[{index}].update-operations")
     return errors
 
 
@@ -602,12 +661,61 @@ def list_mcp_tools(timeout: int = 120) -> dict:
         return client.list_tools(timeout)
 
 
+def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_text=None):
+    sources = sum(1 for source in (args_json is not None, args_file is not None, args_stdin) if source)
+    if sources != 1:
+        raise ValueError("Provide exactly one argument source: <args-json>, --args-file, or --args-stdin")
+    if args_json is not None:
+        return json.loads(args_json)
+    if args_file is not None:
+        return json.loads(Path(args_file).read_text(encoding="utf-8"))
+    data = sys.stdin.read() if stdin_text is None else stdin_text
+    if not data.strip():
+        raise ValueError("--args-stdin requires JSON on stdin")
+    return json.loads(data)
+
+
+def parse_cli_request(argv):
+    if not argv:
+        raise ValueError(
+            "Usage: mcp_client.py <tool-name> <args-json> [timeout]\n"
+            "   or: mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
+            "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]"
+        )
+    tool_name = argv[0]
+    remainder = argv[1:]
+    if remainder and not remainder[0].startswith("-"):
+        if len(remainder) > 2:
+            raise ValueError("Legacy positional mode accepts only <args-json> [timeout]")
+        timeout = int(remainder[1]) if len(remainder) == 2 else 120
+        return {
+            "tool_name": tool_name,
+            "arguments": load_cli_arguments(args_json=remainder[0]),
+            "timeout": timeout,
+        }
+    parser = argparse.ArgumentParser(prog="mcp_client.py", add_help=True)
+    parser.add_argument("--args-file")
+    parser.add_argument("--args-stdin", action="store_true")
+    parser.add_argument("--timeout", type=int, default=120)
+    parsed = parser.parse_args(remainder)
+    arguments = load_cli_arguments(args_file=parsed.args_file, args_stdin=parsed.args_stdin)
+    return {
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "timeout": parsed.timeout,
+    }
+
+
+def main(argv=None):
+    try:
+        request = parse_cli_request(sys.argv[1:] if argv is None else argv)
+    except (ValueError, json.JSONDecodeError, OSError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    result = call_mcp_tool(request["tool_name"], request["arguments"], request["timeout"])
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: mcp_client.py <tool-name> <args-json> [timeout]", file=sys.stderr)
-        sys.exit(1)
-    _tool = sys.argv[1]
-    _args = json.loads(sys.argv[2])
-    _timeout = int(sys.argv[3]) if len(sys.argv) > 3 else 120
-    _result = call_mcp_tool(_tool, _args, _timeout)
-    print(json.dumps(_result, indent=2))
+    sys.exit(main())

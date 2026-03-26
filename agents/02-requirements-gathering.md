@@ -28,7 +28,6 @@ Fallback (if bundle unavailable):
 - `AGENTS.md`
 - `context/essentials.md`
 - `context/business-checklist.md`
-- `scripts/app_docs.py`
 
 ## Preconditions
 
@@ -88,7 +87,7 @@ Stage-specific constraints for this agent:
 - Before presenting `requirements.md`, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting `requirements.md`, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
-- In `planning-first`, defer runtime questions such as URL, MCP URL, and credentials until implementation is requested.
+- In `planning-first`, defer runtime questions such as URL and credentials until implementation is requested.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in the BA dialogue unless the developer explicitly asks about the internal mechanics.
 - Do not ask about internal app code, existing `.workflow-state`, stale `output/` artifacts, or naming collisions during business discovery unless they change the product concept or create a real blocker.
 - If a previous workflow exists for a similar app concept, handle it internally unless it creates a true product-level ambiguity.

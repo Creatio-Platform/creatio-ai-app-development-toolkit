@@ -10,6 +10,7 @@
 - `CLIO_CMD` можна використовувати лише як override шляху до сумісного `clio`
 - Виконання MCP іде через clio stdio, не через HTTP/SSE
 - Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
+- Для JSON-heavy payloads використовуйте `--args-file` або `--args-stdin`, а не inline quoting
 - Назви tools у dash-style: `application-create`, `application-get-list`, `application-get-info`, `schema-sync`, `page-sync`, `page-list`, `page-get`, `page-update`
 - Аргументи entity/page tools у kebab-case
 
@@ -17,8 +18,15 @@
 
 ```bash
 clio ver
+printf '{"environment-name":"local"}\n' > /tmp/application-get-list.args.json
 python3 scripts/mcp_client.py tools/list '{}' 30
-python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}' 30
+python3 scripts/mcp_client.py application-get-list --args-file /tmp/application-get-list.args.json --timeout 30
+```
+
+```powershell
+@'{"environment-name":"local"}'@ | Set-Content -Path .\application-get-list.args.json
+py -3 .\scripts\mcp_client.py tools/list '{}' 30
+py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
 ```
 
 Очікування:
@@ -34,25 +42,41 @@ python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}
 python3 scripts/mcp_client.py tools/list '{}' 30
 ```
 
+```powershell
+py -3 .\scripts\mcp_client.py tools/list '{}' 30
+```
+
 ### Отримати список applications
 
 ```bash
-python3 scripts/mcp_client.py application-get-list '{"environment-name":"local"}' 30
+printf '{"environment-name":"local"}\n' > /tmp/application-get-list.args.json
+python3 scripts/mcp_client.py application-get-list --args-file /tmp/application-get-list.args.json --timeout 30
+```
+
+```powershell
+@'{"environment-name":"local"}'@ | Set-Content -Path .\application-get-list.args.json
+py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
 ```
 
 ### Отримати application context
 
 ```bash
-python3 scripts/mcp_client.py application-get-info '{
-  "environment-name":"local",
-  "app-code":"UsrTodoList"
-}' 30
+cat <<'EOF' > /tmp/application-get-info.args.json
+{"environment-name":"local","app-code":"UsrTodoList"}
+EOF
+python3 scripts/mcp_client.py application-get-info --args-file /tmp/application-get-info.args.json --timeout 30
+```
+
+```powershell
+@'{"environment-name":"local","app-code":"UsrTodoList"}'@ | Set-Content -Path .\application-get-info.args.json
+py -3 .\scripts\mcp_client.py application-get-info --args-file .\application-get-info.args.json --timeout 30
 ```
 
 ### Батч schema sync
 
 ```bash
-python3 scripts/mcp_client.py schema-sync '{
+cat <<'EOF' > /tmp/schema-sync.args.json
+{
   "environment-name":"local",
   "package-name":"UsrTodoList",
   "operations":[
@@ -75,13 +99,33 @@ python3 scripts/mcp_client.py schema-sync '{
       ]
     }
   ]
-}' 120
+}
+EOF
+python3 scripts/mcp_client.py schema-sync --args-file /tmp/schema-sync.args.json --timeout 120
+```
+
+```powershell
+@'
+{
+  "environment-name":"local",
+  "package-name":"UsrTodoList",
+  "operations":[
+    {
+      "type":"create-lookup",
+      "schema-name":"UsrTodoStatus",
+      "title":"Todo Status"
+    }
+  ]
+}
+'@ | Set-Content -Path .\schema-sync.args.json
+py -3 .\scripts\mcp_client.py schema-sync --args-file .\schema-sync.args.json --timeout 120
 ```
 
 ### Батч page sync
 
 ```bash
-python3 scripts/mcp_client.py page-sync '{
+cat <<'EOF' > /tmp/page-sync.args.json
+{
   "environment-name":"local",
   "pages":[
     {
@@ -91,7 +135,26 @@ python3 scripts/mcp_client.py page-sync '{
   ],
   "validate":true,
   "verify":true
-}' 120
+}
+EOF
+python3 scripts/mcp_client.py page-sync --args-file /tmp/page-sync.args.json --timeout 120
+```
+
+```powershell
+@'
+{
+  "environment-name":"local",
+  "pages":[
+    {
+      "schema-name":"UsrTodoList_FormPage",
+      "body":"define(...)"
+    }
+  ],
+  "validate":true,
+  "verify":true
+}
+'@ | Set-Content -Path .\page-sync.args.json
+py -3 .\scripts\mcp_client.py page-sync --args-file .\page-sync.args.json --timeout 120
 ```
 
 ## Очікувані формати відповіді
@@ -133,6 +196,7 @@ python3 scripts/mcp_client.py page-sync '{
 - Після `schema-sync` обов’язково викличте `application-get-info`
 - Після `page-sync` перевірте, що всі page results мають `success: true`
 - Якщо потрібна детальна перевірка сторінок, дочитайте сторінки через `page-get`
+- Для локального helper path `page-sync` лишається preferred fast path, а `mcp_page_sync.py` робить fallback `page-get`, якщо server response не містить reusable verified body
 - Якщо `tools/list` не містить `schema-sync`, `page-sync` або `component-info`, вважайте встановлений `clio` несумісним
 
 ## Типові помилки
@@ -155,6 +219,7 @@ python3 scripts/mcp_client.py page-sync '{
 Рішення:
 - перевірити `clio ver`
 - перевірити `python3 scripts/mcp_client.py tools/list '{}' 30`
+- у PowerShell використати `py -3 .\scripts\mcp_client.py ...`
 
 ### Generic `An error occurred invoking ...`
 
