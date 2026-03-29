@@ -119,6 +119,8 @@ Resolve these ambiguities explicitly when they appear in the request:
 - if a secondary entity is proposed, state why it is a distinct business object instead of additional fields on the main entity
 - if contact-like records are present, state whether they are subordinate to one parent record or may exist independently
 
+The visible BA draft **must** render each entity in the data model section as a markdown table with columns: `Title`, `Code`, `Description`, `Data type`, `Required`, `Default`. Lookup seed rows must also be rendered as a table. Do not use bullet lists to describe entity fields or seed rows.
+
 ### UX assumptions
 
 Default unless critical:

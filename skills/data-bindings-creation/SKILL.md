@@ -1,67 +1,78 @@
 ---
 name: data-bindings-creation
-description: Create or update Creatio data bindings through MCP `get-entity-schema-properties`, `create-data-binding-db`, and `upsert-data-binding-row-db` for SysModule, SysModuleEntity, and lookup seed data.
-compatibility: Requires Creatio MCP binding tools plus context/bindings-lookup.json and context/data-bindings-reference.md.
+description: Create or update Creatio data bindings and lookup seed data through DB-first MCP flows while preserving binding and section registration invariants.
+compatibility: Requires clio MCP binding tools plus `context/bindings-lookup.json` and `context/data-bindings-reference.md`.
 metadata:
-  version: "5.0"
+  version: "6.0"
   category: creatio-schema-generation
 ---
 
-# Data Bindings via MCP
+# Data Bindings
 
-Generate package data bindings that register sections and seed lookup values.
+Use this skill when the workflow must register sections, bind entities to navigation, or seed lookup rows.
+
+This skill is not an MCP API reference.
+Resolve exact tool names, parameters, aliases, defaults, and response shapes through `tool-contract-get`.
+
+## Primary Flow
+
+Prefer plan-driven or composite flows first:
+
+1. use `schema-sync` inline `seed-rows` for normal lookup seeding
+2. use explicit binding tools only when a distinct binding artifact or post-sync seed step is actually required
+
+Typical fallback tool families:
+
+- schema inspection tools for deployed metadata
+- binding creation tools for section registration or explicit binding artifacts
+- row upsert tools for targeted updates to an existing binding
 
 ## Outputs
 
 - MCP response with `{"success": true}`
-- Binding persisted in Creatio DB and data installed immediately
-
-## Source Inputs
-
-From MCP and context:
-- `get-entity-schema-properties` for deployed schema metadata (requires `environment-name`, `package-name`, `schema-name`)
-- `get-entity-schema-column-properties` for single column metadata (also requires `column-name`)
-- current app context with `package-name`, `package-u-id`, or normalized equivalent package identity plus target schema names
-- `context/bindings-lookup.json`
-- `context/data-bindings-reference.md`
+- binding persisted in Creatio DB
+- immediate installed state in Creatio
+- execution evidence captured in the workflow result document
 
 ## Rules
 
-1. MCP usage is the primary generation path. All params use kebab-case.
-2. Do not generate or change stable system column UIds; use values from `bindings-lookup.json`.
-3. `SysModule.data.json` and `SysModuleEntity.data.json` must reference the same SysModuleEntity record GUID.
-4. `SysModule.CardSchemaUId` must match the form page UId in the resolved app context.
-5. `SysModule.SectionSchemaUId` must match the list page UId in the resolved app context.
-6. Use standard values from `context/data-bindings-reference.md`:
-   - `SectionModuleSchemaUId`: `12244568-6d4f-f201-ed26-ac3913021080`
-   - `CardModuleUId`: `c3382be3-6619-9256-2260-93d87cf0d9b5`
-   - `FolderMode`: `b659d704-3955-e011-981f-00155d043204`
-7. `filter.json` for standard bindings is `""`.
-8. For lookup seed data, create one row per seed value.
-9. `create-data-binding-db` requires `environment-name`, `package-name`, `schema-name`. `binding-name` is optional and defaults to `<schema-name>`. After `create-entity-schema` or `create-lookup`, use `get-entity-schema-properties` if column discovery is needed.
-10. Generate a fresh GUID for every lookup seed row. Do not reuse decorative placeholder GUIDs from docs in executable payloads.
-11. For lookup seed bindings via `schema-sync`, prefer inline `seed-rows` format: `[{"values": {"Name": "New"}}, ...]`.
-12. `upsert-data-binding-row-db` upserts a single row and requires `environment-name`, `package-name`, `binding-name`, `values`.
-13. For default lookup seed flows, omit `binding-name` so the tool updates the schema-named binding. Do not create a second binding for the same schema just by using a different name such as `<schema>_Lookup` unless explicitly required.
+1. MCP usage is mandatory.
+2. Keep `context/bindings-lookup.json` as the source for stable system column UIds.
+3. `SysModule` and `SysModuleEntity` links must stay internally consistent.
+4. `SysModule.CardSchemaUId` must match the form page UId in the current app context.
+5. `SysModule.SectionSchemaUId` must match the list page UId in the current app context.
+6. `filter.json` stays empty for standard section registration and lookup seed bindings unless a custom filter is explicitly required.
+7. Generate fresh GUIDs for lookup seed rows at execution time.
+8. For ordinary lookup seeding, do not create a second binding artifact under a different binding name unless the plan explicitly requires it.
+9. Treat DB persistence and immediate install as the primary effect; server-side file materialization is secondary.
 
-## Typical MCP Flow
+## Source Inputs
 
-1. Call `get-entity-schema-properties` for deployed targets such as `SysModule` or `SysModuleEntity`.
-2. Build seed rows in `[{"values": {...}}, ...]` format.
-3. Call `create-data-binding-db` with `environment-name`, `package-name`, `schema-name`.
-4. Before calling `create-data-binding-db`, verify whether lookup seeding already succeeded in this run through `schema-sync` `seed-rows`; if yes, do not call it again for that schema unless a distinct binding artifact is explicitly required.
-5. Validate `{"success": true}`.
+- `get-entity-schema-properties` for deployed schema metadata when stable IDs or deployed columns are needed
+- `get-entity-schema-column-properties` for single-column verification when needed
+- current app context with package and page identifiers
+- deployed schema metadata for binding targets when needed
+- `context/bindings-lookup.json`
+- `context/data-bindings-reference.md`
+- explicit seed values or section registration intent from the approved plan
+
+## Typical Workflow
+
+1. Inspect deployed schema metadata only when needed for stable IDs or column discovery.
+2. Prefer inline lookup seeding through `schema-sync` when the same workflow already creates or updates the lookup.
+3. Use explicit binding creation only when the workflow needs `SysModule`, `SysModuleEntity`, or a separate binding artifact.
+4. Upsert targeted rows only after the binding identity is known.
+5. Verify the result from execution evidence instead of assuming success from planned rows.
 
 ## Validation Checklist
 
-- MCP response parses successfully
-- `success` is `true`
-- Binding and seed data are installed in Creatio
-- All references (entity/page/module ids) match the current app context
-- Lookup data contains all seed values
-- Lookup seed rows use fresh GUID values
+- binding targets match the current app context
+- lookup seed rows contain all required values
+- every generated row GUID is fresh
+- no duplicate binding artifact is created without explicit intent
+- evidence shows the installed result, not only the requested rows
 
 ## Notes
 
-- `create-data-binding-db` does not return generated file bodies on success; the main result is DB persistence and immediate install.
-- Use `templates/data-bindings/` as reference examples, not as the primary generation path.
+- Template files under `templates/data-bindings/` are reference examples only.
+- This skill defines binding policy and invariants, not executable payload syntax.

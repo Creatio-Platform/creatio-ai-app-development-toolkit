@@ -42,6 +42,15 @@ def normalize_title(value, fallback=None):
     return None
 
 
+def build_localizations(value, fallback=None):
+    normalized = normalize_title(value, fallback)
+    if normalized is None:
+        return None
+    return {
+        "en-US": normalized
+    }
+
+
 def load_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -328,12 +337,15 @@ def build_column_operations(current_entity, edited_entity, available_names):
 def build_create_columns(columns):
     converted = []
     for column in columns:
-        normalized_title = normalize_title(column.get("caption"), column["name"])
+        title_localizations = build_localizations(column.get("caption"), column["name"])
         item = {
             "name": column["name"],
             "type": column.get("dataValueTypeName"),
-            "title": normalized_title
+            "title-localizations": title_localizations
         }
+        description_localizations = build_localizations(column.get("description"))
+        if description_localizations is not None:
+            item["description-localizations"] = description_localizations
         if column.get("referenceSchemaName"):
             item["reference-schema-name"] = column["referenceSchemaName"]
         if "isRequired" in column:
@@ -358,18 +370,20 @@ def build_update_operations_payload(operations):
         column = operation["column"]
         action = "add" if operation["operation"] == "addColumn" else "modify"
         if action == "add":
-            normalized_title = normalize_title(column.get("caption"), column["name"])
+            title_localizations = build_localizations(column.get("caption"), column["name"])
         else:
             normalized_title = normalize_title(column.get("caption"))
-            if normalized_title == column["name"]:
-                normalized_title = None
+            title_localizations = None if normalized_title == column["name"] else build_localizations(normalized_title)
         item = {
             "action": action,
             "column-name": column["name"],
             "type": column.get("dataValueTypeName"),
         }
-        if normalized_title is not None:
-            item["title"] = normalized_title
+        if title_localizations is not None:
+            item["title-localizations"] = title_localizations
+        description_localizations = build_localizations(column.get("description"))
+        if description_localizations is not None:
+            item["description-localizations"] = description_localizations
         if column.get("referenceSchemaName"):
             item["reference-schema-name"] = column["referenceSchemaName"]
         if "isRequired" in column:
@@ -391,7 +405,7 @@ def build_create_action(entity):
     arguments = {
         "package-name": entity["packageName"],
         "schema-name": entity["name"],
-        "title": normalize_title(entity.get("caption"), entity["name"])
+        "title-localizations": build_localizations(entity.get("caption"), entity["name"])
     }
     create_columns = build_create_columns(filtered_columns)
     if create_columns:
@@ -549,7 +563,7 @@ def build_schema_sync_operation(action):
         operation = {
             "type": "create-lookup",
             "schema-name": arguments["schema-name"],
-            "title": arguments["title"]
+            "title-localizations": arguments["title-localizations"]
         }
         if arguments.get("columns"):
             operation["columns"] = arguments["columns"]
@@ -558,7 +572,7 @@ def build_schema_sync_operation(action):
         operation = {
             "type": "create-entity",
             "schema-name": arguments["schema-name"],
-            "title": arguments["title"],
+            "title-localizations": arguments["title-localizations"],
             "parent-schema-name": arguments.get("parent-schema-name") or "BaseEntity"
         }
         if arguments.get("columns"):

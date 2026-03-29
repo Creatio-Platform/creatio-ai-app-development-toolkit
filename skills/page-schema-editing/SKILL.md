@@ -1,100 +1,49 @@
-﻿---
+---
 name: page-schema-editing
-description: Edit Freedom UI page schemas by modifying the full JS body directly. Agent gets the raw body, inspects unfamiliar component types when needed, makes changes, and sends it back to MCP for saving.
-compatibility: Requires clio MCP with `page-get`, `page-update`, `page-list`, and `component-info` available.
+description: Edit Freedom UI page schemas by modifying the full JS body directly and persisting changes through the canonical runtime page-sync flow.
+compatibility: Requires clio MCP with `page-list`, `page-get`, `page-sync`, and `component-info` available. `page-update` is fallback-only.
 metadata:
-  version: "2.0"
+  version: "3.0"
   category: creatio-schema-generation
 ---
 
 # Page Schema Editing
 
-Edit Freedom UI page schemas by working with the complete JS body. The agent reads the raw body, modifies it directly, and sends the full updated body back to MCP for validation and saving.
+Use this skill when the task is to change a deployed Freedom UI page body.
+
+This skill is not an MCP API reference.
+Resolve exact tool names, parameters, aliases, defaults, response shapes, and errors through `tool-contract-get`.
+
+## Canonical Runtime Flow
+
+1. `page-list`
+2. `page-get`
+3. edit `raw.body`
+4. `page-sync`
+5. `page-get` verification
+
+Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows.
 
 ## Required Context
 
 Read before executing:
-- `context/handlers-reference.md` — handler patterns, request types, deps correlation
-- `context/devkit-common-reference.md` — exhaustive `@creatio-devkit/common` public API surface for `sdk.*` imports
-- `context/ui-reference.md` — page structure, control types, section markers
-- `context/viewconfig-reference.md` — viewConfigDiff components (buttons, containers, property values)
 
-## MCP Tools Reference
+- `context/handlers-reference.md`
+- `context/devkit-common-reference.md`
+- `context/ui-reference.md`
+- `context/viewconfig-reference.md`
 
-### `page-list` — Discover Pages
+## Working Rules
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `search-pattern` | string | No | Filter by schema name (case-insensitive contains) |
-| `package-name` | string | No | Filter by exact package name |
-| `limit` | string | No | Max results (default: `"25"`) |
-| `environment-name` | string | No | Registered clio environment name |
-
-**All parameters are strings.**
-
-### `page-get` — Read Page
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `schema-name` | string | **Yes** | Exact page schema name |
-| `environment-name` | string | No | Registered clio environment name |
-
-Response:
-```json
-{
-  "success": true,
-  "page": {
-    "schemaName": "UsrMyApp_FormPage",
-    "schemaUId": "...",
-    "packageName": "UsrMyApp",
-    "parentSchemaName": "PageWithTabsFreedomTemplate"
-  },
-  "raw": {
-    "body": "define(\"UsrMyApp_FormPage\", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, ...full JS body...)"
-  }
-}
-```
-
-Use `raw.body` as the editable source of truth. The `page` block is metadata only.
-
-When the response `bundle.viewConfig` contains an unfamiliar `crt.*` component type, call `component-info` with that exact `component-type` before editing nested properties or child items.
-
-### `component-info` — Inspect Component Contract
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `component-type` | string | No | Exact Freedom UI component type, e.g. `crt.TabContainer`. Omit it or use `list` to return the grouped catalog. |
-| `search` | string | No | Optional keyword filter for list mode. |
-
-Use this tool to inspect supported properties, parent types, typical children, and example payloads for unfamiliar container or control types found in `bundle.viewConfig`.
-
-### `page-update` — Save Complete Body
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `schema-name` | string | **Yes** | Page schema name |
-| `body` | string | **Yes** | Complete JS body with all 8 marker pairs |
-| `dry-run` | boolean | No | `True` to validate without saving |
-| `resources` | string | No | JSON object for `#ResourceString(key)#` captions |
-| `environment-name` | string | No | Registered clio environment name |
-
-Response (success):
-```json
-{
-  "success": true,
-  "schemaName": "UsrMyApp_FormPage",
-  "bodyLength": 3456,
-  "dryRun": false,
-  "resourcesRegistered": 1,
-  "registeredResourceKeys": ["UsrDetailsTab_caption"]
-}
-```
-
-If the edited body introduces `#ResourceString(UsrKey_caption)#`, pass `resources` with explicit `{key: value}` pairs or rely on `page-update` auto-derivation for Usr-prefixed keys.
+- Use `raw.body` from `page-get` as the editable source of truth.
+- Treat the `page` block from `page-get` as metadata only.
+- If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `component-info` before editing nested configuration.
+- If the edited body introduces `#ResourceString(UsrKey_caption)#`, pass `resources` through `page-sync` or the fallback `page-update` path.
+- Keep repository docs for workflow and page-editing policy only. Do not copy MCP parameter tables into plans or prompts.
 
 ## Schema Body Format
 
-The body is a JS `define(...)` call containing 8 marker-delimited sections:
+Freedom UI page bodies are AMD modules with marker-delimited sections:
 
 ```javascript
 define("SchemaName", /**SCHEMA_DEPS*/["@creatio-devkit/common"]/**SCHEMA_DEPS*/, function/**SCHEMA_ARGS*/(sdk)/**SCHEMA_ARGS*/ {
@@ -109,222 +58,98 @@ return {
 });
 ```
 
-### Marker Format
+Preserve all marker pairs and the outer module structure.
 
-Each section is delimited by a pair of markers: `/**MARKER_NAME*/content/**MARKER_NAME*/`
+## Safe Editing Algorithm
 
-The 8 markers and their content shapes:
+1. Extract only the content inside the target marker pair.
+2. Detect whether the section is object-based or diff-array-based.
+3. Parse the marker content as structured data with trailing-comma tolerance.
+4. Modify the parsed structure.
+5. Serialize the structure back to JSON text.
+6. Replace only the marker content.
+7. Re-parse every modified section before saving.
 
-| Marker | Section | Shape |
-|--------|---------|-------|
-| `SCHEMA_DEPS` | deps | Array `[...]` |
-| `SCHEMA_ARGS` | args | Parenthesized `(...)` |
-| `SCHEMA_VIEW_CONFIG_DIFF` | viewConfigDiff | Array `[...]` |
-| `SCHEMA_VIEW_MODEL_CONFIG_DIFF` | viewModelConfigDiff | Array `[...]` |
-| `SCHEMA_MODEL_CONFIG_DIFF` | modelConfigDiff | Array `[...]` |
-| `SCHEMA_HANDLERS` | handlers | Array `[...]` |
-| `SCHEMA_CONVERTERS` | converters | Object `{...}` |
-| `SCHEMA_VALIDATORS` | validators | Object `{...}` |
+Use `scripts/page_body_edit.py` or `scripts/page_body_tools.py` for marker-safe manipulation.
+Do not splice raw strings into page bodies.
 
-Notes:
+## FormPage Field Sync
 
-- `handlers` is an array section; append or edit individual handler entries without replacing unrelated ones.
-- `converters` and `validators` are object sections; preserve existing keys and edit them conservatively.
-- For new page logic, prefer handlers, business rules, and attribute-property APIs unless the live page already provides concrete `converters` or `validators` usage to extend.
+Use this when the main entity gained new columns and the live FormPage must surface them.
 
-## Workflow
+1. Read the current page with `page-get`.
+2. Parse `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF`.
+3. Discover the primary field container from the live page by finding the container with the most existing field inserts.
+4. Append only missing fields to that discovered container.
+5. Continue `row` and `index` from the current maximum values.
+6. Add a matching view-model attribute for every inserted field.
+7. Preserve the live page naming pattern and existing bindings.
+8. For datasource-bound lookup fields, add only the main bound attribute unless the live page already persists extra lookup-list bindings.
 
-### Step 1: Discover Pages
+## ListPage Grid Sync
 
-```
-page-list(search-pattern: "TestApp1")
-```
+Use this when the ListPage must surface new main-entity columns.
 
-### Step 2: Read Current Body
+1. Read the current page with `page-get`.
+2. Inspect the live DataGrid and preserve existing columns and order.
+3. Resolve the target columns from the explicit plan first, then from repository default policy in `context/ui-reference.md`.
+4. Append only missing columns.
+5. Preserve the live `items` binding and the collection path unless requirements explicitly change them.
+6. Verify the final grid through a post-save `page-get`.
 
-**Always read before editing.** Never construct a body from scratch.
+## ListPage Sorting
 
-```
-page-get(schema-name: "TestApp1_ListPage")
-```
+Use the canonical sorting policy from `context/ui-reference.md`.
+Sorting is driven by the collection attribute and its `sortingConfig`, not by ad hoc DataGrid node edits.
+Do not reuse FormPage lookup-list sorting patterns for ListPage row sorting.
 
-### Step 3: Modify the Body
+## Save Workflow
 
-**Use marker-based section extraction and structured JSON modification.** The utility `scripts/page_body_edit.py` implements this algorithm. For standard field/column additions, prefer the utility over manual editing.
+Preferred path:
 
-**Safe Editing Algorithm:**
+Persist the edited page through `page-sync` with validation and server-side verification enabled.
 
-1. **Extract** — locate the marker pair `/**MARKER*/.../**MARKER*/` and extract only the content between them
-2. **Detect variant** — determine whether the section is `viewModelConfig` (plain object `{}`) or `viewModelConfigDiff` (array `[]` of merge operations); same for `modelConfig`/`modelConfigDiff`
-3. **Parse** — deserialize the extracted content as JSON with trailing-comma tolerance (strip `,` before `]` and `}`)
-4. **Modify** — apply changes to the parsed data structure (append to arrays, merge into objects)
-5. **Serialize** — convert back to formatted JSON string with proper indentation
-6. **Replace** — substitute the content between markers with the serialized result
-7. **Validate** — re-extract and re-parse each modified section to confirm structural integrity before calling `page-update`
+Fallback path:
 
-**Anti-patterns (MUST NOT):**
-
-- ❌ Never use `body.find("}")` or brace-counting to locate insertion points — nested JS structures make positional brace search unreliable
-- ❌ Never insert raw JSON strings into the body without parsing the target section first — splicing text into unparsed JSON causes structural corruption (fields land inside wrong objects, attributes escape their parent container)
-- ❌ Never use `str.replace()` or string concatenation to inject JSON fragments — Creatio template bodies contain trailing commas (valid JS, invalid strict JSON); appending after a trailing comma produces double-comma `},,{` corruption that breaks the page at runtime
-- ❌ Never assume the viewModelConfig section type — always detect whether it is `viewModelConfig` (object) or `viewModelConfigDiff` (array); FormPage typically uses the object variant, ListPage uses the array variant
-- ❌ Never add columns to `viewConfigDiff` DataTable without adding matching `PDS_*` bindings to `viewModelConfigDiff` — columns without model paths render as empty/broken; every column `PDS_X` needs a corresponding attribute with `modelConfig.path: "PDS.X"`
-- ❌ Never verify edits by substring search alone (e.g., `"UsrStatus" in body`) — a field name can appear in a structurally broken body; always re-parse each edited section as JSON to confirm integrity
-- ❌ Never insert content at a position found by counting closing braces from an anchor string — the correct anchor is the marker boundary, not a brace position
-
-**Mandatory tooling:** Page body editing MUST use `scripts/page_body_edit.py` functions (`add_form_fields`, `add_list_columns`) or `scripts/page_body_tools.py` marker utilities (`parse_marker_json`, `extract_marker_text`). Direct string manipulation of page bodies is prohibited.
-
-**FormPage vs ListPage structural differences:**
-
-| Aspect | FormPage | ListPage |
-|--------|----------|----------|
-| viewModel section | `viewModelConfig` — plain object with `attributes: {}` | `viewModelConfigDiff` — array of merge operations with `path` and `values` |
-| model section | `modelConfig` — plain object | `modelConfigDiff` — array of merge operations |
-| Adding attributes | Merge into `attributes` object directly | Merge into the operation's `values` object where `path` contains `"attributes"` |
-| Field container | Discovered from live `viewConfigDiff` (container with most field-type inserts) | `DataTable` merge with `columns` array |
-
-### Step 3a: Sync New Entity Fields into a Live FormPage
-
-Use this workflow when the entity gained new columns and the live FormPage must surface them:
-
-1. Parse both `SCHEMA_VIEW_CONFIG_DIFF` and `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
-2. If the live page contains unfamiliar `crt.*` container or control types around the target area, inspect them through `component-info` before editing container-specific config.
-3. **Discover the primary field container** — the container with the most field-type `insert` operations (e.g., `crt.Input`, `crt.ComboBox`). Collect existing inserts in that container where `propertyName == "items"`.
-4. Find the current maximum `row` and `index` values in the discovered container
-5. For each missing entity field:
-   - choose the control recipe from `context/viewconfig-reference.md`
-   - append a new `insert` to the discovered container
-   - continue `row` and `index` from the current maximum values
-   - keep the live page naming pattern for the field attribute key
-   - add a matching attribute to `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
-   - keep raw config minimal for preprocessor-backed controls unless the current page body already contains explicit richer config
-6. Preserve existing inserts and bindings — append only missing fields
-7. Keep `Name` as a special case when it already exists in the page body
-
-Special cases from live schema:
-- Lookup fields need:
-  - the main `crt.ComboBox` insert
-  - the main bound attribute in `SCHEMA_VIEW_MODEL_CONFIG_DIFF`
-  - preservation of any existing live `*_List` bindings or nested actions without synthesizing new ones
-- `crt.ImageInput` binds through `value`, not `control`
-- Most other field controls bind through `control`
-- Match `crt.DateTimePicker.pickerType` to the field kind when the column is date-only or time-only
-- Add `crt.NumberInput.format.decimalPrecision` when numeric scale is known
-- `crt.PhoneInput`, `crt.EmailInput`, `crt.WebInput`, `crt.ComboBox`, and `crt.ImageInput` are preprocessor-backed; avoid hand-writing auto-generated request wiring unless the page body already persists it
-
-Guardrails for FormPage lookup sync:
-- If a new `crt.ComboBox` is bound to an entity datasource through the main attribute, do not add a sibling `*_List` attribute.
-- If the live page already has a materialized `*_List`, preserve its naming and config, but do not synthesize a new one.
-- Invalid: `UsrStatus_List.modelConfig.path = "UsrStatus_List"`.
-- Invalid: introducing `UsrPriority_List` next to `UsrPriority -> PDS.UsrPriority` on a page that did not already persist that list attribute.
-
-### Step 3b: Adjust ListPage Sorting
-
-Use this workflow when the task is to change default row sorting on a live ListPage:
-
-1. Read the canonical section `ListPage DataGrid Sorting via page-update` in `context/ui-reference.md`
-2. Parse the live `SCHEMA_VIEW_MODEL_CONFIG_DIFF` and identify the DataGrid collection attribute bound through the grid `items` property
-3. Inspect that collection attribute's `modelConfig.sortingConfig`
-4. Keep the live data-source binding path such as `PDS` unless the task explicitly changes the data source
-5. Use entity column names in sort options such as `CreatedOn` or `UsrDueDate`
-6. Add or update `sortingConfig.default` when the requirement is plain column ordering
-7. Preserve an explicit sibling sorting attribute only when the live page body already materializes it or the task requires deterministic raw-body output
-8. Run `page-update(..., dry-run: True)` before save
-
-Do not reuse FormPage lookup `*_List` sorting as the pattern for ListPage DataGrid row sorting. If the requested order is semantic or business-specific rather than plain column ordering, stop and treat it as a blocker unless there is an explicit technical sort key or separate runtime logic in scope.
-
-### Step 4: Validate with Dry Run
-
-```
-page-update(
-  schema-name: "TestApp1_ListPage",
-  body: "...full modified body...",
-  dry-run: True
-)
-```
-
-Check `success: true` before saving.
-
-### Step 5: Save
-
-```
-page-update(
-  schema-name: "TestApp1_ListPage",
-  body: "...full modified body..."
-)
-```
+Run a single-page `page-update` dry-run, then save, then verify through `page-get`.
 
 ## Critical Rules
 
-1. **Always read first** — use `page-get` before any edit
-2. **Preserve all 8 marker pairs** — MCP validates their presence; missing markers = rejection
-3. **Preserve structure outside markers** — don't modify `define(...)` wrapper, `return {`, or `};`
-4. **Balance all delimiters** — `[]`, `{}`, `()` must be balanced within each section
-5. **By default, call `await next?.handle(request)`** to preserve the request chain, but omit it intentionally when canceling or overriding the default flow
-6. **Prefix entity columns with `PDS_`** (e.g., `PDS_UsrName`, `PDS_UsrStatus`)
-7. **Deps ↔ handlers correlation** — if handler uses SDK services, ensure deps and args include the required import and preserve the live alias style (`sdk`, `devkit`, etc.)
-8. **For runtime entity-field sync, discover the primary field container** from the live page's `viewConfigDiff` (the container with the most field-type inserts) instead of assuming a fixed container name
-9. **Every new field insert needs a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute**
-10. **For datasource-bound FormPage ComboBox fields, add only the main bound attribute unless the live schema already materializes extra lookup-list bindings**
-11. **Do not manually duplicate frontend-generated ComboBox/ImageInput request wiring unless the live schema already stores it explicitly**
-12. **Use `request.$context.executeRequest(...)` for secondary programmatic requests and `setValue(...)` / `setAttributePropertyValue(...)` for runtime attribute state changes**
-13. **Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body via `page-update`**
-14. **Treat `converters` and `validators` as conservative object sections, not the default place for new validation logic without live schema evidence**
-15. **For ListPage sorting, use the canonical contract in `context/ui-reference.md` and do not infer business order from lookup sorting direction**
-16. **Treat any newly introduced FormPage attribute ending with `_List` as a blocker unless the live page already contained it before editing**
+1. Always call `page-get` before editing.
+2. Preserve all marker pairs.
+3. Preserve the `define(...)` wrapper and page module structure.
+4. Every new field insert must have a matching view-model attribute.
+5. Preserve existing live bindings instead of regenerating them under new names.
+6. Do not invent datasource-bound lookup `*_List` attributes on pages that did not already materialize them.
+7. Use `request.$context.executeRequest(...)` for secondary programmatic requests.
+8. Use `setValue(...)` or `setAttributePropertyValue(...)` for runtime attribute state changes.
+9. Do not switch to standalone TypeScript `@CrtRequestHandler` classes when the task is to edit the deployed page body.
+10. Treat `converters` and `validators` conservatively; only edit them when live schema evidence requires it.
+11. Keep `page-update` as fallback-only. Do not document it as the primary write path.
 
 ## Validation Checklist
 
-### Pre-edit
-- [ ] `page-get` called before edit
-- [ ] Section variant detected (`viewModelConfig` vs `viewModelConfigDiff`)
+Before save:
 
-### Structural integrity (before calling page-update)
-- [ ] All 8 `/**MARKER*/.../**MARKER*/` pairs present in modified body
-- [ ] `SCHEMA_VIEW_CONFIG_DIFF` content parses as a valid JSON array
-- [ ] viewModelConfig(Diff) content parses as valid JSON (object or array depending on variant)
-- [ ] modelConfig(Diff) content parses as valid JSON (object or array depending on variant)
-- [ ] `define(...)` wrapper and `return {` structure preserved
-- [ ] Every `insert` operation in viewConfigDiff has: `name`, `values`, `parentName`, `propertyName`, `index`
-- [ ] Every field using `control: "$X"` has a matching attribute `X` in viewModelConfig(Diff)
-- [ ] For FormPage: insert operations targeting the primary field container have monotonically increasing `row` values
-- [ ] For ListPage: `DataTable` merge contains all required column codes
+- `page-get` already ran for the target page.
+- Every modified marker section re-parses successfully.
+- All delimiters remain balanced.
+- Every inserted UI field has a matching binding.
+- The discovered primary field container is used for FormPage inserts.
+- ListPage column changes preserve existing columns and order unless requirements say otherwise.
 
-### Content correctness
-- [ ] Handler uses correct request type for business intent
-- [ ] Each handler either preserves the chain intentionally, stops it intentionally, or documents cleanup via `finally`
-- [ ] Entity attributes prefixed with `PDS_`
-- [ ] Every inserted field has a matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attribute
-- [ ] Runtime FormPage field sync appends to the discovered primary field container
-- [ ] Datasource-bound FormPage ComboBox fields do not introduce new `*_List` bindings unless the live page already persisted them
-- [ ] Existing live lookup-list bindings or nested actions are preserved instead of regenerated or renamed
-- [ ] ListPage sorting changes follow the canonical `context/ui-reference.md` contract instead of FormPage lookup-list patterns
-- [ ] Numeric/date controls keep scale and picker-type metadata when the column type requires it
-- [ ] Preprocessor-backed controls are not bloated with duplicate auto-generated wiring
-- [ ] Programmatic follow-up requests use `request.$context.executeRequest(...)` when needed
-- [ ] Dynamic validation and UI state updates use `setValue(...)` or `setAttributePropertyValue(...)` when appropriate
-- [ ] `converters` and `validators` were only edited when the live schema already used them or the task provided concrete evidence
-- [ ] Deps and args were updated if handlers use external modules, and the live SDK alias style was preserved
-- [ ] `dry-run: True` passed first to validate
-- [ ] `success: true` confirmed after save
+After save:
 
-## Example: Add Handler + Update Deps in One Operation
+- `page-sync` returned success for the page, or the fallback path completed successfully.
+- Post-save `page-get` confirms the required fields or columns are present.
+- Page evidence can be marked `implemented` and `machineChecked`.
 
-```
-1. page-get(schema-name: "TestApp1_ListPage")
-   → get body
+## Minimal Example
 
-2. Modify body:
-   - Replace /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/
-     with    /**SCHEMA_DEPS*/["@creatio-devkit/common"]/**SCHEMA_DEPS*/
-   - Replace /**SCHEMA_ARGS*/()/**SCHEMA_ARGS*/
-     with    /**SCHEMA_ARGS*/(sdk)/**SCHEMA_ARGS*/
-   - Replace /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/
-     with    /**SCHEMA_HANDLERS*/[{ request: "crt.HandleViewModelInitRequest", handler: async (request, next) => { await next?.handle(request); console.log("Welcome!"); } }]/**SCHEMA_HANDLERS*/
-
-3. page-update(schema-name: "TestApp1_ListPage", body: "...modified body...", dry-run: True)
-   → success: true
-
-4. page-update(schema-name: "TestApp1_ListPage", body: "...modified body...")
-   → saved to DB + decorated file written to disk + browser notified
+```text
+1. Discover the target page through `page-list`
+2. Read the live page through `page-get`
+3. edit raw.body with marker-safe utilities
+4. Persist through `page-sync`
+5. Re-read through `page-get` when helper-level verification still needs the live body
 ```

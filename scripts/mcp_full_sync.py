@@ -10,9 +10,9 @@ Usage:
       --page-plan output/<App>/plan.md \
       --report output/<App>/mcp-application-report.md
 
-Runs all entity mutations through schema-sync/create-lookup/create-entity-schema/update-entity-schema
-and page sync through page-list/page-get/page-update/page-sync in one process using
-a single persistent MCP connection.
+Runs entity mutations through the canonical entity flow and page changes through the canonical
+page flow in one process using a single persistent MCP connection. The helper prefers
+page-sync and uses page-update only as an explicit fallback when page-sync is unavailable.
 
 Skipping phases:
     --skip-schema   Skip entity schema sync (only run page sync)

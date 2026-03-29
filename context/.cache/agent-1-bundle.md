@@ -9,11 +9,11 @@ Do NOT edit manually — regenerate with `python3 scripts/build_context_bundle.p
 
 ## Role
 
-Configure clio CLI and establish connection to Creatio instance.
+Configure clio CLI and establish connection to the target Creatio runtime for the current app workflow.
 
 ## Input/Output
 
-- **Input:** Developer request with Creatio URL, `<AppName>`
+- **Input:** Developer request with Creatio URL and `<AppName>`
 - **Output:** `output/<AppName>/.creatio-env.json`
 
 ## Context
@@ -26,30 +26,7 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.m
 
 ### 1. Verify prerequisites
 
-**Step 1a — Resolve Python (FIRST — before any other check):**
-
-Python 3 is required for all MCP calls. Resolve it immediately at session start — **before** checking .NET, clio, or anything else. Run the discovery script for the current OS:
-
-**Windows (PowerShell):**
-```powershell
-. scripts\find_python.ps1
-# $env:PYTHON_CMD is now set to a full path, e.g. "C:\Users\...\Python312\python.exe"
-```
-
-**macOS / Linux (bash):**
-```bash
-source scripts/find_python.sh
-# $PYTHON_CMD is now exported, e.g. "python3" or "/opt/homebrew/bin/python3"
-```
-
-**⛔ If the script exits with an error, stop immediately and tell the user:**
-> Python 3 is not installed on this machine. Please install it from **https://www.python.org/downloads/** and restart your terminal, then retry.
-
-**Do NOT search for Python elsewhere.** Python bundled with pgAdmin, Anaconda, Miniconda, VS Code, or any other application is off-limits — it lacks required packages and will cause unexpected failures.
-
-**Never invoke `python` or `python3` directly.** Always use `$env:PYTHON_CMD` (Windows) or `"$PYTHON_CMD"` (macOS/Linux) for every Python call in this session.
-
-**Step 1b — Check .NET SDK:**
+**Step 1a — Check .NET SDK:**
 ```bash
 dotnet --version
 ```
@@ -58,7 +35,7 @@ If not found — stop and tell the developer:
 > **https://dotnet.microsoft.com/download**
 > Then restart the terminal and retry.
 
-**Step 1c — Check clio (after .NET is confirmed):**
+**Step 1b — Check clio (after .NET is confirmed):**
 
 Three scenarios:
 
@@ -83,9 +60,15 @@ Note the version and proceed. No additional configuration needed.
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
-clio ver 2>/dev/null || dotnet $CLIO_PATH ver  # verify it works
+dotnet /full/path/to/clio.dll ver
 ```
 `scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
+
+Windows PowerShell peer:
+```powershell
+$env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
+py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
+```
 
 ### Environment Name Guardrail
 
@@ -152,26 +135,21 @@ Create the file `output/<AppName>/.creatio-env.json`:
 {
   "environment": "<env_name>",
   "url": "<URL>",
-  "isNetCore": true,
-  "mcpTransport": "stdio",
-  "mcpCommand": "clio mcp-server"
+  "isNetCore": true
 }
 ```
 
 Replace `true` with `false` if .NET Framework was detected in Step 4.
 
-`mcpCommand` is `clio mcp-server` for the standard global install. If the user provided a custom clio path at startup (e.g. `CLIO_CMD="dotnet /path/to/clio.dll"`), document that in `.creatio-env.json` as a `note` field — do NOT change `mcpCommand`.
+If the user provided a custom clio path at startup, add `"mcpCommand": "<custom clio command>"` to `.creatio-env.json`.
+For the standard global install, omit `mcpCommand` and let the runtime resolve `clio` from PATH.
 
 ### 7. Verify MCP via clio stdio (MANDATORY)
 
 Verify that clio MCP responds correctly using the stdio client:
 
 ```bash
-# Windows PowerShell:
-& $env:PYTHON_CMD scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
-
-# macOS / Linux:
-"$PYTHON_CMD" scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
+python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
 ```
 
 - **Success** (response has `"success": true`) — environment setup is complete.
@@ -191,46 +169,11 @@ Verify that clio MCP responds correctly using the stdio client:
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
-✅ `output/<AppName>/.creatio-env.json` exists with `mcpTransport: "stdio"` and correct `environment`  
-✅ `$PYTHON_CMD scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
+✅ `output/<AppName>/.creatio-env.json` exists with correct `environment` and persisted runtime MCP details  
+✅ `python3 scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
 
 <!-- FILE: context/essentials.md (L230-277) -->
 
-
-> 💡 **Note:** `icon-id` is optional. If omitted, a random icon from `SysAppIcons` is selected automatically.
-> 💡 **Note:** Use `"AppFreedomUI"` for `template-code`. Core resolves it dynamically to v1 or v2 based on feature flags.
-
----
-
-## Clio CLI Commands
-
-Clio is the command-line tool for Creatio deployments.
-
-### Environment Setup
-
-```bash
-# Register environment
-clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
-
-# Set active
-clio reg-web-app -a myenv
-
-# Verify connection
-clio healthcheck myenv
-```
-
-```bash
-# Compile configuration
-clio compile-configuration -e myenv
-
-# Restart application
-clio restart-web-app myenv
-
-# Check compilation log
-clio last-compilation-log -e myenv
-```
-
-```
 
 ### Package Management
 
@@ -243,4 +186,39 @@ clio get-pkg-list -e myenv
 
 # Pull package from environment
 clio pull-pkg MyPackage -e myenv
+
+# Delete package
+clio delete-pkg-remote MyPackage -e myenv
+
+# Validate package structure
+clio validation-pkg ./MyPackage
+```
+
+### Development Tools
+
+```bash
+# Execute SQL
+clio execute-sql-script "SELECT Id FROM Contact LIMIT 5" -e myenv
+
+# Clear cache
+clio clear-redis-db myenv
+
+# System settings
+clio set-syssetting MySetting "Value" -e myenv
+
+# Install cliogate (deprecated — entity MCP tools no longer require cliogate)
+# clio install-gate -e myenv
+```
+
+---
+
+## MCP Workflow (DB-First)
+
+```
+MCP application-create or application-get-info → initialize canonical context → [optional] schema-sync or create-lookup/create-entity-schema/update-entity-schema → application-get-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
+```
+
+**Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
+
+---
 

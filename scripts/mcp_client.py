@@ -7,10 +7,6 @@ Usage:
     python3 scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
 
-Examples:
-    python3 scripts/mcp_client.py application-get-list '{"environment-name": "local"}'
-    python3 scripts/mcp_client.py application-create '{"environment-name":"local","name":"My App","code":"UsrMyApp"}' 120
-
 clio resolution (first match wins):
     1. CLIO_CMD env var — custom clio path provided by user at startup
        e.g. CLIO_CMD="dotnet /path/to/clio.dll" python3 scripts/mcp_client.py ...
@@ -28,6 +24,7 @@ Notes:
 Returns JSON: {"success": bool, "data": dict|None, "raw": str}
 """
 import argparse
+import difflib
 import json
 import os
 from pathlib import Path
@@ -42,6 +39,7 @@ import time
 MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 37)
 MIN_SUPPORTED_CLIO_VERSION_TEXT = ".".join(str(part) for part in MIN_SUPPORTED_CLIO_VERSION)
 _CLIO_VERSION_CACHE = {"key": None, "info": None}
+_TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
 
 def _resolve_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
@@ -150,7 +148,7 @@ def _parse_rpc_result(message_id, collected, expect_tool_result):
                 return {"success": False, "data": None, "raw": diag}
             try:
                 data = json.loads(raw)
-                return {"success": not is_error, "data": data, "raw": raw}
+                return {"success": _is_tool_payload_success(data, is_error), "data": data, "raw": raw}
             except json.JSONDecodeError:
                 return {"success": not is_error, "data": None, "raw": raw}
         raw = json.dumps(result, ensure_ascii=True)
@@ -309,6 +307,11 @@ def _get_shared_client():
             _shared_client = PersistentMcpClient()
         return _shared_client
 
+def _is_execution_error_message(message) -> bool:
+    if not isinstance(message, dict):
+        return False
+    message_type = message.get("message-type") or message.get("type")
+    return isinstance(message_type, str) and message_type.lower() == "error"
 
 _TOOL_REQUIRED_PARAMS = {
     "application-create": {
@@ -525,76 +528,149 @@ _TOOL_REQUIRED_PARAMS = {
 }
 
 
-def _validate_params(tool_name: str, arguments: dict) -> list[str]:
-    spec = _TOOL_REQUIRED_PARAMS.get(tool_name)
-    if not spec:
+def _is_tool_payload_success(data, top_level_is_error) -> bool:
+    if top_level_is_error:
+        return False
+    if not isinstance(data, dict):
+        return True
+    if data.get("success") is False:
+        return False
+    exit_code = data.get("exit-code")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        return False
+    messages = data.get("execution-log-messages")
+    if isinstance(messages, list) and any(_is_execution_error_message(message) for message in messages):
+        return False
+    return True
+
+
+def _normalize_tool_contract_index(data):
+    if not isinstance(data, dict):
+        raise RuntimeError("tool-contract-get returned a non-object payload")
+    if data.get("success") is not True:
+        error = data.get("error")
+        if isinstance(error, dict):
+            message = error.get("message") or json.dumps(error, ensure_ascii=True)
+        else:
+            message = json.dumps(data, ensure_ascii=True)
+        raise RuntimeError(message)
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        raise RuntimeError("tool-contract-get did not return a tools array")
+    index = {}
+    for contract in tools:
+        if isinstance(contract, dict):
+            name = contract.get("name")
+            if isinstance(name, str) and name:
+                index[name] = contract
+    if not index:
+        raise RuntimeError("tool-contract-get returned no usable tool contracts")
+    return index
+
+
+def _get_tool_contract_index(timeout=120, force_refresh=False):
+    cache_key = _current_clio_resolution_key()
+    if not force_refresh and _TOOL_CONTRACT_CACHE["key"] == cache_key and _TOOL_CONTRACT_CACHE["contracts"] is not None:
+        return _TOOL_CONTRACT_CACHE["contracts"]
+    client = _get_shared_client()
+    result = client.call_tool("tool-contract-get", {}, timeout=timeout)
+    index = _normalize_tool_contract_index(result["data"])
+    _TOOL_CONTRACT_CACHE["key"] = cache_key
+    _TOOL_CONTRACT_CACHE["contracts"] = index
+    return index
+
+
+def _find_property(contract_spec: dict, name: str) -> dict | None:
+    input_schema = contract_spec.get("input-schema")
+    if not isinstance(input_schema, dict):
+        return None
+    properties = input_schema.get("properties")
+    if not isinstance(properties, list):
+        return None
+    for prop in properties:
+        if isinstance(prop, dict) and prop.get("name") == name:
+            return prop
+    return None
+
+
+def _value_is_missing(value) -> bool:
+    return value is None or value == ""
+
+
+def _validate_field_type(field_name: str, expected_type: str, value) -> list[str]:
+    if value is None:
         return []
+    if expected_type == "boolean" and not isinstance(value, bool):
+        return [f"Parameter '{field_name}' must be a boolean, not {type(value).__name__}"]
+    if expected_type == "array" and not isinstance(value, list):
+        return [f"Parameter '{field_name}' must be an array, not {type(value).__name__}"]
+    if expected_type == "object" and not isinstance(value, dict):
+        return [f"Parameter '{field_name}' must be an object, not {type(value).__name__}"]
+    if expected_type == "string" and not isinstance(value, str):
+        return [f"Parameter '{field_name}' must be a string, not {type(value).__name__}"]
+    if expected_type == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        return [f"Parameter '{field_name}' must be a number, not {type(value).__name__}"]
+    return []
+
+
+def _validate_update_operations(operations, context_label) -> list[str]:
     errors = []
-    for wrong_name, fix in spec.get("reject", {}).items():
-        if wrong_name in arguments:
-            errors.append(f"Wrong parameter '{wrong_name}': {fix}")
-    for param in spec["required"]:
-        if param not in arguments or arguments[param] is None or arguments[param] == "":
-            hint = spec["hints"].get(param, "")
-            msg = f"Missing required parameter '{param}'"
-            if hint:
-                msg += f". Hint: {hint}"
-            errors.append(msg)
-    any_of_groups = spec.get("any_of") or []
-    if any_of_groups and not any(
-        all(param in arguments and arguments[param] not in (None, "") for param in group)
-        for group in any_of_groups
-    ):
-        group_descriptions = []
-        for group in any_of_groups:
-            if len(group) == 1:
-                group_descriptions.append(f"'{group[0]}'")
-            else:
-                joined = " AND ".join(f"'{param}'" for param in group)
-                group_descriptions.append(f"({joined})")
-        errors.append("Missing required connection parameters. Provide " + " or ".join(group_descriptions))
-    errors.extend(_validate_non_blank_titles(tool_name, arguments))
+    if not isinstance(operations, list):
+        return errors
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict):
+            continue
+        action = str(operation.get("action", "")).strip().lower()
+        if "title" in operation:
+            errors.append(f"{context_label}[{index}] must use 'title-localizations' instead of legacy scalar 'title'")
+        if "caption" in operation:
+            errors.append(f"{context_label}[{index}] must use 'title-localizations' instead of legacy scalar 'caption'")
+        if "description" in operation:
+            errors.append(f"{context_label}[{index}] must use 'description-localizations' instead of legacy scalar 'description'")
+        if action == "add":
+            errors.extend(_validate_localizations_map(
+                operation.get("title-localizations"),
+                "title-localizations",
+                f"{context_label}[{index}] action 'add'",
+                require_presence=True,
+            ))
+        if action == "remove":
+            if "title-localizations" in operation:
+                errors.append(f"{context_label}[{index}] action 'remove' must not include 'title-localizations'")
+            if "description-localizations" in operation:
+                errors.append(f"{context_label}[{index}] action 'remove' must not include 'description-localizations'")
+        else:
+            errors.extend(_validate_localizations_map(
+                operation.get("title-localizations"),
+                "title-localizations",
+                f"{context_label}[{index}] action '{action}'",
+            ))
+            errors.extend(_validate_localizations_map(
+                operation.get("description-localizations"),
+                "description-localizations",
+                f"{context_label}[{index}] action '{action}'",
+            ))
     return errors
 
 
-def _is_blank_text(value) -> bool:
-    return isinstance(value, str) and value.strip() == ""
-
-
-def _validate_non_blank_titles(tool_name: str, arguments: dict) -> list[str]:
-    errors = []
-
-    if tool_name in {"create-lookup", "create-entity-schema"}:
-        if _is_blank_text(arguments.get("title")):
-            errors.append("Parameter 'title' must not be empty or whitespace")
-        return errors
-
-    def validate_update_operations(operations, context_label):
-        if not isinstance(operations, list):
-            return
-        for index, operation in enumerate(operations):
-            if not isinstance(operation, dict):
-                continue
-            action = str(operation.get("action", "")).strip().lower()
-            has_title = "title" in operation
-            title_value = operation.get("title")
-            if action == "add":
-                if not has_title or _is_blank_text(title_value):
-                    errors.append(
-                        f"{context_label}[{index}] action 'add' requires non-empty 'title'"
-                    )
-            elif action == "modify":
-                if has_title and _is_blank_text(title_value):
-                    errors.append(
-                        f"{context_label}[{index}] action 'modify' has blank 'title'; omit 'title' to preserve caption"
-                    )
-
-    if tool_name == "update-entity-schema":
-        validate_update_operations(arguments.get("operations"), "operations")
-        return errors
-
-    if tool_name == "schema-sync":
-        operations = arguments.get("operations")
+def _apply_validator(validator: dict, arguments: dict) -> list[str]:
+    name = validator.get("name")
+    if name == "forbid-fields":
+        fields = validator.get("fields") or []
+        context = validator.get("context") or "Unsupported fields were provided."
+        return [f"Wrong parameter '{field}': {context}" for field in fields if field in arguments]
+    if name == "localizations-map":
+        return _validate_localizations_map(
+            arguments.get(validator.get("field")),
+            validator.get("field"),
+            validator.get("context") or "Parameter",
+            require_presence=bool(validator.get("required")),
+        )
+    if name == "update-operations-localizations":
+        return _validate_update_operations(arguments.get(validator.get("field")), validator.get("field") or "operations")
+    if name == "schema-sync-operations-localizations":
+        errors = []
+        operations = arguments.get(validator.get("field"))
         if not isinstance(operations, list):
             return errors
         for index, operation in enumerate(operations):
@@ -602,13 +678,152 @@ def _validate_non_blank_titles(tool_name: str, arguments: dict) -> list[str]:
                 continue
             operation_type = str(operation.get("type", "")).strip().lower()
             if operation_type in {"create-lookup", "create-entity"}:
-                has_title = "title" in operation
-                title_value = operation.get("title")
-                if not has_title or _is_blank_text(title_value):
-                    errors.append(f"operations[{index}] type '{operation_type}' requires non-empty 'title'")
+                if "title" in operation:
+                    errors.append(f"operations[{index}] must use 'title-localizations' instead of legacy scalar 'title'")
+                if "caption" in operation:
+                    errors.append(f"operations[{index}] must use 'title-localizations' instead of legacy scalar 'caption'")
+                errors.extend(_validate_localizations_map(
+                    operation.get("title-localizations"),
+                    "title-localizations",
+                    f"operations[{index}] type '{operation_type}'",
+                    require_presence=True,
+                ))
             if operation_type == "update-entity":
-                validate_update_operations(operation.get("update-operations"), f"operations[{index}].update-operations")
+                errors.extend(_validate_update_operations(
+                    operation.get("update-operations"),
+                    f"operations[{index}].update-operations",
+                ))
+        return errors
+    return []
+
+
+def _is_blank_text(value) -> bool:
+    return isinstance(value, str) and value.strip() == ""
+
+
+def _validate_localizations_map(value, field_name, context_label, require_presence=False) -> list[str]:
+    if value is None:
+        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"] if require_presence else []
+    if not isinstance(value, dict):
+        return [f"{context_label} requires '{field_name}' to be an object of culture -> value pairs"]
+    normalized = {}
+    for culture_name, culture_value in value.items():
+        if not isinstance(culture_name, str) or not culture_name.strip():
+            return [f"{context_label} requires '{field_name}' to use non-empty culture names"]
+        if not isinstance(culture_value, str) or not culture_value.strip():
+            return [f"{context_label} requires '{field_name}' to contain non-empty string values"]
+        normalized[culture_name.strip().lower()] = culture_value.strip()
+    if not normalized:
+        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"]
+    if not normalized.get("en-us"):
+        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"]
+    return []
+
+
+def _validate_params_with_fallback_spec(tool_name: str, arguments: dict) -> list[str]:
+    spec = _TOOL_REQUIRED_PARAMS.get(tool_name)
+    if not spec:
+        return []
+    errors = []
+    for wrong_name, fix in spec.get("reject", {}).items():
+        if wrong_name in arguments:
+            errors.append(f"Wrong parameter '{wrong_name}': {fix}")
+    for param in spec.get("required", []):
+        if param not in arguments or _value_is_missing(arguments.get(param)):
+            hint = spec.get("hints", {}).get(param, "")
+            message = f"Missing required parameter '{param}'"
+            if hint:
+                message += f". Hint: {hint}"
+            errors.append(message)
+    any_of_groups = spec.get("any_of") or []
+    if any_of_groups and not any(
+        all(param in arguments and not _value_is_missing(arguments.get(param)) for param in group)
+        for group in any_of_groups
+    ):
+        group_descriptions = []
+        for group in any_of_groups:
+            if len(group) == 1:
+                group_descriptions.append(f"'{group[0]}'")
+            else:
+                group_descriptions.append("(" + " AND ".join(f"'{param}'" for param in group) + ")")
+        errors.append("Missing required connection parameters. Provide " + " or ".join(group_descriptions))
     return errors
+
+
+def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+    contract_index = contract_index or {}
+    spec = contract_index.get(tool_name)
+    if not spec:
+        return _validate_params_with_fallback_spec(tool_name, arguments)
+    input_schema = spec.get("input-schema")
+    if not isinstance(input_schema, dict):
+        return _validate_params_with_fallback_spec(tool_name, arguments)
+    errors = []
+    for alias in spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        if alias.get("scope") != "parameter" or alias.get("status") != "rejected":
+            continue
+        alias_name = alias.get("alias")
+        if isinstance(alias_name, str) and alias_name in arguments:
+            errors.append(f"Wrong parameter '{alias_name}': {alias.get('message')}")
+    for param in input_schema.get("required") or []:
+        if param not in arguments or _value_is_missing(arguments.get(param)):
+            prop = _find_property(spec, param) or {}
+            hint = prop.get("description") or ""
+            message = f"Missing required parameter '{param}'"
+            if hint:
+                message += f". Hint: {hint}"
+            errors.append(message)
+    any_of_groups = input_schema.get("any-of") or []
+    if any_of_groups and not any(
+        all(param in arguments and not _value_is_missing(arguments.get(param)) for param in group)
+        for group in any_of_groups
+    ):
+        group_descriptions = []
+        for group in any_of_groups:
+            if len(group) == 1:
+                group_descriptions.append(f"'{group[0]}'")
+            else:
+                group_descriptions.append("(" + " AND ".join(f"'{param}'" for param in group) + ")")
+        errors.append("Missing required connection parameters. Provide " + " or ".join(group_descriptions))
+    for prop in input_schema.get("properties") or []:
+        if not isinstance(prop, dict):
+            continue
+        name = prop.get("name")
+        if not isinstance(name, str) or name not in arguments:
+            continue
+        errors.extend(_validate_field_type(name, prop.get("type"), arguments.get(name)))
+    for validator in input_schema.get("validators") or []:
+        if isinstance(validator, dict):
+            errors.extend(_apply_validator(validator, arguments))
+    return errors
+
+
+def _build_unknown_tool_result(tool_name: str, contract_index: dict) -> dict:
+    suggestions = difflib.get_close_matches(tool_name, sorted(contract_index), n=3, cutoff=0.45)
+    error = {
+        "code": "tool-not-found",
+        "message": f"Tool '{tool_name}' is not registered by clio MCP.",
+        "suggestions": suggestions,
+    }
+    raw = error["message"]
+    if suggestions:
+        raw += " Suggestions: " + ", ".join(suggestions)
+    return {"success": False, "data": {"error": error}, "raw": raw}
+
+
+def _build_validation_result(validation_errors: list[str]) -> dict:
+    error = {
+        "code": "invalid-request",
+        "message": "Parameter validation failed.",
+        "details": validation_errors,
+    }
+    return {
+        "success": False,
+        "data": {"error": error},
+        "raw": "Parameter validation failed:\n" + "\n".join(f"  - {e}" for e in validation_errors),
+    }
 
 
 def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
@@ -637,13 +852,26 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     """
     if tool_name == "tools/list":
         return list_mcp_tools(timeout=timeout)
-    validation_errors = _validate_params(tool_name, arguments)
-    if validation_errors:
+    if tool_name == "tool-contract-get":
+        client = _get_shared_client()
+        try:
+            return client.call_tool(tool_name, arguments, timeout)
+        except Exception:
+            client.close()
+            return client.call_tool(tool_name, arguments, timeout)
+    try:
+        contract_index = _get_tool_contract_index(timeout=min(timeout, 60))
+    except Exception as error:
         return {
             "success": False,
-            "data": None,
-            "raw": "Parameter validation failed:\n" + "\n".join(f"  - {e}" for e in validation_errors),
+            "data": {"error": {"code": "tool-contract-unavailable", "message": str(error)}},
+            "raw": str(error),
         }
+    if tool_name not in contract_index:
+        return _build_unknown_tool_result(tool_name, contract_index)
+    validation_errors = _validate_params(tool_name, arguments, contract_index)
+    if validation_errors:
+        return _build_validation_result(validation_errors)
     client = _get_shared_client()
     try:
         return client.call_tool(tool_name, arguments, timeout)
@@ -693,6 +921,16 @@ def parse_cli_request(argv):
             "arguments": load_cli_arguments(args_json=remainder[0]),
             "timeout": timeout,
         }
+    if (
+        remainder
+        and remainder[-1].lstrip("-").isdigit()
+        and not remainder[-1].startswith("--")
+        and (len(remainder) < 2 or remainder[-2] != "--timeout")
+    ):
+        raise ValueError(
+            f"Positional timeout is not supported with named-mode flags.\n"
+            f"Use --timeout {remainder[-1]} instead of a positional argument."
+        )
     parser = argparse.ArgumentParser(prog="mcp_client.py", add_help=True)
     parser.add_argument("--args-file")
     parser.add_argument("--args-stdin", action="store_true")

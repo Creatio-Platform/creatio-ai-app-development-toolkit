@@ -5,498 +5,505 @@ Do NOT edit manually — regenerate with `python3 scripts/build_context_bundle.p
 
 <!-- FILE: agents/03-implementation-plan.md (full) -->
 
-# Agent 03 — Implementation Plan Generator
+# Agent 03 - Implementation Plan
 
 ## Role
 
-Transform approved requirements into a deterministic MCP execution plan for `application.create`, `application.get_list`, `application.get_info`, and follow-up DB-first schema sync.
+Convert approved business requirements into a deterministic Technical Annex and execution plan for MCP application, entity, binding, and page synchronization calls.
 
-## Input/Output
+Run this agent only when implementation or technical execution detail is explicitly requested.
 
-- Input:
-  - `output/<AppName>/requirements.md`
-  - `output/<AppName>/request-spec.json`
-  - `output/<AppName>/workflow-state.json`
-- Output: `output/<AppName>/plan.md`
+The business contract for this agent is the BA-style requirements draft approved in Agent 2. Do not reopen broad business discovery here unless a blocker makes the approved requirements internally inconsistent.
 
-## Context
+## Input
 
-Preferred: read `context/.cache/agent-3-bundle.md` (single file).
+- `output/<AppName>/requirements.md`
+- `output/<AppName>/request-spec.json`
+- `output/<AppName>/workflow-state.json`
+- `output/<AppName>/.creatio-env.json` when runtime inputs are no longer deferred
 
-Fallback (if bundle unavailable):
+## Output
+
+- `output/<AppName>/technical-annex.md`
+- `output/<AppName>/plan.md`
+- `output/<AppName>/page-sync-plan.json` when page sync is required
+- `output/<AppName>/page-sync/*.body.js` when page bodies are materialized outside `plan.md`
+
+## Read First
+Preferred: read `context/.cache/agent-3-bundle.md` when available.
+
+Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
+- the bundle is missing
+- the bundle declares a build timestamp or manifest hash that no longer matches its source set
+- the current task requires a reference file that is known to be outside the bundle
+- the bundle content is internally inconsistent with currently loaded repository instructions
+
+Fallback (if bundle unavailable or stale):
+- `AGENTS.md`
 - `context/essentials.md` L166-229 (MCP Tools)
 - `context/schema-reference.md` L7-90 (Parents + DataValueTypes)
+- `context/business-checklist.md`
+- `context/ui-reference.md`
+- `context/viewconfig-reference.md`
+- `context/data-bindings-reference.md`
+- `scripts/mcp_client.py`
 
-## Steps
+## Preconditions
 
-### 0. Check Gate R (mandatory)
+- Implementation or technical execution detail was explicitly requested.
+- `scripts/check-planning-gate.sh <AppName>` passes.
+- `scripts/check-approval-gate.sh <AppName>` passes.
 
-Run:
-```bash
-scripts/check-planning-gate.sh <AppName>
-scripts/check-approval-gate.sh <AppName>
-```
+## Planning Goals
 
-If this fails, stop immediately and report blocker.
+- Preserve the approved business scope and assumptions from the BA draft.
+- Resolve whether the run is a new-app flow or an existing-app update flow.
+- Produce an execution-ready MCP payload.
+- Produce an ordered schema sync plan.
+- Produce a page sync plan whenever the main entity is created or extended.
+- Make blocker conditions explicit.
 
-### 1. Validate Business Completeness
+## Validation Before Planning
 
-Parse `request-spec.json` and verify:
-- `businessChecklist.complete=true`
-- every required business checklist section has `complete=true` and non-empty `value`
-- `sourcePrompt` is present
-- `technicalInputs.creatioUrl` is present
-- `technicalInputs.credentialsStatus` is present
-- `assumptions` is present as an array
+Validate `request-spec.json` and `workflow-state.json`:
 
-Parse `workflow-state.json` and verify:
-- `businessChecklistComplete=true`
-- `interactionMode="nl-business-first"`
-- `approvalSource="natural-language"`
-- `approvalText` is non-empty
+- the business checklist is complete
+- all required checklist groups have values
+- natural-language approval is persisted
+- routing mode is known
+- runtime inputs are either present or explicitly deferred
+- the approved requirements follow the BA-style structure from Agent 2
+- the approved requirements are not merely a generic planning wrapper with non-BA headings
 
-If any check fails, stop with blocker and return missing checklist items.
+If any of these checks fail, stop and report the blocker.
 
-When requirements mention ListPage sorting, classify them before planning:
-- plain column order such as `CreatedOn desc` or `UsrDueDate asc`
-- semantic or business order such as "Open first, Done last"
+Parse the approved requirements with these business sections as primary inputs:
 
-Only the first category is plan-safe as pure `page.update` sorting metadata. The second category requires an explicit technical sort key, approved additional runtime logic, or a blocker note.
+- business goal
+- core problem
+- desired outcomes and success criteria
+- personas and business use cases
+- access restrictions posture
+- analytics
+- business workflow summary
+- data model
+- explicit assumptions
 
-### 2. Parse Inputs
+If the approved artifact is wrapped by host tooling such as `<proposed_plan>`, ignore the wrapper and validate the inner document structure only.
 
-Determine whether this is a new-app or existing-app flow **before** resolving the MCP payload:
+## Planning Rules
 
-```python
-# Check if app already exists
-import sys
-sys.path.insert(0, 'scripts')
-from mcp_client import call_mcp_tool
-r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
-apps = r.get('data', {}).get('applications', []) if r['success'] else []
-existing = next((a for a in apps if a.get('code') == APP_CODE), None)
-# existing = None → new-app flow
-# existing = {...}  → update flow — extract packageUId and entities from application-get-info
-```
+### App Payload
 
-Persist the result in the plan (`## App Discovery` section):
-- `existingApp: true|false`
-- if `true`: `packageUId`, entity list, current columns — so Agent 4 can skip `application-create`
+Resolve:
 
-Extract from requirements + request spec:
-- app overview and locked business decisions
-- whether the flow creates a new app or updates an existing app
-- entities/lookups/pages/rules
-- whether there is a single primary record type that should stay on the template-created section entity or multiple distinct business objects
-- record title / display column for each entity and lookup
-- whether any title-like field is explicitly distinct from the record name or should be normalized to `Name`
-- whether list/form UX is explicit, partial, or missing and therefore requires resolved defaults
-- the resolved FormPage field set and ListPage column set for the main entity
-- assumptions
-- MCP `application.create` input block
-- entity schema changes that cannot be expressed by `application.create` template defaults
+- application display name
+- application code
+- template choice
+- icon choice/background
+- optional description
+- optional client type
+- optional template-data shape
 
-### 3. Resolve MCP Payload
+Rules:
 
-Build final payload fields for Agent 4:
-- `name`
-- `code`
-- `template-code`
-- `icon-id`
-- `icon-background`
-- `description` (nullable)
-- `client-type-id` (nullable)
-- `optional-template-data-json` (JSON string)
+- Resolve exact executable parameter names, aliases, defaults, and validation rules from `tool-contract-get`.
+- `code` must start with `Usr`.
+- Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
+- `useAIContentGeneration` must be `false`.
+- If the chosen template-data mode reuses an existing entity schema, require that entity schema name.
+- If icon or client-type identifiers are explicit, validate GUID format.
+- Do not introduce technical scope that changes the approved business goal, personas, access posture, or MVP boundary without surfacing it as a blocker or a new assumption.
 
-Resolution rules:
-1. `code` must start with `Usr`.
-2. If `template-code` is empty, use `AppFreedomUI`.
-3. If `optionalTemplateData.useExistingEntitySchema=true`, require `entitySchemaName`.
-4. `optionalTemplateData.useAIContentGeneration` must be `false` for this MCP flow.
-5. `icon-id`:
-   - use explicit value if provided,
-   - otherwise mark as `auto` and document runtime selection strategy.
-6. `icon-background`:
-   - use explicit value if provided,
-   - otherwise mark as `auto` and document deterministic palette strategy.
+### Main Entity And Lookup Rules
 
-### 4. Build schema sync plan
+- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
+- `application-create` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
+- Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
+- Reuse `Name` when it already exists.
+- Never plan duplicate title-like columns when `Name` is already present.
+- Model enum-like business values as lookup entities first.
+- For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
+- For entity schema payloads, plan `title-localizations` and `description-localizations` as localization maps with an `en-US` entry; legacy scalar `title` and `description` fields are rejected by MCP.
+- Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
-For each approved entity:
-- determine whether `application.create` template output is sufficient
-- for new-app flows, treat the template-created section entity returned by `application.create` as the canonical main entity for the app's primary records
-- if requirements describe one primary record type, map synonymous business nouns back to that template-created entity and plan its custom columns as `update-entity` operations within a `schema-sync` batch
-- if extra custom columns are required, prepare explicit sync steps
-- if the flow targets an existing app, include discovery/read steps with `application.get_list` and `application.get_info`
-- if create and update flows are both possible at runtime, make the branch explicit in the plan and require Agent 4 to surface which branch was actually used
-- create new lookup entities as `create-lookup` operations within the `schema-sync` operations array
-- for every lookup entity, rely on inherited `Name` as the display value, mark it as the required `PrimaryDisplayColumn`, and never plan `Name` or duplicate title-like columns as custom columns
-- include `seed-rows` inline in each `create-lookup` operation for lookup entities with seed values (status lists, priority levels, type enumerations)
-- create non-template entities as `create-entity` operations only when the requirements explicitly define an additional business object that is distinct from the template-created main entity
-- before any `update-entity` operation, inspect the current schema snapshot from `application-create` or `application-get-info`; if `Name` already exists, reuse `Name` in UX and never plan an `action: add` for `UsrName`, `UsrTitle`, or `UsrCaption` unless an explicit separate business field is approved
-- update existing template-created entities as `update-entity` operations with `update-operations`
-- if the run creates a new app or extends the main entity with approved non-inherited business fields, emit explicit page-sync steps for the generated `FormPage` and `ListPage`
+### Schema Sync Plan
 
-Schema sync plan format — operations array for `schema-sync` composite tool:
-1. `create-lookup` operations with inline `seed-rows` (including deterministic UUIDs via `uuid.uuid4()` when rows will be used as `default-value`)
-2. `update-entity` operations with `update-operations` array (using client-generated UUIDs as `default-value` with `default-value-source: "Const"`)
-3. After `schema-sync` completes, refresh context once with `application-get-info`
+- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
+- Create lookup entities before entities that reference them.
+- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Extend the template-created main entity via `update-entity-schema`.
+- Use `create-entity-schema` only for genuinely additional business objects.
+- Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
+- Canonical entity flow is `application-create -> schema-sync -> application-get-info`.
+- Refresh once through `application-get-info` after the schema-sync batch completes.
+- Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
-Default planning rules:
-- `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value` in `update-entity` `update-operations`.
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler step in the plan.
-- A requirement such as `UsrStatus defaults to New` is closed only when the plan contains an explicit `schema default` step or an explicit `ui default` step.
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `default-value` with `default-value-source: "Const"`. Generate UUID client-side and include `Id` in the `seed-rows` values, then reuse in `update-entity` operation.
+### Default Rules
 
-For `update-entity` `update-operations`, prepare operations list only. Supported `action` values:
-- `"add"`
-- `"update"`
-- `"remove"`
+- `schema default` means the backend/entity schema contract sets the value through `create-entity-schema` or `update-entity-schema`.
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
+- A requirement such as `UsrStatus defaults to New` is complete only when the plan contains an explicit `schema default` or `ui default` step.
+- Lookup seed rows alone do not satisfy a default requirement.
+- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `defaultValue` with `defaultValueSource="Const"`.
 
-Never treat omission as deletion.
+### Page Sync Plan
 
-Canonical context rule:
-- initialize from `application-create` for new apps
-- initialize from `application-get-info` for existing apps
-- after `schema-sync` completes, refresh context once via `application-get-info`
-- treat `schema-sync` as successful only when all mutated schemas are immediately refreshable and not left in a `Database update required` state
+Page sync is mandatory when the plan creates a new app or extends the main section entity.
 
-### 4.1. Build Page Sync Plan
+FormPage defaults:
 
-When the plan creates a new app or extends the main section entity, page sync is mandatory.
+- keep `Name` as header/title when present
+- include all approved required non-inherited business fields
+- fill in missing explicit requirements with deterministic defaults
 
-Resolve FormPage fields with this algorithm:
-- if requirements provide a complete explicit FormPage field list, use it as-is and add any missing required non-inherited business fields
-- if requirements are partial, keep the explicit fields and fill the missing fields with defaults
-- if requirements are missing, default to `Name` as header/title when present and include all approved non-inherited business fields from the main entity
-- required non-inherited business fields must never be omitted
+ListPage defaults:
 
-Resolve ListPage columns with this algorithm:
-- if requirements provide a complete explicit ListPage column list, use it as-is and add any missing required non-inherited business fields
-- if requirements are partial, keep the explicit columns and fill the missing columns with defaults
 - always include `Name`
-- always include every required non-inherited business field
-- then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount
-- cap auto-selected default ListPage columns at 6 total visible columns unless required business fields exceed that number
+- always include required non-inherited business fields
+- append compact operational fields in this priority order until the grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount
+- cap auto-selected columns at 6 unless required fields exceed that number
 - exclude inherited audit/system fields unless explicitly requested
 - exclude long/rich/blob fields unless explicitly requested or required
 
-For each required page, emit this execution sequence in `plan.md`:
-1. `page.list` to discover the generated page schema in the app package
-2. `page.get` to read the live JS body
-3. `page.update` with `dryRun: True` to validate the merged body
-4. `page.update` without dry run to persist the page
-5. `page.get` again to verify required FormPage fields and resolved ListPage columns are materialized
+Required execution sequence for each page:
 
-ListPage plan rules:
-- preserve existing DataGrid columns and order unless the requirements explicitly demand reordering
-- append only the missing resolved columns
-- plan deterministic `DataGrid.columns` merge logic
-- plan sorting changes only when requirements explicitly call for supported sortable-column order
+1. `page-list`
+2. `page-get`
+3. edit body
+4. `page-sync`
+5. `page-get` again for verification
 
-FormPage lookup sync plan rules:
-- for datasource-bound `crt.ComboBox` fields, instruct Agent 4 to add only the main view-model attribute and minimal ComboBox view config
-- do not plan manual `*_List`, embeddedModel, nested `value`/`displayValue`, sorting, paging, or `crt.ComboboxSearchTextAction` unless the live page body already materializes them and the plan explicitly says to preserve them
-- keep FormPage lookup-list preservation guidance separate from ListPage sorting rules; never reuse lookup-list examples as a general binding-generation recipe
+Fallback page sequence:
 
-Machine-readable page sync contract:
-- when page sync is required, `plan.md` must include an embedded JSON block between these exact markers:
-  - `<!-- PAGE_SYNC_PLAN_JSON_START -->`
-  - `<!-- PAGE_SYNC_PLAN_JSON_END -->`
-- the embedded JSON must be valid and use this shape:
+1. `page-list`
+2. `page-get`
+3. `page-update` with `dry-run: true`
+4. `page-update`
+5. `page-get` again for verification
+
+When page sync is required:
+
+- embed JSON between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in `plan.md`
+- materialize the same payload to `output/<AppName>/page-sync-plan.json`
+- prefer `bodyPath` references over large inline bodies
+
+### Validation Rules
+
+- Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
+- Resolve executable parameter names, aliases, and required fields from `tool-contract-get` instead of hard-coding them in the plan.
+- Keep `operations` / `update-operations` as native arrays.
+- For fallback `create-data-binding-db`, prefer omitting `binding-name` for default lookup seeding so the binding defaults to `<schema-name>`; include `binding-name` only when a distinct binding artifact is explicitly required. Always pass `rows` as a JSON string of `[{"values": {...}}]`.
+- Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
+- Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
+- Never treat seeded rows as implementation of a default rule.
+- For `create-lookup`, `create-entity-schema`, and `update-operations` with `action: add`, `title-localizations` must include a non-empty `en-US` value after trim.
+- If a business title is missing, derive a non-empty fallback from the schema/column code and place it in the `en-US` localization entry instead of sending blank text.
+- For `action: modify`, never send blank/whitespace localization values; omit the localization fields to preserve the existing caption.
+
+## Plan Output
+
+`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, and verification strategy.
+
+`plan.md` should be execution-ready and include:
+
+- app payload
+- branch choice and collision handling
+- ordered schema sync
+- default implementation strategy
+- page sync contract when required
+- explicit blocker notes when the approved business draft is insufficient for safe execution
+
+<!-- FILE: context/essentials.md (full) -->
+
+# Creatio Platform Essentials
+
+## Platform Overview
+
+Creatio is a no-code/low-code platform for process management and CRM using a **composable application** architecture where functionality is delivered as packages.
+
+### Key Concepts
+
+**Composable Applications**
+- Built from self-contained **packages** containing: entity schemas, page schemas, data bindings, business processes, source code
+- Packages can depend on other packages (via `DependsOn` in descriptor.json)
+
+**MCP Application Creation (DB-first)**
+- Primary generation path is MCP tool `application-create`
+- Discovery path for existing apps is `application-get-list`
+- Canonical DB refresh path is `application-get-info`
+- Tool creates application artifacts directly in Creatio DB (PostgreSQL)
+- For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- Released schema tools (`create-lookup`, `create-entity-schema`, `update-entity-schema`) execute CREATE TABLE and ALTER TABLE directly
+- Schemas are immediately runtime-accessible — no compilation or deployment step required
+- Tool returns short compact context JSON (`success`, `package-u-id`, `package-name`, `entities`, `error`)
+- Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
+- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application-create` or `application-get-info`
+
+**Entity Schema Sync (DB-first)**
+- Secondary generation path is MCP `create-entity-schema`, `create-lookup`, `update-entity-schema`
+- These tools mutate entity schemas in Creatio DB and return persisted schema snapshots
+- `update-entity-schema` accepts explicit `operations` entries with `action: add|modify|remove`
+- New lookup entities must be created before entities or updates that reference them
+
+**Default Semantics**
+- `schema default` means the entity schema or backend contract stores the initial value
+- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
+- For lookup-backed `schema default`, use the seeded row GUID in `defaultValue`
+- `Binary`, `Image`, `File`, and `Blob` columns do not support `defaultValueSource=Const`
+
+**Data Binding & Schema Inspection (MCP-assisted)**
+- `get-entity-schema-properties` returns a schema summary object with column entries for deployed schemas; use the returned columns for machine-readable verification and respect each column's `source` (`own` or `inherited`) (requires `environment-name`, `package-name`, `schema-name`)
+- `get-entity-schema-column-properties` returns detailed metadata for a single column (also requires `column-name`)
+- `create-data-binding-db` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately (requires `environment-name`, `package-name`, `schema-name`); accepts optional `rows` for initial seeding in one call
+- `upsert-data-binding-row-db` upserts a single row in an **already existing** data binding — the binding must have been created first via `create-data-binding-db`; calling it without a prior binding will fail with `binding-not-found` (requires `environment-name`, `package-name`, `schema-name`, `values`)
+- For initial lookup seeding prefer `schema-sync` with inline `seed-rows`; use `create-data-binding-db` with `rows` only as fallback; never use `upsert-data-binding-row-db` for initial seeding
+
+**Freedom UI (Angular-based)**
+- Modern UI framework with pages as AMD modules (JavaScript `define()`)
+- UI described via `viewConfigDiff` — array of operations (merge, insert, remove, move)
+- Schema type: `"AngularSchema"`
+- When frontend or page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface rather than relying on root-barrel access to internal exports
+
+**Entity Model**
+- Entities extend a parent (BaseEntity, BaseLookup, etc.)
+- Columns have DataValueType (GUID-based) — ShortText, Lookup, Integer
+- Schemas use DSL diff format for metadata
+
+**System Tables for Navigation**
+- **SysModule** — registers a section (visible in navigation)
+- **SysModuleEntity** — binds entity to section
+- **SysModuleEdit** — binds form page to section
+
+---
+
+## Naming Conventions
+
+### Prefixes
+
+| Element | Prefix | Example |
+|---------|--------|---------|
+| Custom entity | `Usr` | `UsrTodoTask` |
+| Custom column | `Usr` | `UsrStatus`, `UsrDueDate` |
+| Custom page | `Usr` | `UsrTodoTask_FormPage` |
+| Custom package | `Usr` | `UsrTodoListApp` |
+
+### Casing
+
+- **Entities/Columns**: PascalCase — `UsrTodoTask`, `UsrStatus`
+- **Pages**: PascalCase with underscore — `UsrTodoTask_ListPage`, `UsrTodoTask_FormPage`
+- **Packages**: PascalCase — `UsrTodoListApp`
+
+### GUIDs
+
+- Format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` (lowercase, 36 characters)
+- Generate new for: packages, schemas, columns, data binding records
+- **Never reuse** GUIDs from other packages
+
+### Data Binding Naming
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| SysModule | `SysModule_<Code>` | `SysModule_UsrTodoTask` |
+| SysModuleEntity | `SysModuleEntity_<Code>` | `SysModuleEntity_UsrTodoTask` |
+
+---
+
+## Package Structure
+
+### descriptor.json (Required)
+
+Every package MUST have `descriptor.json` at root:
 
 ```json
 {
-  "packageName": "UsrTodoList",
-  "pages": [
-    {
-      "schemaName": "UsrTodoList_FormPage",
-      "kind": "form",
-      "bodyPath": "output/UsrTodoList/page-sync/UsrTodoList_FormPage.body.js",
-      "requiredModelPaths": ["PDS.UsrStatus", "PDS.UsrPriority"]
-    },
-    {
-      "schemaName": "UsrTodoList_ListPage",
-      "kind": "list",
-      "bodyPath": "output/UsrTodoList/page-sync/UsrTodoList_ListPage.body.js",
-      "requiredCodes": ["PDS_Name", "PDS_UsrStatus", "PDS_UsrPriority"]
-    }
-  ]
+  "Descriptor": {
+    "UId": "<new-package-guid>",
+    "PackageVersion": "1.0.0",
+    "Name": "UsrTodoListApp",
+    "ModifiedOnUtc": "/Date(1700000000000)/",
+    "Type": 1,
+    "Maintainer": "Customer",
+    "DependsOn": []
+  }
 }
 ```
 
-- prefer `bodyPath` over inline `body` so `plan.md` stays readable
-- if `bodyPath` is used, Agent 3 must materialize those page body files under `output/<AppName>/page-sync/`
-- if the run requires page sync, Agent 3 must also write `output/<AppName>/page-sync-plan.json` with the same JSON payload used in the embedded block
-- `requiredModelPaths` and `requiredCodes` must reflect the resolved verification targets that Agent 4 will check after persistence
+| Field | Required | Description |
+|-------|----------|-------------|
+| `UId` | ✅ | Unique GUID for package |
+| `PackageVersion` | ✅ | Semantic version (e.g., "1.0.0") |
+| `Name` | ✅ | Package name (PascalCase, Usr prefix) |
+| `ModifiedOnUtc` | ✅ | Timestamp in `/Date(milliseconds)/` format |
+| `Type` | ✅ | Always `1` for custom packages |
+| `Maintainer` | ✅ | `"Customer"` for custom |
+| `DependsOn` | ✅ | Array of dependencies (use `[]` as default) |
 
-### 4.2. Entity Tool Payload Validation
+**⚠️ Dependencies**: Use empty `DependsOn: []` by default. Creatio auto-resolves dependencies. Hardcoding UIds may fail across environments.
 
-When generating `schema-sync` operations or individual `create-lookup`, `update-entity-schema`, `create-data-binding-db` payloads in the plan, follow these rules to prevent parameter name errors.
+### Complete Directory Structure
 
-> **All entity tools use kebab-case parameters** (not camelCase). There is no `packageUId`, `entityUId`, or `operationsJson` — those names are not accepted.
-
-**CRITICAL Parameter Names:**
-
-**For `schema-sync` (preferred — batches all operations):**
-
-1. ✅ `environment-name` — registered clio env name (NOT a URL)
-2. ✅ `package-name` — package string name (e.g., "UsrTodoList", NOT a GUID)
-3. ✅ `operations` — ordered array of operation objects
-4. Each operation has `type` (`create-lookup`, `create-entity`, or `update-entity`), `schema-name`, and type-specific fields
-5. `create-lookup` operations: `title`, optional `columns`, optional `seed-rows`
-6. `update-entity` operations: `update-operations` (same format as `update-entity-schema` `operations`)
-7. `seed-rows` format: `[{"values": {"Name": "New"}}, ...]` — native list, NOT JSON string
-
-**For individual `create-lookup` (fallback):**
-
-1. ✅ `environment-name` — registered clio env name (NOT a URL)
-2. ✅ `package-name` — package string name (e.g., "UsrTodoList", NOT a GUID)
-3. ✅ `schema-name` — entity schema name (e.g., "UsrTodoStatus")
-4. ✅ `title` — display name (NOT `caption`)
-5. ❌ NEVER add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns — BaseLookup inherits them
-
-**For individual `update-entity-schema` (fallback):**
-
-1. ✅ `environment-name`
-2. ✅ `package-name` — package string name (NOT a GUID, NOT `packageUId`)
-3. ✅ `schema-name` — entity schema name
-4. ✅ `operations` — Python **list** of operation objects (NOT a JSON-encoded string, NOT `operationsJson`)
-5. Each operation object: `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`), `required` (boolean), `default-value-source`, `default-value`
-6. ❌ NEVER add `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
-
-**For individual `create-data-binding-db` (fallback, prefer `seed-rows` in `schema-sync`):**
-
-1. ✅ `environment-name`
-2. ✅ `package-name` — package string name
-3. ✅ `schema-name` — entity schema name
-4. ✅ `binding-name` — binding folder name (e.g., "UsrTodoStatus_Lookup")
-5. ✅ `rows` — JSON **string** of `[{"values": {"Name": "New"}}, ...]` format
-6. ❌ NEVER use `rowsJson`, `dataJson`, `bindingName`, or `packageUId`
-
-**Correct Payload Template (schema-sync, preferred):**
-
-```python
-import uuid
-new_id = str(uuid.uuid4())
-r = call_mcp_tool('schema-sync', {
-    'environment-name': 'local',
-    'package-name': 'UsrMyApp',
-    'operations': [
-        {
-            'type': 'create-lookup',
-            'schema-name': 'UsrStatusLookup',
-            'title': 'Status',
-            'seed-rows': [
-                {'values': {'Id': new_id, 'Name': 'New'}},
-                {'values': {'Name': 'In Progress'}},
-                {'values': {'Name': 'Done'}},
-            ],
-        },
-        {
-            'type': 'update-entity',
-            'schema-name': 'UsrMainEntity',
-            'update-operations': [
-                {
-                    'action': 'add',
-                    'column-name': 'UsrStatus',
-                    'type': 'Lookup',
-                    'title': 'Status',
-                    'reference-schema-name': 'UsrStatusLookup',
-                    'required': True,
-                    'default-value-source': 'Const',
-                    'default-value': new_id,
-                },
-            ],
-        },
-    ],
-})
+```
+packages/<PackageName>/
+├── descriptor.json                    
+├── Schemas/
+│   ├── UsrLookup/                     ← lookup entity (3 files)
+│   │   ├── descriptor.json
+│   │   ├── metadata.json
+│   │   └── properties.json
+│   ├── UsrEntity/                     ← main entity (3 files)
+│   ├── UsrEntity_ListPage/            ← list page (4 files)
+│   ├── UsrEntity_FormPage/            ← form page (4 files)
+│   └── UsrEntity_FormPage_Addon/      ← addon (3 files)
+├── Data/
+│   ├── SysModule_UsrEntity/           ← register section
+│   ├── SysModuleEntity_UsrEntity/     ← bind entity to section
+│   └── UsrLookup/                     ← seed lookup values (default binding name is schema name)
+└── Files/                             ← optional C# code
 ```
 
-**UId/Name Variable Strategy:**
+### Generation Order
 
-After `application-create`, extract `packageName` (string) for subsequent entity tools:
+Executable MCP contract authority:
 
-```python
-data = r['data']  # from call_mcp_tool('application-create', ...)
-package_name = data['packageName']
-main_entity_name = data['entities'][0]['name']
-```
+- `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints.
+- Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract.
+- Repository docs describe workflow policy and modeling rules only. They must not become a second MCP API specification.
 
-### 5. Build `plan.md`
+Canonical entity flow:
 
-Create `plan.md` with sections:
-- App Summary
-- Business Decisions Locked
-- Assumptions
-- MCP Payload (resolved and validated)
-- Executable MCP Payloads (see below)
-- Schema Sync Plan
-- Page Sync Plan
-- Embedded `page-sync-plan.json` block when page sync is required
-- Runtime Resolution Strategy (`icon-id` and `icon-background`)
-- Expected Output Artifacts
-- Validation Rules
-- Blocker Conditions
+1. `application-create`
+2. `schema-sync`
+3. `application-get-info`
 
-**Executable MCP Payloads** — MANDATORY section that contains exact JSON payloads
-Agent 4 will copy-paste and execute. This eliminates parameter guessing.
+Canonical page flow:
 
-Format:
-````markdown
-## Executable MCP Payloads
+1. `page-list`
+2. `page-get`
+3. edit body
+4. `page-sync`
+5. `page-get`
 
-### Step 1: application-create
-```json
-{
-  "environment-name": "ENV_PLACEHOLDER",
-  "code": "UsrMyApp",
-  "name": "My App",
-  "template-code": "AppFreedomUI",
-  "icon-background": "#1F5F8B",
-  "description": "App description",
-  "optional-template-data-json": "{\"useExistingEntitySchema\":false,\"entitySchemaName\":\"\",\"appSectionDescription\":\"Section description\",\"useAIContentGeneration\":false}"
-}
-```
+Fallbacks:
 
-### Step 2: schema-sync
-```json
-{
-  "environment-name": "ENV_PLACEHOLDER",
-  "package-name": "UsrMyApp",
-  "operations": [...]
-}
-```
+- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`.
+- Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows.
 
-### Step 3: application-get-info (refresh)
-```json
-{
-  "environment-name": "ENV_PLACEHOLDER",
-  "app-code": "UsrMyApp"
-}
-```
-````
+Critical patterns:
 
-Rules for executable payloads:
-- `ENV_PLACEHOLDER` is replaced by Agent 4 with the actual environment name from `.creatio-env.json`
-- All parameter names must be **kebab-case** (e.g. `template-code`, NOT `templateCode`)
-- `template-code` must be `AppFreedomUI` unless explicitly overridden by requirements
-- All lookup seed-row UUIDs must be pre-generated (use deterministic v4 UUIDs)
-- `schema-sync` operations array must be complete and ordered
-- Boolean values must be native JSON booleans (`true`/`false`), not strings
-
-### 6. Validation Checks
-
-Check:
-- required payload fields are present
-- GUID format validity for explicit `icon-id` and explicit `client-type-id`
-- `optional-template-data-json` is valid JSON
-- no unsupported values remain (`useAIContentGeneration=true`)
-- lookup creation steps are ordered before updates that reference them
-- lookup creation steps include validation that inherited `Name` exists in the persisted schema snapshot
-- every `update-entity-schema` step uses explicit `operations` list (native list, not JSON string)
-- if requirements or assumptions say `Name` is the record title, no page definition, business rule, or `operations` entry introduces `UsrName`, `UsrTitle`, or `UsrCaption`
-- if the app has one primary record type, the plan does not create a second BaseEntity with the same business meaning as the template-created section entity
-- if the run creates or extends the main entity for a new app, the plan includes explicit `FormPage` and `ListPage` sync steps
-- resolved FormPage fields include every required non-inherited business field
-- resolved ListPage columns include `Name`, every required non-inherited business field, and only compact optional fields selected by the priority rules
-- auto-selected default ListPage columns are capped at 6 total visible columns unless required business fields exceed that number
-- every page sync sequence ends with `page.get` verification after persistence
-- the implementation phase is described as synchronous, not a detached/background write phase
-- every ListPage sorting step is classified as either plain column order or semantic order, and semantic order is not emitted as plain DataGrid sorting without an explicit technical carrier
-
-### 7. Save `plan.md`
-
-Write final plan to:
-- `output/<AppName>/plan.md`
-
-When page sync is required, also write:
-- `output/<AppName>/page-sync-plan.json`
-- `output/<AppName>/page-sync/<SchemaName>.body.js` for each synchronized page
-
-## Rules
-
-1. Keep plan deterministic and execution-ready.
-2. Do not create GUID matrices manually for all schemas.
-3. Do not include generated file bodies in plan.
-4. Plan must be sufficient for `application.create` or existing app discovery, ordered entity sync calls, ordered page sync calls, and result/report artifact persistence.
-5. If page sync is required, the machine-readable page sync contract must be extractable without parsing prose.
-
-## Completion Criteria
-
-✅ Gate R passed  
-✅ `businessChecklist.complete=true` in `request-spec.json`  
-✅ `output/<AppName>/plan.md` exists  
-✅ when page sync is required, `output/<AppName>/page-sync-plan.json` exists and matches the embedded contract  
-✅ MCP payload is fully resolved or has explicit runtime resolution rules  
-✅ Explicit validations and blocker conditions are documented  
-
-<!-- FILE: context/essentials.md (L166-229) -->
-
+- Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable.
+- Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity unless requirements define an additional distinct business object.
+- `application-create` stays scalar-only. Localized captions belong to follow-up schema tools.
 
 ### Working with MCP Tools
 
-**Transport:** clio stdio via `scripts/mcp_client.py`.
+Transport:
+
+- clio stdio via `scripts/mcp_client.py`
+- `scripts/mcp_client.py` resolves executable contract metadata from `tool-contract-get`
+
+Example:
 
 ```python
 from scripts.mcp_client import call_mcp_tool
-r = call_mcp_tool('application-get-list', {'environment-name': 'local'})
+
+contracts = call_mcp_tool("tool-contract-get", {})
+apps = call_mcp_tool("application-get-list", {"environment-name": "local"})
 ```
 
-**Available Tools:**
-- `application-create` — Create new app with initial package/entity
-- `application-get-info` — Refresh application context (canonical DB refresh)
-- `application-get-list` — Discover existing apps
-- `schema-sync` — **Batch** entity operations (create-lookup, seed, create-entity, update-entity) in one call
-- `page-sync` — **Batch** page updates with built-in validation in one call
-- `create-lookup` — Create BaseLookup entity (individual, prefer `schema-sync`)
-- `create-entity-schema` — Create BaseEntity entity (individual, prefer `schema-sync`)
-- `update-entity-schema` — Add/update columns (individual, prefer `schema-sync`)
-- `binding-get-columns` — Query deployed schema metadata
-- `create-data-binding-db` — Seed lookup data (individual, prefer `schema-sync` with `seed-rows`)
-- `page-list` — Discover Freedom UI pages
-- `page-get` — Read page body (still individual — needed before `page-sync`)
-- `page-update` — Save page body (individual, prefer `page-sync`)
+Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
-**Complete reference with Python examples:** `context/mcp-application-tools-reference.md`
+---
 
-### MCP `application.create` Input
+## Clio CLI Commands
 
-Required:
-- `name`
-- `code` (must start with `Usr`)
-- `template-code`
-- `icon-background` (hex color)
+Clio is the command-line tool for Creatio deployments.
 
-Optional:
-- `icon-id` (GUID) — if omitted, random icon from SysAppIcons is selected automatically
-- `description`
-- `client-type-id` (GUID)
-- `optional-template-data-json` with:
-  - `useExistingEntitySchema`
-  - `entitySchemaName`
-  - `appSectionDescription`
-  - `useAIContentGeneration`
+### Environment Setup
 
-Validation notes:
-- if `icon-id` provided, must reference existing record in `SysAppIcons` table
-- `client-type-id` must be valid GUID if provided
-- this flow does not support `useAIContentGeneration=true`
-- tool must exist in `tools/list` before execution
-- for a new app with one primary record type, the template-created entity named like `code` is the default main entity to update; do not plan a parallel entity for the same records
+```bash
+# Register environment
+clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
 
-### MCP Request Example
+# Set active
+clio reg-web-app -a myenv
 
-```python
-r = call_mcp_tool('application-create', {
-    'environment-name': 'local',
-    'name': 'Task App',
-    'code': 'UsrTaskApp',
-    'template-code': 'AppFreedomUI',
-    'icon-background': '#1F5F8B',
-    'optional-template-data-json': '{"useExistingEntitySchema":false,"entitySchemaName":"","appSectionDescription":"","useAIContentGeneration":false}',
-})
+# Verify connection
+clio healthcheck myenv
+```
+
+```bash
+# Compile configuration
+clio compile-configuration -e myenv
+
+# Restart application
+clio restart-web-app myenv
+
+# Check compilation log
+clio last-compilation-log -e myenv
+```
+
+```
+
+### Package Management
+
+```bash
+# Create new package skeleton
+clio new-pkg UsrMyPackage
+
+# List installed packages
+clio get-pkg-list -e myenv
+
+# Pull package from environment
+clio pull-pkg MyPackage -e myenv
+
+# Delete package
+clio delete-pkg-remote MyPackage -e myenv
+
+# Validate package structure
+clio validation-pkg ./MyPackage
+```
+
+### Development Tools
+
+```bash
+# Execute SQL
+clio execute-sql-script "SELECT Id FROM Contact LIMIT 5" -e myenv
+
+# Clear cache
+clio clear-redis-db myenv
+
+# System settings
+clio set-syssetting MySetting "Value" -e myenv
+
+# Install cliogate (deprecated — entity MCP tools no longer require cliogate)
+# clio install-gate -e myenv
+```
+
+---
+
+## MCP Workflow (DB-First)
+
+```
+MCP application-create or application-get-info → initialize canonical context → [optional] schema-sync or create-lookup/create-entity-schema/update-entity-schema → application-get-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
+```
+
+**Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
+
+---
+
+## ModifiedOnUtc Format
+
+Use milliseconds since Unix epoch:
+
+```powershell
+# PowerShell
+[Math]::Floor((Get-Date).ToUniversalTime().Subtract([DateTime]'1970-01-01').TotalMilliseconds)
+
+# Result format
+"/Date(1700000000000)/"
 ```
 
 <!-- FILE: context/schema-reference.md (L7-90) -->
@@ -546,15 +553,15 @@ Every entity **must extend** one of these parents. Parent UId goes to `metadata.
 | Name | `736c30a7-c0ec-4fa9-b034-2552b319b633` | MediumText |
 | Description | `9e53fd7c-dde4-4502-a64c-b9e34148108b` | MediumText |
 
-`Name` and `Description` come from `BaseLookup`. Do not send them as custom columns in `entity.create_lookup` payloads or editable-context diffs. `Name` must remain the lookup `PrimaryDisplayColumn`, otherwise selected lookup values will appear blank in UI controls.
+`Name` and `Description` come from `BaseLookup`. Do not send them as custom columns in `create-lookup` payloads or editable-context diffs. `Name` must remain the lookup `PrimaryDisplayColumn`, otherwise selected lookup values will appear blank in UI controls.
 
 ### Display Column Guardrails
 
 - BaseLookup entities must use inherited `Name` as the human-readable display field. Do not add `Name`, `Description`, or duplicate title-like columns as custom lookup columns.
-- The raw BaseEntity inherited column list above does not include template-generated columns. In this MCP flow, `application.create` or `application.get_info` can return section entities that already contain `Name`.
+- The raw BaseEntity inherited column list above does not include template-generated columns. In this MCP flow, `application-create` or `application-get-info` can return section entities that already contain `Name`.
 - Always inspect the current schema snapshot before adding a title field. If `Name` already exists, reuse `Name` in requirements, list pages, form headers, and entity updates. Do not add duplicate title fields such as `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
 
-A successful MCP `entity.create_lookup` / `entity.create` / `entity.update` call must leave the schema fully materialized: no `Database update required` status in workspace explorer, immediate visibility through `application.get_info`, and usable DB structure for data bindings or inserts. If those conditions are not met, treat it as a core MCP materialization bug rather than a normal transient state.
+A successful MCP `create-lookup` / `create-entity-schema` / `update-entity-schema` call must leave the schema fully materialized: no `Database update required` status in workspace explorer, immediate visibility through `application-get-info`, and usable DB structure for data bindings or inserts. If those conditions are not met, treat it as a core MCP materialization bug rather than a normal transient state.
 
 ---
 

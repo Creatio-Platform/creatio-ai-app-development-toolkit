@@ -111,7 +111,7 @@ First-turn latency rule:
 - The first turn should include:
   - a short "What I understood"
   - the routing question: `site-ready-now` or `planning-first`
-  - 1-2 highest-priority business discovery questions when they are needed
+  - the main 3-5 highest-priority business discovery questions when they are needed
 - The routing question and first discovery questions should appear in the same first user-facing interaction, whether via compact text or structured input.
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
 - Additional discovery questions should be asked in the next small themed batch.
@@ -153,6 +153,7 @@ Execution order is conditional:
 - `planning-first`: Agent 2 -> initialize draft docs after Gate R -> wait for runtime inputs -> Agent 1 -> Agent 3 -> Agent 4
 
 Agent 3 is the Technical Annex / execution-plan step. Run it only when implementation or technical execution detail is explicitly requested.
+In `planning-first` mode, the developer providing runtime credentials or Creatio URL after Gate R counts as an explicit implementation request and triggers Agent 3.
 
 ## Agent Responsibilities
 
@@ -184,6 +185,11 @@ Gate R:
 - Persist approval with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
 - Use `scripts/check-approval-gate.sh <AppName>` before Agents 3 and 4.
 
+Approval-ready vs execution-ready rule:
+- The BA draft shown to the developer must remain business-readable.
+- When repository validators require technical carriers (schema names, default classifications, relationship links), include both the business intent and the technical carrier in the same approved draft instead of rewriting the document after approval.
+- This prevents a post-approval editing cycle that would invalidate the approved artifact.
+
 ## Global Invariants
 
 - All package, page, entity, and custom column names use the `Usr` prefix.
@@ -210,20 +216,52 @@ Gate R:
 
 ## Orchestration Checklist
 
-1. Run Gate P and persist planning state.
-2. Verify Gate P with `scripts/check-planning-gate.sh`.
+1. Run Gate P and persist planning state for the current request.
+2. Verify Gate P with the canonical gate-check script before any stage that depends on planning approval.
 3. Run Agent 1 if runtime inputs are available.
 4. Run Agent 2 interactively, produce the BA-style requirements draft, and persist Gate R artifacts only after that draft is approved.
 5. Initialize draft docs immediately after Gate R.
-6. Verify Gate R with `scripts/check-approval-gate.sh`.
+6. Verify Gate R with the canonical gate-check script before Agents 3 and 4.
 7. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract.
 8. Run Agent 4 synchronously.
-9. Before moving to the next stage, verify expected artifacts exist and are non-empty.
+9. Before moving to the next stage, verify expected artifacts for that stage exist and are non-empty.
 10. On failure, either retry with a justified fix or stop with a blocker.
+
+Optimization rule:
+- Do not repeat the same gate check unnecessarily within the same uninterrupted stage transition.
+- A successful canonical gate check remains valid until the workflow state for that gate is modified.
+
+## Approved Plan Fast Path
+
+If the current conversation already contains:
+- a full BA-style Business Plan that matches the required section contract
+- natural-language approval to implement that exact plan
+
+then do not restart business discovery and do not regenerate the BA draft from scratch.
+
+In that case:
+1. Derive `<AppName>` from the approved plan or current request.
+2. Persist Gate P and Gate R artifacts from the current conversation.
+3. Initialize required draft docs if missing.
+4. Proceed directly to Agent 3 and Agent 4 when the execution trigger is satisfied.
+
+Fast-path guardrails:
+- Use this fast path only when the approved plan is for the current request, not a stale prior run.
+- If the approved plan conflicts with repository invariants or lacks a required execution carrier, resolve only the blocking gap instead of restarting full discovery.
+- Do not ask repeated business questions when the approved plan already answers them well enough for execution.
 
 ## Source Of Truth
 
-Canonical references:
+Authority model:
+
+- `clio MCP` is the only authoritative source for the executable MCP contract.
+- Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `tool-contract-get`.
+- Repository docs must not define an independent MCP API contract.
+- Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
+- Canonical entity execution path in repository guidance is `application-create -> schema-sync -> application-get-info`.
+- Canonical page execution path in repository guidance is `page-list -> page-get -> page-sync -> page-get`.
+
+Canonical repository references:
 
 - `context/INDEX.md`
 - `context/essentials.md`
@@ -234,9 +272,8 @@ Canonical references:
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
 - `context/bindings-lookup.json`
-- `context/mcp-application-tools-reference.md`
 - `templates/**`
 
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
-Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep detailed API payload rules and page-editing patterns in the context/reference files rather than duplicating them in multiple agent prompts.
+Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `tool-contract-get` instead of duplicating payload rules in agent prompts.

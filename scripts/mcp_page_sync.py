@@ -138,11 +138,16 @@ def normalize_page_sync_plan(plan_payload, result_document):
 def ensure_required_tools(client):
     tools = client.list_tools()
     tool_names = {tool["name"] for tool in tools}
-    required = {"page-list", "page-get", "page-update"}
+    required = {"page-list", "page-get"}
     missing = sorted(required - tool_names)
     if missing:
         raise WorkflowError(f"Required MCP page tools are missing: {', '.join(missing)}")
-    return "page-sync" in tool_names
+    has_page_sync = "page-sync" in tool_names
+    if has_page_sync:
+        return True
+    if "page-update" not in tool_names:
+        raise WorkflowError("Required MCP page tools are missing: page-update")
+    return False
 
 
 def ensure_success(tool_name, response):

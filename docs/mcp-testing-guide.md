@@ -3,6 +3,7 @@
 > Для візуального UI-тестування дивіться [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md).
 
 Цей документ описує програматичне тестування released clio MCP contract через `scripts/mcp_client.py`.
+Executable contract визначається тільки `clio MCP` через `tool-contract-get`; цей документ описує спосіб перевірки, а не локальний API reference.
 
 ## Базові правила
 
@@ -11,8 +12,11 @@
 - Виконання MCP іде через clio stdio, не через HTTP/SSE
 - Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
 - Для JSON-heavy payloads використовуйте `--args-file` або `--args-stdin`, а не inline quoting
-- Назви tools у dash-style: `application-create`, `application-get-list`, `application-get-info`, `schema-sync`, `page-sync`, `page-list`, `page-get`, `page-update`
-- Аргументи entity/page tools у kebab-case
+- Спочатку перевіряйте manifest через `tools/list`, а executable contract через `tool-contract-get`
+- `application-create` лишається scalar-only; localization maps для captions не передаються сюди, а робляться окремими schema tools після створення app shell
+- Canonical entity flow: `application-create -> schema-sync -> application-get-info`
+- Canonical page flow: `page-list -> page-get -> page-sync -> page-get`
+- `page-update` лишається тільки fallback path для single-page dry-run або legacy save
 
 ## Швидка перевірка середовища
 
@@ -20,18 +24,21 @@
 clio ver
 printf '{"environment-name":"local"}\n' > /tmp/application-get-list.args.json
 python3 scripts/mcp_client.py tools/list '{}' 30
+python3 scripts/mcp_client.py tool-contract-get '{}' 30
 python3 scripts/mcp_client.py application-get-list --args-file /tmp/application-get-list.args.json --timeout 30
 ```
 
 ```powershell
 @'{"environment-name":"local"}'@ | Set-Content -Path .\application-get-list.args.json
 py -3 .\scripts\mcp_client.py tools/list '{}' 30
+py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
 py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
 ```
 
 Очікування:
 - `clio ver` повертає `8.0.2.37` або новіше
 - `tools/list` повертає non-empty manifest
+- `tool-contract-get` повертає metadata хоча б для `application-create`, `schema-sync`, `page-sync`
 - `application-get-list` повертає `success: true`
 
 ## Типові виклики
@@ -44,6 +51,16 @@ python3 scripts/mcp_client.py tools/list '{}' 30
 
 ```powershell
 py -3 .\scripts\mcp_client.py tools/list '{}' 30
+```
+
+### Отримати executable contract metadata
+
+```bash
+python3 scripts/mcp_client.py tool-contract-get '{}' 30
+```
+
+```powershell
+py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
 ```
 
 ### Отримати список applications
@@ -83,7 +100,9 @@ cat <<'EOF' > /tmp/schema-sync.args.json
     {
       "type":"create-lookup",
       "schema-name":"UsrTodoStatus",
-      "title":"Todo Status"
+      "title-localizations":{
+        "en-US":"Todo Status"
+      }
     },
     {
       "type":"update-entity",
@@ -93,7 +112,9 @@ cat <<'EOF' > /tmp/schema-sync.args.json
           "action":"add",
           "column-name":"UsrStatus",
           "type":"Lookup",
-          "title":"Status",
+          "title-localizations":{
+            "en-US":"Status"
+          },
           "reference-schema-name":"UsrTodoStatus"
         }
       ]
@@ -113,7 +134,9 @@ python3 scripts/mcp_client.py schema-sync --args-file /tmp/schema-sync.args.json
     {
       "type":"create-lookup",
       "schema-name":"UsrTodoStatus",
-      "title":"Todo Status"
+      "title-localizations":{
+        "en-US":"Todo Status"
+      }
     }
   ]
 }
@@ -157,43 +180,10 @@ python3 scripts/mcp_client.py page-sync --args-file /tmp/page-sync.args.json --t
 py -3 .\scripts\mcp_client.py page-sync --args-file .\page-sync.args.json --timeout 120
 ```
 
-## Очікувані формати відповіді
-
-### `application-get-list`
-
-```json
-{
-  "success": true,
-  "applications": [
-    {
-      "id": "7030c825-59bd-49c6-8a6b-5ff260687a87",
-      "code": "UsrEvents",
-      "name": "Events"
-    }
-  ]
-}
-```
-
-### `application-get-info`
-
-```json
-{
-  "success": true,
-  "package-u-id": "597944b2-c71f-4cdb-9510-0216c1e214a6",
-  "package-name": "UsrTodoList",
-  "entities": [
-    {
-      "uId": "32ccd416-a6c7-4eeb-bae0-46403f18c457",
-      "name": "UsrTodoList",
-      "caption": "Todo"
-    }
-  ]
-}
-```
-
 ## Перевірки після schema/page sync
 
 - Після `schema-sync` обов’язково викличте `application-get-info`
+- Не тримайте локальні hard-coded param/response expectations; якщо треба точний shape, дочитайте його через `tool-contract-get`
 - Після `page-sync` перевірте, що всі page results мають `success: true`
 - Якщо потрібна детальна перевірка сторінок, дочитайте сторінки через `page-get`
 - Для локального helper path `page-sync` лишається preferred fast path, а `mcp_page_sync.py` робить fallback `page-get`, якщо server response не містить reusable verified body
@@ -229,11 +219,8 @@ py -3 .\scripts\mcp_client.py page-sync --args-file .\page-sync.args.json --time
 
 Рішення:
 - перевірити dash-style tool name
-- перевірити kebab-case аргументи
-- для `update-entity-schema` передавати native list у `operations`
-- для `page-update` передавати `dry-run`, а не `dryRun`
+- звірити exact params, aliases і validators через `tool-contract-get`
 
 ## Дивіться також
 
-- [`context/mcp-application-tools-reference.md`](../context/mcp-application-tools-reference.md)
 - [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md)

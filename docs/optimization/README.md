@@ -1,5 +1,7 @@
 # MCP Performance Optimization — Overview
 
+> Historical design notes only. These documents are not the executable MCP contract source of truth. For current tool names, parameters, response shapes, and errors, use `clio MCP` via `tool-contract-get`.
+
 Результат аналізу сесії `84576484` (8m 11s, UsrTodoList) та аудиту коду clio MCP server + Python client.
 
 ## Критичні знахідки

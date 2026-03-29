@@ -1,7 +1,7 @@
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with `page-update`.
+Used by coding agents with the runtime page-sync flow. `page-update` is fallback-only.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -112,13 +112,13 @@ When the task is "main entity columns were added and the ListPage must show the 
 4. Append only the missing resolved columns.
 5. Keep the live `items` binding, `primaryColumnName`, and collection path intact unless the plan explicitly changes them.
 6. Exclude inherited audit/system fields and long/rich/blob fields from default auto-selection unless they are explicitly requested or required.
-7. After `page-update`, re-read the page and verify the required fields and resolved selected columns are present in the live DataGrid.
+7. After `page-sync`, re-read or verify the page and confirm the required fields and resolved selected columns are present in the live DataGrid.
 
 ---
 
 ## Runtime FormPage Field Recipes
 
-Use these recipes when syncing entity fields into a live FormPage through `page-update`.
+Use these recipes when syncing entity fields into a live FormPage through the canonical runtime page-sync flow.
 
 If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `component-info` for that exact type before changing container-specific properties or children.
 
@@ -382,7 +382,7 @@ See `context/handlers-reference.md` for the full request type reference.
 
 ## Editing Safety Contract
 
-When editing page bodies via `page-update`, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
+When editing page bodies for the runtime page-sync flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
 
 ### Correct: FormPage field insertion via parsed JSON
 
@@ -438,7 +438,7 @@ FormPage typically uses the object variant; ListPage typically uses the array va
 
 ## ResourceString Localization for Custom Elements
 
-When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `page-update`/`page-sync`.
+When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `page-sync` or the fallback `page-update` path.
 
 ### How it works
 
@@ -476,7 +476,7 @@ Usr-prefixed keys without explicit values in `resources` are auto-derived from k
 }
 ```
 
-Save via: `call_mcp_tool('page-update', {'schema-name': '...', 'body': body, 'resources': '{"UsrDetailsTab_caption": "Details"}', 'environment-name': 'local'})`
+Save through the canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
 
 ---
 

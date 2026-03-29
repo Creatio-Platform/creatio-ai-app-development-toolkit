@@ -1,5 +1,7 @@
 # 01 — Clio MCP Server: Quick Wins
 
+> Historical design note. Any example payloads or response shapes here are proposals, not the authoritative executable contract. Resolve the current contract through `tool-contract-get`.
+
 Миттєві покращення швидкодії без зміни API.
 
 ---

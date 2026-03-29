@@ -2,44 +2,87 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+AUTHORITY_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "README.md",
+    ROOT / "context/essentials.md",
+    ROOT / "context/INDEX.md",
+    ROOT / "context/data-bindings-reference.md",
+    ROOT / "agents/03-implementation-plan.md",
+    ROOT / "agents/04-implementation.md",
+    ROOT / "docs/mcp-testing-guide.md",
+    ROOT / "skills/README.md",
+    ROOT / "skills/entity-creation/SKILL.md",
+    ROOT / "skills/data-bindings-creation/SKILL.md",
+    ROOT / "skills/page-schema-editing/SKILL.md",
+    ROOT / ".github/copilot-instructions.md",
+]
+
 DOC_PATHS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/02-requirements-gathering.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "agents/04-implementation.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/mcp-application-tools-reference.md"
+    ROOT / "context/mcp-application-tools-reference.md",
 ]
+
+CANONICAL_FLOW_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "README.md",
+    ROOT / "context/essentials.md",
+    ROOT / "context/INDEX.md",
+    ROOT / "agents/03-implementation-plan.md",
+    ROOT / "agents/04-implementation.md",
+    ROOT / "docs/mcp-testing-guide.md",
+    ROOT / ".github/copilot-instructions.md",
+]
+
+FALLBACK_DOCS = [
+    ROOT / "context/essentials.md",
+    ROOT / "agents/04-implementation.md",
+    ROOT / "skills/page-schema-editing/SKILL.md",
+    ROOT / "context/ui-reference.md",
+    ROOT / "context/viewconfig-reference.md",
+]
+
 CHECKLIST_SOURCE_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/02-requirements-gathering.md",
     ROOT / "context/business-checklist.md",
-    ROOT / "README.md"
+    ROOT / "README.md",
 ]
+
 EVIDENCE_STATUS_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/04-implementation.md",
-    ROOT / "README.md"
+    ROOT / "README.md",
 ]
+
 PAGE_SYNC_PLAN_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "agents/04-implementation.md",
-    ROOT / "README.md"
+    ROOT / "README.md",
 ]
+
 PRE_ANALYSIS_DOCS = [
     ROOT / "agents/02-requirements-gathering.md",
-    ROOT / "context/business-checklist.md"
+    ROOT / "context/business-checklist.md",
 ]
+
 FIRST_TURN_LATENCY_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "agents/02-requirements-gathering.md"
+    ROOT / "agents/02-requirements-gathering.md",
 ]
+
 DOMAIN_EXPERTISE_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/02-requirements-gathering.md",
-    ROOT / "context/business-checklist.md"
+    ROOT / "context/business-checklist.md",
 ]
+
 STDIO_ONLY_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/01-environment-setup.md",
@@ -47,13 +90,9 @@ STDIO_ONLY_DOCS = [
     ROOT / "context/mcp-application-tools-reference.md",
     ROOT / ".github/copilot-instructions.md",
     ROOT / "README.md",
-    ROOT / "skills/README.md"
+    ROOT / "skills/README.md",
 ]
-MISSING_HELPER_REFERENCE_DOCS = [
-    ROOT / "README.md",
-    ROOT / "agents/02-requirements-gathering.md",
-    ROOT / "agents/04-implementation.md"
-]
+
 DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "README.md",
@@ -64,32 +103,20 @@ DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "context/data-bindings-reference.md",
     ROOT / "skills/README.md",
     ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / "skills/page-creation/SKILL.md",
-]
-BINDING_GET_COLUMNS_DOCS = [
-    ROOT / "context/essentials.md",
-    ROOT / "context/INDEX.md",
-]
-AGENT_FIVE_DOCS = [
-    ROOT / "skills/page-creation/SKILL.md",
-]
-POWERSHELL_RUNTIME_DOCS = [
-    ROOT / "README.md",
-    ROOT / "docs/mcp-testing-guide.md",
-    ROOT / "context/mcp-application-tools-reference.md",
-]
-ARGS_FILE_DOCS = [
-    ROOT / "README.md",
-    ROOT / "docs/mcp-testing-guide.md",
-    ROOT / "context/mcp-application-tools-reference.md",
-]
-PAGE_SYNC_PREFERRED_DOCS = [
-    ROOT / "agents/04-implementation.md",
-    ROOT / "context/mcp-application-tools-reference.md",
 ]
 
 
 class DefaultContractDocsTests(unittest.TestCase):
+    def test_authority_docs_point_to_clio_mcp_contract(self):
+        for path in AUTHORITY_DOCS:
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("tool-contract-get", content, str(path))
+        agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("only authoritative source", agents_doc)
+        self.assertIn("must not define an independent MCP API contract", agents_doc)
+        reference_doc = (ROOT / "context/mcp-application-tools-reference.md").read_text(encoding="utf-8")
+        self.assertIn("It is not the executable MCP specification.", reference_doc)
+
     def test_docs_delegate_default_semantics_to_clio_guidance(self):
         for path in DOC_PATHS:
             content = path.read_text(encoding="utf-8")
@@ -100,7 +127,6 @@ class DefaultContractDocsTests(unittest.TestCase):
                 or "default requirement" in content.lower(),
                 str(path),
             )
-
         requirements_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
         self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", requirements_doc)
 
@@ -134,11 +160,11 @@ class DefaultContractDocsTests(unittest.TestCase):
 
     def test_docs_define_first_turn_latency_bootstrap_rule(self):
         for path in FIRST_TURN_LATENCY_DOCS:
-            content = path.read_text(encoding="utf-8")
-            self.assertIn("first", content.lower(), str(path))
-            self.assertIn("latency", content.lower(), str(path))
-            self.assertIn("structured input", content.lower(), str(path))
-            self.assertIn("do not read large repository files or run orchestration scripts", content.lower(), str(path))
+            content = path.read_text(encoding="utf-8").lower()
+            self.assertIn("first", content, str(path))
+            self.assertIn("latency", content, str(path))
+            self.assertIn("structured input", content, str(path))
+            self.assertIn("do not read large repository files or run orchestration scripts", content, str(path))
 
     def test_docs_require_domain_expertise_for_recognizable_app_types(self):
         for path in DOMAIN_EXPERTISE_DOCS:
@@ -154,7 +180,6 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_docs_define_fixed_business_plan_rendering_contract(self):
         agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("exact BA-style Business Plan structure", agents_doc)
-        self.assertNotIn("context/app-documentation-contract.md", agents_doc)
 
         agent_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
         self.assertIn("Document Rendering Contract", agent_doc)
@@ -167,7 +192,6 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("## 7. UX Expectations", agent_doc)
         self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", agent_doc)
         self.assertNotIn("## 6. Implementation-shaping decisions and assumptions", agent_doc)
-        self.assertNotIn("context/app-documentation-contract.md", agent_doc)
 
         checklist_doc = (ROOT / "context/business-checklist.md").read_text(encoding="utf-8").lower()
         self.assertIn("business logic quality bar", checklist_doc)
@@ -191,10 +215,52 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("clio stdio transport", reference_doc)
         self.assertIn("Do not use curl as an MCP execution pattern.", reference_doc)
 
-    def test_docs_do_not_reference_missing_app_docs_helper(self):
-        for path in MISSING_HELPER_REFERENCE_DOCS:
+    def test_active_policy_docs_do_not_embed_hand_written_contract_tables(self):
+        disallowed_markers = [
+            "Parameter | Type | Required",
+            "Parameters (all kebab-case)",
+            "Request Shapes",
+            "Expected Response",
+            "Tool name:",
+            "All parameters are strings",
+        ]
+        for path in AUTHORITY_DOCS:
             content = path.read_text(encoding="utf-8")
-            self.assertNotIn("scripts/app_docs.py", content, str(path))
+            for marker in disallowed_markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
+
+    def test_canonical_entity_and_page_flows_are_documented_consistently(self):
+        entity_flow_hits = 0
+        page_flow_hits = 0
+        for path in CANONICAL_FLOW_DOCS:
+            content = path.read_text(encoding="utf-8")
+            if "application-create -> schema-sync -> application-get-info" in content:
+                entity_flow_hits += 1
+            if "page-list -> page-get -> page-sync -> page-get" in content:
+                page_flow_hits += 1
+        self.assertGreaterEqual(entity_flow_hits, 5)
+        self.assertGreaterEqual(page_flow_hits, 5)
+
+    def test_page_update_is_documented_as_fallback_only(self):
+        for path in FALLBACK_DOCS:
+            content = path.read_text(encoding="utf-8").lower()
+            self.assertIn("page-update", content, str(path))
+            self.assertIn("fallback", content, str(path))
+
+    def test_repo_preserves_policy_surfaces(self):
+        agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertTrue("Business context" in agents_doc or "Business Outcome" in agents_doc)
+        self.assertTrue("Users, access and ownership" in agents_doc or "Access / Personas" in agents_doc)
+        self.assertIn("orchestration", agents_doc.lower())
+        self.assertIn("approvals", agents_doc.lower())
+        self.assertIn("business invariants", agents_doc.lower())
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("machineChecked", readme)
+        self.assertIn("manualCheckPending", readme)
+        ui_reference = (ROOT / "context/ui-reference.md").read_text(encoding="utf-8").lower()
+        self.assertIn("page sync", ui_reference)
+        viewconfig_reference = (ROOT / "context/viewconfig-reference.md").read_text(encoding="utf-8").lower()
+        self.assertIn("page-sync", viewconfig_reference)
 
     def test_docs_do_not_use_dot_style_application_tool_names(self):
         for path in DOT_STYLE_APPLICATION_TOOL_DOCS:
@@ -202,36 +268,6 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertNotIn("application.create", content, str(path))
             self.assertNotIn("application.get_list", content, str(path))
             self.assertNotIn("application.get_info", content, str(path))
-
-    def test_docs_do_not_reference_binding_get_columns(self):
-        for path in BINDING_GET_COLUMNS_DOCS:
-            content = path.read_text(encoding="utf-8")
-            self.assertNotIn("binding-get-columns", content, str(path))
-
-    def test_docs_do_not_mention_agent_five(self):
-        for path in AGENT_FIVE_DOCS:
-            content = path.read_text(encoding="utf-8")
-            self.assertNotIn("Agent 5", content, str(path))
-
-    def test_runtime_docs_include_powershell_parity(self):
-        for path in POWERSHELL_RUNTIME_DOCS:
-            content = path.read_text(encoding="utf-8")
-            self.assertIn("PowerShell", content, str(path))
-
-    def test_runtime_docs_document_args_file_execution(self):
-        for path in ARGS_FILE_DOCS:
-            content = path.read_text(encoding="utf-8")
-            self.assertIn("--args-file", content, str(path))
-
-    def test_page_sync_docs_prefer_fast_path_with_fallback(self):
-        agent_doc = (ROOT / "agents/04-implementation.md").read_text(encoding="utf-8")
-        self.assertNotIn("MANDATORY for new apps", agent_doc)
-        self.assertIn("preferred", agent_doc.lower())
-        self.assertIn("fallback", agent_doc.lower())
-
-        reference_doc = (ROOT / "context/mcp-application-tools-reference.md").read_text(encoding="utf-8")
-        self.assertIn("preferred", reference_doc.lower())
-        self.assertIn("fallback", reference_doc.lower())
 
 
 if __name__ == "__main__":

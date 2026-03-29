@@ -1,5 +1,7 @@
 # 05 — MCP Protocol: Extended Capabilities
 
+> Historical design note. Any example payloads or response shapes here are proposals, not the authoritative executable contract. Resolve the current contract through `tool-contract-get`.
+
 Використання можливостей MCP протоколу поза tools: Resources, Prompts, Subscriptions.
 
 ---

@@ -23,9 +23,15 @@ The business contract for this agent is the BA-style requirements draft approved
 - `output/<AppName>/page-sync/*.body.js` when page bodies are materialized outside `plan.md`
 
 ## Read First
-Preferred: read `context/.cache/agent-3-bundle.md` (single file).
+Preferred: read `context/.cache/agent-3-bundle.md` when available.
 
-Fallback (if bundle unavailable):
+Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
+- the bundle is missing
+- the bundle declares a build timestamp or manifest hash that no longer matches its source set
+- the current task requires a reference file that is known to be outside the bundle
+- the bundle content is internally inconsistent with currently loaded repository instructions
+
+Fallback (if bundle unavailable or stale):
 - `AGENTS.md`
 - `context/essentials.md` L166-229 (MCP Tools)
 - `context/schema-reference.md` L7-90 (Parents + DataValueTypes)
@@ -33,7 +39,7 @@ Fallback (if bundle unavailable):
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
-- `context/mcp-application-tools-reference.md`
+- `scripts/mcp_client.py`
 
 ## Preconditions
 
@@ -84,32 +90,38 @@ If the approved artifact is wrapped by host tooling such as `<proposed_plan>`, i
 
 Resolve:
 
-- `name`
-- `code`
-- `templateCode`
-- `iconId`
-- `iconBackground`
-- `description`
-- `clientTypeId`
-- `optionalTemplateDataJson`
+- application display name
+- application code
+- template choice
+- icon choice/background
+- optional description
+- optional client type
+- optional template-data shape
 
 Rules:
 
+- Resolve exact executable parameter names, aliases, defaults, and validation rules from `tool-contract-get`.
 - `code` must start with `Usr`.
-- Default `templateCode` to `AppFreedomUI`.
+- Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
 - `useAIContentGeneration` must be `false`.
-- If `useExistingEntitySchema=true`, require `entitySchemaName`.
-- If `iconId` or `clientTypeId` is explicit, validate GUID format.
+- If the chosen template-data mode reuses an existing entity schema, require that entity schema name.
+- If icon or client-type identifiers are explicit, validate GUID format.
 - Do not introduce technical scope that changes the approved business goal, personas, access posture, or MVP boundary without surfacing it as a blocker or a new assumption.
 
 ### Main Entity And Lookup Rules
 
+- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
+- `application-create` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
 - Use the current `clio` MCP contract and prompts/resources for canonical main-entity selection and lookup display semantics instead of redefining them here.
 - When refreshed application context exposes `canonical-main-entity-name`, use it as the primary selector for the app’s main entity. Fall back to the section entity that matches the app code only when the canonical field is absent.
-- Map synonymous business nouns back to that resolved main entity unless the requirements define a distinct business object.
+- Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
+- Reuse `Name` when it already exists.
+- Never plan duplicate title-like columns when `Name` is already present.
 - Model enum-like business values as lookup entities first.
+- For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
+- For entity schema payloads, plan `title-localizations` and `description-localizations` as localization maps with an `en-US` entry; legacy scalar `title` and `description` fields are rejected by MCP.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
 ### Schema Sync Plan
@@ -121,7 +133,8 @@ Rules:
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
-- After each schema mutation, require refresh through `application-get-info`.
+- Canonical entity flow is `application-create -> schema-sync -> application-get-info`.
+- Refresh once through `application-get-info` after the schema-sync batch completes.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
 ### Default Rules
@@ -153,6 +166,14 @@ Required execution sequence for each page:
 
 1. `page-list`
 2. `page-get`
+3. edit body
+4. `page-sync`
+5. `page-get` again for verification
+
+Fallback page sequence:
+
+1. `page-list`
+2. `page-get`
 3. `page-update` with `dry-run: true`
 4. `page-update`
 5. `page-get` again for verification
@@ -165,16 +186,16 @@ When page sync is required:
 
 ### Validation Rules
 
-- Prefer `schema-sync` for entity mutations and keep `operations` / `update-operations` as native arrays.
-- Use `environment-name` and `package-name` for executable entity payloads, and `schema-name` for schema targets.
-- Use `action` / `column-name` keys inside `update-operations`.
+- Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
+- Resolve executable parameter names, aliases, and required fields from `tool-contract-get` instead of hard-coding them in the plan.
+- Keep `operations` / `update-operations` as native arrays.
 - For fallback `create-data-binding-db`, prefer omitting `binding-name` for default lookup seeding so the binding defaults to `<schema-name>`; include `binding-name` only when a distinct binding artifact is explicitly required. Always pass `rows` as a JSON string of `[{"values": {...}}]`.
 - Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
 - Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
 - Never treat seeded rows as implementation of a default rule.
-- For `create-lookup`, `create-entity-schema`, and `update-operations` with `action: add`, `title` must be non-empty after trim.
-- If a business title is missing, derive a non-empty fallback from the schema/column code instead of sending blank text.
-- For `action: modify`, never send blank/whitespace `title`; omit `title` to preserve existing caption.
+- For `create-lookup`, `create-entity-schema`, and `update-operations` with `action: add`, `title-localizations` must include a non-empty `en-US` value after trim.
+- If a business title is missing, derive a non-empty fallback from the schema/column code and place it in the `en-US` localization entry instead of sending blank text.
+- For `action: modify`, never send blank/whitespace localization values; omit the localization fields to preserve the existing caption.
 
 ## Plan Output
 

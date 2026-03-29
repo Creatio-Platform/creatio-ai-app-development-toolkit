@@ -19,7 +19,7 @@ This source format is different from the frontend TypeScript runtime implementat
 
 - page schemas store handler code in the JS body and marker sections
 - the frontend executes requests through a handler chain at runtime
-- for `page-get` / `page-update` tasks, keep editing the page body markers rather than switching to standalone TypeScript `@CrtRequestHandler` classes unless the task explicitly targets frontend source code
+- for runtime page-body editing tasks, keep editing the page body markers rather than switching to standalone TypeScript `@CrtRequestHandler` classes unless the task explicitly targets frontend source code
 
 ## Runtime Execution Model
 
@@ -415,8 +415,8 @@ Use these MCP tools to read and edit handler logic in deployed pages:
 1. `page-list` — discover pages
 2. `page-get` — read metadata and raw JS body
 3. edit `handlers`, `SCHEMA_DEPS`, `SCHEMA_ARGS`, and related sections in one pass
-4. `page-update(..., dry-run: True)`
-5. `page-update(...)`
+4. `page-sync(..., validate: true, verify: true)`
+5. fallback to `page-update(..., dry-run: True)` plus `page-update(...)` only when `page-sync` is unavailable
 
 When editing handler logic through MCP:
 

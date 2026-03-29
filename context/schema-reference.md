@@ -237,8 +237,6 @@ define("UsrTodoTask_ListPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/, function/**SC
 });
 ```
 
-**📁 See `templates/pages/` for complete examples.**
-
 ---
 
 ### Addon Schema (3 files)

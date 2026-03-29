@@ -80,7 +80,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
 
-When editing raw page bodies through `page-update`, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `page-get` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
+When editing raw page bodies through the canonical runtime page-sync flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `page-get` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
 
 ---
 
@@ -123,7 +123,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` param in `page-update`/`page-sync` to register the localizableString.
+- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `page-sync` or the fallback `page-update` path to register the localizableString.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -141,9 +141,9 @@ Use this policy when a new app is generated or the main section entity gains app
 - If the requirements are partial, keep the explicit columns and fill only the missing columns with this default policy.
 - When editing a live page, preserve existing DataGrid columns and order. Append only the missing resolved columns unless the requirements explicitly demand reordering.
 
-### ListPage DataGrid Sorting via `page-update`
+### ListPage DataGrid Sorting for Runtime Page Sync
 
-This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through `page-update`.
+This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through the runtime page-sync flow.
 
 The runtime contract is centered on the DataGrid collection attribute, not on the visual `sorting` property stored inside the DataGrid node:
 
@@ -173,7 +173,7 @@ The frontend preprocessor can auto-inject DataGrid view properties from this met
 - `viewConfig.sorting`
 - `viewConfig.sortingChange`
 
-When editing raw page bodies through `page-update`, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
+When editing raw page bodies through the runtime page-sync flow, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
 
 #### Minimal Safe Example
 
@@ -328,9 +328,9 @@ Binds page attributes to data source:
 
 ### Runtime Binding Pattern for Preserving Live Form Page Lookup Lists
 
-When editing an existing FormPage via `page-update`, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
+When editing an existing FormPage through the runtime page-sync flow, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
 
-This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting via page-update` above.
+This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting for Runtime Page Sync` above.
 
 ```json
 {
@@ -422,7 +422,7 @@ Use this policy when a new app is generated or the main section entity gains app
 - If the requirements are partial, keep the explicit fields and fill only the missing fields with this default policy.
 - Preserve existing live fields and append only missing resolved fields unless the requirements explicitly demand removal or re-layout.
 
-### Runtime Field Insertion via `page-update`
+### Runtime Field Insertion via Page Sync
 
 Use the current page body from `page-get` as the source of truth. For live FormPage field sync, identify the **primary field container** by inspecting the existing `viewConfigDiff` — it is the container that holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`). Append missing resolved field controls to that discovered container.
 
@@ -546,10 +546,6 @@ The frontend also supports these field controls:
 | Encrypted input | `crt.EncryptedInput` | SecureText | Supports masking state and `toggleMaskValue`. Use for secure text, not as a generic text replacement. |
 | Slider | `crt.Slider` | Integer, Float, Money | Supports `minValue`, `maxValue`, `step`, `color`. Use only when the UX explicitly wants a range/slider control. |
 
-### Template Note
-
-`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime `page-update` edits. When editing a live page, trust `page-get` and preserve the current container and binding pattern.
-
 ---
 
 ## Page Parent Templates
@@ -639,7 +635,8 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
 |------|-------------|
 | `page-list` | Discover page schemas by package or name pattern |
 | `page-get` | Read a page schema's metadata and raw JS body |
-| `page-update` | Save the complete JS body — agent handles all edits (saves to DB, no compile needed) |
+| `page-sync` | Canonical write path for edited page bodies, batch validation, and server-side verification |
+| `page-update` | Fallback single-page dry-run or legacy save path |
 | `component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -650,13 +647,12 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 2. call `page-get` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
 4. If the page contains unfamiliar `crt.*` components, inspect them with `component-info` and `component-type: "..."`
-5. call `page-update` with `schema-name: "UsrMyApp_FormPage"` and the full modified `body`
+5. call `page-sync` with the edited page body and verify the saved page; use `page-update` only as an explicit fallback
 ```
 
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page-get`.
 
 ---
 
-**📁 For complete page examples, see `templates/pages/`**
 **📁 For handler patterns and Creatio client APIs, see `context/handlers-reference.md`**
 **📁 For viewConfigDiff component reference (buttons, containers, properties), see `context/viewconfig-reference.md`**

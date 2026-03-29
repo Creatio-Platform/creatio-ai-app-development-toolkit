@@ -128,6 +128,110 @@ class PageBodyToolsTests(unittest.TestCase):
 
 
 class McpClientValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.contract_index = {
+            "application-create": {
+                "name": "application-create",
+                "input-schema": {
+                    "required": ["environment-name", "name", "code", "template-code", "icon-background"],
+                    "properties": [
+                        {"name": "environment-name", "type": "string", "description": "Registered clio environment name."},
+                        {"name": "name", "type": "string", "description": "Application display name."},
+                        {"name": "code", "type": "string", "description": "Application code."},
+                        {"name": "template-code", "type": "string", "description": "Technical template code."},
+                        {"name": "icon-background", "type": "string", "description": "Hex icon background."},
+                    ],
+                    "validators": [
+                        {
+                            "name": "forbid-fields",
+                            "code": "invalid-workflow-shape",
+                            "fields": ["title-localizations", "description-localizations"],
+                            "context": "application-create stays scalar-only; localized captions belong to follow-up schema tools.",
+                        }
+                    ],
+                    "any-of": [],
+                },
+                "aliases": [
+                    {
+                        "scope": "parameter",
+                        "canonical-name": "code",
+                        "alias": "app-code",
+                        "status": "rejected",
+                        "message": "Use 'code' instead of 'app-code'.",
+                    },
+                    {
+                        "scope": "parameter",
+                        "canonical-name": "name",
+                        "alias": "app-name",
+                        "status": "rejected",
+                        "message": "Use 'name' instead of 'app-name'.",
+                    },
+                ],
+            },
+            "page-get": {
+                "name": "page-get",
+                "input-schema": {
+                    "required": ["schema-name"],
+                    "properties": [
+                        {"name": "schema-name", "type": "string", "description": "Freedom UI page schema name."},
+                        {"name": "environment-name", "type": "string", "description": "Registered clio environment name."},
+                    ],
+                    "validators": [],
+                    "any-of": [["environment-name"], ["uri", "login", "password"]],
+                },
+                "aliases": [
+                    {
+                        "scope": "parameter",
+                        "canonical-name": "environment-name",
+                        "alias": "environmentName",
+                        "status": "rejected",
+                        "message": "Use 'environment-name' instead of 'environmentName'.",
+                    },
+                    {
+                        "scope": "parameter",
+                        "canonical-name": "schema-name",
+                        "alias": "schemaName",
+                        "status": "rejected",
+                        "message": "Use 'schema-name' instead of 'schemaName'.",
+                    },
+                ],
+            },
+            "application-delete": {
+                "name": "application-delete",
+                "input-schema": {
+                    "required": ["app-name"],
+                    "properties": [
+                        {"name": "app-name", "type": "string", "description": "Application name or code."},
+                        {"name": "environment-name", "type": "string", "description": "Registered clio environment name."},
+                    ],
+                    "validators": [],
+                    "any-of": [["environment-name"], ["uri", "login", "password"]],
+                },
+                "aliases": [],
+            },
+            "component-info": {
+                "name": "component-info",
+                "input-schema": {
+                    "required": [],
+                    "properties": [
+                        {"name": "component-type", "type": "string", "description": "Optional component type."},
+                        {"name": "search", "type": "string", "description": "Optional search string."},
+                    ],
+                    "validators": [],
+                    "any-of": [],
+                },
+                "aliases": [
+                    {
+                        "scope": "parameter",
+                        "canonical-name": "component-type",
+                        "alias": "componentType",
+                        "status": "rejected",
+                        "message": "Use 'component-type' instead of 'componentType'.",
+                    }
+                ],
+            },
+        }
+
     def test_rejects_wrong_param_names_for_application_create(self):
         from scripts.mcp_client import _validate_params
         errors = _validate_params("application-create", {
@@ -136,7 +240,7 @@ class McpClientValidationTests(unittest.TestCase):
             "app-name": "Test",
             "template-code": "AppFreedomUI",
             "icon-background": "#fff",
-        })
+        }, self.contract_index)
         self.assertTrue(any("Use 'code'" in e for e in errors))
         self.assertTrue(any("Use 'name'" in e for e in errors))
         self.assertTrue(any("Missing required parameter 'code'" in e for e in errors))
@@ -144,7 +248,7 @@ class McpClientValidationTests(unittest.TestCase):
 
     def test_validates_page_get_requires_kebab_case(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("page-get", {"environmentName": "local", "schemaName": "X"})
+        errors = _validate_params("page-get", {"environmentName": "local", "schemaName": "X"}, self.contract_index)
         self.assertTrue(any("environment-name" in e for e in errors))
         self.assertTrue(any("schema-name" in e for e in errors))
 
@@ -155,24 +259,24 @@ class McpClientValidationTests(unittest.TestCase):
             "uri": "http://localhost:5001",
             "login": "Supervisor",
             "password": "Supervisor",
-        })
+        }, self.contract_index)
         self.assertEqual(errors, [])
 
     def test_application_delete_requires_environment_or_explicit_connection(self):
         from scripts.mcp_client import _validate_params
         errors = _validate_params("application-delete", {
             "app-name": "UsrTest",
-        })
+        }, self.contract_index)
         self.assertTrue(any("connection parameters" in e for e in errors))
 
     def test_component_info_accepts_empty_args(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("component-info", {})
+        errors = _validate_params("component-info", {}, self.contract_index)
         self.assertEqual(errors, [])
 
     def test_component_info_rejects_camel_case_param_name(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("component-info", {"componentType": "crt.TabContainer"})
+        errors = _validate_params("component-info", {"componentType": "crt.TabContainer"}, self.contract_index)
         self.assertTrue(any("component-type" in e for e in errors))
 
     def test_passes_valid_application_create(self):
@@ -183,7 +287,7 @@ class McpClientValidationTests(unittest.TestCase):
             "name": "Test",
             "template-code": "AppFreedomUI",
             "icon-background": "#1F5F8B",
-        })
+        }, self.contract_index)
         self.assertEqual(errors, [])
 
     def test_build_page_update_arguments_with_resources_dict(self):

@@ -1,5 +1,7 @@
 # 02 — Clio MCP Server: Composite Tools
 
+> Historical design note. Any example payloads or response shapes here are proposals, not the authoritative executable contract. Resolve the current contract through `tool-contract-get`.
+
 Нові tools що об'єднують кілька операцій в один MCP call.
 
 ---

@@ -17,6 +17,9 @@ Use these files as canonical:
 - `context/bindings-lookup.json`
 - `templates/**`
 
+Executable MCP contract is authoritative only in `clio MCP` through `tool-contract-get`.
+This repository is authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and business invariants.
+
 ## Developer UX
 
 Primary workflow is natural language:
@@ -44,7 +47,8 @@ Orchestrator flow:
 3. Requirements gathering produces a BA-style `requirements.md`, writes `request-spec.json`, persists approved `workflow-state.json`, and initializes draft docs under `output/<AppName>/docs/**`.
    The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`.
 4. Implementation plan generates `output/<AppName>/technical-annex.md` and `output/<AppName>/plan.md` when implementation is explicitly requested.
-5. Implementation runs synchronously, uses MCP `application-create`, or branches explicitly into `application-get-list` -> `application-get-info` for existing apps, initializes canonical context in `mcp-application-result.json`, applies ordered entity sync via MCP entity tools when needed, and persists refreshed artifacts only after schemas are fully materialized.
+5. Implementation runs synchronously, resolves executable contract metadata through `tool-contract-get`, initializes canonical context in `mcp-application-result.json`, applies the canonical entity flow `application-create -> schema-sync -> application-get-info`, and applies the canonical page flow `page-list -> page-get -> page-sync -> page-get`.
+6. Existing-app branching stays explicit through `application-get-list -> application-get-info`. Individual entity/page tools remain fallback-only compatibility paths.
 
 All generated artifacts are under `output/<AppName>/`.
 
@@ -132,7 +136,6 @@ scripts/
 context/
   business-checklist.md
   essentials.md
-  mcp-application-tools-reference.md
   schema-reference.md
   ui-reference.md
   data-bindings-reference.md

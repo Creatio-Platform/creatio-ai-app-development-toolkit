@@ -19,6 +19,22 @@ from scripts.mcp_context_adapter import normalize_result_document
 from scripts.mcp_schema_sync import ClioStdioClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
 
 
+def build_localizations(value):
+    return {"en-US": value}
+
+
+def read_localized_text(localizations, fallback=None):
+    if isinstance(localizations, dict):
+        if isinstance(localizations.get("en-US"), str) and localizations["en-US"].strip():
+            return localizations["en-US"].strip()
+        for value in localizations.values():
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    if isinstance(fallback, str):
+        return fallback
+    return None
+
+
 @contextlib.contextmanager
 def temp_workdir():
     workdir = TEST_TMP_ROOT / f"tmp-{uuid.uuid4().hex}"
@@ -477,12 +493,12 @@ class FakeMcpClient:
                     }
                     for column in operation.get("columns", []):
                         columns[column["name"]] = {
-                            "caption": column.get("title") or column["name"],
+                            "caption": read_localized_text(column.get("title-localizations"), column["name"]),
                             "dataValueTypeName": column.get("type")
                         }
                     package["entities"][schema_name] = {
                         "uId": "66666666-6666-6666-6666-666666666666",
-                        "caption": operation["title"],
+                        "caption": read_localized_text(operation["title-localizations"], schema_name),
                         "parentSchemaName": "BaseLookup",
                         "columns": columns
                     }
@@ -494,7 +510,7 @@ class FakeMcpClient:
                             entity["columns"].pop(update["column-name"], None)
                             continue
                         payload = {
-                            "caption": update.get("title") or update["column-name"],
+                            "caption": read_localized_text(update.get("title-localizations"), update["column-name"]),
                             "dataValueTypeName": update.get("type")
                         }
                         if update.get("reference-schema-name"):
@@ -548,12 +564,12 @@ class FakeMcpClientWithoutSchemaSync:
             }
             for column in arguments.get("columns", []):
                 columns[column["name"]] = {
-                    "caption": column.get("title") or column["name"],
+                    "caption": read_localized_text(column.get("title-localizations"), column["name"]),
                     "dataValueTypeName": column.get("type")
                 }
             package["entities"][arguments["schema-name"]] = {
                 "uId": "66666666-6666-6666-6666-666666666666",
-                "caption": arguments["title"],
+                "caption": read_localized_text(arguments["title-localizations"], arguments["schema-name"]),
                 "parentSchemaName": "BaseLookup",
                 "columns": columns
             }
@@ -563,7 +579,7 @@ class FakeMcpClientWithoutSchemaSync:
                 "entity": {
                     "uId": "66666666-6666-6666-6666-666666666666",
                     "name": arguments["schema-name"],
-                    "caption": arguments["title"],
+                    "caption": read_localized_text(arguments["title-localizations"], arguments["schema-name"]),
                     "parentSchemaName": "BaseLookup",
                     "columns": columns
                 }
@@ -571,7 +587,7 @@ class FakeMcpClientWithoutSchemaSync:
         if tool_name == "create-entity-schema":
             package["entities"][arguments["schema-name"]] = {
                 "uId": "66666666-6666-6666-6666-666666666666",
-                "caption": arguments["title"],
+                "caption": read_localized_text(arguments["title-localizations"], arguments["schema-name"]),
                 "parentSchemaName": arguments.get("parent-schema-name") or "BaseEntity",
                 "columns": {}
             }
@@ -581,7 +597,7 @@ class FakeMcpClientWithoutSchemaSync:
                 "entity": {
                     "uId": "66666666-6666-6666-6666-666666666666",
                     "name": arguments["schema-name"],
-                    "caption": arguments["title"],
+                    "caption": read_localized_text(arguments["title-localizations"], arguments["schema-name"]),
                     "parentSchemaName": arguments.get("parent-schema-name") or "BaseEntity",
                     "columns": {}
                 }
@@ -593,7 +609,7 @@ class FakeMcpClientWithoutSchemaSync:
                     entity["columns"].pop(operation["column-name"], None)
                     continue
                 payload = {
-                    "caption": operation.get("title") or operation["column-name"],
+                    "caption": read_localized_text(operation.get("title-localizations"), operation["column-name"]),
                     "dataValueTypeName": operation.get("type")
                 }
                 if operation.get("reference-schema-name"):
@@ -720,7 +736,7 @@ class McpSchemaSyncTests(unittest.TestCase):
                     "action": "modify",
                     "column-name": "UsrName",
                     "type": "Text",
-                    "title": "Name",
+                    "title-localizations": build_localizations("Name"),
                     "default-value-source": "Const",
                     "default-value": "Draft"
                 }
@@ -738,7 +754,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         operations = sync_plan["actions"][0]["arguments"]["operations"]
 
         self.assertEqual(operations[0]["action"], "modify")
-        self.assertNotIn("title", operations[0])
+        self.assertNotIn("title-localizations", operations[0])
 
     def test_build_sync_plan_rejects_existing_entity_caption_update(self):
         current_context = build_current_result_document()["editableContext"]

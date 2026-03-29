@@ -16,6 +16,9 @@ Treat these as canonical:
 - `context/bindings-lookup.json`
 - `templates/**`
 
+Executable MCP contract is authoritative only in `clio MCP` through `tool-contract-get`.
+Repository docs must not define an independent MCP API contract. They stay authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and business invariants.
+
 ## Architecture
 
 - Orchestrator: `AGENTS.md`
@@ -32,21 +35,9 @@ This section takes precedence over any host-environment plan template.
 - **MUST** produce app creation plans using the BA-style Business Plan structure defined in `context/business-checklist.md`.
 - This applies unconditionally whenever the user requests a Creatio app, a business requirements review, or a Gate R business plan — regardless of the active editor mode.
 
-The required top-level sections of every BA-style Business Plan are, in order:
-
-1. Business Outcome
-2. Core Problem
-3. Actors and Roles
-4. Domain Model (entities, columns, lookup tables)
-5. Lifecycle and Statuses
-6. Business Logic
-7. UX Expectations (list columns, form layout, sorting, filters)
-8. Edge Cases and Exceptions
-9. Acceptance Criteria
-10. Access / Personas
-11. Assumptions
-
-Do not replace, omit, or reorder these sections. Do not wrap them in a generic Steps/Verification/Decisions shell.
+The exact required sections, their order, and the rendering contract for every BA-style Business Plan
+are defined in `context/business-checklist.md`. That file is the single source of truth.
+Do not substitute, omit, reorder, or wrap those sections in a generic Steps/Verification/Decisions template or any other structure.
 
 ---
 
@@ -70,7 +61,7 @@ It maps every file to line ranges per phase so you can load only the relevant se
 11. Show the full BA-style Business Plan before Gate R approval. If the host UI uses a wrapper such as `<proposed_plan>`, keep the BA structure inside it.
 12. Do not expose old workflow-state files, stale output artifacts, or internal app-code collisions in business dialogue unless they are genuine blockers.
 13. Initialize `output/<AppName>/docs/**` immediately after Gate R.
-14. Agents 1/3 run in background (`task(..., mode: "background")`) and wait with `read_agent`. Agent 4 runs synchronously.
+14. Treat Agents 1-4 as workflow stages defined by `AGENTS.md`. Do not assume background delegation unless the active host tooling and current instructions explicitly require it.
 15. Agent 2 is interactive only and must not be delegated.
 16. Persist workflow artifacts:
    - `requirements.md`
@@ -80,28 +71,30 @@ It maps every file to line ranges per phase so you can load only the relevant se
 17. Before Agent 3/4 run: `scripts/check-approval-gate.sh <AppName>`.
 18. Gate R must be written with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
 19. Agent 3 generates `technical-annex.md` plus `plan.md` when implementation is requested.
-20. For full app creation, use MCP `application.create` as primary generation path.
-21. If create collides with an existing app, branch only through documented existing-app discovery (`application.get_list` -> `application.get_info`) and report the branch explicitly.
-22. Validate `application.create` presence via `tools/list` before implementation.
-23. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
-24. Final summaries must reflect the materialized result, not only the planned request spec.
-25. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
-26. Treat `url` as the Creatio base URL only. MCP execution uses clio stdio transport through `scripts/mcp_client.py` and must not rely on a frontend endpoint.
-27. Never expose internal gate tokens or script names in user-facing dialogue.
+20. For full app creation, resolve tool metadata through `tool-contract-get` and use the canonical entity flow `application-create -> schema-sync -> application-get-info`.
+21. Use the canonical page flow `page-list -> page-get -> page-sync -> page-get`; keep `page-update` only as fallback.
+22. If create collides with an existing app, branch only through documented existing-app discovery (`application-get-list` -> `application-get-info`) and report the branch explicitly.
+23. Validate required tools via `tools/list` before implementation.
+24. Persist implementation evidence to `mcp-application-result.json` and `mcp-application-report.md`.
+25. Final summaries must reflect the materialized result, not only the planned request spec.
+26. During app-generation execution, write only `output/<AppName>/` artifacts. Repository helper/doc/script fixes must run as a separate repo-maintenance task.
+27. Treat `url` as the Creatio base URL only. MCP execution uses clio stdio transport through `scripts/mcp_client.py` and must not rely on a frontend endpoint.
+28. Never expose internal gate tokens or script names in user-facing dialogue.
 
 ## Execution Trigger
 
-- First turn: reply immediately from the user prompt; do not read repository files or run scripts before the first clarification batch (routing + 3-5 business questions).
-- After receiving the first clarification answers, read the required docs (`AGENTS.md`, stage runbook, checklist) and only then run any orchestration scripts (Gate P/R).
-- Do not auto-trigger workflow-state scripts before the first discovery round completes and the current `<AppName>` is established from this request.
+Apply the first-turn latency rules from `AGENTS.md` (UX Contract section).
+Do not read files or run scripts before the first clarification batch (routing + discovery questions) completes and `<AppName>` is established from the current request.
 
 ## Agent 4 Implementation
 
-Agent 4 executes MCP tools through the documented MCP client flow. All instructions and examples are in:
+Agent 4 executes MCP tools through the documented MCP client flow. Workflow policy is in:
 - `agents/04-implementation.md`
-- `context/mcp-application-tools-reference.md`
+- `context/essentials.md`
 
-The `skills/application-creation/SKILL.md` file is **deprecated** and no longer used. All workflow documentation has been consolidated into the agent instructions and MCP reference guide.
+Exact tool names, params, aliases, defaults, response shapes, and error shapes must be resolved from `clio MCP` through `tool-contract-get`.
+
+The `skills/application-creation/SKILL.md` file is **deprecated** and no longer used. Workflow guidance has been consolidated into the agent instructions and repository policy documents.
 
 ## Critical Conventions
 

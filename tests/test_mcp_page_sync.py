@@ -130,18 +130,14 @@ def build_list_body(include_status):
 
 
 class FakePageClient:
-    def __init__(self, pages, include_verified_body=True):
+    def __init__(self, pages, include_verified_body=True, tools=None):
         self.pages = pages
         self.calls = []
         self.include_verified_body = include_verified_body
+        self.tools = tools or ["page-list", "page-get", "page-update", "page-sync"]
 
     def list_tools(self):
-        return [
-            {"name": "page-list"},
-            {"name": "page-get"},
-            {"name": "page-update"},
-            {"name": "page-sync"}
-        ]
+        return [{"name": name} for name in self.tools]
 
     def call_tool_json(self, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
@@ -511,6 +507,40 @@ class McpPageSyncTests(unittest.TestCase):
             )
         page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
         self.assertNotIn("environment-name", page_sync_call[1])
+
+    def test_apply_page_sync_plan_accepts_page_sync_without_page_update_tool(self):
+        pages = {
+            "UsrTodoList_ListPage": {
+                "uId": "33333333-3333-3333-3333-333333333333",
+                "packageName": "UsrTodoList",
+                "parentSchemaName": "BaseSectionTemplate",
+                "body": build_list_body(False)
+            }
+        }
+        fake_client = FakePageClient(pages, tools=["page-list", "page-get", "page-sync"])
+        result_document = build_result_document()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            result_path = temp_path / "mcp-application-result.json"
+            result_path.write_text(json.dumps(result_document), encoding="utf-8")
+            apply_page_sync_plan(
+                fake_client,
+                result_document,
+                {
+                    "packageName": "UsrTodoList",
+                    "pages": [
+                        {
+                            "schemaName": "UsrTodoList_ListPage",
+                            "kind": "list",
+                            "body": build_list_body(True),
+                            "requiredCodes": ["PDS_Name", "PDS_UsrStatus"]
+                        }
+                    ]
+                },
+                result_path
+            )
+        self.assertEqual([call[0] for call in fake_client.calls].count("page-sync"), 1)
+        self.assertNotIn("page-update", [call[0] for call in fake_client.calls])
 
 
 if __name__ == "__main__":

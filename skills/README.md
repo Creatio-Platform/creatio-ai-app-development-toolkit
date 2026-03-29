@@ -4,9 +4,13 @@ This directory contains **reference documents** that describe workflows and best
 
 ## Current Approach
 
-Agent 4 executes MCP `application-create` through the clio stdio client flow documented in:
+Agent 4 executes MCP tools through the clio stdio client flow documented in:
 - `agents/04-implementation.md` — Agent instructions with stdio execution guidance
-- `context/mcp-application-tools-reference.md` — Complete MCP tools guide
+- `context/essentials.md` — repository policy and canonical execution flow
+- `scripts/mcp_client.py` — transport and local normalization
+
+Executable tool names, parameters, aliases, defaults, response shapes, and error shapes are authoritative only in `clio MCP` through `tool-contract-get`.
+These skill documents keep workflow and page-editing policy only; they must not define an independent MCP API contract.
 
 ## Skills as Reference Documentation
 
@@ -23,7 +27,7 @@ skills/
 
 Each SKILL.md contains:
 - Workflow documentation
-- Input/output specifications
+- Input/output expectations
 - Validation checklists
 - Best practices
 

@@ -1,5 +1,7 @@
 # 03 — Clio MCP Server: Backend Optimization
 
+> Historical design note. Any example payloads or response shapes here are proposals, not the authoritative executable contract. Resolve the current contract through `tool-contract-get`.
+
 Оптимізація HTTP комунікації clio → Creatio backend.
 
 ---

@@ -1,157 +1,95 @@
 ---
 name: entity-creation
-description: Mutate Creatio entity schemas in DB via MCP tools `create-entity-schema`, `create-lookup`, and `update-entity-schema`, then refresh the canonical workflow context via `application-get-info`.
-compatibility: Requires running Creatio with MCP endpoint and DB-first entity tools available.
+description: Apply approved entity changes in Creatio through the canonical DB-first entity flow. Prefer schema-sync and refresh the canonical app context after materialization.
+compatibility: Requires clio MCP DB-first entity tools and application context refresh support.
 metadata:
-  version: "6.0"
+  version: "7.0"
   category: creatio-schema-generation
 ---
 
-# Entity Schema Sync via MCP
+# Entity Schema Sync
 
 Use this skill when approved schema changes must be applied after `application-create`. These tools persist changes in Creatio DB, and this repo treats refreshed application context from `application-get-info` as the canonical post-mutation state.
 
-## What This Skill Does
+This skill is not an MCP API reference.
+Resolve exact tool names, parameters, aliases, defaults, validators, response shapes, and error shapes through `tool-contract-get`.
 
-- `create-entity-schema` creates a new entity schema in DB
-- `create-lookup` creates a new `BaseLookup` entity in DB
-- `update-entity-schema` applies explicit `operations` mutations to an existing entity
-- `application-get-info` refreshes the canonical app context after each successful mutation or schema batch
+## Canonical Entity Flow
+
+1. `application-create` for a new app shell when needed
+2. `schema-sync`
+3. `application-get-info`
+
+Keep individual entity tools such as `create-entity-schema`, `create-lookup`, and `update-entity-schema` as fallback-only compatibility paths.
+
+## What This Skill Covers
+
+- ordering schema operations
+- lookup-before-reference rules
+- localization and naming invariants
+- schema default versus UI default planning rules
+- post-sync refresh and evidence persistence
 
 ## Hard Rules
 
 1. MCP usage is mandatory.
 2. Manual schema file generation is forbidden.
-3. Create new lookup entities before referencing them from other entities.
-4. `update-entity-schema` must use explicit `operations` as a native list.
+3. Prefer `schema-sync` over individual entity mutations.
+4. Create lookup entities before referencing them from other schemas.
 5. Omission never means delete.
-6. Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for lookup/display/default semantics instead of restating them locally.
-7. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
+6. `BaseLookup` already provides `Name` and `Description`; never add duplicate lookup title columns.
+7. If the current entity snapshot already contains `Name`, do not add `UsrName`.
+8. Enum-like business values must be modeled as lookup entities.
+9. Requirements phrased as “defaults to X” are incomplete until the plan defines either a schema default or a UI default.
+10. Lookup seed rows alone do not satisfy a default requirement.
+11. Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for lookup/display/default semantics instead of restating them locally.
+12. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
 
-## Input Expected
+## Planning Inputs
 
-From `plan.md`, for each step:
-- target tool name
-- `package-name`
-- entity or lookup schema name
-- title
-- parent schema when creating an entity
-- `entity-u-id` for updates when available
-- `operations` for updates
+From the approved plan, keep only the semantic requirements:
 
-## Request Shapes
+- package and schema names
+- whether the target is a new entity, lookup, or update to an existing entity
+- localized business titles and descriptions when required
+- parent schema intent for new entities
+- ordered column operations
+- lookup seed requirements
+- explicit default behavior
 
-### create-entity-schema
-
-```json
-{
-  "environment-name": "local",
-  "package-name": "UsrTodoList",
-  "schema-name": "UsrTodoTask",
-  "title": "Todo Task",
-  "parent-schema-name": "BaseEntity",
-  "columns": [
-    {
-      "action": "add",
-      "column-name": "UsrStatus",
-      "type": "Lookup",
-      "title": "Status",
-      "reference-schema-name": "UsrTodoTaskStatus"
-    }
-  ]
-}
-```
-
-### create-lookup
-
-```json
-{
-  "environment-name": "local",
-  "package-name": "UsrTodoList",
-  "schema-name": "UsrTodoTaskStatus",
-  "title": "Todo Task Status"
-}
-```
-
-### update-entity-schema
-
-```json
-{
-  "environment-name": "local",
-  "package-name": "UsrTodoList",
-  "schema-name": "UsrTodoTask",
-  "operations": [
-    {
-      "action": "add",
-      "column-name": "UsrStatus",
-      "type": "Lookup",
-      "title": "Status",
-      "reference-schema-name": "UsrTodoTaskStatus"
-    }
-  ]
-}
-```
-
-## Operation Format
-
-Each item in `operations`:
-
-```json
-{
-  "action": "add",
-  "column-name": "UsrStatus",
-  "type": "Lookup",
-  "title": "Status",
-  "reference-schema-name": "UsrTodoTaskStatus"
-}
-```
-
-Allowed actions:
-- `add`
-- `modify`
-- `remove`
-
-## Canonical Runtime Context
-
-```json
-{
-  "success": true,
-  "package-u-id": "<package-guid>",
-  "package-name": "UsrTodoList",
-  "canonical-main-entity-name": "UsrTodoList",
-  "entities": [
-    {
-      "uId": "<entity-guid>",
-      "name": "UsrTodoTask",
-      "caption": "Todo Task",
-      "columns": []
-    }
-  ]
-}
-```
+Translate these into executable payloads only at runtime through `tool-contract-get`.
 
 This flat application context is the primary runtime contract for this repo. After normalization, `mcp-application-result.json` may also contain `editableContext`, but that is a repo-local helper projection rather than the MCP response contract.
 
 ## Refresh Policy
 
-After each successful call or approved schema batch:
-1. call `application-get-info` for the current app
-2. overwrite `output/<AppName>/mcp-application-result.json` with the refreshed flat context
-3. normalize it with `scripts/mcp_context_adapter.py normalize`
-4. append an entry to `schemaSync`
-5. save the file
+After a successful `schema-sync` batch:
+
+1. call `application-get-info` once
+2. overwrite `output/<AppName>/mcp-application-result.json`
+3. append execution evidence to `schemaSync`
+4. stop if the refreshed context does not show the materialized schema state
+5. normalize the result with `scripts/mcp_context_adapter.py normalize`
+
+Do not document per-operation refresh as the primary flow.
 
 ## Validation Checklist
 
 - `success=true`
 - `package-u-id` is non-empty
 - `entities` contains the expected schema after refresh
+- schema operations follow lookup-before-reference ordering
+- no inherited lookup columns are redefined
+- no duplicate title column such as `UsrName` is introduced when `Name` already exists
+- explicit defaults are classified as schema defaults or UI defaults
+- canonical context was refreshed through `application-get-info`
 - `canonical-main-entity-name` is used when deciding whether to extend the template-created main entity or create an additional business object
 - lookup references point to already existing schemas
-- canonical context file was updated
+- evidence reflects the materialized result, not only the intended mutation
 
 ## Failure Policy
 
-- Retry transient MCP failures up to 3 times with 10s delay
-- On validation or business-rule errors, stop immediately and surface the returned error
-- Do not continue to dependent updates after a failed lookup creation
+- Retry only transient MCP failures.
+- Stop immediately on validation or business-rule errors.
+- Do not continue to dependent updates after a failed lookup creation.
+- If `tool-contract-get` cannot provide contract metadata, stop with blocker instead of guessing payload shape.
