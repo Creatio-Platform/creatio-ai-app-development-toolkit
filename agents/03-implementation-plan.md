@@ -104,12 +104,12 @@ Rules:
 
 ### Main Entity And Lookup Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
-- Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
-- Reuse `Name` when it already exists.
-- Never plan duplicate title-like columns when `Name` is already present.
+- Use the current `clio` MCP contract and prompts/resources for canonical main-entity selection and lookup display semantics instead of redefining them here.
+- When refreshed application context exposes `canonical-main-entity-name`, use it as the primary selector for the app’s main entity. Fall back to the section entity that matches the app code only when the canonical field is absent.
+- Map synonymous business nouns back to that resolved main entity unless the requirements define a distinct business object.
+- Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
+- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
 - Model enum-like business values as lookup entities first.
-- For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
 ### Schema Sync Plan
@@ -126,11 +126,9 @@ Rules:
 
 ### Default Rules
 
-- `schema default` means the backend/entity schema contract sets the value through `create-entity-schema` or `update-entity-schema`.
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
-- A requirement such as `UsrStatus defaults to New` is complete only when the plan contains an explicit `schema default` or `ui default` step.
-- Lookup seed rows alone do not satisfy a default requirement.
-- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `defaultValue` with `defaultValueSource="Const"`.
+- A requirement such as `UsrStatus defaults to New` is incomplete until the plan names the field, the default value, and the step that applies it.
+- Seed data alone does not satisfy a default requirement.
+- The implementation plan should rely on current `clio` MCP guidance for whether the default is enforced through schema contract or page logic.
 
 ### Page Sync Plan
 

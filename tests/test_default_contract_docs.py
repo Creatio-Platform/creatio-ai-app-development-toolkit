@@ -90,16 +90,24 @@ PAGE_SYNC_PREFERRED_DOCS = [
 
 
 class DefaultContractDocsTests(unittest.TestCase):
-    def test_docs_define_schema_and_ui_defaults(self):
+    def test_docs_delegate_default_semantics_to_clio_guidance(self):
         for path in DOC_PATHS:
             content = path.read_text(encoding="utf-8")
-            self.assertIn("schema default", content, str(path))
-            self.assertIn("ui default", content, str(path))
+            self.assertTrue(
+                "docs://mcp/guides/app-modeling" in content
+                or "current `clio` MCP guidance" in content
+                or "current `clio` MCP contract" in content
+                or "default requirement" in content.lower(),
+                str(path),
+            )
 
-    def test_docs_reject_seed_rows_as_default_closure(self):
-        for path in DOC_PATHS:
-            content = path.read_text(encoding="utf-8")
-            self.assertIn("Lookup seed rows alone do not satisfy", content, str(path))
+        requirements_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
+        self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", requirements_doc)
+
+    def test_docs_keep_seed_data_separate_from_default_rules(self):
+        plan_doc = (ROOT / "agents/03-implementation-plan.md").read_text(encoding="utf-8")
+        self.assertIn("Seed data alone does not satisfy a default requirement.", plan_doc)
+        self.assertIn("A requirement such as `UsrStatus defaults to New` is incomplete", plan_doc)
 
     def test_docs_require_confirmed_or_assumed_checklist_sources(self):
         for path in CHECKLIST_SOURCE_DOCS:
@@ -151,12 +159,13 @@ class DefaultContractDocsTests(unittest.TestCase):
         agent_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
         self.assertIn("Document Rendering Contract", agent_doc)
         self.assertIn("Hard Fail Conditions", agent_doc)
-        self.assertIn("Use tables only in section 4", agent_doc)
+        self.assertIn("Use tables only in `## 4. Domain Model`", agent_doc)
         self.assertIn("Do not replace the entity field tables with prose summaries", agent_doc)
         self.assertIn("entity metadata block", agent_doc)
         self.assertIn("required or optional child-side link status when applicable", agent_doc)
-        self.assertIn("System value:", agent_doc)
-        self.assertIn("What should feel easy in the MVP:", agent_doc)
+        self.assertIn("## 1. Business Outcome", agent_doc)
+        self.assertIn("## 7. UX Expectations", agent_doc)
+        self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", agent_doc)
         self.assertNotIn("## 6. Implementation-shaping decisions and assumptions", agent_doc)
         self.assertNotIn("context/app-documentation-contract.md", agent_doc)
 

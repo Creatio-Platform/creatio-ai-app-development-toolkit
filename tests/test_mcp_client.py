@@ -216,9 +216,9 @@ class ParamValidationTests(unittest.TestCase):
         self.assertTrue(any("environmentName" in e for e in errors))
         self.assertTrue(any("packageName" in e for e in errors))
 
-    def test_page_list_requires_package_name(self):
+    def test_page_list_accepts_empty_args(self):
         errors = _validate_params("page-list", {})
-        self.assertTrue(any("package-name" in e for e in errors))
+        self.assertEqual(errors, [])
 
     def test_page_list_accepts_kebab_case(self):
         errors = _validate_params("page-list", {"package-name": "UsrMyApp"})

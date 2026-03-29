@@ -40,6 +40,7 @@ During app-generation execution, write only inside `output/<AppName>/`.
 
 - Prefer `scripts/mcp_client.py` for clio stdio transport; it handles MCP initialization internally.
 - Prefer `scripts/mcp_full_sync.py` when the plan batches schema and page synchronization in one process.
+- For executable tool parameters, response shape, and app-modeling semantics, use current `clio` MCP discovery plus prompts/resources instead of maintaining a second local MCP spec here.
 - Respect `CLIO_CMD` when a custom clio binary is configured; otherwise use global `clio`.
 - Do not use raw curl for clio stdio transport.
 - Pass boolean MCP parameters such as `dry-run` as booleans, not strings.
@@ -58,7 +59,7 @@ During app-generation execution, write only inside `output/<AppName>/`.
 3. Resolve the execution branch:
    - new app: `application-create`
    - existing app: `application-get-list` -> `application-get-info`
-4. Parse the short MCP contract from `result.content[0].text`.
+4. Parse the flat MCP JSON payload returned by `scripts/mcp_client.py` and treat it as the source runtime contract.
 5. Initialize `output/<AppName>/mcp-application-result.json`.
 6. Execute ordered schema sync from the plan, preferably via `schema-sync` / `scripts/mcp_full_sync.py` when the plan batches operations:
    - `create-lookup`
@@ -84,22 +85,18 @@ During app-generation execution, write only inside `output/<AppName>/`.
 
 ## Schema Sync Rules
 
-- Treat the template-created section entity from `application-create` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
+- Prefer `canonical-main-entity-name` from application context when selecting the main entity for a new app. Fall back to the section entity that matches the app code only when the canonical field is absent.
 - Use `update-entity-schema` to extend that main entity.
 - Use `create-entity-schema` only for additional business objects with distinct meaning.
+- Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns.
+- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
 - Create lookup entities before entities that reference them.
-- After each `create-lookup`, validate that inherited `Name` exists in refreshed metadata.
-- Do not add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
-- If the refreshed entity snapshot already contains `Name`, do not add duplicate title-like columns unless the plan explicitly requires a separate field.
 - Treat schema mutations as successful only when refreshed metadata is available immediately and the schema is not left in `Database update required`.
 - If post-mutation refresh fails, stop with a blocker.
 
 ## Default Rules
 
-- A `schema default` must be implemented through the entity schema contract.
-- A `ui default` must be implemented through page logic such as `crt.CreateRecordRequest.defaultValues` or a handler.
-- Lookup seed rows alone do not satisfy a default requirement.
-- For lookup-backed schema defaults, use the seeded row GUID, not the caption.
+When the approved plan requires defaults, implement them explicitly and follow current `clio` MCP guidance for whether they belong to schema contract or page logic. Treat refreshed runtime evidence as the success criterion.
 
 ## Page Sync Rules
 
@@ -137,170 +134,44 @@ Use `scripts/mcp_result_evidence.py` and the normalized result document as the s
 Persist the compact context from MCP and set `contractType=short`.
 Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
 
-### Schema Sync Rules
+### Schema Sync Execution Notes
 
-- Use `schema-sync` composite tool as the primary path for all entity mutations. It batches create-lookup, seed-data, create-entity, and update-entity into a single MCP call with one lock acquisition.
-- Create new lookup entities first (as `create-lookup` operations in the `schema-sync` operations array).
-- For lookup entities, rely on inherited `Name` as the display value. Do not add `Name` or duplicate title-like columns as custom columns, and treat the lookup as incomplete if the plan does not preserve `Name` as the intended `PrimaryDisplayColumn`.
-- Include `seed-rows` directly in the `create-lookup` operation for inline seeding (no separate `create-data-binding-db` call needed).
-- For new-app flows, inspect the entity list returned by `application-create` and treat the template-created section entity as the canonical main entity for the app's primary records.
-- Use `create-entity` operation type only for new entities that are genuinely additional business objects and not already represented by the template-created section entity.
-- Before including an `update-entity` operation, inspect the current schema snapshot from `application-create` or `application-get-info`. If `Name` already exists, reuse `Name` and do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the requirements explicitly require a separate business field.
-- Use `update-entity` operation type for template-created entities with `update-operations` (same format as `update-entity-schema` `operations`).
-- Entity-tool success is valid only when the schema is fully materialized, immediately refreshable via `application-get-info`, and not left in a `Database update required` state.
-- After `schema-sync` completes successfully, call `application-get-info` ONCE (not per operation) and overwrite `mcp-application-result.json`.
-- If the run creates a new app or extends the main section entity with approved non-inherited business fields, page sync for the generated `FormPage` and `ListPage` is mandatory before success can be reported.
-- Treat a missing page-sync section in `plan.md` for such a run as a blocker in the plan, not as a reason to silently skip UI sync.
-- `schema default` means the backend/entity schema contract sets the value through `default-value-source` and `default-value`.
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`.
-- If the plan says `schema default` for a lookup column, use the seeded row GUID in `default-value`; never send the display caption. Generate UUIDs client-side via `uuid.uuid4()` and include `Id` in the `seed-rows` values within the same `schema-sync` operation, then use the same UUID as `default-value` in the `update-entity` operation.
-- `Binary`, `Image`, `File`, and `Blob` columns do not support `default-value-source: Const`.
-- `update-entity` `update-operations` are explicit:
-  - `action: "add"`
-  - `action: "update"`
-  - `action: "remove"`
-- Omission never implies deletion.
+- Use `schema-sync` as the primary entity write path and use individual entity tools only when the approved plan cannot be expressed as one batch.
+- Prefer `canonical-main-entity-name` from application context when deciding which entity to extend for the app’s primary records.
+- Include lookup seeding inline in `schema-sync` where possible. Use `create-data-binding-db` only when the run still needs an explicit binding artifact after schema sync.
+- Treat schema work as successful only after `application-get-info` refreshes the application context and the result file is overwritten and normalized again.
+- When the run creates a new app or extends the main section entity with approved business fields, page sync remains mandatory before the run can be reported as successful.
 
 ### Related Binding Tools
 
-- `get-entity-schema-properties` returns a schema summary object with column entries for deployed schemas such as `SysModule` and `SysModuleEntity`. Use the returned columns for machine-readable verification; each entry includes `source` (`own` or `inherited`), name, UId, and friendly `type`. Requires `environment-name`, `package-name`, `schema-name`.
-- `get-entity-schema-column-properties` returns detailed metadata for a single column. Requires `environment-name`, `package-name`, `schema-name`, `column-name`.
-- `create-data-binding-db` creates or updates a binding in DB, stores payload, and installs lookup seed data immediately. `binding-name` is optional and defaults to `<schema-name>`. When using `schema-sync`, prefer inline `seed-rows` instead of a separate `create-data-binding-db` call.
-- Schemas created earlier in the same flow are DB-first and should be queried through `get-entity-schema-properties`; do not use raw mode.
-- For lookup seed rows, the format is `[{"values": {"Name": "New"}}, ...]` — no `Id` needed unless you require a deterministic GUID.
-- When a seed row will be referenced later as a `default-value` for a lookup column, generate the UUID client-side and include `Id` in the row's `values`:
+- `get-entity-schema-properties` and `get-entity-schema-column-properties` are verification tools for deployed schemas.
+- `create-data-binding-db` remains available for explicit binding artifacts and seed scenarios not already handled by `schema-sync`.
+- If lookup seed data already landed through `schema-sync` `seed-rows`, do not repeat the same seed flow with `create-data-binding-db` unless the plan explicitly requires a second artifact.
 
-```python
-import uuid
-new_id = str(uuid.uuid4())
-# In schema-sync, use seed-rows inline:
-# 'seed-rows': [{'values': {'Id': new_id, 'Name': 'New'}}, ...]
-# Then in update-entity operation:
-# 'default-value-source': 'Const', 'default-value': new_id
-```
-- Never pass partial `columnsJson` for lookup seed bindings.
+### Flat Runtime Contract
 
-### Parameter Validation Checklist
+`scripts/mcp_client.py` returns raw MCP JSON. Treat the application context as flat runtime data, not as a nested `app/packages` contract.
 
-**For `schema-sync` calls, validate:**
+Primary fields:
+- `success`
+- `package-u-id`
+- `package-name`
+- `entities`
+- `canonical-main-entity-name` when present
+- `error`
 
-1. ✅ `environment-name` matches registered clio env name
-2. ✅ `package-name` is the string package name (NOT a GUID)
-3. ✅ `operations` is a Python **list** of operation objects
-4. ✅ Each operation has `type` (`create-lookup`, `create-entity`, or `update-entity`)
-5. ✅ Each operation has `schema-name`
-6. ✅ `update-operations` within `update-entity` uses same format as `update-entity-schema` `operations`
-7. ✅ `seed-rows` uses `[{"values": {...}}]` format (not JSON string — native list)
-8. ✅ Booleans (`is-required`, `extend-parent`) are Python `True`/`False`, not strings
-9. ✅ `title` values for `create-lookup` / `create-entity` are non-empty after trim
-10. ✅ In `update-operations`, `action: add` includes non-empty `title`; `action: modify` omits `title` when not changing caption
-
-**For `page-sync` calls, validate:**
-
-1. ✅ `environment-name` matches registered clio env name
-2. ✅ `pages` is a Python **list** of page objects
-3. ✅ Each page has `schema-name` and `body`
-4. ✅ `body` contains all 8 required marker pairs
-
-**For individual tool fallback — before `create-lookup`, validate:**
-
-1. ✅ `environment-name` matches registered clio env name
-2. ✅ `package-name` is the string package name (NOT a GUID)
-3. ✅ `schema-name` is the entity schema name (e.g., "UsrTodoStatus")
-4. ✅ `title` is the display name (NOT `caption`)
-5. ✅ No `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` in columns
-6. ✅ `title` is not empty/whitespace (trimmed value must be non-empty)
-
-Before EVERY `update-entity-schema` call, validate:
-
-1. ✅ `environment-name` matches registered clio env name
-2. ✅ `package-name` is the string package name (NOT a GUID)
-3. ✅ `schema-name` is the entity schema name
-4. ✅ `operations` is a Python **list** (NOT a JSON-encoded string)
-5. ✅ Each operation uses `action` (NOT `operation`), `column-name` (NOT `name`), `type` (NOT `dataValueTypeName`), `title` (NOT `caption`), `reference-schema-name` (NOT `referenceSchemaName`)
-6. ✅ `is-required` is a boolean (`True`/`False`), not a string
-7. ✅ Schema defaults use `default-value-source` and `default-value` (kebab-case)
-8. ✅ `Binary`, `Image`, `File`, and `Blob` columns never use `default-value-source: Const`
-9. ✅ For existing/template-created entities, no `UsrName`, `UsrTitle`, or `UsrCaption` when schema already contains `Name`
-10. ✅ For `action: add`, `title` is required and non-empty after trim
-11. ✅ For `action: modify`, never pass blank `title`; omit `title` to keep the existing caption
-
-Before EVERY `create-data-binding-db` call, validate:
-
-1. ✅ `environment-name` matches registered clio env name
-2. ✅ `package-name` is the string package name
-3. ✅ `schema-name` is the entity schema name
-4. ✅ `binding-name` is omitted for default lookup seeding so the tool reuses `<schema-name>`
-5. ✅ `rows` is a JSON **string** of `[{"values": {...}}, ...]` format
-6. ✅ Lookup seed rows use `{"values": {"Name": "New"}}` — not `[{columnName, value}]` format
-7. ✅ Target schema is already materialized in DB
-8. ✅ If lookup seed data was already applied in the same run via `schema-sync` `seed-rows`, do not run a second `create-data-binding-db` for that same schema unless a distinct binding artifact is explicitly required
-
-**Pre-execution validation script:**
-
-```bash
-# Before create-lookup or update-entity-schema: check package name is set
-if [[ -z "$PACKAGE_NAME" ]]; then
-  echo "ERROR: PACKAGE_NAME not set"
-  exit 1
-fi
-```
-
-**Package Name Extraction (New Flat Format):**
-
-Since core 8.3.4.802, MCP tools return simplified flat format. Extract `packageName` from `application-create` response:
-
-```bash
-PACKAGE_NAME=$(python3 -c "import json; d=json.load(open('/tmp/mcp-app-context.json')); print(d['packageName'])")
-echo "Package Name: $PACKAGE_NAME"
-```
-```json
-{
-  "success": true,
-  "packageUId": "597944b2-c71f-4cdb-9510-0216c1e214a6",
-  "packageName": "UsrTodoList",
-  "entities": [
-    {"uId": "...", "name": "UsrTodoList", "caption": "Todo", "columns": [...]}
-  ]
-}
-```
-
-**Error Diagnosis from tmux Logs:**
-
-If MCP call returns generic "An error occurred invoking..." message:
-
-```bash
-# Check core tmux session logs for actual exception
-tmux capture-pane -t core -p -S -1000 | grep -A5 "ArgumentException\|Error\|Exception"
-```
-
-Look for diagnostic patterns:
-- `ArgumentException: missing value for required parameter 'packageUId'` → using wrong parameter name (e.g., `packageName`)
-- `ArgumentException: missing value for required parameter 'entityUId'` → using wrong parameter name (e.g., `entitySchemaUId`)
-- `Unsupported operation ''` → wrong JSON structure in `operations` (using JSON string instead of native list, or old {operation,column} format)
-
-**Correct Tool Signatures Reference:**
-
-Always verify against C# source files:
-- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/EntityCreateLookupTool.cs` (line 13-23)
-- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/EntityCreateTool.cs`
-- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Tools/EntityUpdateTool.cs` (line 13-26)
-- `~/Projects/core/TSBpm/Src/Lib/Terrasoft.Mcp/Models/EntityColumnOperation.cs`
+Normalize `output/<AppName>/mcp-application-result.json` with `scripts/mcp_context_adapter.py normalize` after writing the raw MCP result. The normalized file may also contain `editableContext`, which is a local helper projection rather than the MCP contract.
 
 ### Validation Checklist
 
-- response text parses as JSON
-- `contractType=short`
+- response JSON parses successfully
+- `contractType=short` after normalization
 - `success` exists
-- if `success=true`, `packageUId` is non-empty
-- if `success=true`, `entities` is non-empty
-- if `success=false`, `error.message` is non-empty
-- each lookup creation response confirms inherited `Name` exists before seed data is installed
-- each successful entity tool call is followed by a successful `application-get-info` refresh
-- no duplicate title-like columns are added when the refreshed main entity snapshot already contains `Name`
-- no second BaseEntity is created for the same primary record type already covered by the template-created section entity
-- result and report are persisted
+- when `success=true`, `package-u-id` is non-empty
+- when `success=true`, `entities` is non-empty
+- `canonical-main-entity-name` is used when present for main-entity selection
+- each successful entity mutation is followed by a successful `application-get-info` refresh
+- result and report are persisted from runtime evidence
 - final report matches the materialized entity names and implemented artifacts in `mcp-application-result.json`
 
 ### Retry and Failure Policy
@@ -309,7 +180,7 @@ Always verify against C# source files:
 - If required application tools are missing in `tools/list`, stop with blocker.
 - If any tool returns `success=false`, stop with blocker and surface `error.message`.
 - If `application-create` returns an existing-app collision and the plan does not explicitly allow update flow, stop with blocker.
-- If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing `create-entity-schema`.
+- If the plan tries to create a second BaseEntity for the same primary record type as the already resolved main section entity, stop with blocker instead of executing `create-entity-schema`.
 - For plain-text `ERROR:` responses, stop with blocker and persist raw response in report.
 - If `application-get-info` fails after a reported entity mutation success because the schema is missing from server metadata, stop with a core MCP materialization blocker.
 - Never synthesize success for `create-data-binding-db`; if the response cannot be parsed or does not contain `success=true` or `exit-code: 0`, stop with blocker.
@@ -407,10 +278,10 @@ r = call_mcp_tool('application-create', {
 if not r['success']:
     print('ERROR:', r['raw']); sys.exit(1)
 data = r['data']
-if not data.get('success') or not data.get('packageUId'):
-    print('ERROR: missing packageUId:', json.dumps(data)); sys.exit(1)
+if not data.get('success') or not data.get('package-u-id'):
+    print('ERROR: missing package-u-id:', json.dumps(data)); sys.exit(1)
 json.dump(data, open('/tmp/mcp-app-context.json', 'w'), indent=2)
-print('OK packageUId:', data['packageUId'])
+print('OK package-u-id:', data['package-u-id'])
 PYEOF
 python3 /tmp/run_app_create.py
 ```
@@ -422,24 +293,12 @@ For existing app flow:
 
 Stop and report blocker when:
 - `success=false`
-- response missing `packageUId` or `entities`
+- response missing `package-u-id` or `entities`
 - plain `ERROR: ...` text
 
 ### 6. Initialize canonical context
 
-**See:** `context/mcp-application-tools-reference.md` section "Initialize Canonical Context File"
-
-Write normalized MCP result:
-
-```bash
-echo "$RESPONSE" | jq '. + {
-  contractType: "short",
-  schemaSync: [],
-  editableContext: {}
-}' > output/<AppName>/mcp-application-result.json
-```
-
-Or use Python helper:
+Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`, then normalize it:
 
 ```bash
 python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json
@@ -448,15 +307,14 @@ python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-applicatio
 Normalized result shape:
 - `contractType` (`short`)
 - `success` (boolean)
-- `app` (object when available or inferable)
-- `packageUId` (GUID)
-- `packageName` (string)
+- flat application fields such as `package-u-id`, `package-name`, `entities`, and optional `canonical-main-entity-name`
 - `entities` (array)
 - `error` (object when available)
 - `schemaSync` (array of executed entity tool operations with tool name, target, and status)
-- `editableContext` (package/entity-oriented projection for approved edits)
+- `operationLog`, `pageEvidence`, `acceptanceEvidence`
+- `editableContext` (repo-local helper projection for approved edits)
 
-Persist the compact tree response as-is and add `contractType=short`.
+Treat the flat application fields as the primary runtime contract. Treat `editableContext` as a derived helper projection.
 
 ### 7. Execute schema sync steps
 
@@ -803,9 +661,10 @@ Stop and report blocker on first failed page tool call.
 Validate result payload:
 1. top-level `success` exists and is boolean
 2. `contractType=short`
-3. when `success=true`, `packageUId` is a non-empty GUID
+3. when `success=true`, `package-u-id` is a non-empty GUID
 4. when `success=true`, `entities` is non-empty
-5. when `success=false`, `error.message` is non-empty
+5. when `canonical-main-entity-name` is present, it resolves to one of the returned entities
+6. when `success=false`, `error.message` is non-empty
 
 ### 9. Write summary report
 
@@ -815,7 +674,7 @@ Create:
 Include:
 - resolved payload fields
 - icon resolution details
-- MCP result (`contractType=short`, `success`, `packageUId`, `packageName`)
+- MCP result (`contractType=short`, `success`, `package-u-id`, `package-name`, optional `canonical-main-entity-name`)
 - schema sync steps executed and refreshed through `application-get-info`
 - page sync steps executed and verification results for `FormPage` and `ListPage`
 - validation results for normalized contract

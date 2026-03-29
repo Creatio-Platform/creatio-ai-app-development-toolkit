@@ -60,39 +60,20 @@ def build_valid_request_spec():
 def build_valid_requirements_doc(app_name="TodoList"):
     return f"""# {app_name} - Requirements
 
-## 1. Business context
+## 1. Business Outcome
 
-Short business opening paragraph.
+Provide a shared task registry so the team can track work in one place.
 
-System value:
-- Shared registry instead of scattered notes
+## 2. Core Problem
 
-MVP success criteria:
-- New records are created quickly
+Tasks are scattered across notes and chat, so owners and statuses are hard to track.
 
-## 2. Users, access and ownership
+## 3. Actors and Roles
 
-Primary roles:
-- Sales manager: creates and updates records
+- Team member: creates and updates tasks
+- Team lead: reviews progress and priorities
 
-Access model:
-- Shared workspace for the team
-
-## 3. Core process and business logic
-
-Typical process:
-1. Create the main record.
-
-Lifecycle:
-- Main record: New, Active, Archived
-
-Key business logic:
-- Records live in one shared registry
-
-Operational metrics:
-- Active records by owner
-
-## 4. Data model
+## 4. Domain Model
 
 ### 4.1 Main entity: Task
 
@@ -106,7 +87,7 @@ Purpose: Main work item.
 | Title | Code | Description | Data type | Required | Default |
 | --- | --- | --- | --- | --- | --- |
 | Name | `Name` | Task title | Short text | Yes | - |
-| Status | `UsrStatusId` | Task lifecycle state | Lookup | Yes | ui default: New |
+| Status | `UsrStatusId` | Task lifecycle state | Lookup | Yes | New |
 
 Minimum to create:
 - Name
@@ -120,13 +101,34 @@ Minimum to create:
 
 - Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
 
-## 5. UX assumptions
+## 5. Lifecycle and Statuses
 
-What should feel easy in the MVP:
+Tasks move through New, Active, and Archived statuses.
+
+## 6. Business Logic
+
+- Title and Status are required to create a task.
+- Tasks stay in one shared registry and are archived instead of deleted.
+
+## 7. UX Expectations
+
 - default list columns: Name, Status
-- default main filters: Status
+- default filters: Status
+- main form groups: Main information
 
-## Assumptions used for the draft requirements
+## 8. Edge Cases and Exceptions
+
+- Archived tasks remain visible in history views.
+
+## 9. Acceptance Criteria
+
+- User can create, view, and update tasks.
+
+## 10. Access / Personas
+
+- Shared team workspace with no special restrictions for MVP.
+
+## 11. Assumptions
 
 - MVP uses a single workflow.
 """

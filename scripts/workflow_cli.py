@@ -14,26 +14,23 @@ class WorkflowError(Exception):
 
 
 REQUIRED_REQUIREMENTS_SECTIONS = [
-    "## 1. Business context",
-    "## 2. Users, access and ownership",
-    "## 3. Core process and business logic",
-    "## 4. Data model",
-    "## 5. UX assumptions",
-    "## Assumptions used for the draft requirements",
+    "## 1. Business Outcome",
+    "## 2. Core Problem",
+    "## 3. Actors and Roles",
+    "## 4. Domain Model",
+    "## 5. Lifecycle and Statuses",
+    "## 6. Business Logic",
+    "## 7. UX Expectations",
+    "## 8. Edge Cases and Exceptions",
+    "## 9. Acceptance Criteria",
+    "## 10. Access / Personas",
+    "## 11. Assumptions",
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
-    "System value:",
-    "MVP success criteria:",
-    "Primary roles:",
-    "Access model:",
-    "Typical process:",
-    "Lifecycle:",
-    "Key business logic:",
-    "Operational metrics:",
-    "What should feel easy in the MVP:",
     "Minimum to create:",
     "default list columns:",
-    "default main filters:",
+    "default filters:",
+    "main form groups:",
 ]
 REQUEST_SPEC_SECTIONS = [
     "businessOutcome",
@@ -56,7 +53,7 @@ TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*(Title|Назва)\s*\|\s*(Code|Код)\s*\|\s*(Description|Опис)\s*\|\s*(Data type|Тип)\s*\|\s*(Required|Обов’язкове)\s*\|\s*Default\s*\|",
     re.IGNORECASE,
 )
-UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|main filters):", re.IGNORECASE)
+UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNORECASE)
 USR_CODE_RE = re.compile(r"\bUsr[A-Za-z0-9_]+\b")
 CHECKLIST_SOURCE_RE = re.compile(r"\bconfirmed\b|\bassumed\b|complete=true|source=", re.IGNORECASE)
 HTTP_URL_RE = re.compile(r"^https?://")
@@ -167,15 +164,20 @@ def validate_requirements_doc(requirements_file):
         raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 4")
     if not RELATIONSHIPS_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing Relationships subsection in section 4")
-    section1_text = extract_section(text, "## 1. Business context", "## 2. Users, access and ownership")
-    section2_text = extract_section(text, "## 2. Users, access and ownership", "## 3. Core process and business logic")
-    section3_text = extract_section(text, "## 3. Core process and business logic", "## 4. Data model")
-    section4_text = extract_section(text, "## 4. Data model", "## 5. UX assumptions")
-    section5_text = extract_section(text, "## 5. UX assumptions", "## Assumptions used for the draft requirements")
-    assumptions_text = extract_section(text, "## Assumptions used for the draft requirements")
-    for section_text in (section1_text, section2_text, section3_text, section5_text, assumptions_text):
+    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Core Problem")
+    section2_text = extract_section(text, "## 2. Core Problem", "## 3. Actors and Roles")
+    section3_text = extract_section(text, "## 3. Actors and Roles", "## 4. Domain Model")
+    section4_text = extract_section(text, "## 4. Domain Model", "## 5. Lifecycle and Statuses")
+    section5_text = extract_section(text, "## 5. Lifecycle and Statuses", "## 6. Business Logic")
+    section6_text = extract_section(text, "## 6. Business Logic", "## 7. UX Expectations")
+    section7_text = extract_section(text, "## 7. UX Expectations", "## 8. Edge Cases and Exceptions")
+    section8_text = extract_section(text, "## 8. Edge Cases and Exceptions", "## 9. Acceptance Criteria")
+    section9_text = extract_section(text, "## 9. Acceptance Criteria", "## 10. Access / Personas")
+    section10_text = extract_section(text, "## 10. Access / Personas", "## 11. Assumptions")
+    section11_text = extract_section(text, "## 11. Assumptions")
+    for section_text in (section1_text, section2_text, section3_text, section5_text, section6_text, section7_text, section8_text, section9_text, section10_text, section11_text):
         if re.search(r"^[ \t]*\|", section_text, re.MULTILINE):
-            raise WorkflowError("Requirements doc failed: markdown tables are allowed only in section 4 data model")
+            raise WorkflowError("Requirements doc failed: markdown tables are allowed only in section 4 domain model")
     if not re.search(r"^[ \t]*\|[ \t]*(Title|Назва)[ \t]*\|[ \t]*(Code|Код)[ \t]*\|[ \t]*(Description|Опис)[ \t]*\|", section4_text, re.IGNORECASE | re.MULTILINE):
         raise WorkflowError("Requirements doc failed: section 4 must include a field table with the required columns")
     lines = section4_text.splitlines()
@@ -201,12 +203,12 @@ def validate_requirements_doc(requirements_file):
             )
     if table_count < len(entity_indices):
         raise WorkflowError("Requirements doc failed: every main and supporting entity must have a dedicated field table")
-    if USR_CODE_RE.search(section5_text):
-        raise WorkflowError("Requirements doc failed: section 5 must use business titles instead of Usr* codes")
+    if USR_CODE_RE.search(section7_text):
+        raise WorkflowError("Requirements doc failed: section 7 must use business titles instead of Usr* codes")
     if CHECKLIST_SOURCE_RE.search(text):
         raise WorkflowError("Requirements doc failed: business plan must not expose checklist-source or validation markers")
     section4_text_lower = section4_text.lower()
-    for line in section5_text.splitlines():
+    for line in section7_text.splitlines():
         if not UX_CARRIER_RE.search(line):
             continue
         values = normalize_title_list(re.sub(r"^[\s-]*default [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))

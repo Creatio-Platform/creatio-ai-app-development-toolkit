@@ -59,51 +59,20 @@ def build_valid_request_spec():
 def build_valid_requirements_doc(app_name="TodoList"):
     return f"""# {app_name} - Requirements
 
-## 1. Business context
+## 1. Business Outcome
 
-Short business opening paragraph.
+Give the team one place to capture and manage daily tasks.
 
-System value:
-- Shared registry instead of scattered notes
-- Clear owner, status, and activity visibility
+## 2. Core Problem
 
-MVP success criteria:
-- New records are created quickly
-- Team can filter and manage the shared base
+Tasks are spread across notes and chat, which makes status and ownership unclear.
 
-## 2. Users, access and ownership
+## 3. Actors and Roles
 
-Primary roles:
-- Sales manager: creates and updates records
-- Team lead: reviews and controls activity
+- Team member: creates and updates tasks
+- Team lead: reviews progress and priorities
 
-Access model:
-- Shared workspace for the team
-- Each key record has an owner
-- Archiving is used instead of deletion
-
-## 3. Core process and business logic
-
-Typical process:
-1. Create the main record.
-2. Add contacts.
-3. Log interactions.
-4. Create a follow-up action.
-
-Lifecycle:
-- Main record: New, Active, Archived
-- Follow-up task: Planned, Completed
-
-Key business logic:
-- Records live in one shared registry
-- Duplicate handling is advisory only
-- Archived records are not deleted
-
-Operational metrics:
-- Active records by owner
-- Open follow-up tasks by period
-
-## 4. Data model
+## 4. Domain Model
 
 ### 4.1 Main entity: Task
 
@@ -117,7 +86,7 @@ Purpose: Main work item.
 | Title | Code | Description | Data type | Required | Default |
 | --- | --- | --- | --- | --- | --- |
 | Name | `Name` | Task title | Short text | Yes | - |
-| Status | `UsrStatusId` | Task lifecycle state | Lookup | Yes | ui default: New |
+| Status | `UsrStatusId` | Task lifecycle state | Lookup | Yes | New |
 
 Minimum to create:
 - Name
@@ -131,14 +100,34 @@ Minimum to create:
 
 - Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
 
-## 5. UX assumptions
+## 5. Lifecycle and Statuses
 
-What should feel easy in the MVP:
+Tasks move through New, Active, and Archived statuses.
+
+## 6. Business Logic
+
+- Title and Status are required to create a task.
+- Duplicate handling is advisory only.
+
+## 7. UX Expectations
+
 - default list columns: Name, Status
-- default main filters: Status
-- quick access to main records
+- default filters: Status
+- main form groups: Main information
 
-## Assumptions used for the draft requirements
+## 8. Edge Cases and Exceptions
+
+- Archived tasks are excluded from default active lists.
+
+## 9. Acceptance Criteria
+
+- User can create, view, and update tasks.
+
+## 10. Access / Personas
+
+- Shared team workspace with one owner field on each task.
+
+## 11. Assumptions
 
 - MVP uses a single workflow.
 """

@@ -35,7 +35,7 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | Naming rules, Usr prefix | `context/essentials.md` | Naming conventions section |
 | Clio CLI commands | `context/essentials.md` | Clio commands section |
 | MCP client usage | `scripts/mcp_client.py` | Full |
-| MCP tool API (all tools) | `context/mcp-application-tools-reference.md` | See per-tool index below |
+| Local MCP wrapper + normalization | `context/mcp-application-tools-reference.md` | Source of truth, transport, runtime result, normalization |
 | Entity parent GUIDs | `context/schema-reference.md` | Parent entity types section |
 | DataValueType GUIDs | `context/schema-reference.md` | DataValueType section |
 | Schema file formats | `context/schema-reference.md` | Schema file formats section |
@@ -46,7 +46,7 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | Deep container discovery | `context/viewconfig-reference.md` | Deep container discovery section |
 | viewConfigDiff field recipes | `context/viewconfig-reference.md` | Field recipes section |
 | viewConfigDiff Button recipe | `context/viewconfig-reference.md` | Button recipe section |
-| Freedom UI component contracts | `context/mcp-application-tools-reference.md` | `component-info` section |
+| Freedom UI component contracts | `context/ui-reference.md` | Page structure section; use live `component-info` for unfamiliar `crt.*` components |
 | Handlers + SDK reference | `context/devkit-common-reference.md` | Scope and safe defaults sections |
 | Data bindings (SysModule, lookups) | `context/data-bindings-reference.md` | Core binding sections |
 
@@ -69,10 +69,10 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | Agent 2 (Requirements) | agents/02-requirements-gathering.md | Full file |
 | | context/business-checklist.md | Full file |
 | Agent 3 (Plan) | agents/03-implementation-plan.md | Full file |
-| | context/essentials.md | MCP tools and application workflow |
+| | context/essentials.md | MCP-orchestrated runtime and local workflow sections |
 | | context/schema-reference.md | Parent schemas and DataValueTypes |
 | Agent 4 (Implementation) | agents/04-implementation.md | Full file |
-| | context/mcp-application-tools-reference.md | Overview + per-tool sections |
+| | context/mcp-application-tools-reference.md | Source-of-truth boundaries, transport, normalization, refresh pattern |
 | | context/ui-reference.md | FormPage and ListPage layout sections |
 | | context/viewconfig-reference.md | Container discovery and field recipes |
 | | scripts/mcp_client.py | Full file |
@@ -105,11 +105,10 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | Lines | Section | Description |
 |-------|---------|-------------|
 | 1-29 | Role + I/O + Context | Interactive-only agent, three output files |
-| 30-81 | Steps 1-2 | Parse prompt, run business checklist |
-| 82-122 | Steps 3-4 | Technical blockers, build request-spec.json |
-| 123-231 | Steps 5-6 | Generate requirements.md, approval loop |
-| 232-243 | Step 7 | Persist workflow state (Gate R) |
-| 244-286 | Critical Rules + Completion | 20 rules, default classification, criteria |
+| 30-94 | Conversation + Checklist Authority | First-turn rules, checklist authority, BA flow |
+| 95-258 | Requirements Output Contract | Canonical 11-section Business Plan, rendering rules, Domain Model table contract |
+| 260-299 | Request Spec Contract | Required checklist groups and validation scripts |
+| 301-329 | Modeling + Default Resolution | Business naming rules and business-facing default rules |
 
 ### agents/03-implementation-plan.md — Plan Generator
 | Lines | Section | Description |
@@ -125,45 +124,48 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 ### agents/04-implementation.md — MCP Executor
 | Lines | Section | Description |
 |-------|---------|-------------|
-| 1-20 | Role + I/O + Context | Execute MCP calls, sync artifacts |
-| 21-69 | MCP Workflow | clio resolution, stdio transport, quick start |
-| 70-104 | Protocol Flow + Responses | Request lifecycle, success/error parsing |
-| 105-169 | Schema Sync + Bindings + Params | Entity ordering, binding tools, param validation |
-| 170-203 | Validation + Retry | Pre-execution checklist, failure policy |
-| 204-329 | Steps 0-5 | Gate R → parse plan → verify MCP → check app → init context |
-| 330-398 | Steps 6-7 | Init canonical context, execute schema sync |
-| 399-461 | Steps 7b-8 | Page customization, validate output |
-| 462-552 | Step 9 | Write summary report (mcp-application-report.md) |
-| 553-570 | Completion Criteria | 6 validation requirements |
-| 571-785 | Page Sync Details | Full page editing workflow, body markers, recipes |
+| 1-20 | Role + I/O + Context | Execute MCP calls, persist result/report/docs |
+| 22-47 | Read First + MCP Transport | Required local reads, transport rules, MCP source-of-truth boundary |
+| 48-79 | Preconditions + Execution Order | Gate check, app create/discovery branch, refresh sequence |
+| 81-135 | Branching + Schema/Page/Evidence Rules | Main-entity selection, defaults, page-sync obligations, evidence handling |
+| 137-186 | Local Runtime Rules | Schema-sync notes, flat runtime contract, validation checklist, retry policy |
+| 188-299 | Steps 0-5 | Gate R, parse plan, verify MCP, check app, resolve runtime inputs, initialize context |
+| 299-407 | Steps 6-7 | Initialize canonical context, execute schema sync |
+| 408-658 | Step 7b | Page customization and verification workflow |
+| 659-684 | Steps 8-9 | Validate output contract and write summary report |
+| 685-695 | Completion Criteria | Final implementation completion rules |
 
 ### context/essentials.md — Platform Basics
 | Lines | Section | Description |
 |-------|---------|-------------|
-| 1-58 | Platform Overview | Architecture, key concepts, system tables |
-| 59-90 | Naming Conventions | Usr prefix, PascalCase, GUID rules |
-| 91-165 | Package Structure | descriptor.json, directory layout, generation order |
-| 166-229 | MCP Tools | Python client, app.create input, request example |
-| 230-277 | Clio CLI Commands | Environment, package, development commands |
-| 278-319 | MCP Workflow + Timestamps | DB-first workflow, ModifiedOnUtc format |
+| 1-36 | Platform Overview | Architecture, MCP-orchestrated runtime, system tables |
+| 38-67 | Naming Conventions | Usr prefix, PascalCase, GUID rules |
+| 70-167 | Package Structure + Workflow | descriptor.json, directory layout, local MCP generation flow |
+| 171-234 | Clio CLI Commands | Environment, package, development commands |
+| 238-244 | Local MCP Workflow | Local mutation/refresh sequence |
+| 248-258 | ModifiedOnUtc Format | Timestamp format reference |
 
 ### context/business-checklist.md — Checklist
 | Lines | Section | Description |
 |-------|---------|-------------|
-| 1-10 | Goal | Ensure completeness of business requirements |
-| 11-72 | 8 Checklist Items | Outcome, actors, domain, lifecycle, rules, UX, edge cases, acceptance |
-| 73-109 | Completion + Strategy | When done, question batching, tech boundary, display defaults |
+| 5-25 | Output Format | Canonical 11-section BA plan contract and mapping rule |
+| 29-56 | Goal + Domain Expertise | BA discovery style and domain-quality bar |
+| 58-157 | Checklist Groups | Discovery buckets for outcome, roles, process, data model, UX, assumptions |
+| 159-191 | Logic Quality + Pre-analysis | Cross-section validation before draft approval |
+| 193-228 | Completion + Clarification | Completion criteria, assumption persistence, question strategy, technical boundary |
+| 230-233 | Display Field Defaulting | Pointer to `clio` MCP app-modeling guidance for title/display assumptions |
 
-### context/mcp-application-tools-reference.md — MCP Tools API
+### context/mcp-application-tools-reference.md — Local MCP Workflow Wrapper
 | Lines | Section | Description |
 |-------|---------|-------------|
-| 1-103 | Overview + Init + Tools List | Transport, naming, JSON format, MCP bootstrap |
-| 104-263 | App Lifecycle Tools | application-create, application-get-info, application-get-list |
-| 292-438 | Entity Schema Tools | create-entity-schema, create-lookup, update-entity-schema |
-| 439-597 | Schema Inspection + Data Binding | get-entity-schema-properties/get-entity-schema-column-properties, create-data-binding-db |
-| 598-778 | Composite Tools | schema-sync, page-sync |
-| 779-1039 | Error Handling + Workflow Patterns | pitfalls, recovery, fallback usage |
-| 1104-1423 | Page Tools + Component Info | page-list, component-info, page-get, page-update, parameter conventions |
+| 1-5 | Purpose | Local wrapper scope; not the executable MCP spec |
+| 7-22 | Source Of Truth | Repo-local responsibilities vs `clio` MCP responsibilities |
+| 24-40 | Local Transport | `scripts/mcp_client.py` usage and stdio rules |
+| 42-54 | Canonical Runtime Result | Flat MCP response fields used by this repo |
+| 56-72 | Normalization | `mcp-application-result.json` normalization and local helper projections |
+| 74-84 | Local Refresh Pattern | Create/discover, mutate, refresh, normalize sequence |
+| 86-98 | Local Follow-up Helpers | Evidence/report/page-sync/schema-sync helper scripts |
+| 99-117 | Minimal Example | Persist raw MCP result, then normalize |
 
 ### context/ui-reference.md — Freedom UI
 | Lines | Section | Description |
@@ -222,33 +224,28 @@ Apply specific changes to an existing Creatio project. Pick the skill you need:
 | 56-100 | call_mcp_tool() | Main function: build JSON-RPC, spawn clio, parse |
 | 101-168 | Response Parsing | JSON decode, isError check, data extraction |
 
-## MCP Tool Quick Lookup
+## MCP Tool Lookup Guidance
 
-When you need a specific MCP tool's API, read only its section from `context/mcp-application-tools-reference.md`:
+When you need executable tool parameters or current response shape:
 
-| MCP Tool | Lines | What You Get |
-|----------|-------|-------------|
-| `application-create` | App lifecycle section | Create app with package + entity |
-| `application-get-info` | App lifecycle section | Refresh app context from DB |
-| `application-get-list` | App lifecycle section | Discover existing apps |
-| `create-entity-schema` | Entity schema tools section | Create BaseEntity schema |
-| `create-lookup` | Entity schema tools section | Create BaseLookup schema |
-| `update-entity-schema` | Entity schema tools section | Add/modify columns |
-| `create-data-binding-db` | Data binding section | Seed lookup data |
-| `page-list` | Page tools section | Discover pages in package |
-| `page-get` | Page tools section | Read page body |
-| `page-update` | Page tools section | Save modified page body, DB workaround |
-| Error handling | Error handling section | Recovery + common pitfalls |
+| Need | Read |
+|------|------|
+| Current MCP tool signature | `tools/list` and the discovered `clio` MCP tool schema |
+| App-modeling semantics | `docs://mcp/guides/app-modeling` |
+| Local invocation pattern | `scripts/mcp_client.py` |
+| Local result normalization | `context/mcp-application-tools-reference.md` |
+| Repo-local execution flow | `agents/04-implementation.md` and relevant skill file |
 
 ## Skills Detail Map
 
 ### skills/entity-creation/SKILL.md — Entity Sync via MCP
 | Lines | Section | Description |
 |-------|---------|-------------|
-| Core sections | What + Hard Rules | Scope, naming, inherited columns |
-| Core sections | Input + Request Shapes | Expected plan format, current tool params |
-| Core sections | Operation Format | Column operation actions (add/modify/remove) |
-| Core sections | Response + Refresh + Validation | Success check, get_info refresh, failure policy |
+| 14-29 | What + Hard Rules | Scope, schema mutation rules, `clio` MCP source-of-truth note |
+| 31-93 | Input + Request Shapes | Expected plan fields and current request examples |
+| 95-112 | Operation Format | Column operation actions |
+| 114-149 | Canonical Runtime Context + Refresh | Flat runtime contract, normalization, refresh rules |
+| 153-157 | Failure Policy | Retry and stop conditions |
 
 ### skills/page-schema-editing/SKILL.md — Edit Live Pages
 | Lines | Section | Description |

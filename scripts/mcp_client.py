@@ -421,7 +421,7 @@ _TOOL_REQUIRED_PARAMS = {
         },
     },
     "page-list": {
-        "required": ["package-name"],
+        "required": [],
         "hints": {
             "package-name": "Package name to list pages from",
         },

@@ -12,14 +12,73 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 
 The required top-level sections of every BA-style Business Plan are, in order:
 
-1. Business context
-2. Users, access and ownership
-3. Core process and business logic
-4. Data model
-5. UX assumptions
-6. Assumptions used for the draft requirements
+1. Business Outcome
+2. Core Problem
+3. Actors and Roles
+4. Domain Model
+5. Lifecycle and Statuses
+6. Business Logic
+7. UX Expectations
+8. Edge Cases and Exceptions
+9. Acceptance Criteria
+10. Access / Personas
+11. Assumptions
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
+
+Required BA-style Business Plan template:
+
+```md
+## 1. Business Outcome
+## 2. Core Problem
+## 3. Actors and Roles
+## 4. Domain Model
+## 5. Lifecycle and Statuses
+## 6. Business Logic
+## 7. UX Expectations
+## 8. Edge Cases and Exceptions
+## 9. Acceptance Criteria
+## 10. Access / Personas
+## 11. Assumptions
+```
+
+## Format Compliance Rule
+
+If the requested artifact has a prescribed format, the assistant MUST reproduce that format exactly.
+A structurally similar format is considered incorrect.
+
+If any required section is missing, renamed, reordered, merged, or replaced with a synonym, the assistant MUST treat the artifact as invalid and regenerate it before responding.
+
+The assistant MUST NOT:
+
+- rename required section headers
+- reorder required sections
+- merge multiple required sections into one
+- replace a required format with a summary, changelog, implementation note, or freeform prose
+- mix business-plan format with technical-plan format
+- invent an alternative structure because it seems clearer, shorter, or more practical
+
+Business Plan and Implementation Plan are different artifacts with different contracts.
+
+The assistant MUST NEVER:
+
+- use the Business Plan structure when the task requires the technical implementation plan
+- use the implementation structure when the task requires the BA-style Business Plan
+- combine both in one artifact unless the user explicitly asks for both
+- improvise a technical-plan structure when the repository defines a canonical one elsewhere
+
+If the repository prescribes a canonical format for the technical implementation plan, the assistant MUST load and follow that format exactly.
+If the canonical implementation-plan format cannot be located, the assistant MUST treat that as a blocker and inspect the repository instructions before responding with a plan.
+
+Before returning any Business Plan or Implementation Plan, the assistant MUST run an internal checklist:
+
+1. Does the output use the exact required template?
+2. Are all required sections present in the exact order?
+3. Are there any extra top-level sections?
+4. Is any section replaced by a synonym or merged with another section?
+5. Is the output for the correct stage: BA plan versus implementation plan?
+
+If any answer indicates format drift, the assistant MUST regenerate before responding.
 
 ---
 
@@ -30,7 +89,6 @@ Full checklist rules are in `context/business-checklist.md`. This section provid
 - Do not ask the developer to provide `APPROVE_*` tokens.
 - Treat natural-language confirmation as the approval source and persist it through the provided scripts.
 - Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
-- MCP entity tools are DB-first: schema mutations land directly in PostgreSQL and are immediately usable without a separate compile/deploy step.
 
 ## UX Contract
 
@@ -129,17 +187,17 @@ Gate R:
 ## Global Invariants
 
 - All package, page, entity, and custom column names use the `Usr` prefix.
-- MCP entity tools are DB-first. No separate compilation or deployment step is required after successful MCP schema mutations.
+- For newly created entities and custom columns, derive business code/name from the business phrase in requirements/model intent.
+- For newly created entities and custom columns, derive code as `Usr` + PascalCase business tokens and derive title as human-readable Title Case from the same phrase.
+- Acronym policy for derived names: preserve business acronym readability in title (for example `ID`, `VAT`, `CRM`) and use Pascalized acronym tokens in code (`Id`, `Vat`, `Crm`).
+- Semantic `Id` in business terms is allowed (for example `Tax ID` -> `UsrTaxId`).
+- Treat physical FK/storage aliases (for example `E17`/`ColumnValueName` values like `...Id`) as storage aliases only, never as naming source for new entities or new custom columns.
+- Existing manually edited title/code divergence is allowed; this derivation contract applies to new creations only.
 - Generated artifacts under `output/**` are execution evidence, not policy sources.
-- `url` is the Creatio base URL. MCP calls run through clio stdio transport and must not depend on a frontend endpoint derived from `url`.
 - Do not add inherited base columns to requirements.
 - Enum-like business values must be modeled as lookup entities.
-- For lookup schemas, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
-- If a schema already contains `Name`, reuse it as the record title and do not invent `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
-- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
+- For MCP transport, tool request/response shape, canonical app-modeling rules, and lookup/default semantics, follow the current `clio` MCP contract and prompts/resources such as `docs://mcp/guides/app-modeling` rather than re-declaring those rules locally.
 - If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
-- Any requirement phrased as "defaults to X" is incomplete until the plan defines either a `schema default` or a `ui default`.
-- Lookup seed rows alone do not satisfy a default requirement.
 - Final user-facing status must be derived from `mcp-application-result.json`. Do not report planned items as implemented without persisted evidence.
 - Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
 - When page sync is required, the machine-readable page sync contract must be embedded in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, and may also be materialized as `page-sync-plan.json`.
@@ -147,6 +205,8 @@ Gate R:
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
+- The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
+- Implementation success does not excuse format non-compliance. Even if the app is successfully created, the assistant must still provide the required planning artifacts in the exact prescribed format.
 
 ## Orchestration Checklist
 

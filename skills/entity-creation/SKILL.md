@@ -9,14 +9,14 @@ metadata:
 
 # Entity Schema Sync via MCP
 
-Use this skill when approved schema changes must be applied after `application-create`. These tools persist changes in Creatio DB and return the post-save entity snapshot.
+Use this skill when approved schema changes must be applied after `application-create`. These tools persist changes in Creatio DB, and this repo treats refreshed application context from `application-get-info` as the canonical post-mutation state.
 
 ## What This Skill Does
 
-- `create-entity-schema` creates a new entity schema in DB and returns the persisted entity snapshot
-- `create-lookup` creates a new `BaseLookup` entity in DB and returns the persisted entity snapshot
-- `update-entity-schema` applies explicit `operations` mutations to an existing entity and returns the post-save snapshot
-- `application-get-info` refreshes the canonical app context after each successful mutation
+- `create-entity-schema` creates a new entity schema in DB
+- `create-lookup` creates a new `BaseLookup` entity in DB
+- `update-entity-schema` applies explicit `operations` mutations to an existing entity
+- `application-get-info` refreshes the canonical app context after each successful mutation or schema batch
 
 ## Hard Rules
 
@@ -25,8 +25,8 @@ Use this skill when approved schema changes must be applied after `application-c
 3. Create new lookup entities before referencing them from other entities.
 4. `update-entity-schema` must use explicit `operations` as a native list.
 5. Omission never means delete.
-6. BaseLookup already provides `Name` and `Description`; `Name` must remain the lookup `PrimaryDisplayColumn`, so never add `Name`, `Description`, or `UsrName` as custom lookup columns.
-7. If the current entity snapshot already contains `Name`, never add duplicate `UsrName`; reuse `Name` as the record title.
+6. Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for lookup/display/default semantics instead of restating them locally.
+7. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
 
 ## Input Expected
 
@@ -111,37 +111,43 @@ Allowed actions:
 - `modify`
 - `remove`
 
-## Expected Response
+## Canonical Runtime Context
 
 ```json
 {
   "success": true,
-  "packageUId": "<package-guid>",
-  "entity": {
-    "uId": "<entity-guid>",
-    "name": "UsrTodoTask",
-    "caption": "Todo Task",
-    "parentSchemaName": "BaseEntity",
-    "columns": []
-  }
+  "package-u-id": "<package-guid>",
+  "package-name": "UsrTodoList",
+  "canonical-main-entity-name": "UsrTodoList",
+  "entities": [
+    {
+      "uId": "<entity-guid>",
+      "name": "UsrTodoTask",
+      "caption": "Todo Task",
+      "columns": []
+    }
+  ]
 }
 ```
 
+This flat application context is the primary runtime contract for this repo. After normalization, `mcp-application-result.json` may also contain `editableContext`, but that is a repo-local helper projection rather than the MCP response contract.
+
 ## Refresh Policy
 
-After each successful call:
+After each successful call or approved schema batch:
 1. call `application-get-info` for the current app
-2. overwrite `output/<AppName>/mcp-application-result.json` with the refreshed compact context
-3. append an entry to `schemaSync`
-4. save the file
+2. overwrite `output/<AppName>/mcp-application-result.json` with the refreshed flat context
+3. normalize it with `scripts/mcp_context_adapter.py normalize`
+4. append an entry to `schemaSync`
+5. save the file
 
 ## Validation Checklist
 
 - `success=true`
-- `entity.uId` is non-empty
-- `entity.name` matches the requested schema
+- `package-u-id` is non-empty
+- `entities` contains the expected schema after refresh
+- `canonical-main-entity-name` is used when deciding whether to extend the template-created main entity or create an additional business object
 - lookup references point to already existing schemas
-- lookup payloads do not redefine inherited `Name` or `Description`, and no duplicate `UsrName` is introduced when `Name` already exists
 - canonical context file was updated
 
 ## Failure Policy

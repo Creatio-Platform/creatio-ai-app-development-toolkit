@@ -21,7 +21,7 @@ Generate package data bindings that register sections and seed lookup values.
 From MCP and context:
 - `get-entity-schema-properties` for deployed schema metadata (requires `environment-name`, `package-name`, `schema-name`)
 - `get-entity-schema-column-properties` for single column metadata (also requires `column-name`)
-- current app context with `packageUId` and target schema names
+- current app context with `package-name`, `package-u-id`, or normalized equivalent package identity plus target schema names
 - `context/bindings-lookup.json`
 - `context/data-bindings-reference.md`
 

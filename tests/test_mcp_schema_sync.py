@@ -190,13 +190,7 @@ def build_edited_context():
                         "name": "UsrMyEntityType",
                         "caption": "My Entity Type",
                         "kind": "lookup",
-                        "columns": [
-                            {
-                                "name": "Name",
-                                "caption": "Name",
-                                "dataValueTypeName": "Text"
-                            }
-                        ]
+                        "columns": []
                     }
                 ]
             }
@@ -624,42 +618,10 @@ class FakeMcpClientWithoutSchemaSync:
 
 
 class McpSchemaSyncTests(unittest.TestCase):
-    def test_build_create_action_skips_inherited_lookup_columns(self):
-        action = build_create_action({
-            "packageUId": "22222222-2222-2222-2222-222222222222",
-            "packageName": "UsrMyPkg",
-            "name": "UsrMyEntityType",
-            "caption": "My Entity Type",
-            "kind": "lookup",
-            "columns": [
-                {
-                    "name": "Name",
-                    "caption": "Name",
-                    "dataValueTypeName": "Text"
-                },
-                {
-                    "name": "UsrColor",
-                    "caption": "Color",
-                    "dataValueTypeName": "Text"
-                }
-            ]
-        })
-        self.assertEqual(action["toolName"], "create-lookup")
-        self.assertEqual(
-            action["arguments"]["columns"],
-            [
-                {
-                    "name": "UsrColor",
-                    "type": "Text",
-                    "title": "Color"
-                }
-            ]
-        )
-
-    def test_build_create_action_rejects_usrname_for_lookup(self):
+    def test_build_create_action_rejects_inherited_lookup_columns(self):
         with self.assertRaisesRegex(
             WorkflowError,
-            "Lookup UsrMyEntityType must use inherited Name as PrimaryDisplayColumn"
+            "Lookup UsrMyEntityType inherits BaseLookup columns"
         ):
             build_create_action({
                 "packageUId": "22222222-2222-2222-2222-222222222222",
@@ -669,12 +631,54 @@ class McpSchemaSyncTests(unittest.TestCase):
                 "kind": "lookup",
                 "columns": [
                     {
-                        "name": "UsrName",
-                        "caption": "Custom Name",
+                        "name": "Name",
+                        "caption": "Name",
+                        "dataValueTypeName": "Text"
+                    },
+                    {
+                        "name": "Description",
+                        "caption": "Description",
                         "dataValueTypeName": "Text"
                     }
                 ]
             })
+
+    def test_build_create_action_rejects_duplicate_title_like_lookup_columns(self):
+        for column_name in ("UsrName", "UsrTitle", "UsrCaption"):
+            with self.subTest(column_name=column_name):
+                with self.assertRaisesRegex(
+                    WorkflowError,
+                    "Lookup UsrMyEntityType must use inherited Name as PrimaryDisplayColumn"
+                ):
+                    build_create_action({
+                        "packageUId": "22222222-2222-2222-2222-222222222222",
+                        "packageName": "UsrMyPkg",
+                        "name": "UsrMyEntityType",
+                        "caption": "My Entity Type",
+                        "kind": "lookup",
+                        "columns": [
+                            {
+                                "name": column_name,
+                                "caption": "Custom Title",
+                                "dataValueTypeName": "Text"
+                            }
+                        ]
+                    })
+
+    def test_build_sync_plan_rejects_duplicate_title_like_lookup_column_updates(self):
+        current_context = build_current_result_document_with_lookup_status()["editableContext"]
+        edited_context = copy.deepcopy(build_edited_context_with_default_update())
+        edited_context["packages"][0]["entities"][1]["columns"].append({
+            "name": "UsrTitle",
+            "caption": "Title",
+            "dataValueTypeName": "Text"
+        })
+
+        with self.assertRaisesRegex(
+            WorkflowError,
+            "Lookup UsrMyEntityType must use inherited Name as PrimaryDisplayColumn"
+        ):
+            build_sync_plan(current_context, edited_context)
 
     def test_build_sync_plan_orders_lookup_creation_before_entity_update(self):
         current_context = build_current_result_document()["editableContext"]

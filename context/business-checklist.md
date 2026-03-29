@@ -8,16 +8,21 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 
 | # | Section | Required |
 |---|---------|----------|
-| 1 | Business context | yes |
-| 2 | Users, access and ownership | yes |
-| 3 | Core process and business logic | yes |
-| 4 | Data model | yes |
-| 5 | UX assumptions | yes |
-| 6 | Assumptions used for the draft requirements | yes |
+| 1 | Business Outcome | yes |
+| 2 | Core Problem | yes |
+| 3 | Actors and Roles | yes |
+| 4 | Domain Model | yes |
+| 5 | Lifecycle and Statuses | yes |
+| 6 | Business Logic | yes |
+| 7 | UX Expectations | yes |
+| 8 | Edge Cases and Exceptions | yes |
+| 9 | Acceptance Criteria | yes |
+| 10 | Access / Personas | yes |
+| 11 | Assumptions | yes |
 
-Sections 1–5 and the assumptions block may never be omitted. Edge cases, acceptance criteria, and analytics should be resolved inside sections 1–5 or captured explicitly in assumptions when they do not materially change the business intent.
-
-The plan body shown for Gate R approval must follow this structure exactly. A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
+The checklist groups below are discovery buckets, not an alternate final document structure.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 11-section Business Plan above.
+A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
 ---
 
@@ -52,7 +57,7 @@ If they do not materially change scope, include them as explicit assumptions ins
 
 ## Checklist Items
 
-## 1. Business context
+### Business context
 
 Required:
 - app purpose
@@ -63,7 +68,7 @@ Required:
 
 The first discovery questions should focus here before moving into lower-level detail.
 
-## 2. Users, access and ownership
+### Users, access and ownership
 
 Required:
 - who uses the app
@@ -76,7 +81,7 @@ If restrictions are not essential, explicitly state:
 
 Do not suggest optional restrictions without a business reason.
 
-## 3. Core process and business logic
+### Core process and business logic
 
 Required:
 - current operational pain points
@@ -99,7 +104,7 @@ Required:
 
 If full metric detail is missing, define a practical draft set and mark it as an assumption.
 
-## 4. Data model
+### Data model
 
 Required:
 - main entities
@@ -114,7 +119,7 @@ Resolve these ambiguities explicitly when they appear in the request:
 - if a secondary entity is proposed, state why it is a distinct business object instead of additional fields on the main entity
 - if contact-like records are present, state whether they are subordinate to one parent record or may exist independently
 
-## 5. UX assumptions
+### UX assumptions
 
 Default unless critical:
 - list page columns
@@ -129,7 +134,7 @@ If the developer omits exact page fields or gives only a partial list, resolve d
 - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
 - Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
-The BA draft must surface these defaults in the `UX assumptions` section:
+The BA draft must surface these defaults in the `UX Expectations` section:
 - default list columns
 - default sorting
 - default main filters
@@ -137,7 +142,7 @@ The BA draft must surface these defaults in the `UX assumptions` section:
 
 The visible BA draft should render the UX section as a short bullet list, not as a table.
 
-## Assumptions used for the draft requirements
+### Assumptions used for the draft requirements
 
 Default unless critical:
 - required fields
@@ -170,7 +175,7 @@ The pre-analysis must check for:
 - contradictions between business context, process, data model, UX assumptions, and assumptions
 - business logic that is not reflected in the data model or cannot be supported by the described UX
 - required fields in business logic that are not marked as required in the data model
-- defaults that do not identify a concrete `schema default`, `ui default`, or explicit absence of default
+- defaults that do not identify an explicit business default or explicit absence of default
 - sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
 - lookup usage that is inconsistent across entities or too broad for the stated business scope
 - supporting entities whose required parent links or cross-field constraints are not explicitly captured
@@ -224,7 +229,5 @@ All other technical values should use deterministic defaults and be documented l
 
 ## Display Field Defaulting
 
-- For `BaseLookup`, default the display field to inherited `Name`.
-- For template-created app section entities, default the record title to `Name` when the schema snapshot already contains it.
-- For a new app with one primary record type, default that record type to the template-created section entity whose schema name matches the app code. Do not invent a second entity name for the same records.
-- Add a separate title-like column such as `UsrTitle` only when the developer explicitly needs a business field that is different from the record name.
+- For canonical main-entity rules, lookup display semantics, and title-field assumptions, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
+- In the BA draft, describe the record title in business language and request a separate title-like field only when the business needs a field that is distinct from the record name.
