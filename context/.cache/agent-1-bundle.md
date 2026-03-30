@@ -144,17 +144,6 @@ Replace `true` with `false` if .NET Framework was detected in Step 4.
 If the user provided a custom clio path at startup, add `"mcpCommand": "<custom clio command>"` to `.creatio-env.json`.
 For the standard global install, omit `mcpCommand` and let the runtime resolve `clio` from PATH.
 
-### 7. Verify MCP via clio stdio (MANDATORY)
-
-Verify that clio MCP responds correctly using the stdio client:
-
-```bash
-python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
-```
-
-- **Success** (response has `"success": true`) — environment setup is complete.
-- **Failure** — stop and report blocker to developer. Check that clio is installed (`clio ver`) and the environment name is correct.
-
 ## Error Handling
 
 | Error | Action |
@@ -164,61 +153,38 @@ python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_n
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
-| `mcp_client.py` returns `success: false` | Check that clio is installed (`clio ver`), the environment name matches exactly, and the Creatio instance is running. |
 
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ `output/<AppName>/.creatio-env.json` exists with correct `environment` and persisted runtime MCP details  
-✅ `python3 scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
 
 <!-- FILE: context/essentials.md (L230-277) -->
 
-
-### Package Management
-
-```bash
-# Create new package skeleton
-clio new-pkg UsrMyPackage
-
-# List installed packages
-clio get-pkg-list -e myenv
-
-# Pull package from environment
-clio pull-pkg MyPackage -e myenv
-
-# Delete package
-clio delete-pkg-remote MyPackage -e myenv
-
-# Validate package structure
-clio validation-pkg ./MyPackage
 ```
 
 ### Development Tools
 
 ```bash
-# Execute SQL
 clio execute-sql-script "SELECT Id FROM Contact LIMIT 5" -e myenv
-
-# Clear cache
 clio clear-redis-db myenv
-
-# System settings
 clio set-syssetting MySetting "Value" -e myenv
-
-# Install cliogate (deprecated — entity MCP tools no longer require cliogate)
-# clio install-gate -e myenv
 ```
 
 ---
 
-## MCP Workflow (DB-First)
+## Local MCP Workflow
 
-```
-MCP application-create or application-get-info → initialize canonical context → [optional] schema-sync or create-lookup/create-entity-schema/update-entity-schema → application-get-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
+```text
+MCP application-create or application-get-info -> initialize canonical context -> optional schema-sync or fallback entity tools -> application-get-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
 ```
 
-**Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
+Local rule:
+- Keep the result file flat and source-backed
+- The normalized runtime document starts from the MCP response and adds local helper state such as `contractType`, `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
 
 ---
 
+## ModifiedOnUtc Format
+
+Use milliseconds since Unix epoch in `/Date(milliseconds)/` format.
