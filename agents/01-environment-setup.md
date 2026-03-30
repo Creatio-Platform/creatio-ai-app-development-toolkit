@@ -137,17 +137,6 @@ Replace `true` with `false` if .NET Framework was detected in Step 4.
 If the user provided a custom clio path at startup, add `"mcpCommand": "<custom clio command>"` to `.creatio-env.json`.
 For the standard global install, omit `mcpCommand` and let the runtime resolve `clio` from PATH.
 
-### 7. Verify MCP via clio stdio (MANDATORY)
-
-Verify that clio MCP responds correctly using the stdio client:
-
-```bash
-python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_name>"}' 30
-```
-
-- **Success** (response has `"success": true`) — environment setup is complete.
-- **Failure** — stop and report blocker to developer. Check that clio is installed (`clio ver`) and the environment name is correct.
-
 ## Error Handling
 
 | Error | Action |
@@ -157,10 +146,8 @@ python3 scripts/mcp_client.py application-get-list '{"environment-name": "<env_n
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
-| `mcp_client.py` returns `success: false` | Check that clio is installed (`clio ver`), the environment name matches exactly, and the Creatio instance is running. |
 
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ `output/<AppName>/.creatio-env.json` exists with correct `environment` and persisted runtime MCP details  
-✅ `python3 scripts/mcp_client.py application-get-list '{"environment-name":"<env_name>"}'` returns `success: true`  
