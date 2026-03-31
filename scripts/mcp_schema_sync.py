@@ -30,6 +30,20 @@ class WorkflowError(RuntimeError):
     pass
 
 
+def _normalize_hint_token(value):
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value.strip().lower() if ch.isalnum())
+
+
+def resolve_effective_data_value_type(column):
+    data_value_type_name = column.get("dataValueTypeName")
+    normalized_data_value_type_name = _normalize_hint_token(data_value_type_name)
+    if normalized_data_value_type_name == "emailaddress":
+        return "Email"
+    return data_value_type_name
+
+
 def normalize_title(value, fallback=None):
     if isinstance(value, str):
         trimmed = value.strip()
@@ -340,7 +354,7 @@ def build_create_columns(columns):
         title_localizations = build_localizations(column.get("caption"), column["name"])
         item = {
             "name": column["name"],
-            "type": column.get("dataValueTypeName"),
+            "type": resolve_effective_data_value_type(column),
             "title-localizations": title_localizations
         }
         description_localizations = build_localizations(column.get("description"))
@@ -377,7 +391,7 @@ def build_update_operations_payload(operations):
         item = {
             "action": action,
             "column-name": column["name"],
-            "type": column.get("dataValueTypeName"),
+            "type": resolve_effective_data_value_type(column),
         }
         if title_localizations is not None:
             item["title-localizations"] = title_localizations

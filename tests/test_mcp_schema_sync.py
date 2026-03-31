@@ -634,6 +634,23 @@ class FakeMcpClientWithoutSchemaSync:
 
 
 class McpSchemaSyncTests(unittest.TestCase):
+    def test_build_sync_plan_normalizes_email_address_alias_to_email_type(self):
+        current_context = build_current_result_document_with_lookup_status()["editableContext"]
+        edited_context = copy.deepcopy(build_edited_context_with_default_update())
+        entity = edited_context["packages"][0]["entities"][0]
+        entity["columns"].append({
+            "name": "UsrEmail",
+            "caption": "Email",
+            "dataValueTypeName": "EmailAddress"
+        })
+
+        sync_plan = build_sync_plan(current_context, edited_context)
+        operations = sync_plan["actions"][0]["arguments"]["operations"]
+        email_operation = next(op for op in operations if op["column-name"] == "UsrEmail")
+
+        self.assertEqual(email_operation["action"], "add")
+        self.assertEqual(email_operation["type"], "Email")
+
     def test_build_create_action_rejects_inherited_lookup_columns(self):
         with self.assertRaisesRegex(
             WorkflowError,

@@ -120,6 +120,7 @@ Rules:
 - Reuse `Name` when it already exists.
 - Never plan duplicate title-like columns when `Name` is already present.
 - Model enum-like business values as lookup entities first.
+- Preserve semantic text field types in schema plans: use `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields instead of downgrading them to generic `ShortText`.
 - For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
 - For entity schema payloads, plan `title-localizations` and `description-localizations` as localization maps with an `en-US` entry; legacy scalar `title` and `description` fields are rejected by MCP.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.

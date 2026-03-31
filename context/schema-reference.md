@@ -80,6 +80,9 @@ Use these GUIDs in entity metadata column definitions (field `S2`):
 | **MediumText** | `325a73b8-0f47-44a0-8412-7606f78003ac` | Up to 500 characters |
 | **LongText** | `c0f04627-4620-4bc0-84e5-9419dc8516b1` | Up to 1000+ characters |
 | **MaxSizeText** | `5ca35f10-a101-4c67-a96a-383da6afacfc` | Unlimited text |
+| **PhoneNumber** | `26cba63c-daf1-4f36-b2ea-73c0d675d90c` | Phone text with phone semantics |
+| **WebLink** | `26cba64c-daf1-4f36-b2ea-73c0d695d90c` | URL text with web-link semantics |
+| **Email** | `66cba64c-daf1-4f36-b8ea-73c0d695d90c` | Email address text with email semantics |
 | **LargeText** | `79bccffa-8c8b-4863-b376-a69d2244182b` | Rich text/HTML |
 | **LocalizableString** | `8b3f29bb-ea14-4ce5-a5c5-293a929b6ba2` | Localizable |
 | **SecureText** | `3509b9dd-2c90-4540-b82e-8f6ae85d8248` | Encrypted |
@@ -106,6 +109,19 @@ Used in page `.js` files in DataTable column definitions:
 | Lookup | 10 |
 | Boolean | 12 |
 | MaxSizeText | 13 |
+| PhoneNumber | 42 |
+| WebLink | 44 |
+| Email | 45 |
+
+### Semantic Text Types
+
+Do not collapse semantic text fields to generic `ShortText` when the business meaning is known:
+
+- use `PhoneNumber` for phone fields
+- use `WebLink` for URL / website fields
+- use `Email` for email address fields
+
+These remain text-like fields, but they carry a more specific schema data type and should stay specific in `schema-sync`, `create-entity-schema`, and `update-entity-schema` payloads.
 
 ---
 
