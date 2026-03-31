@@ -11,6 +11,7 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 - `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
+- `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
 Resolve executable tool details through `tool-contract-get`.
@@ -68,14 +69,21 @@ Fallback execution paths:
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
-- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact
+- Prefer inline lookup `seed-rows` in `schema-sync`; clio automatically materializes the binding descriptor in the package during `schema-sync`, so no separate `create-data-binding-db` call is needed for standard lookup seeding
+- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
+- Each `seed-rows` entry must use the `{"values": {"Name": "...", "Description": ""}}` shape; clio auto-generates `Id` if absent
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 
 ## Default Rules
 
-When the approved plan requires defaults, implement them explicitly and follow current `clio` MCP guidance for whether they belong to schema contract or page logic.
+When the approved plan requires defaults, implement them explicitly.
 Seed data alone does not satisfy a default requirement.
+
+For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
+- Use the seeded row GUID in `default-value` with `default-value-source: "Const"` on the column's `update-entity` operation inside `schema-sync`; OR
+- Implement a `crt.CreateRecordRequest` handler in the `SCHEMA_HANDLERS` block of the FormPage that calls `setAttribute` / `setValue` for the field on new-record open
+- Either mechanism must be in the page-sync plan and executed — never mark lookup defaults as `manualCheckPending`
 
 ## Page Sync Rules
 

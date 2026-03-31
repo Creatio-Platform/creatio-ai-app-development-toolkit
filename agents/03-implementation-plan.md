@@ -130,6 +130,7 @@ Rules:
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
 - Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Each `seed-rows` entry must use the shape `{"values": {"Name": "...", "Description": ""}}` — clio auto-generates `Id` when absent. Flat objects such as `{"Name": "..."}` (without the `values` wrapper) are rejected by clio and produce an error.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
@@ -141,7 +142,10 @@ Rules:
 
 - A requirement such as `UsrStatus defaults to New` is incomplete until the plan names the field, the default value, and the step that applies it.
 - Seed data alone does not satisfy a default requirement.
-- The implementation plan should rely on current `clio` MCP guidance for whether the default is enforced through schema contract or page logic.
+- For lookup-backed defaults, the plan must choose one of:
+  1. `default-value` with `default-value-source: "Const"` set to the seeded row GUID on the column's `update-entity` operation in `schema-sync`
+  2. A `crt.CreateRecordRequest` handler in the FormPage `SCHEMA_HANDLERS` block that sets the field value on new-record open
+- The chosen mechanism must be included in the page-sync plan and executed. It must never be deferred as `manualCheckPending`.
 
 ### Page Sync Plan
 
