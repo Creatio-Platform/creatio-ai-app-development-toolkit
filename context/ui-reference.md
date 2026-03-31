@@ -56,6 +56,9 @@ Array of operations that modify the parent page template:
 | DataValueType | Control Type | Type String |
 |---------------|-------------|-------------|
 | ShortText, MediumText, LongText | Input | `crt.Input` |
+| PhoneNumber | PhoneInput | `crt.PhoneInput` |
+| Email | EmailInput | `crt.EmailInput` |
+| WebLink | WebInput | `crt.WebInput` |
 | MaxSizeText, RichText | RichTextEditor | `crt.RichTextEditor` |
 | Integer, Float, Money | NumberInput | `crt.NumberInput` |
 | Boolean | Checkbox | `crt.Checkbox` |
@@ -76,6 +79,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.NumberInput` supports `format.decimalPrecision`; use it when the numeric column scale is known.
 - `crt.DateTimePicker` supports `pickerType`, `useSeconds`, `startView`, `mode`, and `timeInterval`. Match `pickerType` to the real field kind (`date`, `time`, or `datetime`).
 - `crt.PhoneInput`, `crt.EmailInput`, and `crt.WebInput` are backed by preprocessors that can promote a bound text input to a more specific control based on the underlying data value type.
+- Keep the schema data type semantic when the business meaning is explicit: use `PhoneNumber`, `Email`, and `WebLink` in entity payloads instead of collapsing them to `ShortText`.
 - `crt.ComboBox` is also preprocessor-backed: it can auto-build lookup loading requests, pagination wiring, and lookup list attributes from the main binding.
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.

@@ -44,6 +44,7 @@ Keep individual entity tools such as `create-entity-schema`, `create-lookup`, an
 10. Lookup seed rows alone do not satisfy a default requirement.
 11. Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for lookup/display/default semantics instead of restating them locally.
 12. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
+13. Preserve semantic text field types in runtime payloads: use `Email`, `PhoneNumber`, and `WebLink` when the approved business field is an email, phone, or URL, instead of generic `ShortText`.
 
 ## Planning Inputs
 
