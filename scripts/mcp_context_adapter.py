@@ -92,6 +92,9 @@ def normalize_column(column, name=None):
     is_required_present, is_required = get_present_value(column, "isRequired", "IsRequired", "required")
     if is_required_present:
         normalized["isRequired"] = bool(is_required)
+    masked_present, masked_value = get_present_value(column, "masked", "Masked", "isValueMasked", "IsValueMasked")
+    if masked_present:
+        normalized["masked"] = bool(masked_value)
     default_value_source_present, default_value_source = get_present_value(
         column,
         "defaultValueSource",
