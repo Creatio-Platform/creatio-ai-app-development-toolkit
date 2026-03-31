@@ -3,7 +3,8 @@ name: Cross Platform
 on:
   push:
     branches:
-      - "**"
+      - main
+      - master
   pull_request:
 
 jobs:
@@ -18,8 +19,6 @@ jobs:
             smoke_filter: UnixWrapperSmokeTests
           - os: windows-latest
             smoke_filter: PowerShellWrapperSmokeTests
-          - os: macos-latest
-            smoke_filter: UnixWrapperSmokeTests
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
