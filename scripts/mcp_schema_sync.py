@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -24,10 +25,124 @@ LOOKUP_INHERITED_COLUMN_NAMES = {"Name", "Description"}
 LOOKUP_DUPLICATE_TITLE_COLUMN_NAMES = {"UsrName", "UsrTitle", "UsrCaption"}
 SUPPORTED_DEFAULT_VALUE_SOURCES = {"Const", "None"}
 BINARY_LIKE_DATA_VALUE_TYPES = {"binary", "blob", "image", "file"}
+TYPE_FALLBACK_RULES = (
+    {
+        "aliases": {"securetext", "encrypted", "password"},
+        "fallback": "ShortText",
+    },
+)
 
 
 class WorkflowError(RuntimeError):
     pass
+
+
+def _normalize_type_name(value):
+    if not isinstance(value, str):
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+    return normalized
+
+
+def _extract_error_text(tool_response):
+    if not isinstance(tool_response, dict):
+        return ""
+    error = tool_response.get("error")
+    if isinstance(error, str):
+        return error
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str):
+            return message
+        return json.dumps(error, ensure_ascii=True)
+    return ""
+
+
+def _extract_unsupported_type_name(error_text):
+    if not isinstance(error_text, str) or not error_text.strip():
+        return None
+    patterns = (
+        r"unsupported type\s+['\"](?P<type>[^'\"]+)['\"]",
+        r"column type\s+['\"](?P<type>[^'\"]+)['\"]\s+is not supported",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, error_text, flags=re.IGNORECASE)
+        if match:
+            raw_type = match.group("type")
+            if isinstance(raw_type, str) and raw_type.strip():
+                return raw_type.strip()
+    return None
+
+
+def _resolve_type_fallback_rule(unsupported_type):
+    normalized = _normalize_type_name(unsupported_type)
+    if not normalized:
+        return None
+    for rule in TYPE_FALLBACK_RULES:
+        aliases = rule.get("aliases") or set()
+        if normalized in aliases:
+            return rule
+    return None
+
+
+def _resolve_effective_masked(column):
+    if not isinstance(column, dict):
+        return None
+    if "masked" in column and column.get("masked") is not None:
+        return bool(column.get("masked"))
+    return None
+
+
+def _apply_type_fallback(payload, unsupported_type):
+    rule = _resolve_type_fallback_rule(unsupported_type)
+    if rule is None:
+        return payload, False
+
+    aliases = rule["aliases"]
+    fallback_type = rule["fallback"]
+
+    def _transform(node):
+        if isinstance(node, list):
+            changed = False
+            transformed_items = []
+            for item in node:
+                transformed_item, item_changed = _transform(item)
+                transformed_items.append(transformed_item)
+                changed = changed or item_changed
+            return transformed_items, changed
+
+        if not isinstance(node, dict):
+            return node, False
+
+        changed = False
+        transformed_dict = {}
+        for key, value in node.items():
+            transformed_value, value_changed = _transform(value)
+            transformed_dict[key] = transformed_value
+            changed = changed or value_changed
+
+        current_type = transformed_dict.get("type")
+        if _normalize_type_name(current_type) in aliases:
+            transformed_dict["type"] = fallback_type
+            changed = True
+
+        return transformed_dict, changed
+
+    return _transform(payload)
+
+
+def call_tool_with_type_fallback(client, tool_name, arguments):
+    first_response = client.call_tool_json(tool_name, arguments)
+    if first_response.get("success") is True:
+        return first_response
+    error_message = _extract_error_text(first_response)
+    unsupported_type = _extract_unsupported_type_name(error_message)
+    if not unsupported_type:
+        return first_response
+    retry_arguments, changed = _apply_type_fallback(arguments, unsupported_type)
+    if not changed:
+        return first_response
+    return client.call_tool_json(tool_name, retry_arguments)
 
 
 def normalize_title(value, fallback=None):
@@ -258,10 +373,18 @@ def build_column_map(columns):
     return {column["name"]: normalize_column(column) for column in columns}
 
 
+def normalize_column_for_compare(column):
+    normalized = {k: v for k, v in column.items() if k != "uId"}
+    effective_masked = _resolve_effective_masked(column)
+    if effective_masked is not None:
+        normalized["masked"] = effective_masked
+    else:
+        normalized.pop("masked", None)
+    return normalized
+
+
 def columns_equal(left_column, right_column):
-    skip = {"uId"}
-    return {k: v for k, v in left_column.items() if k not in skip} == \
-           {k: v for k, v in right_column.items() if k not in skip}
+    return normalize_column_for_compare(left_column) == normalize_column_for_compare(right_column)
 
 
 def validate_display_field_rules(current_entity, edited_entity, current_columns, edited_columns):
@@ -318,6 +441,10 @@ def build_column_operations(current_entity, edited_entity, available_names):
         edited_type = column.get("dataValueTypeName")
         if current_type and edited_type and current_type != edited_type:
             raise WorkflowError(f"Changing dataValueTypeName for existing column {name} is not supported")
+        effective_masked = _resolve_effective_masked(column)
+        if effective_masked is not None and column.get("masked") is None:
+            column = dict(column)
+            column["masked"] = effective_masked
         if not columns_equal(current_column, column):
             operations.append({
                 "operation": "updateColumn",
@@ -354,6 +481,8 @@ def build_create_columns(columns):
             item["default-value-source"] = column["defaultValueSource"]
         if "defaultValue" in column:
             item["default-value"] = column["defaultValue"]
+        if column.get("masked") is not None:
+            item["masked"] = bool(column["masked"])
         converted.append({key: value for key, value in item.items() if value is not None})
     return converted
 
@@ -392,6 +521,8 @@ def build_update_operations_payload(operations):
             item["default-value-source"] = column["defaultValueSource"]
         if "defaultValue" in column:
             item["default-value"] = column["defaultValue"]
+        if column.get("masked") is not None:
+            item["masked"] = bool(column["masked"])
         payload.append({key: value for key, value in item.items() if value is not None})
     return payload
 
@@ -601,13 +732,13 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
         for action in sync_plan["actions"]:
             actions_by_package.setdefault(action["packageName"], []).append(action)
         for package_name, package_actions in actions_by_package.items():
-            tool_response = client.call_tool_json("schema-sync", {
+            tool_response = call_tool_with_type_fallback(client, "schema-sync", {
                 "package-name": package_name,
                 "operations": [build_schema_sync_operation(action) for action in package_actions]
             })
             if tool_response.get("success") is not True:
-                error = tool_response.get("error") or {}
-                raise WorkflowError(error.get("message") or "schema-sync failed")
+                error_message = _extract_error_text(tool_response) or "schema-sync failed"
+                raise WorkflowError(error_message)
             current_document = append_operation(
                 current_document,
                 "schema-sync",
@@ -619,10 +750,10 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
             )
     else:
         for action in sync_plan["actions"]:
-            tool_response = client.call_tool_json(action["toolName"], action["arguments"])
+            tool_response = call_tool_with_type_fallback(client, action["toolName"], action["arguments"])
             if tool_response.get("success") is not True:
-                error = tool_response.get("error") or {}
-                raise WorkflowError(error.get("message") or f"{action['toolName']} failed")
+                error_message = _extract_error_text(tool_response) or f"{action['toolName']} failed"
+                raise WorkflowError(error_message)
             current_document = append_operation(
                 current_document,
                 action["toolName"],
