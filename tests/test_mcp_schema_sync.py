@@ -16,7 +16,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
-from scripts.mcp_schema_sync import ClioStdioClient, WorkflowError, apply_sync_plan, build_create_action, build_sync_plan, load_mcp_client
+from scripts.mcp_schema_sync import (
+    ClioStdioClient,
+    WorkflowError,
+    apply_sync_plan,
+    build_create_action,
+    build_sync_plan,
+    call_tool_with_type_fallback,
+    load_mcp_client,
+)
 
 
 def build_localizations(value):
@@ -161,6 +169,41 @@ def build_current_result_document_with_lookup_status():
                             "Name": {
                                 "caption": "Name",
                                 "dataValueTypeName": "Text"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+
+
+def build_current_result_document_with_secure_password(masked):
+    return normalize_result_document({
+        "success": True,
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "code": "UsrMyApp"
+        },
+        "packages": {
+            "UsrMyPkg": {
+                "uId": "22222222-2222-2222-2222-222222222222",
+                "isPrimary": True,
+                "entities": {
+                    "UsrMyEntity": {
+                        "uId": "33333333-3333-3333-3333-333333333333",
+                        "caption": "My Entity",
+                        "columns": {
+                            "UsrName": {
+                                "uId": "77777777-7777-7777-7777-777777777777",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            },
+                            "UsrPassword": {
+                                "uId": "99999999-9999-9999-9999-999999999999",
+                                "caption": "Password",
+                                "dataValueTypeName": "SecureText",
+                                "masked": bool(masked)
                             }
                         }
                     }
@@ -466,6 +509,74 @@ def build_edited_context_with_invalid_binary_default():
     }
 
 
+def build_edited_context_with_secure_password_column():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "entityUId": "33333333-3333-3333-3333-333333333333",
+                        "name": "UsrMyEntity",
+                        "caption": "My Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "UsrName",
+                                "caption": "Name",
+                                "dataValueTypeName": "Text"
+                            },
+                            {
+                                "name": "UsrPassword",
+                                "caption": "Password",
+                                "dataValueTypeName": "SecureText"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def build_new_entity_with_secure_password_column():
+    return {
+        "app": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "My App",
+            "code": "UsrMyApp"
+        },
+        "packages": [
+            {
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "name": "UsrMyPkg",
+                "isPrimary": True,
+                "entities": [
+                    {
+                        "name": "UsrSecretEntity",
+                        "caption": "Secret Entity",
+                        "kind": "entity",
+                        "columns": [
+                            {
+                                "name": "UsrPassword",
+                                "caption": "Password",
+                                "dataValueTypeName": "SecureText"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
 class FakeMcpClient:
     def __init__(self, context_document):
         self.context_document = context_document
@@ -631,6 +742,22 @@ class FakeMcpClientWithoutSchemaSync:
         if tool_name == "application-get-info":
             return self.context_document
         raise AssertionError(tool_name)
+
+
+class FakeUnsupportedTypeFallbackClient:
+    def __init__(self, unsupported_type="SecureText"):
+        self.calls = []
+        self.unsupported_type = unsupported_type
+
+    def call_tool_json(self, tool_name, arguments):
+        payload = copy.deepcopy(arguments)
+        self.calls.append((tool_name, payload))
+        if len(self.calls) == 1:
+            return {
+                "success": False,
+                "error": f"Unsupported type '{self.unsupported_type}'. Supported types: shorttext, text"
+            }
+        return {"success": True}
 
 
 class McpSchemaSyncTests(unittest.TestCase):
@@ -810,6 +937,54 @@ class McpSchemaSyncTests(unittest.TestCase):
                 ):
                     build_sync_plan(current_context, edited_context)
 
+    def test_build_sync_plan_does_not_force_masked_for_secure_text_update_columns(self):
+        current_context = build_current_result_document()["editableContext"]
+        sync_plan = build_sync_plan(current_context, build_edited_context_with_secure_password_column())
+
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+        operation = sync_plan["actions"][0]["arguments"]["operations"][0]
+        self.assertEqual(operation["action"], "add")
+        self.assertEqual(operation["column-name"], "UsrPassword")
+        self.assertEqual(operation["type"], "SecureText")
+        self.assertNotIn("masked", operation)
+
+    def test_build_sync_plan_does_not_force_masked_for_secure_text_create_columns(self):
+        current_context = build_current_result_document()["editableContext"]
+        current_context["packages"][0]["entities"] = []
+        sync_plan = build_sync_plan(current_context, build_new_entity_with_secure_password_column())
+
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "create-entity-schema")
+        create_column = sync_plan["actions"][0]["arguments"]["columns"][0]
+        self.assertEqual(create_column["name"], "UsrPassword")
+        self.assertEqual(create_column["type"], "SecureText")
+        self.assertNotIn("masked", create_column)
+
+    def test_build_sync_plan_does_not_force_masked_when_modifying_existing_secure_text_with_masked_false(self):
+        current_context = build_current_result_document_with_secure_password(masked=False)["editableContext"]
+        sync_plan = build_sync_plan(current_context, build_edited_context_with_secure_password_column())
+
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+        operation = sync_plan["actions"][0]["arguments"]["operations"][0]
+        self.assertEqual(operation["action"], "modify")
+        self.assertEqual(operation["column-name"], "UsrPassword")
+        self.assertEqual(operation["type"], "SecureText")
+        self.assertNotIn("masked", operation)
+
+    def test_build_sync_plan_does_not_force_masked_when_modifying_existing_secure_text_with_masked_true(self):
+        current_context = build_current_result_document_with_secure_password(masked=True)["editableContext"]
+        sync_plan = build_sync_plan(current_context, build_edited_context_with_secure_password_column())
+
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+        operation = sync_plan["actions"][0]["arguments"]["operations"][0]
+        self.assertEqual(operation["action"], "modify")
+        self.assertEqual(operation["column-name"], "UsrPassword")
+        self.assertEqual(operation["type"], "SecureText")
+        self.assertNotIn("masked", operation)
+
     def test_apply_sync_plan_refreshes_canonical_result_after_batch(self):
         result_document = build_current_result_document()
         fake_client = FakeMcpClient(build_current_result_document())
@@ -864,6 +1039,81 @@ class McpSchemaSyncTests(unittest.TestCase):
         refresh_calls = [call for call in fake_client.calls if call[0] == "application-get-info"]
         self.assertTrue(refresh_calls)
         self.assertEqual(refresh_calls[0][1], {"app-code": "UsrMyApp"})
+
+    def test_type_fallback_retries_update_entity_schema_with_shorttext_without_forcing_masked(self):
+        fake_client = FakeUnsupportedTypeFallbackClient("SecureText")
+        response = call_tool_with_type_fallback(
+            fake_client,
+            "update-entity-schema",
+            {
+                "package-name": "UsrPkg",
+                "schema-name": "UsrEntity",
+                "operations": [
+                    {
+                        "action": "add",
+                        "column-name": "UsrPassword",
+                        "type": "SecureText",
+                    }
+                ],
+            },
+        )
+        self.assertTrue(response["success"])
+        self.assertEqual(len(fake_client.calls), 2)
+        retry_call = fake_client.calls[1]
+        self.assertEqual(retry_call[0], "update-entity-schema")
+        retry_operation = retry_call[1]["operations"][0]
+        self.assertEqual(retry_operation["type"], "ShortText")
+        self.assertNotIn("masked", retry_operation)
+
+    def test_type_fallback_retries_schema_sync_update_entity_payload_without_forcing_masked(self):
+        fake_client = FakeUnsupportedTypeFallbackClient("SecureText")
+        response = call_tool_with_type_fallback(
+            fake_client,
+            "schema-sync",
+            {
+                "package-name": "UsrPkg",
+                "operations": [
+                    {
+                        "type": "update-entity",
+                        "schema-name": "UsrEntity",
+                        "update-operations": [
+                            {
+                                "action": "add",
+                                "column-name": "UsrPassword",
+                                "type": "SecureText",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertTrue(response["success"])
+        self.assertEqual(len(fake_client.calls), 2)
+        retry_call = fake_client.calls[1]
+        self.assertEqual(retry_call[0], "schema-sync")
+        retry_operation = retry_call[1]["operations"][0]["update-operations"][0]
+        self.assertEqual(retry_operation["type"], "ShortText")
+        self.assertNotIn("masked", retry_operation)
+
+    def test_type_fallback_does_not_retry_without_matching_rule(self):
+        fake_client = FakeUnsupportedTypeFallbackClient("GeoPoint")
+        response = call_tool_with_type_fallback(
+            fake_client,
+            "update-entity-schema",
+            {
+                "package-name": "UsrPkg",
+                "schema-name": "UsrEntity",
+                "operations": [
+                    {
+                        "action": "add",
+                        "column-name": "UsrLocation",
+                        "type": "GeoPoint",
+                    }
+                ],
+            },
+        )
+        self.assertFalse(response["success"])
+        self.assertEqual(len(fake_client.calls), 1)
 
     def test_clio_stdio_client_lists_tools_via_mcp_tools_list(self):
         with patch("scripts.mcp_client.ensure_supported_clio_version"), patch(
