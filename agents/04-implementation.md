@@ -29,6 +29,7 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 - `scripts/check-approval-gate.sh <AppName>` passes
 - `output/<AppName>/.creatio-env.json` exists and is valid
+- when the current run has a request URL, `.creatio-env.json.url` matches it exactly
 - `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
 - Agent 4 runs in the foreground
 
@@ -139,7 +140,9 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### 2. Verify MCP reachability
 
-- Read the environment from `.creatio-env.json`
+- Validate that `.creatio-env.json.url` matches the current request URL for this run
+- Only after that validation, read the environment from `.creatio-env.json`
+- If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
 - Call `tools/list` through `scripts/mcp_client.py`
 - Resolve the executable contract through `tool-contract-get`
 - Stop with blocker if required tools are missing or `tool-contract-get` fails

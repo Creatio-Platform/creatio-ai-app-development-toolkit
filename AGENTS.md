@@ -138,6 +138,10 @@ Run Gate P once at the start of each app workflow.
 - Before Gate P approval, do not run agents, do not run `clio`, and do not create or modify `output/<AppName>/`.
 - Persist Gate P in `.workflow-state/<AppName>/planning-state.json` with `scripts/write-planning-state.sh`.
 - Never treat a pre-existing `planning-state.json` as satisfying Gate P for a new user request. Always rewrite planning state from the current conversation's routing choice, understanding summary, and natural-language confirmation.
+- Never treat a pre-existing `output/<AppName>/.creatio-env.json` as satisfying Environment Setup for a new user request.
+- When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
+- Agent 1 must resolve the environment from the current request URL and rewrite `output/<AppName>/.creatio-env.json` for the current run before Agent 3 or Agent 4 reads it.
+- If `output/<AppName>/` already exists for the same app name but points to a different URL or environment, treat its runtime artifacts as stale for the current run.
 - Existing `.workflow-state/<AppName>/planning-state.json` or `output/<AppName>/` artifacts are internal implementation details. Do not surface them in business dialogue unless they create a real blocker that changes business intent.
 
 Technical question policy:
@@ -208,6 +212,10 @@ Approval-ready vs execution-ready rule:
 - Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
 - When page sync is required, the machine-readable page sync contract must be embedded in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, and may also be materialized as `page-sync-plan.json`.
 - App code, workflow-state collisions, and stale output artifacts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
+- A stale `output/<AppName>/.creatio-env.json` must never rebind a new run to an old site.
+- Before any internal run that depends on `output/<AppName>/.creatio-env.json`, verify that its `url` matches the current request URL or the runtime URL resolved by Agent 1 for the current conversation.
+- If that URL does not match, stop using the file, rerun Agent 1, and rewrite downstream environment references for the current run instead of patching around the mismatch.
+- Do not infer the current environment from `plan.md`, `technical-annex.md`, `page-sync-plan.json`, `build_pages.py`, or previous report artifacts. Those files may only consume the environment resolved by Agent 1 for the current run.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.

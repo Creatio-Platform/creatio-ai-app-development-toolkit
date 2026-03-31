@@ -46,6 +46,7 @@ Fallback (if bundle unavailable or stale):
 - Implementation or technical execution detail was explicitly requested.
 - `scripts/check-planning-gate.sh <AppName>` passes.
 - `scripts/check-approval-gate.sh <AppName>` passes.
+- If runtime inputs are already available for the current run, `output/<AppName>/.creatio-env.json` exists and its `url` matches the current request URL.
 
 ## Planning Goals
 
@@ -67,6 +68,8 @@ Validate `request-spec.json` and `workflow-state.json`:
 - runtime inputs are either present or explicitly deferred
 - the approved requirements follow the BA-style structure from Agent 2
 - the approved requirements are not merely a generic planning wrapper with non-BA headings
+- when runtime inputs are available, `.creatio-env.json` points to the same URL as the current request for this run
+- if `.creatio-env.json` exists with a different URL, stop and rerun Agent 1 instead of reusing stale runtime artifacts
 
 If any of these checks fail, stop and report the blocker.
 
