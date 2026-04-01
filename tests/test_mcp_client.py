@@ -26,13 +26,13 @@ def build_contract_index(*contracts):
     return {contract["name"]: contract for contract in contracts}
 
 
-def build_contract(name, required=None, properties=None, aliases=None, any_of=None):
+def build_contract(name, required=None, properties=None, aliases=None, any_of=None, validators=None):
     return {
         "name": name,
         "input-schema": {
             "required": required or [],
             "properties": properties or [],
-            "validators": [],
+            "validators": validators or [],
             "any-of": any_of or [],
         },
         "aliases": aliases or [],
@@ -73,6 +73,8 @@ PAGE_LIST_CONTRACT = build_contract(
     "page-list",
     properties=[
         field("package-name", "string", "Package name to inspect."),
+        field("app-code", "string", "Installed application code to inspect."),
+        field("search-pattern", "string", "Optional page schema name pattern."),
         field("environment-name", "string", "Registered clio environment name."),
         field("uri", "string", "Explicit Creatio URL."),
         field("login", "string", "Explicit login."),
@@ -83,6 +85,14 @@ PAGE_LIST_CONTRACT = build_contract(
         alias("environment-name", "environmentName", "Use 'environment-name' instead of 'environmentName'."),
     ],
     any_of=[["environment-name"], ["uri", "login", "password"]],
+    validators=[
+        {
+            "name": "mutually-exclusive-fields",
+            "code": "invalid-workflow-shape",
+            "fields": ["package-name", "app-code"],
+            "context": "page-list accepts package-name or app-code, not both.",
+        }
+    ],
 )
 
 SCHEMA_SYNC_CONTRACT = build_contract(
@@ -252,6 +262,19 @@ class McpClientTests(unittest.TestCase):
         self.assertEqual(result["data"]["error"]["code"], "invalid-request")
         self.assertIn("Missing required parameter 'environment-name'", result["raw"])
 
+    def test_call_mcp_tool_rejects_unknown_parameter_before_execution(self):
+        contract_index = build_contract_index(PAGE_LIST_CONTRACT)
+        fake_client = SimpleNamespace(call_tool=Mock(side_effect=AssertionError("should not execute tool")))
+        with patch("scripts.mcp_client._get_tool_contract_index", return_value=contract_index), patch(
+            "scripts.mcp_client._get_shared_client",
+            return_value=fake_client,
+        ):
+            result = call_mcp_tool("page-list", {"environment-name": "local", "appCode": "UsrTest"})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "invalid-request")
+        self.assertIn("Unknown parameter 'appCode'", result["raw"])
+        fake_client.call_tool.assert_not_called()
+
     def test_call_mcp_tool_returns_tool_contract_unavailable(self):
         with patch("scripts.mcp_client._get_tool_contract_index", side_effect=RuntimeError("metadata unavailable")):
             result = call_mcp_tool("schema-sync", {"environment-name": "local"})
@@ -291,6 +314,18 @@ class ParamValidationTests(unittest.TestCase):
         self.assertTrue(any("connection parameters" in error for error in errors))
         self.assertFalse(any("package-name" in error for error in errors))
 
+    def test_page_list_accepts_search_only_when_connection_is_present(self):
+        errors = _validate_params("page-list", {"environment-name": "local", "search-pattern": "UsrTodo*"}, self.contract_index)
+        self.assertEqual(errors, [])
+
+    def test_page_list_rejects_package_name_and_app_code_together(self):
+        errors = _validate_params(
+            "page-list",
+            {"environment-name": "local", "package-name": "UsrTodo", "app-code": "UsrTodo"},
+            self.contract_index,
+        )
+        self.assertTrue(any("package-name or app-code" in error for error in errors))
+
     def test_validation_uses_server_declared_types(self):
         errors = _validate_params("page-sync", {
             "environment-name": "local",
@@ -322,6 +357,10 @@ class ParamValidationTests(unittest.TestCase):
         }, self.contract_index)
         self.assertTrue(any("environmentName" in error for error in errors))
         self.assertTrue(any("packageName" in error for error in errors))
+
+    def test_unknown_parameter_rejection_uses_normalized_contract_fields(self):
+        errors = _validate_params("page-list", {"environment-name": "local", "appCode": "UsrTodo"}, self.contract_index)
+        self.assertTrue(any("Unknown parameter 'appCode'" in error for error in errors))
 
 
 if __name__ == "__main__":

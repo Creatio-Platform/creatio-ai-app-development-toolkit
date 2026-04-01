@@ -383,6 +383,98 @@ def _value_is_missing(value) -> bool:
     return value is None or value == ""
 
 
+def _is_parameter_supplied(arguments: dict, name: str) -> bool:
+    return name in arguments and not _value_is_missing(arguments.get(name))
+
+
+def _collect_allowed_param_names(contract_spec: dict) -> set[str]:
+    input_schema = contract_spec.get("input-schema")
+    if not isinstance(input_schema, dict):
+        return set()
+    names = set()
+    for param in input_schema.get("required") or []:
+        if isinstance(param, str) and param:
+            names.add(param)
+    for group in input_schema.get("any-of") or []:
+        if not isinstance(group, list):
+            continue
+        for param in group:
+            if isinstance(param, str) and param:
+                names.add(param)
+    for prop in input_schema.get("properties") or []:
+        if isinstance(prop, dict):
+            name = prop.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+    for validator in input_schema.get("validators") or []:
+        if not isinstance(validator, dict):
+            continue
+        field = validator.get("field")
+        if isinstance(field, str) and field:
+            names.add(field)
+        for name in validator.get("fields") or []:
+            if isinstance(name, str) and name:
+                names.add(name)
+    for alias in contract_spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        canonical_name = alias.get("canonical-name")
+        if isinstance(canonical_name, str) and canonical_name:
+            names.add(canonical_name)
+    return names
+
+
+def _normalize_arguments_with_aliases(arguments: dict, contract_spec: dict) -> tuple[dict, list[str]]:
+    alias_index = {}
+    for alias in contract_spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        if alias.get("scope") != "parameter":
+            continue
+        alias_name = alias.get("alias")
+        if isinstance(alias_name, str) and alias_name:
+            alias_index[alias_name] = alias
+    normalized = {}
+    errors = []
+    for key, value in arguments.items():
+        alias = alias_index.get(key)
+        if alias is None:
+            normalized[key] = value
+            continue
+        canonical_name = alias.get("canonical-name")
+        message = alias.get("message") or f"Use '{canonical_name}' instead of '{key}'."
+        if alias.get("status") == "rejected":
+            errors.append(f"Wrong parameter '{key}': {message}")
+            continue
+        if not isinstance(canonical_name, str) or not canonical_name:
+            errors.append(f"Wrong parameter '{key}': {message}")
+            continue
+        if canonical_name in normalized:
+            errors.append(f"Duplicate parameter '{canonical_name}' after alias normalization from '{key}'.")
+            continue
+        if canonical_name in arguments and canonical_name != key:
+            errors.append(f"Provide only '{canonical_name}', not both '{canonical_name}' and alias '{key}'.")
+            continue
+        normalized[canonical_name] = value
+    return normalized, errors
+
+
+def _validate_unknown_params(tool_name: str, arguments: dict, contract_spec: dict) -> list[str]:
+    allowed = _collect_allowed_param_names(contract_spec)
+    if not allowed:
+        return []
+    errors = []
+    for key in arguments:
+        if key in allowed:
+            continue
+        suggestions = difflib.get_close_matches(key, sorted(allowed), n=3, cutoff=0.45)
+        message = f"Unknown parameter '{key}' for tool '{tool_name}'."
+        if suggestions:
+            message += " Did you mean " + ", ".join(f"'{item}'" for item in suggestions) + "?"
+        errors.append(message)
+    return errors
+
+
 def _validate_field_type(field_name: str, expected_type: str, value) -> list[str]:
     if value is None:
         return []
@@ -399,25 +491,41 @@ def _validate_field_type(field_name: str, expected_type: str, value) -> list[str
     return []
 
 
-def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+def _apply_validator(validator: dict, arguments: dict) -> list[str]:
+    name = validator.get("name")
+    fields = [field for field in validator.get("fields") or [] if isinstance(field, str) and field]
+    if name == "forbid-fields":
+        present = [field for field in fields if _is_parameter_supplied(arguments, field)]
+        if not present:
+            return []
+        message = "Parameters " + ", ".join(f"'{field}'" for field in present) + " are not allowed for this request."
+        context = validator.get("context")
+        if context:
+            message += f" {context}"
+        return [message]
+    if name == "mutually-exclusive-fields":
+        present = [field for field in fields if _is_parameter_supplied(arguments, field)]
+        if len(present) <= 1:
+            return []
+        context = validator.get("context")
+        if isinstance(context, str) and context:
+            return [context]
+        return ["Provide only one of " + ", ".join(f"'{field}'" for field in present) + "."]
+    return []
+
+
+def _normalize_and_validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> tuple[dict, list[str]]:
     contract_index = contract_index or {}
     spec = contract_index.get(tool_name)
     if not spec:
-        return []
+        return dict(arguments), []
     input_schema = spec.get("input-schema")
     if not isinstance(input_schema, dict):
-        return []
-    errors = []
-    for alias in spec.get("aliases") or []:
-        if not isinstance(alias, dict):
-            continue
-        if alias.get("scope") != "parameter" or alias.get("status") != "rejected":
-            continue
-        alias_name = alias.get("alias")
-        if isinstance(alias_name, str) and alias_name in arguments:
-            errors.append(f"Wrong parameter '{alias_name}': {alias.get('message')}")
+        return dict(arguments), []
+    normalized_arguments, errors = _normalize_arguments_with_aliases(arguments, spec)
+    errors.extend(_validate_unknown_params(tool_name, normalized_arguments, spec))
     for param in input_schema.get("required") or []:
-        if param not in arguments or _value_is_missing(arguments.get(param)):
+        if param not in normalized_arguments or _value_is_missing(normalized_arguments.get(param)):
             prop = _find_property(spec, param) or {}
             hint = prop.get("description") or ""
             message = f"Missing required parameter '{param}'"
@@ -426,7 +534,7 @@ def _validate_params(tool_name: str, arguments: dict, contract_index: dict | Non
             errors.append(message)
     any_of_groups = input_schema.get("any-of") or []
     if any_of_groups and not any(
-        all(param in arguments and not _value_is_missing(arguments.get(param)) for param in group)
+        all(param in normalized_arguments and not _value_is_missing(normalized_arguments.get(param)) for param in group)
         for group in any_of_groups
     ):
         group_descriptions = []
@@ -440,10 +548,17 @@ def _validate_params(tool_name: str, arguments: dict, contract_index: dict | Non
         if not isinstance(prop, dict):
             continue
         name = prop.get("name")
-        if not isinstance(name, str) or name not in arguments:
+        if not isinstance(name, str) or name not in normalized_arguments:
             continue
-        errors.extend(_validate_field_type(name, prop.get("type"), arguments.get(name)))
-    return errors
+        errors.extend(_validate_field_type(name, prop.get("type"), normalized_arguments.get(name)))
+    for validator in input_schema.get("validators") or []:
+        if isinstance(validator, dict):
+            errors.extend(_apply_validator(validator, normalized_arguments))
+    return normalized_arguments, errors
+
+
+def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+    return _normalize_and_validate_params(tool_name, arguments, contract_index)[1]
 
 
 def _build_unknown_tool_result(tool_name: str, contract_index: dict) -> dict:
@@ -515,15 +630,15 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
         }
     if tool_name not in contract_index:
         return _build_unknown_tool_result(tool_name, contract_index)
-    validation_errors = _validate_params(tool_name, arguments, contract_index)
+    normalized_arguments, validation_errors = _normalize_and_validate_params(tool_name, arguments, contract_index)
     if validation_errors:
         return _build_validation_result(validation_errors)
     client = _get_shared_client()
     try:
-        return client.call_tool(tool_name, arguments, timeout)
+        return client.call_tool(tool_name, normalized_arguments, timeout)
     except Exception:
         client.close()
-        return client.call_tool(tool_name, arguments, timeout)
+        return client.call_tool(tool_name, normalized_arguments, timeout)
 
 
 def list_mcp_tools(timeout: int = 120) -> dict:

@@ -58,7 +58,7 @@ def build_current_result_document():
         "success": True,
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": {
             "UsrMyPkg": {
@@ -109,7 +109,7 @@ def build_current_result_document_with_name():
         "success": True,
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": {
             "UsrMyPkg": {
@@ -138,7 +138,7 @@ def build_current_result_document_with_lookup_status():
         "success": True,
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": {
             "UsrMyPkg": {
@@ -183,7 +183,7 @@ def build_current_result_document_with_secure_password(masked):
         "success": True,
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": {
             "UsrMyPkg": {
@@ -218,7 +218,7 @@ def build_edited_context():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -262,7 +262,7 @@ def build_edited_context_with_duplicate_usrname():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -299,7 +299,7 @@ def build_invalid_edited_context():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -337,7 +337,7 @@ def build_edited_context_with_default_update():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -390,7 +390,7 @@ def build_edited_context_with_caption_update():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -422,7 +422,7 @@ def build_edited_context_with_invalid_lookup_default():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -475,7 +475,7 @@ def build_edited_context_with_invalid_binary_default():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -514,7 +514,7 @@ def build_edited_context_with_secure_password_column():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {
@@ -551,7 +551,7 @@ def build_new_entity_with_secure_password_column():
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "My App",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": [
             {

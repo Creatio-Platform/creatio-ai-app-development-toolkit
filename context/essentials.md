@@ -13,7 +13,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **MCP-Orchestrated Runtime**
 - This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
-- The raw application context returned by `application-create` or `application-get-info` is a flat runtime payload such as `success`, `package-u-id`, `package-name`, `entities`, optional `canonical-main-entity-name`, and `error`
+- The raw application context returned by `application-create` or `application-get-info` is a flat runtime payload whose exact fields and selectors must be read from `tool-contract-get`
 - `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
 - After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
 
@@ -170,7 +170,7 @@ Critical patterns:
 - Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable
 - Do not create a second `BaseEntity` for the same primary records already represented by the template-created section entity
 - `application-create` stays scalar-only; localized captions belong to follow-up schema tools
-- When `canonical-main-entity-name` is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when the canonical field is absent
+- When server-advertised canonical main-entity metadata is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when that metadata is absent
 - Treat `editableContext` as a local helper projection, not as the primary MCP response contract
 
 ### Working With MCP Tools

@@ -31,7 +31,7 @@ def build_result_document():
     return normalize_result_document({
         "success": True,
         "app": {
-            "code": "UsrTodoList"
+            "app-code": "UsrTodoList"
         },
         "packageUId": "22222222-2222-2222-2222-222222222222",
         "packageName": "UsrTodoList",
@@ -148,8 +148,7 @@ class FakePageClient:
                 "packageName": pkg,
                 "pages": [
                     {
-                        "name": name,
-                        "schemaName": name,
+                        "schema-name": name,
                         "uId": page["uId"],
                         "packageName": page["packageName"],
                         "parentSchemaName": page["parentSchemaName"]
