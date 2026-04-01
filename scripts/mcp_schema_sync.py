@@ -647,9 +647,9 @@ def build_sync_plan(current_context, edited_context):
 
 def resolve_app_selector(result_document):
     app = result_document.get("app") or {}
-    if app.get("code"):
+    if app.get("app-code"):
         return {
-            "app-code": app["code"]
+            "app-code": app["app-code"]
         }
     if app.get("id"):
         return {

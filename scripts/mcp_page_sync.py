@@ -171,7 +171,7 @@ def build_page_index(page_list_response):
     for page in pages:
         if not isinstance(page, dict):
             continue
-        page_name = page.get("name") or page.get("schemaName")
+        page_name = page.get("schema-name") or page.get("schemaName")
         if page_name:
             index[page_name] = copy.deepcopy(page)
     return index
@@ -196,8 +196,6 @@ def merge_page_metadata(discovered_page, page_response):
         if key in ("body", "raw"):
             continue
         merged[key] = copy.deepcopy(value)
-    if "schemaName" not in merged and discovered_page.get("name"):
-        merged["schemaName"] = discovered_page["name"]
     if "bodyLength" not in merged and isinstance(page_response.get("raw", {}).get("body"), str):
         merged["bodyLength"] = len(page_response["raw"]["body"])
     for meta_key in ("schemaUId", "packageName", "packageUId", "parentSchemaName"):

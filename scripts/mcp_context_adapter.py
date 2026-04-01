@@ -197,7 +197,7 @@ def build_app_context(document):
     if app_name:
         app["name"] = app_name
     if app_code:
-        app["code"] = app_code
+        app["app-code"] = app_code
     return app
 
 

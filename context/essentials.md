@@ -13,7 +13,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **MCP-Orchestrated Runtime**
 - This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
-- The raw application context returned by `application-create` or `application-get-info` is a flat runtime payload such as `success`, `package-u-id`, `package-name`, `entities`, optional `canonical-main-entity-name`, and `error`
+- The raw application context returned by `application-create` or `application-get-info` is a flat runtime payload whose exact fields and selectors must be read from `tool-contract-get`
 - `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
 - After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
 
@@ -33,7 +33,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
-- For lookup-backed schema defaults, use the seeded row GUID in the stored default value
+- For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
 - Binary-like columns do not support constant defaults
 
 **Data Binding And Schema Inspection**
@@ -41,7 +41,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
 - `create-data-binding-db` persists bindings in DB and installs data immediately
 - `upsert-data-binding-row-db` updates rows only in an already existing binding
-- For initial lookup seeding, prefer `schema-sync` inline `seed-rows`; use explicit binding tools only as fallback
+- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules
@@ -170,7 +170,7 @@ Critical patterns:
 - Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable
 - Do not create a second `BaseEntity` for the same primary records already represented by the template-created section entity
 - `application-create` stays scalar-only; localized captions belong to follow-up schema tools
-- When `canonical-main-entity-name` is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when the canonical field is absent
+- When server-advertised canonical main-entity metadata is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when that metadata is absent
 - Treat `editableContext` as a local helper projection, not as the primary MCP response contract
 
 ### Working With MCP Tools

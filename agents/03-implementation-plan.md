@@ -125,7 +125,7 @@ Rules:
 - Model enum-like business values as lookup entities first.
 - Preserve semantic text field types in schema plans: use `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields instead of downgrading them to generic `ShortText`.
 - For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
-- For entity schema payloads, plan `title-localizations` and `description-localizations` as localization maps with an `en-US` entry; legacy scalar `title` and `description` fields are rejected by MCP.
+- Do not encode executable schema payload field names in the plan. Resolve them at runtime through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
 ### Schema Sync Plan
@@ -133,8 +133,7 @@ Rules:
 - Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
-- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
-- Each `seed-rows` entry must use the shape `{"values": {"Name": "...", "Description": ""}}` — clio auto-generates `Id` when absent. Flat objects such as `{"Name": "..."}` (without the `values` wrapper) are rejected by clio and produce an error.
+- Prefer batched lookup seeding inside the canonical schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
@@ -146,9 +145,7 @@ Rules:
 
 - A requirement such as `UsrStatus defaults to New` is incomplete until the plan names the field, the default value, and the step that applies it.
 - Seed data alone does not satisfy a default requirement.
-- For lookup-backed defaults, the plan must choose one of:
-  1. `default-value` with `default-value-source: "Const"` set to the seeded row GUID on the column's `update-entity` operation in `schema-sync`
-  2. A `crt.CreateRecordRequest` handler in the FormPage `SCHEMA_HANDLERS` block that sets the field value on new-record open
+- For lookup-backed defaults, the plan must choose an executable mechanism resolved at runtime through the live contract or an explicit page-side handler when the default belongs to page behavior.
 - The chosen mechanism must be included in the page-sync plan and executed. It must never be deferred as `manualCheckPending`.
 
 ### Page Sync Plan
@@ -195,15 +192,9 @@ When page sync is required:
 ### Validation Rules
 
 - Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
-- Resolve executable parameter names, aliases, and required fields from `tool-contract-get` instead of hard-coding them in the plan.
-- Keep `operations` / `update-operations` as native arrays.
-- For fallback `create-data-binding-db`, prefer omitting `binding-name` for default lookup seeding so the binding defaults to `<schema-name>`; include `binding-name` only when a distinct binding artifact is explicitly required. Always pass `rows` as a JSON string of `[{"values": {...}}]`.
-- Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
+- Resolve executable parameter names, aliases, defaults, and nested request shapes from `tool-contract-get` instead of hard-coding them in the plan.
 - Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
 - Never treat seeded rows as implementation of a default rule.
-- For `create-lookup`, `create-entity-schema`, and `update-operations` with `action: add`, `title-localizations` must include a non-empty `en-US` value after trim.
-- If a business title is missing, derive a non-empty fallback from the schema/column code and place it in the `en-US` localization entry instead of sending blank text.
-- For `action: modify`, never send blank/whitespace localization values; omit the localization fields to preserve the existing caption.
 
 ## Plan Output
 

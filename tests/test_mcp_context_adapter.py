@@ -14,7 +14,7 @@ def build_short_context():
         "success": True,
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
-            "code": "UsrMyApp"
+            "app-code": "UsrMyApp"
         },
         "packages": {
             "UsrMyPkg": {
@@ -129,7 +129,7 @@ class McpContextAdapterTests(unittest.TestCase):
         self.assertEqual(normalized["operationLog"], [])
         self.assertEqual(normalized["pageEvidence"], {})
         editable_context = normalized["editableContext"]
-        self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
+        self.assertEqual(editable_context["app"]["app-code"], "UsrMyApp")
         self.assertEqual(len(editable_context["packages"]), 1)
         package = editable_context["packages"][0]
         self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")
@@ -158,7 +158,7 @@ class McpContextAdapterTests(unittest.TestCase):
         normalized = normalize_result_document(build_flat_short_context())
         self.assertEqual(normalized["contractType"], "short")
         editable_context = normalized["editableContext"]
-        self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
+        self.assertEqual(editable_context["app"]["app-code"], "UsrMyApp")
         self.assertEqual(len(editable_context["packages"]), 1)
         package = editable_context["packages"][0]
         self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")

@@ -40,7 +40,7 @@ def summarize_response(response):
         "success": ("success",),
         "packageUId": ("packageUId", "package-u-id"),
         "packageName": ("packageName", "package-name"),
-        "schemaName": ("schemaName", "schema-name", "name"),
+        "schemaName": ("schemaName", "schema-name"),
         "bodyLength": ("bodyLength", "body-length"),
         "dryRun": ("dryRun", "dry-run"),
         "count": ("count",),
@@ -70,9 +70,9 @@ def summarize_response(response):
     if isinstance(pages, list):
         summary["pages"] = [
             {
-                key: copy.deepcopy(page[key])
-                for key in ("name", "uId", "packageName")
-                if isinstance(page, dict) and key in page
+                target_key: copy.deepcopy(page[source_key])
+                for target_key, source_key in (("schemaName", "schema-name"), ("uId", "uId"), ("packageName", "packageName"))
+                if isinstance(page, dict) and source_key in page
             }
             for page in pages
             if isinstance(page, dict)

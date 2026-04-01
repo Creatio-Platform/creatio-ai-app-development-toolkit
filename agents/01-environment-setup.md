@@ -103,24 +103,17 @@ If the developer did **not** provide login and/or password — **ask for them**.
 
 The `<env_name>` should be a short, descriptive name derived from the URL (e.g., `dev-crm`, `prod-sales`).
 
-### 4. Detect IsNetCore
+### 4. Auto-detect runtime during registration
 
-Creatio instances can be .NET Core or .NET Framework. Detect this automatically:
+Creatio instances can be `.NET Core / NET8` or `.NET Framework`.
+Do not detect this in ADAC. Let `clio reg-web-app` resolve it and persist the correct `IsNetCore` value:
 
-1. **Try .NET Core first** (most common for modern Creatio):
-   ```bash
-   clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i true
-   clio healthcheck -e <env_name>
-   ```
-2. If healthcheck **succeeds** — use `isNetCore: true`.
-3. If healthcheck **fails** — fall back to .NET Framework:
-   ```bash
-   clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i false
-   clio healthcheck -e <env_name>
-   ```
-4. Save the detected `isNetCore` value (`true` or `false`) for the env file.
+```bash
+clio reg-web-app <env_name> -u <url> -l <login> -p <password>
+```
 
-**Critical:** Getting `isNetCore` wrong causes page-get/page-update MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
+If `clio reg-web-app` cannot determine the runtime automatically, treat that as a blocker and stop before app creation.
+Do not retry the same registration with speculative `-i true` / `-i false` toggles unless the developer explicitly asks for a manual override.
 
 ### 5. Verify the connection
 
@@ -144,6 +137,7 @@ Create or overwrite the file `output/<AppName>/.creatio-env.json` from the curre
 ```
 
 Replace `true` with `false` if .NET Framework was detected in Step 4.
+Read the resolved value from clio settings after registration. Do not infer it inside ADAC.
 
 If the user provided a custom clio path at startup, add `"mcpCommand": "<custom clio command>"` to `.creatio-env.json`.
 For the standard global install, omit `mcpCommand` and let the runtime resolve `clio` from PATH.
@@ -154,6 +148,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 |-------|--------|
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
+| `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |

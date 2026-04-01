@@ -58,21 +58,9 @@ Seeds rows for lookup entities such as statuses, priorities, or categories.
 
 Key invariants:
 
-- preserve the lookup `Name` field as the human title; clio auto-generates `Id` when absent
 - do not treat seed rows alone as a default-selection implementation
-- prefer inline `schema-sync` `seed-rows` when the lookup is already part of the same schema batch; clio automatically materializes the binding descriptor in the package so seed data travels with the package on pull-pkg / push-pkg
+- prefer batched lookup seeding when the lookup is already part of the same schema batch
 - `create-data-binding-db` is not required for standard lookup seeding; use it only for custom filters, cross-package references, or standalone binding artifacts
-
-Required row shape:
-
-```json
-[
-  {"values": {"Name": "New", "Description": ""}},
-  {"values": {"Name": "In Progress", "Description": ""}}
-]
-```
-
-**Warning:** flat objects such as `{"Name": "New"}` (without the `values` wrapper) are rejected by clio with an error.
 
 ## Binding Identity Rules
 

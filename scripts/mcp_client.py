@@ -313,220 +313,6 @@ def _is_execution_error_message(message) -> bool:
     message_type = message.get("message-type") or message.get("type")
     return isinstance(message_type, str) and message_type.lower() == "error"
 
-_TOOL_REQUIRED_PARAMS = {
-    "application-create": {
-        "required": ["environment-name", "code", "name", "template-code", "icon-background"],
-        "hints": {
-            "template-code": "Technical template code: 'AppFreedomUI' or 'AppFreedomUIv2' (NOT display names like 'Records & business processes')",
-            "icon-background": "Hex color string, e.g. '#1F5F8B'",
-            "environment-name": "Registered clio environment name, e.g. 'local'",
-            "code": "Application code (e.g. 'UsrMyApp'). Use 'code', NOT 'app-code'",
-            "name": "Display name (e.g. 'My App'). Use 'name', NOT 'app-name'",
-        },
-        "reject": {
-            "app-code": "Use 'code' instead of 'app-code'",
-            "app-name": "Use 'name' instead of 'app-name'",
-        },
-    },
-    "create-lookup": {
-        "required": ["environment-name", "package-name", "schema-name", "title"],
-        "hints": {
-            "environment-name": "Registered clio environment name, e.g. 'local'",
-            "package-name": "Package string name (NOT a GUID)",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-        },
-    },
-    "create-entity-schema": {
-        "required": ["environment-name", "package-name", "schema-name", "title"],
-        "hints": {},
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-            "parentSchemaName": "Use 'parent-schema-name' (kebab-case) instead of 'parentSchemaName'",
-            "extendParent": "Use 'extend-parent' (kebab-case) instead of 'extendParent'",
-        },
-    },
-    "update-entity-schema": {
-        "required": ["environment-name", "package-name", "schema-name", "operations"],
-        "hints": {
-            "operations": "Array of {action, column-name, type, title, ...} objects",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-        },
-    },
-    "schema-sync": {
-        "required": ["environment-name", "package-name", "operations"],
-        "hints": {
-            "operations": "Array of {type, schema-name, ...} objects. Types: create-lookup, create-entity, update-entity",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-        },
-    },
-    "page-sync": {
-        "required": ["environment-name", "pages"],
-        "hints": {
-            "pages": "Array of {schema-name, body, resources?} objects. resources is optional JSON string for #ResourceString(key)# macros.",
-        },
-    },
-    "application-get-info": {
-        "required": ["environment-name"],
-        "hints": {
-            "app-code": "Application code (NOT 'application-code' or 'code')",
-            "app-id": "Application identifier GUID when app-code is not available",
-        },
-        "any_of": [["app-code"], ["app-id"]],
-    },
-    "application-get-list": {
-        "required": ["environment-name"],
-        "hints": {},
-    },
-    "page-get": {
-        "required": ["schema-name"],
-        "hints": {
-            "environment-name": "Registered clio environment name, e.g. 'local'",
-            "schema-name": "e.g. 'UsrMyApp_FormPage' or 'UsrMyApp_ListPage'",
-            "uri": "Explicit Creatio URL, e.g. 'http://localhost:5001'",
-            "login": "Creatio login for explicit connection",
-            "password": "Creatio password for explicit connection",
-        },
-        "any_of": [["environment-name"], ["uri", "login", "password"]],
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-        },
-    },
-    "page-update": {
-        "required": ["schema-name", "body"],
-        "hints": {
-            "environment-name": "Registered clio environment name, e.g. 'local'",
-            "schema-name": "e.g. 'UsrMyApp_FormPage'",
-            "body": "Full page body string with markers",
-            "resources": "Optional. JSON string of {key: value} for #ResourceString(key)# macros. Usr-prefixed keys auto-derive if omitted.",
-            "uri": "Explicit Creatio URL, e.g. 'http://localhost:5001'",
-            "login": "Creatio login for explicit connection",
-            "password": "Creatio password for explicit connection",
-        },
-        "any_of": [["environment-name"], ["uri", "login", "password"]],
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-            "dryRun": "Use 'dry-run' (kebab-case) instead of 'dryRun'",
-        },
-    },
-    "page-list": {
-        "required": [],
-        "hints": {
-            "package-name": "Package name to list pages from",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "searchPattern": "Use 'search-pattern' (kebab-case) instead of 'searchPattern'",
-        },
-    },
-    "component-info": {
-        "required": [],
-        "hints": {
-            "component-type": "Optional Freedom UI component type, e.g. 'crt.TabContainer'. Omit it or use 'list' to return the grouped catalog.",
-            "search": "Optional keyword filter for list mode, e.g. 'tab'",
-        },
-        "reject": {
-            "componentType": "Use 'component-type' (kebab-case) instead of 'componentType'",
-        },
-    },
-    "application-delete": {
-        "required": ["app-name"],
-        "hints": {
-            "app-name": "Application name or code to uninstall, e.g. 'UsrMyApp'",
-            "environment-name": "Registered clio environment name, e.g. 'local'",
-            "uri": "Explicit Creatio URL, e.g. 'http://localhost:5001'",
-            "login": "Creatio login for explicit connection",
-            "password": "Creatio password for explicit connection",
-        },
-        "any_of": [["environment-name"], ["uri", "login", "password"]],
-    },
-    "create-data-binding-db": {
-        "required": ["environment-name", "package-name", "schema-name"],
-        "hints": {
-            "environment-name": "Registered clio environment name, e.g. 'local'",
-            "package-name": "Package string name (NOT a GUID)",
-            "schema-name": "Entity schema name, e.g. 'UsrMyEntityStatus'",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-        },
-    },
-    "upsert-data-binding-row-db": {
-        "required": ["environment-name", "package-name", "binding-name", "values"],
-        "hints": {
-            "values": "JSON object mapping column names to values",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "bindingName": "Use 'binding-name' (kebab-case) instead of 'bindingName'",
-        },
-    },
-    "remove-data-binding-row-db": {
-        "required": ["environment-name", "package-name", "binding-name", "key-value"],
-        "hints": {
-            "key-value": "Value of the key column to identify the row to remove",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "bindingName": "Use 'binding-name' (kebab-case) instead of 'bindingName'",
-            "keyValue": "Use 'key-value' (kebab-case) instead of 'keyValue'",
-        },
-    },
-    "get-entity-schema-properties": {
-        "required": ["environment-name", "package-name", "schema-name"],
-        "hints": {},
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-        },
-    },
-    "get-entity-schema-column-properties": {
-        "required": ["environment-name", "package-name", "schema-name", "column-name"],
-        "hints": {},
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-            "columnName": "Use 'column-name' (kebab-case) instead of 'columnName'",
-        },
-    },
-    "modify-entity-schema-column": {
-        "required": ["environment-name", "package-name", "schema-name", "action", "column-name"],
-        "hints": {
-            "action": "Column action: 'add', 'modify', or 'remove'",
-        },
-        "reject": {
-            "environmentName": "Use 'environment-name' (kebab-case) instead of 'environmentName'",
-            "packageName": "Use 'package-name' (kebab-case) instead of 'packageName'",
-            "schemaName": "Use 'schema-name' (kebab-case) instead of 'schemaName'",
-            "columnName": "Use 'column-name' (kebab-case) instead of 'columnName'",
-            "referenceSchemaName": "Use 'reference-schema-name' (kebab-case) instead of 'referenceSchemaName'",
-            "defaultValue": "Use 'default-value' (kebab-case) instead of 'defaultValue'",
-            "defaultValueSource": "Use 'default-value-source' (kebab-case) instead of 'defaultValueSource'",
-        },
-    },
-}
-
 
 def _is_tool_payload_success(data, top_level_is_error) -> bool:
     if top_level_is_error:
@@ -597,6 +383,98 @@ def _value_is_missing(value) -> bool:
     return value is None or value == ""
 
 
+def _is_parameter_supplied(arguments: dict, name: str) -> bool:
+    return name in arguments and not _value_is_missing(arguments.get(name))
+
+
+def _collect_allowed_param_names(contract_spec: dict) -> set[str]:
+    input_schema = contract_spec.get("input-schema")
+    if not isinstance(input_schema, dict):
+        return set()
+    names = set()
+    for param in input_schema.get("required") or []:
+        if isinstance(param, str) and param:
+            names.add(param)
+    for group in input_schema.get("any-of") or []:
+        if not isinstance(group, list):
+            continue
+        for param in group:
+            if isinstance(param, str) and param:
+                names.add(param)
+    for prop in input_schema.get("properties") or []:
+        if isinstance(prop, dict):
+            name = prop.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+    for validator in input_schema.get("validators") or []:
+        if not isinstance(validator, dict):
+            continue
+        field = validator.get("field")
+        if isinstance(field, str) and field:
+            names.add(field)
+        for name in validator.get("fields") or []:
+            if isinstance(name, str) and name:
+                names.add(name)
+    for alias in contract_spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        canonical_name = alias.get("canonical-name")
+        if isinstance(canonical_name, str) and canonical_name:
+            names.add(canonical_name)
+    return names
+
+
+def _normalize_arguments_with_aliases(arguments: dict, contract_spec: dict) -> tuple[dict, list[str]]:
+    alias_index = {}
+    for alias in contract_spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        if alias.get("scope") != "parameter":
+            continue
+        alias_name = alias.get("alias")
+        if isinstance(alias_name, str) and alias_name:
+            alias_index[alias_name] = alias
+    normalized = {}
+    errors = []
+    for key, value in arguments.items():
+        alias = alias_index.get(key)
+        if alias is None:
+            normalized[key] = value
+            continue
+        canonical_name = alias.get("canonical-name")
+        message = alias.get("message") or f"Use '{canonical_name}' instead of '{key}'."
+        if alias.get("status") == "rejected":
+            errors.append(f"Wrong parameter '{key}': {message}")
+            continue
+        if not isinstance(canonical_name, str) or not canonical_name:
+            errors.append(f"Wrong parameter '{key}': {message}")
+            continue
+        if canonical_name in normalized:
+            errors.append(f"Duplicate parameter '{canonical_name}' after alias normalization from '{key}'.")
+            continue
+        if canonical_name in arguments and canonical_name != key:
+            errors.append(f"Provide only '{canonical_name}', not both '{canonical_name}' and alias '{key}'.")
+            continue
+        normalized[canonical_name] = value
+    return normalized, errors
+
+
+def _validate_unknown_params(tool_name: str, arguments: dict, contract_spec: dict) -> list[str]:
+    allowed = _collect_allowed_param_names(contract_spec)
+    if not allowed:
+        return []
+    errors = []
+    for key in arguments:
+        if key in allowed:
+            continue
+        suggestions = difflib.get_close_matches(key, sorted(allowed), n=3, cutoff=0.45)
+        message = f"Unknown parameter '{key}' for tool '{tool_name}'."
+        if suggestions:
+            message += " Did you mean " + ", ".join(f"'{item}'" for item in suggestions) + "?"
+        errors.append(message)
+    return errors
+
+
 def _validate_field_type(field_name: str, expected_type: str, value) -> list[str]:
     if value is None:
         return []
@@ -613,162 +491,41 @@ def _validate_field_type(field_name: str, expected_type: str, value) -> list[str
     return []
 
 
-def _validate_update_operations(operations, context_label) -> list[str]:
-    errors = []
-    if not isinstance(operations, list):
-        return errors
-    for index, operation in enumerate(operations):
-        if not isinstance(operation, dict):
-            continue
-        action = str(operation.get("action", "")).strip().lower()
-        if "title" in operation:
-            errors.append(f"{context_label}[{index}] must use 'title-localizations' instead of legacy scalar 'title'")
-        if "caption" in operation:
-            errors.append(f"{context_label}[{index}] must use 'title-localizations' instead of legacy scalar 'caption'")
-        if "description" in operation:
-            errors.append(f"{context_label}[{index}] must use 'description-localizations' instead of legacy scalar 'description'")
-        if action == "add":
-            errors.extend(_validate_localizations_map(
-                operation.get("title-localizations"),
-                "title-localizations",
-                f"{context_label}[{index}] action 'add'",
-                require_presence=True,
-            ))
-        if action == "remove":
-            if "title-localizations" in operation:
-                errors.append(f"{context_label}[{index}] action 'remove' must not include 'title-localizations'")
-            if "description-localizations" in operation:
-                errors.append(f"{context_label}[{index}] action 'remove' must not include 'description-localizations'")
-        else:
-            errors.extend(_validate_localizations_map(
-                operation.get("title-localizations"),
-                "title-localizations",
-                f"{context_label}[{index}] action '{action}'",
-            ))
-            errors.extend(_validate_localizations_map(
-                operation.get("description-localizations"),
-                "description-localizations",
-                f"{context_label}[{index}] action '{action}'",
-            ))
-    return errors
-
-
 def _apply_validator(validator: dict, arguments: dict) -> list[str]:
     name = validator.get("name")
+    fields = [field for field in validator.get("fields") or [] if isinstance(field, str) and field]
     if name == "forbid-fields":
-        fields = validator.get("fields") or []
-        context = validator.get("context") or "Unsupported fields were provided."
-        return [f"Wrong parameter '{field}': {context}" for field in fields if field in arguments]
-    if name == "localizations-map":
-        return _validate_localizations_map(
-            arguments.get(validator.get("field")),
-            validator.get("field"),
-            validator.get("context") or "Parameter",
-            require_presence=bool(validator.get("required")),
-        )
-    if name == "update-operations-localizations":
-        return _validate_update_operations(arguments.get(validator.get("field")), validator.get("field") or "operations")
-    if name == "schema-sync-operations-localizations":
-        errors = []
-        operations = arguments.get(validator.get("field"))
-        if not isinstance(operations, list):
-            return errors
-        for index, operation in enumerate(operations):
-            if not isinstance(operation, dict):
-                continue
-            operation_type = str(operation.get("type", "")).strip().lower()
-            if operation_type in {"create-lookup", "create-entity"}:
-                if "title" in operation:
-                    errors.append(f"operations[{index}] must use 'title-localizations' instead of legacy scalar 'title'")
-                if "caption" in operation:
-                    errors.append(f"operations[{index}] must use 'title-localizations' instead of legacy scalar 'caption'")
-                errors.extend(_validate_localizations_map(
-                    operation.get("title-localizations"),
-                    "title-localizations",
-                    f"operations[{index}] type '{operation_type}'",
-                    require_presence=True,
-                ))
-            if operation_type == "update-entity":
-                errors.extend(_validate_update_operations(
-                    operation.get("update-operations"),
-                    f"operations[{index}].update-operations",
-                ))
-        return errors
+        present = [field for field in fields if _is_parameter_supplied(arguments, field)]
+        if not present:
+            return []
+        message = "Parameters " + ", ".join(f"'{field}'" for field in present) + " are not allowed for this request."
+        context = validator.get("context")
+        if context:
+            message += f" {context}"
+        return [message]
+    if name == "mutually-exclusive-fields":
+        present = [field for field in fields if _is_parameter_supplied(arguments, field)]
+        if len(present) <= 1:
+            return []
+        context = validator.get("context")
+        if isinstance(context, str) and context:
+            return [context]
+        return ["Provide only one of " + ", ".join(f"'{field}'" for field in present) + "."]
     return []
 
 
-def _is_blank_text(value) -> bool:
-    return isinstance(value, str) and value.strip() == ""
-
-
-def _validate_localizations_map(value, field_name, context_label, require_presence=False) -> list[str]:
-    if value is None:
-        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"] if require_presence else []
-    if not isinstance(value, dict):
-        return [f"{context_label} requires '{field_name}' to be an object of culture -> value pairs"]
-    normalized = {}
-    for culture_name, culture_value in value.items():
-        if not isinstance(culture_name, str) or not culture_name.strip():
-            return [f"{context_label} requires '{field_name}' to use non-empty culture names"]
-        if not isinstance(culture_value, str) or not culture_value.strip():
-            return [f"{context_label} requires '{field_name}' to contain non-empty string values"]
-        normalized[culture_name.strip().lower()] = culture_value.strip()
-    if not normalized:
-        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"]
-    if not normalized.get("en-us"):
-        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"]
-    return []
-
-
-def _validate_params_with_fallback_spec(tool_name: str, arguments: dict) -> list[str]:
-    spec = _TOOL_REQUIRED_PARAMS.get(tool_name)
-    if not spec:
-        return []
-    errors = []
-    for wrong_name, fix in spec.get("reject", {}).items():
-        if wrong_name in arguments:
-            errors.append(f"Wrong parameter '{wrong_name}': {fix}")
-    for param in spec.get("required", []):
-        if param not in arguments or _value_is_missing(arguments.get(param)):
-            hint = spec.get("hints", {}).get(param, "")
-            message = f"Missing required parameter '{param}'"
-            if hint:
-                message += f". Hint: {hint}"
-            errors.append(message)
-    any_of_groups = spec.get("any_of") or []
-    if any_of_groups and not any(
-        all(param in arguments and not _value_is_missing(arguments.get(param)) for param in group)
-        for group in any_of_groups
-    ):
-        group_descriptions = []
-        for group in any_of_groups:
-            if len(group) == 1:
-                group_descriptions.append(f"'{group[0]}'")
-            else:
-                group_descriptions.append("(" + " AND ".join(f"'{param}'" for param in group) + ")")
-        errors.append("Missing required connection parameters. Provide " + " or ".join(group_descriptions))
-    return errors
-
-
-def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+def _normalize_and_validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> tuple[dict, list[str]]:
     contract_index = contract_index or {}
     spec = contract_index.get(tool_name)
     if not spec:
-        return _validate_params_with_fallback_spec(tool_name, arguments)
+        return dict(arguments), []
     input_schema = spec.get("input-schema")
     if not isinstance(input_schema, dict):
-        return _validate_params_with_fallback_spec(tool_name, arguments)
-    errors = []
-    for alias in spec.get("aliases") or []:
-        if not isinstance(alias, dict):
-            continue
-        if alias.get("scope") != "parameter" or alias.get("status") != "rejected":
-            continue
-        alias_name = alias.get("alias")
-        if isinstance(alias_name, str) and alias_name in arguments:
-            errors.append(f"Wrong parameter '{alias_name}': {alias.get('message')}")
+        return dict(arguments), []
+    normalized_arguments, errors = _normalize_arguments_with_aliases(arguments, spec)
+    errors.extend(_validate_unknown_params(tool_name, normalized_arguments, spec))
     for param in input_schema.get("required") or []:
-        if param not in arguments or _value_is_missing(arguments.get(param)):
+        if param not in normalized_arguments or _value_is_missing(normalized_arguments.get(param)):
             prop = _find_property(spec, param) or {}
             hint = prop.get("description") or ""
             message = f"Missing required parameter '{param}'"
@@ -777,7 +534,7 @@ def _validate_params(tool_name: str, arguments: dict, contract_index: dict | Non
             errors.append(message)
     any_of_groups = input_schema.get("any-of") or []
     if any_of_groups and not any(
-        all(param in arguments and not _value_is_missing(arguments.get(param)) for param in group)
+        all(param in normalized_arguments and not _value_is_missing(normalized_arguments.get(param)) for param in group)
         for group in any_of_groups
     ):
         group_descriptions = []
@@ -791,13 +548,17 @@ def _validate_params(tool_name: str, arguments: dict, contract_index: dict | Non
         if not isinstance(prop, dict):
             continue
         name = prop.get("name")
-        if not isinstance(name, str) or name not in arguments:
+        if not isinstance(name, str) or name not in normalized_arguments:
             continue
-        errors.extend(_validate_field_type(name, prop.get("type"), arguments.get(name)))
+        errors.extend(_validate_field_type(name, prop.get("type"), normalized_arguments.get(name)))
     for validator in input_schema.get("validators") or []:
         if isinstance(validator, dict):
-            errors.extend(_apply_validator(validator, arguments))
-    return errors
+            errors.extend(_apply_validator(validator, normalized_arguments))
+    return normalized_arguments, errors
+
+
+def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+    return _normalize_and_validate_params(tool_name, arguments, contract_index)[1]
 
 
 def _build_unknown_tool_result(tool_name: str, contract_index: dict) -> dict:
@@ -869,15 +630,15 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
         }
     if tool_name not in contract_index:
         return _build_unknown_tool_result(tool_name, contract_index)
-    validation_errors = _validate_params(tool_name, arguments, contract_index)
+    normalized_arguments, validation_errors = _normalize_and_validate_params(tool_name, arguments, contract_index)
     if validation_errors:
         return _build_validation_result(validation_errors)
     client = _get_shared_client()
     try:
-        return client.call_tool(tool_name, arguments, timeout)
+        return client.call_tool(tool_name, normalized_arguments, timeout)
     except Exception:
         client.close()
-        return client.call_tool(tool_name, arguments, timeout)
+        return client.call_tool(tool_name, normalized_arguments, timeout)
 
 
 def list_mcp_tools(timeout: int = 120) -> dict:

@@ -1,9 +1,9 @@
-# MCP Testing Guide — Програматичне тестування
+# MCP Testing Guide — Bootstrap And Verification
 
 > Для візуального UI-тестування дивіться [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md).
 
-Цей документ описує програматичне тестування released clio MCP contract через `scripts/mcp_client.py`.
-Executable contract визначається тільки `clio MCP` через `tool-contract-get`; цей документ описує спосіб перевірки, а не локальний API reference.
+Цей документ описує, як перевіряти released clio MCP bootstrap і wrapper behavior через `scripts/mcp_client.py`.
+Executable contract визначається тільки `clio MCP` через `tool-contract-get`; цей документ не дублює tool payload shape.
 
 ## Базові правила
 
@@ -13,214 +13,114 @@ Executable contract визначається тільки `clio MCP` через 
 - Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
 - Для JSON-heavy payloads використовуйте `--args-file` або `--args-stdin`, а не inline quoting
 - Спочатку перевіряйте manifest через `tools/list`, а executable contract через `tool-contract-get`
-- `application-create` лишається scalar-only; localization maps для captions не передаються сюди, а робляться окремими schema tools після створення app shell
 - Canonical entity flow: `application-create -> schema-sync -> application-get-info`
 - Canonical page flow: `page-list -> page-get -> page-sync -> page-get`
 - `page-update` лишається тільки fallback path для single-page dry-run або legacy save
+- Якщо потрібен точний tool shape, дочитуйте його в момент виконання через `tool-contract-get` і `docs://mcp/guides/app-modeling`
 
 ## Швидка перевірка середовища
 
 ```bash
 clio ver
-printf '{"environment-name":"local"}\n' > /tmp/application-get-list.args.json
 python3 scripts/mcp_client.py tools/list '{}' 30
 python3 scripts/mcp_client.py tool-contract-get '{}' 30
-python3 scripts/mcp_client.py application-get-list --args-file /tmp/application-get-list.args.json --timeout 30
 ```
 
 ```powershell
-@'{"environment-name":"local"}'@ | Set-Content -Path .\application-get-list.args.json
+clio ver
 py -3 .\scripts\mcp_client.py tools/list '{}' 30
 py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
-py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
 ```
 
 Очікування:
+
 - `clio ver` повертає `8.0.2.37` або новіше
 - `tools/list` повертає non-empty manifest
-- `tool-contract-get` повертає metadata хоча б для `application-create`, `schema-sync`, `page-sync`
-- `application-get-list` повертає `success: true`
+- `tool-contract-get` повертає non-empty metadata для доступних tools
 
-## Типові виклики
+## Generic Invocation Pattern
 
-### Отримати manifest tools
+Для будь-якого non-bootstrap tool:
+
+1. перевірити, що tool присутній у `tools/list`
+2. отримати exact params, aliases, required fields, type expectations, response hints і rejected aliases через `tool-contract-get`
+3. підготувати payload у `args.json` або через stdin
+4. викликати `scripts/mcp_client.py <tool-name> --args-file ./args.json --timeout <seconds>`
+5. якщо виклик змінює entity metadata, виконати подальшу перевірку через canonical refresh path
+
+Приклади wrapper invocation pattern:
 
 ```bash
-python3 scripts/mcp_client.py tools/list '{}' 30
+python3 scripts/mcp_client.py <tool-name> --args-file ./args.json --timeout 120
+python3 scripts/mcp_client.py <tool-name> --args-stdin --timeout 120 < ./args.json
 ```
 
 ```powershell
-py -3 .\scripts\mcp_client.py tools/list '{}' 30
+py -3 .\scripts\mcp_client.py <tool-name> --args-file .\args.json --timeout 120
+Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin --timeout 120
 ```
 
-### Отримати executable contract metadata
+## Wrapper Verification Focus
 
-```bash
-python3 scripts/mcp_client.py tool-contract-get '{}' 30
-```
+Перевіряйте локальний wrapper на такі властивості:
 
-```powershell
-py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
-```
+- `tools/list` і `tool-contract-get` працюють без попереднього contract cache
+- non-bootstrap tools вимагають успішного `tool-contract-get`
+- top-level metadata validation використовує лише live contract data:
+  - `required`
+  - `any-of`
+  - declared field types
+  - rejected aliases
+- nested request shapes не вгадуються локально; помилки такого типу повертає сам clio MCP
+- unknown tool names повертають suggestion list із live contract index
 
-### Отримати список applications
+## Перевірки після mutation flows
 
-```bash
-printf '{"environment-name":"local"}\n' > /tmp/application-get-list.args.json
-python3 scripts/mcp_client.py application-get-list --args-file /tmp/application-get-list.args.json --timeout 30
-```
-
-```powershell
-@'{"environment-name":"local"}'@ | Set-Content -Path .\application-get-list.args.json
-py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
-```
-
-### Отримати application context
-
-```bash
-cat <<'EOF' > /tmp/application-get-info.args.json
-{"environment-name":"local","app-code":"UsrTodoList"}
-EOF
-python3 scripts/mcp_client.py application-get-info --args-file /tmp/application-get-info.args.json --timeout 30
-```
-
-```powershell
-@'{"environment-name":"local","app-code":"UsrTodoList"}'@ | Set-Content -Path .\application-get-info.args.json
-py -3 .\scripts\mcp_client.py application-get-info --args-file .\application-get-info.args.json --timeout 30
-```
-
-### Батч schema sync
-
-```bash
-cat <<'EOF' > /tmp/schema-sync.args.json
-{
-  "environment-name":"local",
-  "package-name":"UsrTodoList",
-  "operations":[
-    {
-      "type":"create-lookup",
-      "schema-name":"UsrTodoStatus",
-      "title-localizations":{
-        "en-US":"Todo Status"
-      }
-    },
-    {
-      "type":"update-entity",
-      "schema-name":"UsrTodoList",
-      "update-operations":[
-        {
-          "action":"add",
-          "column-name":"UsrStatus",
-          "type":"Lookup",
-          "title-localizations":{
-            "en-US":"Status"
-          },
-          "reference-schema-name":"UsrTodoStatus"
-        }
-      ]
-    }
-  ]
-}
-EOF
-python3 scripts/mcp_client.py schema-sync --args-file /tmp/schema-sync.args.json --timeout 120
-```
-
-```powershell
-@'
-{
-  "environment-name":"local",
-  "package-name":"UsrTodoList",
-  "operations":[
-    {
-      "type":"create-lookup",
-      "schema-name":"UsrTodoStatus",
-      "title-localizations":{
-        "en-US":"Todo Status"
-      }
-    }
-  ]
-}
-'@ | Set-Content -Path .\schema-sync.args.json
-py -3 .\scripts\mcp_client.py schema-sync --args-file .\schema-sync.args.json --timeout 120
-```
-
-### Батч page sync
-
-```bash
-cat <<'EOF' > /tmp/page-sync.args.json
-{
-  "environment-name":"local",
-  "pages":[
-    {
-      "schema-name":"UsrTodoList_FormPage",
-      "body":"define(...)"
-    }
-  ],
-  "validate":true,
-  "verify":true
-}
-EOF
-python3 scripts/mcp_client.py page-sync --args-file /tmp/page-sync.args.json --timeout 120
-```
-
-```powershell
-@'
-{
-  "environment-name":"local",
-  "pages":[
-    {
-      "schema-name":"UsrTodoList_FormPage",
-      "body":"define(...)"
-    }
-  ],
-  "validate":true,
-  "verify":true
-}
-'@ | Set-Content -Path .\page-sync.args.json
-py -3 .\scripts\mcp_client.py page-sync --args-file .\page-sync.args.json --timeout 120
-```
-
-## Перевірки після schema/page sync
-
-- Після `schema-sync` обов’язково викличте `application-get-info`
-- Не тримайте локальні hard-coded param/response expectations; якщо треба точний shape, дочитайте його через `tool-contract-get`
-- Після `page-sync` перевірте, що всі page results мають `success: true`
-- Якщо потрібна детальна перевірка сторінок, дочитайте сторінки через `page-get`
-- Для локального helper path `page-sync` лишається preferred fast path, а `mcp_page_sync.py` робить fallback `page-get`, якщо server response не містить reusable verified body
-- Якщо `tools/list` не містить `schema-sync`, `page-sync` або `component-info`, вважайте встановлений `clio` несумісним
+- Після entity mutation flow виконайте canonical refresh через `application-get-info`
+- Після page write flow повторно перевірте результат через `page-get`, якщо helper або server response не дає достатньої verification evidence
+- Не тримайте локальні hard-coded param або response expectations; якщо потрібен точний shape, дочитайте його через `tool-contract-get`
 
 ## Типові помилки
 
 ### Unsupported clio version
 
 Причина:
+
 - встановлено `clio` старіше за `8.0.2.37`
 
 Рішення:
+
 - оновити `clio`
 - або вказати сумісний released binary через `CLIO_CMD`
 
-### `tools/list` повертає помилку або порожній manifest
+### `tool-contract-get` недоступний
 
 Причина:
-- використовується несумісна версія `clio`
-- `clio mcp-server` не запускається коректно
+
+- wrapper не може отримати live metadata
+- несумісна версія `clio`
+- transport/bootstrap проблема
 
 Рішення:
+
 - перевірити `clio ver`
-- перевірити `python3 scripts/mcp_client.py tools/list '{}' 30`
-- у PowerShell використати `py -3 .\scripts\mcp_client.py ...`
+- перевірити `tools/list`
+- окремо перевірити `tool-contract-get`
+- не намагатися будувати non-bootstrap payload з repo docs
 
-### Generic `An error occurred invoking ...`
+### Generic invocation error from clio
 
 Причина:
-- неправильні назви параметрів
-- старий payload contract
+
+- payload shape або nested fields не відповідають live contract
+- wrapper більше не перевіряє складні nested rules локально
 
 Рішення:
-- перевірити dash-style tool name
-- звірити exact params, aliases і validators через `tool-contract-get`
+
+- звірити exact params, aliases, validators, prompt/resource guidance і tool-specific notes через `tool-contract-get`
+- для app-modeling semantics дочитати `docs://mcp/guides/app-modeling`
 
 ## Дивіться також
 
 - [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md)
+- [`context/mcp-application-tools-reference.md`](../context/mcp-application-tools-reference.md)

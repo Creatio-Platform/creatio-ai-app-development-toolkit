@@ -137,6 +137,14 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 | Color | `crt.ColorPicker` | `control` | `labelPosition: "auto"`, `pickerMode: "extended"` | Supports transparent color and custom `colors` palette. |
 | Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. The frontend can auto-add `bindTo`, `crt.ToImageLink`, `imageSelected`, and `imageClear`. |
 
+### Field Label Pattern Rule
+
+The `label` value depends on whether a custom "Title on page" is set:
+
+- **No custom title** — `label` = `$Resources.Strings.` + the attribute name from `control` (strip the leading `$`). Example: `control: "$PDS_UsrCode_ab12cd3"` → `label: "$Resources.Strings.PDS_UsrCode_ab12cd3"`.
+  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `page-sync`, you MUST also pass the resource values explicitly via the `resources` param: `{"PDS_UsrCode_ab12cd3": {"en-US": "Code"}}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
+- **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `page-sync` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": {"en-US": "My Title"}}`.
+
 ### Generic Runtime Field Insert Example
 
 > `parentName` below is a placeholder. Use the actual container discovered from the live page's `viewConfigDiff` (the container with the most field-type inserts).
@@ -318,7 +326,7 @@ When the user does not specify style/size, use these defaults:
 | Property | Type | Default | Valid Values |
 |----------|------|---------|--------------|
 | `type` | string | — | `"crt.Button"` (required) |
-| `caption` | string | `""` | Any string or `#ResourceString(...)#`. For custom elements, use `#ResourceString(UsrKey_caption)#` with `resources` param — clio auto-registers the localizableString. |
+| `caption` | string | `""` | Any string or `#ResourceString(...)#`. For custom elements, use `#ResourceString(UsrKey_caption)#` with `resources` param — clio auto-registers the localizableString. **Note: `caption` is for non-field elements (buttons, tabs, DataTable columns). Field controls (Input, ComboBox, DateTimePicker, etc.) use `label` instead — see Field Label Pattern Rule above.** |
 | `color` | string | `"default"` | `"primary"`, `"accent"`, `"warn"`, `"default"`, `"outline"` |
 | `size` | string | `"large"` | `"small"`, `"medium"`, `"large"`, `"extra-large"` |
 | `iconPosition` | string | `"only-text"` | `"only-text"`, `"left-icon"`, `"right-icon"`, `"only-icon"` |

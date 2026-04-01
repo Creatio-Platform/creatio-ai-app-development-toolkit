@@ -52,14 +52,8 @@ $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
 
 The primary application context used by this repo starts from the flat MCP response returned by `application-create` or `application-get-info`.
 
-Treat these as the important top-level runtime fields:
-- `success`
-- `package-u-id`
-- `package-name`
-- `entities`
-- `canonical-main-entity-name` when present
-- `error`
-
+Use `tool-contract-get` plus `clio` prompts/resources for the current executable response shape and field names.
+This repo only normalizes the current response envelope into local helper state and evidence files.
 Do not treat legacy `app/packages` examples as the MCP response contract.
 
 ## Normalize Into `mcp-application-result.json`
@@ -90,7 +84,7 @@ Use this repo-local refresh policy:
 5. Overwrite and normalize `mcp-application-result.json` again
 6. Run page sync and evidence helpers when required
 
-When the application context includes `canonical-main-entity-name`, use it as the primary selector for the app’s main entity. Only fall back to matching the app code when that field is absent.
+When the application context includes server-advertised canonical main-entity metadata, use it as the primary selector for the app’s main entity. Only fall back to matching the app code when that metadata is absent.
 
 ## Local Follow-up Helpers
 
@@ -112,10 +106,17 @@ from scripts.mcp_client import call_mcp_tool
 import json
 from pathlib import Path
 
-result = call_mcp_tool('application-get-info', {
-    'environment-name': 'local',
-    'app-code': 'UsrMyApp',
+contracts = call_mcp_tool('tool-contract-get', {
+    'tool-names': ['application-get-info'],
 })
+if not contracts['success']:
+    raise RuntimeError(contracts['raw'])
+
+runtime_args = {
+    'environment-name': 'local',
+}
+
+result = call_mcp_tool('application-get-info', runtime_args)
 if not result['success']:
     raise RuntimeError(result['raw'])
 
