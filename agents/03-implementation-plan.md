@@ -46,6 +46,7 @@ Fallback (if bundle unavailable or stale):
 - Implementation or technical execution detail was explicitly requested.
 - `scripts/check-planning-gate.sh <AppName>` passes.
 - `scripts/check-approval-gate.sh <AppName>` passes.
+- If runtime inputs are already available for the current run, `output/<AppName>/.creatio-env.json` exists and its `url` matches the current request URL.
 
 ## Planning Goals
 
@@ -67,6 +68,8 @@ Validate `request-spec.json` and `workflow-state.json`:
 - runtime inputs are either present or explicitly deferred
 - the approved requirements follow the BA-style structure from Agent 2
 - the approved requirements are not merely a generic planning wrapper with non-BA headings
+- when runtime inputs are available, `.creatio-env.json` points to the same URL as the current request for this run
+- if `.creatio-env.json` exists with a different URL, stop and rerun Agent 1 instead of reusing stale runtime artifacts
 
 If any of these checks fail, stop and report the blocker.
 
@@ -120,6 +123,7 @@ Rules:
 - Reuse `Name` when it already exists.
 - Never plan duplicate title-like columns when `Name` is already present.
 - Model enum-like business values as lookup entities first.
+- Preserve semantic text field types in schema plans: use `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields instead of downgrading them to generic `ShortText`.
 - For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
 - For entity schema payloads, plan `title-localizations` and `description-localizations` as localization maps with an `en-US` entry; legacy scalar `title` and `description` fields are rejected by MCP.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
@@ -130,6 +134,7 @@ Rules:
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
 - Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Each `seed-rows` entry must use the shape `{"values": {"Name": "...", "Description": ""}}` — clio auto-generates `Id` when absent. Flat objects such as `{"Name": "..."}` (without the `values` wrapper) are rejected by clio and produce an error.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
@@ -141,7 +146,10 @@ Rules:
 
 - A requirement such as `UsrStatus defaults to New` is incomplete until the plan names the field, the default value, and the step that applies it.
 - Seed data alone does not satisfy a default requirement.
-- The implementation plan should rely on current `clio` MCP guidance for whether the default is enforced through schema contract or page logic.
+- For lookup-backed defaults, the plan must choose one of:
+  1. `default-value` with `default-value-source: "Const"` set to the seeded row GUID on the column's `update-entity` operation in `schema-sync`
+  2. A `crt.CreateRecordRequest` handler in the FormPage `SCHEMA_HANDLERS` block that sets the field value on new-record open
+- The chosen mechanism must be included in the page-sync plan and executed. It must never be deferred as `manualCheckPending`.
 
 ### Page Sync Plan
 

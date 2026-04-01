@@ -11,6 +11,7 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 - `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
+- `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
 Resolve executable tool details through `tool-contract-get`.
@@ -28,6 +29,7 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 - `scripts/check-approval-gate.sh <AppName>` passes
 - `output/<AppName>/.creatio-env.json` exists and is valid
+- when the current run has a request URL, `.creatio-env.json.url` matches it exactly
 - `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
 - Agent 4 runs in the foreground
 
@@ -68,14 +70,21 @@ Fallback execution paths:
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
-- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact
+- Prefer inline lookup `seed-rows` in `schema-sync`; clio automatically materializes the binding descriptor in the package during `schema-sync`, so no separate `create-data-binding-db` call is needed for standard lookup seeding
+- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
+- Each `seed-rows` entry must use the `{"values": {"Name": "...", "Description": ""}}` shape; clio auto-generates `Id` if absent
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 
 ## Default Rules
 
-When the approved plan requires defaults, implement them explicitly and follow current `clio` MCP guidance for whether they belong to schema contract or page logic.
+When the approved plan requires defaults, implement them explicitly.
 Seed data alone does not satisfy a default requirement.
+
+For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
+- Use the seeded row GUID in `default-value` with `default-value-source: "Const"` on the column's `update-entity` operation inside `schema-sync`; OR
+- Implement a `crt.CreateRecordRequest` handler in the `SCHEMA_HANDLERS` block of the FormPage that calls `setAttribute` / `setValue` for the field on new-record open
+- Either mechanism must be in the page-sync plan and executed — never mark lookup defaults as `manualCheckPending`
 
 ## Page Sync Rules
 
@@ -131,7 +140,9 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### 2. Verify MCP reachability
 
-- Read the environment from `.creatio-env.json`
+- Validate that `.creatio-env.json.url` matches the current request URL for this run
+- Only after that validation, read the environment from `.creatio-env.json`
+- If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
 - Call `tools/list` through `scripts/mcp_client.py`
 - Resolve the executable contract through `tool-contract-get`
 - Stop with blocker if required tools are missing or `tool-contract-get` fails
@@ -147,6 +158,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 - Prefer `schema-sync`
 - Use individual entity tools only when the approved plan cannot be expressed as one batch
+- Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
 - After each approved schema batch, call `application-get-info` once, overwrite `mcp-application-result.json`, and normalize again
 - Stop with blocker if required fields or columns are still missing after verification
 

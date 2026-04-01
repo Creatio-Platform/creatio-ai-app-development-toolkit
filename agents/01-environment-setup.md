@@ -69,15 +69,26 @@ py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get
 The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
 Always register through `clio reg-web-app` if the environment does not exist.
 
+### Existing Output Guard
+
+If `output/<AppName>/.creatio-env.json` already exists:
+
+1. Read it only to detect staleness.
+2. Compare its `url` with the current request URL.
+3. If the URLs differ, do not reuse its `environment` value and do not trust any runtime artifacts under `output/<AppName>/`.
+4. Resolve the environment again from `clio show-web-app-list` using the current request URL and overwrite `.creatio-env.json`.
+5. Reuse is allowed only when the existing `.creatio-env.json` points to the exact same URL as the current request.
+
 ### 2. List existing environments
 
 ```bash
 clio show-web-app-list
 ```
 
-Display the list to the developer. Check if an environment for the target URL already exists.
+Display the list to the developer. Check if an environment for the current request URL already exists.
 
-- **If it exists** — use that environment name and skip to Step 5.
+- Ignore `output/<AppName>/.creatio-env.json` as the runtime source of truth for a new run.
+- **If an environment for the current request URL exists** — use that environment name and skip to Step 5.
 - **If it does not exist** — proceed to Step 3.
 
 ### 3. Register the environment
@@ -122,7 +133,7 @@ clio healthcheck -e <env_name>
 
 ### 6. Save environment configuration
 
-Create the file `output/<AppName>/.creatio-env.json`:
+Create or overwrite the file `output/<AppName>/.creatio-env.json` from the current request URL and the environment resolved in this run:
 
 ```json
 {
@@ -150,4 +161,4 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
-✅ `output/<AppName>/.creatio-env.json` exists with correct `environment` and persisted runtime MCP details  
+✅ `output/<AppName>/.creatio-env.json` exists with the current request URL, the correct `environment`, and persisted runtime MCP details  
