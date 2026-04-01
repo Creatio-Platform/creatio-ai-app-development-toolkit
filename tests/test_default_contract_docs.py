@@ -19,6 +19,22 @@ AUTHORITY_DOCS = [
     ROOT / ".github/copilot-instructions.md",
 ]
 
+ACTIVE_CONTRACT_SURFACE_DOCS = [
+    ROOT / "README.md",
+    ROOT / "context/INDEX.md",
+    ROOT / "context/essentials.md",
+    ROOT / "context/data-bindings-reference.md",
+    ROOT / "agents/03-implementation-plan.md",
+    ROOT / "agents/04-implementation.md",
+    ROOT / "docs/mcp-testing-guide.md",
+    ROOT / "skills/entity-creation/SKILL.md",
+    ROOT / "skills/data-bindings-creation/SKILL.md",
+    ROOT / "skills/page-schema-editing/SKILL.md",
+    ROOT / ".github/copilot-instructions.md",
+]
+
+HISTORICAL_OPTIMIZATION_DOCS = sorted((ROOT / "docs/optimization").glob("*.md"))
+
 DOC_PATHS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/02-requirements-gathering.md",
@@ -135,6 +151,21 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("Seed data alone does not satisfy a default requirement.", plan_doc)
         self.assertIn("A requirement such as `UsrStatus defaults to New` is incomplete", plan_doc)
 
+    def test_active_docs_do_not_restate_clio_owned_field_level_contract_details(self):
+        disallowed_markers = [
+            "title-localizations",
+            "description-localizations",
+            "reference-schema-name",
+            "update-operations",
+            "seed-rows",
+            "`default-value`",
+            "`default-value-source`",
+        ]
+        for path in ACTIVE_CONTRACT_SURFACE_DOCS:
+            content = path.read_text(encoding="utf-8")
+            for marker in disallowed_markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
+
     def test_docs_require_confirmed_or_assumed_checklist_sources(self):
         for path in CHECKLIST_SOURCE_DOCS:
             content = path.read_text(encoding="utf-8")
@@ -225,6 +256,19 @@ class DefaultContractDocsTests(unittest.TestCase):
             "All parameters are strings",
         ]
         for path in AUTHORITY_DOCS:
+            content = path.read_text(encoding="utf-8")
+            for marker in disallowed_markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
+
+    def test_historical_optimization_docs_do_not_embed_executable_contract_sections(self):
+        disallowed_markers = [
+            "Input shape:",
+            "Response shape:",
+            "```json",
+            "prompts/get",
+            "resources/read",
+        ]
+        for path in HISTORICAL_OPTIMIZATION_DOCS:
             content = path.read_text(encoding="utf-8")
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")

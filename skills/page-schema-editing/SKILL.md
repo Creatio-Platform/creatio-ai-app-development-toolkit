@@ -38,7 +38,7 @@ Read before executing:
 - Use `raw.body` from `page-get` as the editable source of truth.
 - Treat the `page` block from `page-get` as metadata only.
 - If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `component-info` before editing nested configuration.
-- If the edited body introduces `#ResourceString(UsrKey_caption)#`, pass `resources` through `page-sync` or the fallback `page-update` path.
+- If the edited body introduces new localizable captions, persist them through the live page write contract resolved at runtime.
 - Keep repository docs for workflow and page-editing policy only. Do not copy MCP parameter tables into plans or prompts.
 
 ## Schema Body Format
@@ -107,7 +107,7 @@ Do not reuse FormPage lookup-list sorting patterns for ListPage row sorting.
 
 Preferred path:
 
-Persist the edited page through `page-sync` with validation and server-side verification enabled.
+Persist the edited page through `page-sync` using the runtime options resolved from live contract metadata.
 
 Fallback path:
 

@@ -70,9 +70,8 @@ Fallback execution paths:
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
-- Prefer inline lookup `seed-rows` in `schema-sync`; clio automatically materializes the binding descriptor in the package during `schema-sync`, so no separate `create-data-binding-db` call is needed for standard lookup seeding
+- Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
 - Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
-- Each `seed-rows` entry must use the `{"values": {"Name": "...", "Description": ""}}` shape; clio auto-generates `Id` if absent
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 
@@ -82,8 +81,7 @@ When the approved plan requires defaults, implement them explicitly.
 Seed data alone does not satisfy a default requirement.
 
 For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
-- Use the seeded row GUID in `default-value` with `default-value-source: "Const"` on the column's `update-entity` operation inside `schema-sync`; OR
-- Implement a `crt.CreateRecordRequest` handler in the `SCHEMA_HANDLERS` block of the FormPage that calls `setAttribute` / `setValue` for the field on new-record open
+- Resolve the executable schema-side or page-side mechanism from the live contract and current page/runtime context; do not guess field-level request shape from repo docs
 - Either mechanism must be in the page-sync plan and executed — never mark lookup defaults as `manualCheckPending`
 
 ## Page Sync Rules

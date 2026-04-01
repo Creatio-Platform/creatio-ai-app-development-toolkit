@@ -33,7 +33,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
-- For lookup-backed schema defaults, use the seeded row GUID in the stored default value
+- For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
 - Binary-like columns do not support constant defaults
 
 **Data Binding And Schema Inspection**
@@ -41,7 +41,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
 - `create-data-binding-db` persists bindings in DB and installs data immediately
 - `upsert-data-binding-row-db` updates rows only in an already existing binding
-- For initial lookup seeding, prefer `schema-sync` inline `seed-rows`; use explicit binding tools only as fallback
+- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules

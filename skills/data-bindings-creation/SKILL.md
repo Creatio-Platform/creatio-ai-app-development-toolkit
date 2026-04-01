@@ -18,7 +18,7 @@ Resolve exact tool names, parameters, aliases, defaults, and response shapes thr
 
 Prefer plan-driven or composite flows first:
 
-1. use `schema-sync` inline `seed-rows` for normal lookup seeding
+1. use batched lookup seeding inside `schema-sync` for normal lookup seeding
 2. use explicit binding tools only when a distinct binding artifact or post-sync seed step is actually required
 
 Typical fallback tool families:
@@ -59,7 +59,7 @@ Typical fallback tool families:
 ## Typical Workflow
 
 1. Inspect deployed schema metadata only when needed for stable IDs or column discovery.
-2. Prefer inline lookup seeding through `schema-sync` when the same workflow already creates or updates the lookup.
+2. Prefer batched lookup seeding through `schema-sync` when the same workflow already creates or updates the lookup.
 3. Use explicit binding creation only when the workflow needs `SysModule`, `SysModuleEntity`, or a separate binding artifact.
 4. Upsert targeted rows only after the binding identity is known.
 5. Verify the result from execution evidence instead of assuming success from planned rows.
