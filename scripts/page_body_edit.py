@@ -163,7 +163,7 @@ def build_form_field_insert(field, row, index, parent_name):
             "rowSpan": 1,
         },
         "type": field["type"],
-        "label": field.get("label") or field.get("title") or field["name"],
+        "label": field.get("label") or f"$Resources.Strings.{field['name']}",
         "labelPosition": "auto",
     }
     binding_prop = "value" if field["type"] == "crt.ImageInput" else "control"
