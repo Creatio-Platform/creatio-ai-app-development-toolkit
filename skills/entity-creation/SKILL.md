@@ -45,6 +45,7 @@ Keep individual entity tools such as `create-entity-schema`, `create-lookup`, an
 11. Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for lookup/display/default semantics instead of restating them locally.
 12. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
 13. Resolve runtime field-type semantics through live `clio` MCP contract metadata and app-modeling guidance rather than hardcoded repo rules.
+14. Do not create a second main entity right after `application-create` for the same primary record type; extend the canonical main entity unless the approved plan proves a distinct business object.
 
 ## Planning Inputs
 

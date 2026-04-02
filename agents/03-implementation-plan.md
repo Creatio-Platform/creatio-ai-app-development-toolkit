@@ -118,6 +118,7 @@ Rules:
 - Use the current `clio` MCP contract and prompts/resources for canonical main-entity selection and lookup display semantics instead of redefining them here.
 - When refreshed application context exposes `canonical-main-entity-name`, use it as the primary selector for the app’s main entity. Fall back to the section entity that matches the app code only when the canonical field is absent.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
+- If the approved BA draft names the primary record with a different business label than the app code, treat that label as the caption of the template-created main entity unless the draft explicitly proves it is a separate business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
 - Resolve title/display field reuse from refreshed app context plus live `clio` modeling guidance; do not encode duplicate-column heuristics in the plan.
@@ -129,6 +130,7 @@ Rules:
 ### Schema Sync Plan
 
 - Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- Resolve the canonical main entity immediately after `application-create` and before planning any additional entity creation.
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
 - Prefer batched lookup seeding inside the canonical schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.

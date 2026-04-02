@@ -84,20 +84,27 @@ Then wait for confirmation and retry.
 **Scenario 2 — clio installed globally (standard):**
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
+python3 scripts/mcp_client.py --check-clio-version
 ```
-Note the version and proceed. No additional configuration needed.
+The released version must be `8.0.2.50` or newer.
+If the check fails, stop immediately and ask the developer to upgrade:
+```bash
+dotnet tool update clio -g
+```
 
 **Scenario 3 — user provided a custom clio path:**
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
 dotnet /full/path/to/clio.dll ver
+python3 scripts/mcp_client.py --check-clio-version
 ```
 `scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
 
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
+py -3 .\scripts\mcp_client.py --check-clio-version
 py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
 ```
 
@@ -186,6 +193,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 |-------|--------|
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
+| `clio` version is older than `8.0.2.50` | Stop. Tell developer to upgrade clio: `dotnet tool update clio -g` |
 | Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
