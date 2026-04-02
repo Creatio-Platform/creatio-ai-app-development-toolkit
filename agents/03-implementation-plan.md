@@ -114,6 +114,7 @@ Rules:
 - Treat app-shell and localization behavior for `application-create` as `clio`-owned MCP semantics. Keep the plan focused on which follow-up schema work is required, not on restating request-shape rules.
 - When refreshed application context exposes server-owned canonical main-entity metadata, use that selector for the app’s main entity and only document the orchestration consequence in the plan.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
+- If the approved BA draft names the primary record with a different business label than the app code, treat that label as the caption of the template-created main entity unless the draft explicitly proves it is a separate business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
 - Resolve title/display field reuse from refreshed app context plus live `clio` modeling guidance; do not encode duplicate-column heuristics in the plan.
@@ -124,7 +125,9 @@ Rules:
 
 ### Schema Sync Plan
 
-- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync, using the live `clio` contract for executable app-create semantics.
+- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync,
+using the live `clio` contract for executable app-create semantics.
+- Resolve the canonical main entity immediately after `application-create` and before planning any additional entity creation.
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
 - Prefer batched lookup seeding inside the canonical schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.

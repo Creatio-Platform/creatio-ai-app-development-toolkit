@@ -7,14 +7,14 @@ Executable contract визначається тільки `clio MCP` через 
 
 ## Базові правила
 
-- Підтримуваний runtime: released `clio` `8.0.2.37+`
+- Підтримуваний runtime: released `clio` `8.0.2.50+`
 - `CLIO_CMD` можна використовувати лише як override шляху до сумісного `clio`
 - Виконання MCP іде через clio stdio, не через HTTP/SSE
 - Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
 - Для JSON-heavy payloads використовуйте `--args-file` або `--args-stdin`, а не inline quoting
 - Спочатку перевіряйте manifest через `tools/list`, а executable contract через `tool-contract-get`
 - Canonical entity flow: `application-create -> schema-sync -> application-get-info`
-- Canonical page flow: `page-list -> page-get -> page-sync -> page-get`
+- clio-advertised canonical page flow: `page-list -> page-get -> page-sync -> page-get`
 - `page-update` лишається тільки fallback path для single-page dry-run або legacy save
 - Якщо потрібен точний tool shape, дочитуйте його в момент виконання через `tool-contract-get` і `docs://mcp/guides/app-modeling`
 
@@ -22,19 +22,22 @@ Executable contract визначається тільки `clio MCP` через 
 
 ```bash
 clio ver
+python3 scripts/mcp_client.py --check-clio-version
 python3 scripts/mcp_client.py tools/list '{}' 30
 python3 scripts/mcp_client.py tool-contract-get '{}' 30
 ```
 
 ```powershell
 clio ver
+py -3 .\scripts\mcp_client.py --check-clio-version
 py -3 .\scripts\mcp_client.py tools/list '{}' 30
 py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
 ```
 
 Очікування:
 
-- `clio ver` повертає `8.0.2.37` або новіше
+- `clio ver` повертає `8.0.2.50` або новіше
+- `--check-clio-version` завершується успішно
 - `tools/list` повертає non-empty manifest
 - `tool-contract-get` повертає non-empty metadata для доступних tools
 
@@ -86,7 +89,7 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 
 Причина:
 
-- встановлено `clio` старіше за `8.0.2.37`
+- встановлено `clio` старіше за `8.0.2.50`
 
 Рішення:
 

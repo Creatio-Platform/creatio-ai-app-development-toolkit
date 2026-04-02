@@ -64,8 +64,11 @@ Fallback execution paths:
 
 ## Schema Sync Rules
 
-- For a new app with one primary record type, use the main-entity selection resolved from `clio` guidance and refreshed application context instead of redefining the technical rule locally
-- Prefer the refreshed app-context main-entity selector when it is present
+- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity unless the plan explicitly defines multiple distinct business objects
+- Prefer `canonical-main-entity-name` from application context when it is present
+- If the approved plan names the primary record differently from the app code but does not justify a second business object, map that business label onto the canonical main entity instead of creating another entity
+- Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity
+- Use `create-entity-schema` only for additional business objects with distinct meaning
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
 - Create lookup entities before entities that reference them
 - Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
@@ -84,13 +87,28 @@ For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
 ## Page Sync Rules
 
 Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
+Treat `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance` as authoritative for page-tool semantics. This section defines only the repo-local execution and evidence policy built on top of that contract.
 
 If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
 The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
 
 Execute the page sync sequence defined in plan.md using `tool-contract-get` for exact tool signatures.
-Use `page-update` only when the approved plan explicitly requires a single-page dry-run or legacy save workflow.
-Use `component-info` after `page-get` whenever the page body contains unfamiliar `crt.*` component types.
+
+Canonical page sequence:
+
+1. `page-list`
+2. `page-get`
+3. edit body
+4. `page-sync`
+5. `page-get`
+
+Fallback page path:
+
+- use `page-update` only when the run explicitly needs a single-page dry-run or legacy save workflow
+- keep `page-sync` as the preferred local apply path under the current `clio` contract
+- keep local verification fallback through `page-get` when the page-sync response does not expose a reusable verified body
+
+Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and the resolved `clio` guidance still leaves container behavior unclear.
 
 ## Evidence Rules
 
@@ -136,6 +154,8 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - Existing app flow: call `application-get-list`, then `application-get-info` with the resolved app identifier
 - Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
 - Normalize it with `scripts/mcp_context_adapter.py normalize`
+- Resolve the canonical main entity from the initialized application context before executing any schema mutations
+- If the next planned schema step would create a second entity for the same primary record type, stop with blocker and reuse the canonical main entity instead
 
 ### 4. Execute schema sync
 
@@ -149,7 +169,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 - Read the live page bodies via `page-get`
 - Apply page-body edits with the local page-body helpers
-- Use `page-sync` as the preferred apply path
+- Use `page-sync` as the preferred local apply path under the resolved `clio` contract
 - Verify the saved body again via `page-get`
 - Persist verification results for both `FormPage` and `ListPage`
 

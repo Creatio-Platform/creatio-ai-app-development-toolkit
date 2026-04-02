@@ -19,7 +19,10 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 
 **MCP Application Creation (DB-first)**
 - Primary generation path is `application-create`
-- Discovery, refresh, and main-entity semantics are MCP-owned — resolve through `tool-contract-get` and `docs://mcp/guides/app-modeling`
+- Discovery path for existing apps is `application-get-list`
+- Canonical refresh path is `application-get-info`
+- For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- For single-record-type apps, extend that template-created section entity instead of creating a second main `BaseEntity` for the same business object
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **Entity Schema Sync (DB-first)**
@@ -139,12 +142,36 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 - Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract
 - Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
 
-### Canonical Execution Paths
+Canonical entity flow:
 
-The canonical entity flow is `application-create -> schema-sync -> application-get-info`.
-The canonical page flow is `page-list -> page-get -> page-sync -> page-get`.
+1. `application-create`
+2. `schema-sync`
+3. `application-get-info`
 
-Resolve exact tool sequences, parameters, and fallback paths through `tool-contract-get` and the Clio MCP guidance resources (`docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`). This repository defines only the orchestration policy for when to invoke each flow phase—not the executable MCP contract.
+Canonical page flow from the current `clio` contract:
+
+1. `page-list`
+2. `page-get`
+3. edit body
+4. `page-sync`
+5. `page-get`
+
+Compact reference:
+- `application-create -> schema-sync -> application-get-info`
+- `page-list -> page-get -> page-sync -> page-get`
+
+Fallbacks:
+
+- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`
+- Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows
+
+Critical patterns:
+
+- Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable
+- Do not create a second `BaseEntity` for the same primary records already represented by the template-created section entity
+- `application-create` stays scalar-only; localized captions belong to follow-up schema tools
+- When server-advertised canonical main-entity metadata is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when that metadata is absent
+- Treat `editableContext` as a local helper projection, not as the primary MCP response contract
 
 ### Working With MCP Tools
 
@@ -171,7 +198,7 @@ Use this repo’s wrapper docs and helper scripts for:
 - normalized result-file handling
 - evidence generation and follow-up apply helpers
 
-Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+For repo-local page editing, use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
 ---
 
