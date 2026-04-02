@@ -93,13 +93,13 @@ Agent 4 executes MCP tools through the documented MCP client flow. Workflow poli
 - `context/essentials.md`
 
 Exact tool names, params, aliases, defaults, response shapes, and error shapes must be resolved from `clio MCP` through `tool-contract-get`.
+Entity and schema modeling semantics must be resolved from `docs://mcp/guides/app-modeling` instead of restating field-level rules in this repo.
 
 The `skills/application-creation/SKILL.md` file is **deprecated** and no longer used. Workflow guidance has been consolidated into the agent instructions and repository policy documents.
 
 ## Critical Conventions
 
 - All custom names start with `Usr`.
-- Entities inherit from `BaseEntity` or `BaseLookup`.
-- Do not add inherited columns (`Id`, `CreatedOn`, `CreatedBy`, `ModifiedOn`, `ModifiedBy`).
+- Resolve entity parents, inherited-column behavior, and display/default semantics through `tool-contract-get` plus `docs://mcp/guides/app-modeling`.
 - Enum-like fields are separate lookup entities.
 - All generated files live under `output/<AppName>/`.

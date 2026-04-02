@@ -778,54 +778,61 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(email_operation["action"], "add")
         self.assertEqual(email_operation["type"], "Email")
 
-    def test_build_create_action_rejects_inherited_lookup_columns(self):
-        with self.assertRaisesRegex(
-            WorkflowError,
-            "Lookup UsrMyEntityType inherits BaseLookup columns"
-        ):
-            build_create_action({
-                "packageUId": "22222222-2222-2222-2222-222222222222",
-                "packageName": "UsrMyPkg",
-                "name": "UsrMyEntityType",
-                "caption": "My Entity Type",
-                "kind": "lookup",
-                "columns": [
-                    {
-                        "name": "Name",
-                        "caption": "Name",
-                        "dataValueTypeName": "Text"
-                    },
-                    {
-                        "name": "Description",
-                        "caption": "Description",
-                        "dataValueTypeName": "Text"
-                    }
-                ]
-            })
+    def test_build_create_action_filters_non_custom_lookup_columns_without_local_semantic_validation(self):
+        action = build_create_action({
+            "packageUId": "22222222-2222-2222-2222-222222222222",
+            "packageName": "UsrMyPkg",
+            "name": "UsrMyEntityType",
+            "caption": "My Entity Type",
+            "kind": "lookup",
+            "columns": [
+                {
+                    "name": "Name",
+                    "caption": "Name",
+                    "dataValueTypeName": "Text"
+                },
+                {
+                    "name": "Description",
+                    "caption": "Description",
+                    "dataValueTypeName": "Text"
+                }
+            ]
+        })
 
-    def test_build_create_action_rejects_duplicate_title_like_lookup_columns(self):
+        self.assertEqual(action["toolName"], "create-lookup")
+        self.assertNotIn("columns", action["arguments"])
+
+    def test_build_create_action_passes_lookup_title_like_custom_columns_through_to_clio(self):
         for column_name in ("UsrName", "UsrTitle", "UsrCaption"):
             with self.subTest(column_name=column_name):
-                with self.assertRaisesRegex(
-                    WorkflowError,
-                    "Lookup UsrMyEntityType must use inherited Name as PrimaryDisplayColumn"
-                ):
-                    build_create_action({
-                        "packageUId": "22222222-2222-2222-2222-222222222222",
-                        "packageName": "UsrMyPkg",
-                        "name": "UsrMyEntityType",
-                        "caption": "My Entity Type",
-                        "kind": "lookup",
-                        "columns": [
-                            {
-                                "name": column_name,
-                                "caption": "Custom Title",
-                                "dataValueTypeName": "Text"
-                            }
-                        ]
-                    })
+                action = build_create_action({
+                    "packageUId": "22222222-2222-2222-2222-222222222222",
+                    "packageName": "UsrMyPkg",
+                    "name": "UsrMyEntityType",
+                    "caption": "My Entity Type",
+                    "kind": "lookup",
+                    "columns": [
+                        {
+                            "name": column_name,
+                            "caption": "Custom Title",
+                            "dataValueTypeName": "Text"
+                        }
+                    ]
+                })
 
-    def test_build_sync_plan_rejects_duplicate_title_like_lookup_column_updates(self):
+                self.assertEqual(action["toolName"], "create-lookup")
+                self.assertEqual(
+                    action["arguments"]["columns"],
+                    [
+                        {
+                            "name": column_name,
+                            "type": "Text",
+                            "title-localizations": build_localizations("Custom Title"),
+                        }
+                    ],
+                )
+
+    def test_build_sync_plan_allows_duplicate_title_like_lookup_column_updates_to_pass_through(self):
         current_context = build_current_result_document_with_lookup_status()["editableContext"]
         edited_context = copy.deepcopy(build_edited_context_with_default_update())
         edited_context["packages"][0]["entities"][1]["columns"].append({
@@ -834,11 +841,23 @@ class McpSchemaSyncTests(unittest.TestCase):
             "dataValueTypeName": "Text"
         })
 
-        with self.assertRaisesRegex(
-            WorkflowError,
-            "Lookup UsrMyEntityType must use inherited Name as PrimaryDisplayColumn"
-        ):
-            build_sync_plan(current_context, edited_context)
+        sync_plan = build_sync_plan(current_context, edited_context)
+
+        self.assertEqual(len(sync_plan["actions"]), 2)
+        lookup_update = sync_plan["actions"][1]
+        self.assertEqual(lookup_update["toolName"], "update-entity-schema")
+        self.assertEqual(lookup_update["target"], "UsrMyEntityType")
+        self.assertEqual(
+            lookup_update["arguments"]["operations"],
+            [
+                {
+                    "action": "add",
+                    "column-name": "UsrTitle",
+                    "type": "Text",
+                    "title-localizations": build_localizations("Title"),
+                }
+            ],
+        )
 
     def test_build_sync_plan_orders_lookup_creation_before_entity_update(self):
         current_context = build_current_result_document()["editableContext"]
@@ -859,13 +878,23 @@ class McpSchemaSyncTests(unittest.TestCase):
         with self.assertRaises(WorkflowError):
             build_sync_plan(current_context, build_invalid_edited_context())
 
-    def test_build_sync_plan_rejects_duplicate_usrname_when_name_exists(self):
+    def test_build_sync_plan_allows_duplicate_usrname_when_name_exists_and_leaves_semantics_to_clio(self):
         current_context = build_current_result_document_with_name()["editableContext"]
-        with self.assertRaisesRegex(
-            WorkflowError,
-            "Entity UsrMyEntity already contains Name; do not add duplicate UsrName"
-        ):
-            build_sync_plan(current_context, build_edited_context_with_duplicate_usrname())
+        sync_plan = build_sync_plan(current_context, build_edited_context_with_duplicate_usrname())
+
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+        self.assertEqual(
+            sync_plan["actions"][0]["arguments"]["operations"],
+            [
+                {
+                    "action": "add",
+                    "column-name": "UsrName",
+                    "type": "Text",
+                    "title-localizations": build_localizations("Custom Name"),
+                }
+            ],
+        )
 
     def test_build_sync_plan_emits_update_column_when_only_default_changes(self):
         current_context = build_current_result_document_with_lookup_status()["editableContext"]
@@ -916,26 +945,51 @@ class McpSchemaSyncTests(unittest.TestCase):
         sync_plan = build_sync_plan(current_context, edited_context)
         self.assertEqual(sync_plan["actions"], [])
 
-    def test_build_sync_plan_rejects_lookup_default_caption_instead_of_guid(self):
+    def test_build_sync_plan_passes_lookup_default_caption_through_without_local_validation(self):
         current_context = build_current_result_document_with_lookup_status()["editableContext"]
-        with self.assertRaisesRegex(
-            WorkflowError,
-            "Lookup column UsrStatus requires defaultValue as a seeded row GUID"
-        ):
-            build_sync_plan(current_context, build_edited_context_with_invalid_lookup_default())
+        sync_plan = build_sync_plan(current_context, build_edited_context_with_invalid_lookup_default())
 
-    def test_build_sync_plan_rejects_const_default_for_binary_like_columns(self):
+        self.assertEqual(len(sync_plan["actions"]), 1)
+        self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+        self.assertEqual(
+            sync_plan["actions"][0]["arguments"]["operations"],
+            [
+                {
+                    "action": "modify",
+                    "column-name": "UsrStatus",
+                    "type": "Lookup",
+                    "title-localizations": build_localizations("Status"),
+                    "reference-schema-name": "UsrMyEntityType",
+                    "default-value-source": "Const",
+                    "default-value": "New",
+                }
+            ],
+        )
+
+    def test_build_sync_plan_passes_binary_const_defaults_through_without_local_validation(self):
         current_context = build_current_result_document()["editableContext"]
         for column_type in ("Blob", "Binary", "Image", "File"):
             with self.subTest(column_type=column_type):
                 edited_context = copy.deepcopy(build_edited_context_with_invalid_binary_default())
                 attachment_column = edited_context["packages"][0]["entities"][0]["columns"][1]
                 attachment_column["dataValueTypeName"] = column_type
-                with self.assertRaisesRegex(
-                    WorkflowError,
-                    f"Column UsrAttachment with type {column_type} does not support defaultValueSource Const"
-                ):
-                    build_sync_plan(current_context, edited_context)
+                sync_plan = build_sync_plan(current_context, edited_context)
+
+                self.assertEqual(len(sync_plan["actions"]), 1)
+                self.assertEqual(sync_plan["actions"][0]["toolName"], "update-entity-schema")
+                self.assertEqual(
+                    sync_plan["actions"][0]["arguments"]["operations"],
+                    [
+                        {
+                            "action": "add",
+                            "column-name": "UsrAttachment",
+                            "type": column_type,
+                            "title-localizations": build_localizations("Attachment"),
+                            "default-value-source": "Const",
+                            "default-value": "abc123",
+                        }
+                    ],
+                )
 
     def test_build_sync_plan_does_not_force_masked_for_secure_text_update_columns(self):
         current_context = build_current_result_document()["editableContext"]

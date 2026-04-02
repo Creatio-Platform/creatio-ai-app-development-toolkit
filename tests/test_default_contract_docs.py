@@ -19,6 +19,15 @@ AUTHORITY_DOCS = [
     ROOT / ".github/copilot-instructions.md",
 ]
 
+WORKFLOW_ONLY_SCHEMA_DOCS = [
+    ROOT / "context/INDEX.md",
+    ROOT / "context/essentials.md",
+    ROOT / "context/schema-reference.md",
+    ROOT / "agents/03-implementation-plan.md",
+    ROOT / "skills/entity-creation/SKILL.md",
+    ROOT / ".github/copilot-instructions.md",
+]
+
 ACTIVE_CONTRACT_SURFACE_DOCS = [
     ROOT / "README.md",
     ROOT / "context/INDEX.md",
@@ -306,21 +315,26 @@ class DefaultContractDocsTests(unittest.TestCase):
         viewconfig_reference = (ROOT / "context/viewconfig-reference.md").read_text(encoding="utf-8").lower()
         self.assertIn("page-sync", viewconfig_reference)
 
-    def test_docs_preserve_semantic_text_field_types(self):
-        schema_reference = (ROOT / "context/schema-reference.md").read_text(encoding="utf-8")
-        self.assertIn("**Email**", schema_reference)
-        self.assertIn("PhoneNumber", schema_reference)
-        self.assertIn("WebLink", schema_reference)
-        self.assertIn("Do not collapse semantic text fields to generic `ShortText`", schema_reference)
-
-        ui_reference = (ROOT / "context/ui-reference.md").read_text(encoding="utf-8")
-        self.assertIn("| Email | EmailInput | `crt.EmailInput` |", ui_reference)
-        self.assertIn("| PhoneNumber | PhoneInput | `crt.PhoneInput` |", ui_reference)
-        self.assertIn("| WebLink | WebInput | `crt.WebInput` |", ui_reference)
-        self.assertIn("use `PhoneNumber`, `Email`, and `WebLink` in entity payloads instead of collapsing them to `ShortText`", ui_reference)
-
-        implementation_doc = (ROOT / "agents/04-implementation.md").read_text(encoding="utf-8")
-        self.assertIn("emit `Email`, `PhoneNumber`, and `WebLink`", implementation_doc)
+    def test_schema_docs_delegate_entity_and_schema_semantics_to_clio(self):
+        disallowed_markers = [
+            "BaseLookup",
+            "PrimaryDisplayColumn",
+            "defaultValueSource",
+            "default-value-source",
+            "PhoneNumber",
+            "WebLink",
+            "Email",
+            "UsrName",
+            "UsrTitle",
+            "UsrCaption",
+            "duplicate title",
+        ]
+        for path in WORKFLOW_ONLY_SCHEMA_DOCS:
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("tool-contract-get", content, str(path))
+            self.assertIn("docs://mcp/guides/app-modeling", content, str(path))
+            for marker in disallowed_markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
 
     def test_docs_do_not_use_dot_style_application_tool_names(self):
         for path in DOT_STYLE_APPLICATION_TOOL_DOCS:

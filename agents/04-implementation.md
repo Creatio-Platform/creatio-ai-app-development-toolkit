@@ -156,7 +156,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 - Prefer `schema-sync`
 - Use individual entity tools only when the approved plan cannot be expressed as one batch
-- Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
+- Resolve executable field-type semantics through `tool-contract-get` plus `docs://mcp/guides/app-modeling` instead of hardcoding them in this repo
 - After each approved schema batch, call `application-get-info` once, overwrite `mcp-application-result.json`, and normalize again
 - Stop with blocker if required fields or columns are still missing after verification
 
