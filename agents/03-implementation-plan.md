@@ -106,38 +106,27 @@ Rules:
 - Resolve exact executable parameter names, aliases, defaults, and validation rules from `tool-contract-get`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
-- `useAIContentGeneration` must be `false`.
-- If the chosen template-data mode reuses an existing entity schema, require that entity schema name.
-- If icon or client-type identifiers are explicit, validate GUID format.
 - Do not introduce technical scope that changes the approved business goal, personas, access posture, or MVP boundary without surfacing it as a blocker or a new assumption.
 
 ### Main Entity And Lookup Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
-- `application-create` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
-- Use the current `clio` MCP contract and prompts/resources for canonical main-entity selection and lookup display semantics instead of redefining them here.
-- When refreshed application context exposes `canonical-main-entity-name`, use it as the primary selector for the app’s main entity. Fall back to the section entity that matches the app code only when the canonical field is absent.
+- For new-app main-entity behavior, resolve the canonical selector from `tool-contract-get` and `docs://mcp/guides/app-modeling` instead of redefining the application contract here.
+- Treat app-shell and localization behavior for `application-create` as `clio`-owned MCP semantics. Keep the plan focused on which follow-up schema work is required, not on restating request-shape rules.
+- When refreshed application context exposes server-owned canonical main-entity metadata, use that selector for the app’s main entity and only document the orchestration consequence in the plan.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
-- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
-- Reuse `Name` when it already exists.
-- Never plan duplicate title-like columns when `Name` is already present.
-- Model enum-like business values as lookup entities first.
-- Preserve semantic text field types in schema plans: use `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields instead of downgrading them to generic `ShortText`.
-- For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
 - Do not encode executable schema payload field names in the plan. Resolve them at runtime through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
 ### Schema Sync Plan
 
-- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync, using the live `clio` contract for executable app-create semantics.
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
 - Prefer batched lookup seeding inside the canonical schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
-- Extend the template-created main entity via `update-entity-schema`.
+- Extend the workflow-selected main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
-- Canonical entity flow is `application-create -> schema-sync -> application-get-info`.
 - Refresh once through `application-get-info` after the schema-sync batch completes.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 

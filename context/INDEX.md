@@ -19,12 +19,12 @@ Start with `AGENTS.md`, then follow the current stage runbook in `agents/`.
 
 Apply a focused change to an existing app or runtime page.
 
-| Task | Skill | Read Next | Canonical MCP Flow |
-|------|-------|-----------|--------------------|
-| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | `application-create -> schema-sync -> application-get-info` |
-| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | `page-list -> page-get -> page-sync -> page-get` |
-| Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | `schema-sync` preferred, individual binding tools are fallback |
-| Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only | no MCP write path required |
+| Task | Skill | Read Next |
+|------|-------|-----------|
+| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` |
+| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` |
+| Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` |
+| Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only |
 
 ## Executable Contract
 
@@ -73,26 +73,8 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 
 ## Canonical Execution Paths
 
-Use these repository-level paths consistently.
-
-### Entity path
-
-1. `application-create`
-2. `schema-sync`
-3. `application-get-info`
-
-### Page path
-
-1. `page-list`
-2. `page-get`
-3. edit body
-4. `page-sync`
-5. `page-get`
-
-Fallback-only compatibility paths:
-
-- `create-lookup`, `create-entity-schema`, `update-entity-schema`, `create-data-binding-db`
-- `page-update` for single-page dry-run or legacy save workflows
+Resolve exact tool sequences, parameters, and fallback paths through `tool-contract-get` and the Clio MCP guidance resources (`docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`).
+Local orchestration policy for each flow is documented in the agent runbooks (`agents/*.md`).
 
 ## Skill Notes
 

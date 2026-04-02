@@ -19,9 +19,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 
 **MCP Application Creation (DB-first)**
 - Primary generation path is `application-create`
-- Discovery path for existing apps is `application-get-list`
-- Canonical refresh path is `application-get-info`
-- For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- Discovery, refresh, and main-entity semantics are MCP-owned — resolve through `tool-contract-get` and `docs://mcp/guides/app-modeling`
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **Entity Schema Sync (DB-first)**
@@ -32,9 +30,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **Default Semantics**
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
 - For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
-- Binary-like columns do not support constant defaults
 
 **Data Binding And Schema Inspection**
 - `get-entity-schema-properties` returns a deployed schema summary with column metadata
@@ -142,36 +138,9 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 - Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract
 - Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
 
-Canonical entity flow:
+### Canonical Execution Paths
 
-1. `application-create`
-2. `schema-sync`
-3. `application-get-info`
-
-Canonical page flow:
-
-1. `page-list`
-2. `page-get`
-3. edit body
-4. `page-sync`
-5. `page-get`
-
-Compact reference:
-- `application-create -> schema-sync -> application-get-info`
-- `page-list -> page-get -> page-sync -> page-get`
-
-Fallbacks:
-
-- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`
-- Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows
-
-Critical patterns:
-
-- Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable
-- Do not create a second `BaseEntity` for the same primary records already represented by the template-created section entity
-- `application-create` stays scalar-only; localized captions belong to follow-up schema tools
-- When server-advertised canonical main-entity metadata is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when that metadata is absent
-- Treat `editableContext` as a local helper projection, not as the primary MCP response contract
+Resolve exact tool sequences, parameters, and fallback paths through `tool-contract-get` and the Clio MCP guidance resources (`docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`). This repository defines only the orchestration policy for when to invoke each flow phase—not the executable MCP contract.
 
 ### Working With MCP Tools
 
@@ -241,9 +210,8 @@ clio set-syssetting MySetting "Value" -e myenv
 
 ## Local MCP Workflow
 
-```text
-MCP application-create or application-get-info -> initialize canonical context -> optional schema-sync or fallback entity tools -> application-get-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
-```
+Resolve the exact tool sequence and parameters through `tool-contract-get` and Clio MCP guidance resources.
+The local orchestration pattern follows: initialize canonical context → schema mutations → refresh → verify.
 
 Local rule:
 - Keep the result file flat and source-backed

@@ -42,13 +42,12 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
    - new app: `application-create`
    - existing app: `application-get-list` -> `application-get-info`
 5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute ordered schema sync through `schema-sync`.
-7. Refresh once through `application-get-info` and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, run `page-list` -> `page-get` -> `page-sync` -> `page-get`.
-9. Persist page evidence and verification results.
-10. Validate the final normalized result.
-11. Build `mcp-application-report.md` from persisted evidence only.
-12. Sync and validate docs under `output/<AppName>/docs/`.
+6. Execute schema and page sync following plan.md execution sequence and `tool-contract-get` tool signatures.
+7. Refresh application context after schema mutations and verify materialized schemas.
+8. Persist page evidence and verification results.
+9. Validate the final normalized result.
+10. Build `mcp-application-report.md` from persisted evidence only.
+11. Sync and validate docs under `output/<AppName>/docs/`.
 
 Fallback execution paths:
 
@@ -59,19 +58,14 @@ Fallback execution paths:
 
 - If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
 - Surface which branch actually ran in the persisted evidence and final report
-- Keep `application-create` scalar-only and apply localized captions later through schema tools
 
 ## Schema Sync Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity unless the plan explicitly defines multiple distinct business objects
-- Prefer `canonical-main-entity-name` from application context when it is present
-- Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity
-- Use `create-entity-schema` only for additional business objects with distinct meaning
+- For a new app with one primary record type, use the main-entity selection resolved from `clio` guidance and refreshed application context instead of redefining the technical rule locally
+- Prefer the refreshed app-context main-entity selector when it is present
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
-- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
 - Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
-- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 
@@ -91,21 +85,9 @@ Page sync is mandatory when the run creates a new app or extends the main sectio
 If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
 The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
 
-Canonical page sequence:
-
-1. `page-list`
-2. `page-get`
-3. edit body
-4. `page-sync`
-5. `page-get`
-
-Fallback page path:
-
-- use `page-update` only when the run explicitly needs a single-page dry-run or legacy save workflow
-- keep `page-sync` as the preferred page write path
-- keep local verification fallback through `page-get` when the page-sync response does not expose a reusable verified body
-
-Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
+Execute the page sync sequence defined in plan.md using `tool-contract-get` for exact tool signatures.
+Use `page-update` only when the approved plan explicitly requires a single-page dry-run or legacy save workflow.
+Use `component-info` after `page-get` whenever the page body contains unfamiliar `crt.*` component types.
 
 ## Evidence Rules
 
@@ -178,7 +160,7 @@ Validate the normalized result payload:
 - when `success=false`, failure evidence is present
 - schema refresh evidence exists after entity mutations
 - page evidence exists when page sync was required
-- `canonical-main-entity-name` is used when present
+- refreshed app-context main-entity selector is used when present
 
 ### 7. Write summary report
 
