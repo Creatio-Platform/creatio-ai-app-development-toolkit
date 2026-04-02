@@ -16,11 +16,8 @@ Resolve exact tool names, parameters, aliases, defaults, validators, response sh
 
 ## Canonical Entity Flow
 
-1. `application-create` for a new app shell when needed
-2. `schema-sync`
-3. `application-get-info`
-
-Keep individual entity tools such as `create-entity-schema`, `create-lookup`, and `update-entity-schema` as fallback-only compatibility paths.
+Resolve the exact tool sequence, parameters, and fallback paths through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
+Prefer `schema-sync` for grouped entity work. Use individual entity tools only when the approved plan explicitly requires a fallback path.
 
 ## What This Skill Covers
 
@@ -61,8 +58,6 @@ From the approved plan, keep only the semantic requirements:
 
 Translate these into executable payloads only at runtime through `tool-contract-get`.
 
-This flat application context is the primary runtime contract for this repo. After normalization, `mcp-application-result.json` may also contain `editableContext`, but that is a repo-local helper projection rather than the MCP response contract.
-
 ## Refresh Policy
 
 After a successful `schema-sync` batch:
@@ -77,9 +72,7 @@ Do not document per-operation refresh as the primary flow.
 
 ## Validation Checklist
 
-- `success=true`
-- `package-u-id` is non-empty
-- `entities` contains the expected schema after refresh
+- MCP response shape validated through `tool-contract-get` contract
 - schema operations follow lookup-before-reference ordering
 - inherited/display/title-field conflicts are delegated to live `clio` contract semantics instead of repo-local rules
 - explicit defaults are classified as schema defaults or UI defaults
