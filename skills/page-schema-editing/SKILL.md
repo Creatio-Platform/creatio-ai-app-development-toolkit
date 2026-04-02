@@ -1,6 +1,6 @@
 ---
 name: page-schema-editing
-description: Edit Freedom UI page schemas by modifying the full JS body directly and persisting changes through the canonical runtime page-sync flow.
+description: Edit Freedom UI page schemas by modifying the full JS body directly and persisting changes through the clio-advertised runtime page-sync flow.
 compatibility: Requires clio MCP with `page-list`, `page-get`, `page-sync`, and `component-info` available. `page-update` is fallback-only.
 metadata:
   version: "3.0"
@@ -14,7 +14,7 @@ Use this skill when the task is to change a deployed Freedom UI page body.
 This skill is not an MCP API reference.
 Resolve exact tool names, parameters, aliases, defaults, response shapes, and errors through `tool-contract-get`.
 
-## Canonical Runtime Flow
+## Runtime Flow Used By This Repo
 
 1. `page-list`
 2. `page-get`
@@ -22,7 +22,7 @@ Resolve exact tool names, parameters, aliases, defaults, response shapes, and er
 4. `page-sync`
 5. `page-get` verification
 
-Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows.
+This repo follows the clio-advertised canonical page flow above and keeps `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows.
 
 ## Required Context
 
@@ -37,7 +37,7 @@ Read before executing:
 
 - Use `raw.body` from `page-get` as the editable source of truth.
 - Treat the `page` block from `page-get` as metadata only.
-- If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `component-info` before editing nested configuration.
+- If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `component-info` as part of the clio-guided page workflow before editing nested configuration.
 - If the edited body introduces new localizable captions, persist them through the live page write contract resolved at runtime.
 - Keep repository docs for workflow and page-editing policy only. Do not copy MCP parameter tables into plans or prompts.
 

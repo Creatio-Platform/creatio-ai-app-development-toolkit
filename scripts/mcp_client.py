@@ -3,6 +3,7 @@
 Reusable stdio MCP client for clio.
 
 Usage:
+    python3 scripts/mcp_client.py --check-clio-version [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> <args-json> [timeout]
     python3 scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
@@ -36,7 +37,7 @@ import sys
 import threading
 import time
 
-MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 37)
+MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 50)
 MIN_SUPPORTED_CLIO_VERSION_TEXT = ".".join(str(part) for part in MIN_SUPPORTED_CLIO_VERSION)
 _CLIO_VERSION_CACHE = {"key": None, "info": None}
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
@@ -120,6 +121,19 @@ def validate_clio_version(min_version=MIN_SUPPORTED_CLIO_VERSION, timeout=30):
 
 def ensure_supported_clio_version(timeout=30):
     return validate_clio_version(timeout=timeout)
+
+
+def check_clio_version(timeout=30):
+    info = validate_clio_version(timeout=timeout)
+    return {
+        "success": True,
+        "data": {
+            "version": info["version"],
+            "minimum-supported-version": MIN_SUPPORTED_CLIO_VERSION_TEXT,
+            "command": info["command"],
+        },
+        "raw": info["raw"],
+    }
 
 
 def _parse_rpc_result(message_id, collected, expect_tool_result):
@@ -667,7 +681,8 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
 def parse_cli_request(argv):
     if not argv:
         raise ValueError(
-            "Usage: mcp_client.py <tool-name> <args-json> [timeout]\n"
+            "Usage: mcp_client.py --check-clio-version [--timeout <seconds>]\n"
+            "   or: mcp_client.py <tool-name> <args-json> [timeout]\n"
             "   or: mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
             "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]"
         )
@@ -705,9 +720,29 @@ def parse_cli_request(argv):
     }
 
 
+def parse_clio_version_check_request(argv):
+    if not argv or argv[0] != "--check-clio-version":
+        return None
+    parser = argparse.ArgumentParser(prog="mcp_client.py", add_help=True)
+    parser.add_argument("--check-clio-version", action="store_true")
+    parser.add_argument("--timeout", type=int, default=30)
+    parsed = parser.parse_args(argv)
+    return {"timeout": parsed.timeout}
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    version_check = parse_clio_version_check_request(argv)
+    if version_check is not None:
+        try:
+            result = check_clio_version(timeout=version_check["timeout"])
+        except (ValueError, json.JSONDecodeError, OSError, RuntimeError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return 0
     try:
-        request = parse_cli_request(sys.argv[1:] if argv is None else argv)
+        request = parse_cli_request(argv)
     except (ValueError, json.JSONDecodeError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 1

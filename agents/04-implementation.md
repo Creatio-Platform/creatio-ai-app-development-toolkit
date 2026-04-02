@@ -35,6 +35,9 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 ## Canonical Execution Order
 
+The canonical entity flow is `application-create -> schema-sync -> application-get-info`.
+The canonical page flow is `page-list -> page-get -> page-sync -> page-get`.
+
 1. Verify MCP reachability through `scripts/mcp_client.py`.
 2. Call `tools/list` and verify required tools exist.
 3. Resolve executable contract metadata through `tool-contract-get`.
@@ -42,13 +45,12 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
    - new app: `application-create`
    - existing app: `application-get-list` -> `application-get-info`
 5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute ordered schema sync through `schema-sync`.
-7. Refresh once through `application-get-info` and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, run `page-list` -> `page-get` -> `page-sync` -> `page-get`.
-9. Persist page evidence and verification results.
-10. Validate the final normalized result.
-11. Build `mcp-application-report.md` from persisted evidence only.
-12. Sync and validate docs under `output/<AppName>/docs/`.
+6. Execute schema and page sync following plan.md execution sequence and `tool-contract-get` tool signatures.
+7. Refresh application context after schema mutations and verify materialized schemas.
+8. Persist page evidence and verification results.
+9. Validate the final normalized result.
+10. Build `mcp-application-report.md` from persisted evidence only.
+11. Sync and validate docs under `output/<AppName>/docs/`.
 
 Fallback execution paths:
 
@@ -59,18 +61,17 @@ Fallback execution paths:
 
 - If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
 - Surface which branch actually ran in the persisted evidence and final report
-- Keep `application-create` scalar-only and apply localized captions later through schema tools
 
 ## Schema Sync Rules
 
 - For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity unless the plan explicitly defines multiple distinct business objects
 - Prefer `canonical-main-entity-name` from application context when it is present
+- If the approved plan names the primary record differently from the app code but does not justify a second business object, map that business label onto the canonical main entity instead of creating another entity
 - Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity
 - Use `create-entity-schema` only for additional business objects with distinct meaning
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
-- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
-- Prefer batched lookup seeding inside `schema-sync`; when the approved run needs an explicit DB-first binding fallback or separate artifact, resolve the exact tool path through `tool-contract-get`
+- Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 
@@ -86,9 +87,12 @@ For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
 ## Page Sync Rules
 
 Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
+Treat `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance` as authoritative for page-tool semantics. This section defines only the repo-local execution and evidence policy built on top of that contract.
 
 If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
 The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
+
+Execute the page sync sequence defined in plan.md using `tool-contract-get` for exact tool signatures.
 
 Canonical page sequence:
 
@@ -101,10 +105,10 @@ Canonical page sequence:
 Fallback page path:
 
 - use `page-update` only when the run explicitly needs a single-page dry-run or legacy save workflow
-- keep `page-sync` as the preferred page write path
+- keep `page-sync` as the preferred local apply path under the current `clio` contract
 - keep local verification fallback through `page-get` when the page-sync response does not expose a reusable verified body
 
-Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
+Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and the resolved `clio` guidance still leaves container behavior unclear.
 
 ## Evidence Rules
 
@@ -150,6 +154,8 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - Existing app flow: call `application-get-list`, then `application-get-info` with the resolved app identifier
 - Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
 - Normalize it with `scripts/mcp_context_adapter.py normalize`
+- Resolve the canonical main entity from the initialized application context before executing any schema mutations
+- If the next planned schema step would create a second entity for the same primary record type, stop with blocker and reuse the canonical main entity instead
 
 ### 4. Execute schema sync
 
@@ -163,7 +169,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 - Read the live page bodies via `page-get`
 - Apply page-body edits with the local page-body helpers
-- Use `page-sync` as the preferred apply path
+- Use `page-sync` as the preferred local apply path under the resolved `clio` contract
 - Verify the saved body again via `page-get`
 - Persist verification results for both `FormPage` and `ListPage`
 
@@ -177,7 +183,7 @@ Validate the normalized result payload:
 - when `success=false`, failure evidence is present
 - schema refresh evidence exists after entity mutations
 - page evidence exists when page sync was required
-- `canonical-main-entity-name` is used when present
+- refreshed app-context main-entity selector is used when present
 
 ### 7. Write summary report
 

@@ -22,6 +22,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Discovery path for existing apps is `application-get-list`
 - Canonical refresh path is `application-get-info`
 - For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- For single-record-type apps, extend that template-created section entity instead of creating a second main `BaseEntity` for the same business object
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **Entity Schema Sync (DB-first)**
@@ -32,7 +33,6 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **Default Semantics**
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
-- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
 - For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
 - Do not restate field-level default rules in this repo; resolve them through live `clio` guidance
 
@@ -147,7 +147,7 @@ Canonical entity flow:
 2. `schema-sync`
 3. `application-get-info`
 
-Canonical page flow:
+Canonical page flow from the current `clio` contract:
 
 1. `page-list`
 2. `page-get`
@@ -190,13 +190,14 @@ Use discovered MCP tool schema plus `clio` prompts/resources for:
 - lookup display-field semantics
 - default semantics and lookup-seed implications
 - current `schema-sync` and `page-sync` behavior
+- canonical page flow: `page-list -> page-get -> page-sync -> page-get`; keep `page-update` only as fallback
 
 Use this repo’s wrapper docs and helper scripts for:
 - local transport invocation patterns
 - normalized result-file handling
 - evidence generation and follow-up apply helpers
 
-Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+For repo-local page editing, use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
 ---
 
@@ -240,9 +241,8 @@ clio set-syssetting MySetting "Value" -e myenv
 
 ## Local MCP Workflow
 
-```text
-MCP application-create or application-get-info -> initialize canonical context -> optional schema-sync or fallback entity tools -> application-get-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
-```
+Resolve the exact tool sequence and parameters through `tool-contract-get` and Clio MCP guidance resources.
+The local orchestration pattern follows: initialize canonical context → schema mutations → refresh → verify.
 
 Local rule:
 - Keep the result file flat and source-backed

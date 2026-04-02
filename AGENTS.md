@@ -279,8 +279,9 @@ Authority model:
 - Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `tool-contract-get`.
 - Repository docs must not define an independent MCP API contract.
 - Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
-- Canonical entity execution path in repository guidance is `application-create -> schema-sync -> application-get-info`.
-- Canonical page execution path in repository guidance is `page-list -> page-get -> page-sync -> page-get`.
+- Resolve canonical entity and page execution paths through `tool-contract-get` and Clio MCP guidance resources. See `context/essentials.md` for orchestration policy.
+- The canonical entity flow is `application-create -> schema-sync -> application-get-info`.
+- The canonical page flow is `page-list -> page-get -> page-sync -> page-get`.
 
 Canonical repository references:
 

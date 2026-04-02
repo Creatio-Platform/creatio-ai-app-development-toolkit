@@ -17,9 +17,10 @@ Use `clio` MCP discovery plus MCP prompts/resources for:
 - canonical main-entity rules
 - lookup display-field rules
 - default semantics
-- current `schema-sync` and `page-sync` behavior
+- current `schema-sync` and `page-sync` behavior, including page-tool roles and fallback hints
 
 For app-modeling guidance, use `docs://mcp/guides/app-modeling`.
+For page maintenance guidance, use `docs://mcp/guides/existing-app-maintenance`.
 
 ## Local Transport
 
@@ -50,11 +51,7 @@ $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
 
 ## Canonical Runtime Result
 
-The primary application context used by this repo starts from the flat MCP response returned by `application-create` or `application-get-info`.
-
-Use `tool-contract-get` plus `clio` prompts/resources for the current executable response shape and field names.
-This repo only normalizes the current response envelope into local helper state and evidence files.
-Do not treat legacy `app/packages` examples as the MCP response contract.
+For canonical MCP response fields and shapes, use `tool-contract-get`. This section covers only the local normalization applied after receiving the MCP response.
 
 ## Normalize Into `mcp-application-result.json`
 
@@ -84,7 +81,7 @@ Use this repo-local refresh policy:
 5. Overwrite and normalize `mcp-application-result.json` again
 6. Run page sync and evidence helpers when required
 
-When the application context includes server-advertised canonical main-entity metadata, use it as the primary selector for the app’s main entity. Only fall back to matching the app code when that metadata is absent.
+When the application context exposes a main-entity selector, treat it as `clio`-owned MCP metadata and use it as the primary selector for the app’s main entity. Keep this file focused on local wrapper and result-handling behavior.
 
 ## Local Follow-up Helpers
 
@@ -96,8 +93,8 @@ Use these helpers after MCP calls:
 
 Local helper rules:
 - use `schema-sync` as the preferred entity write path when the approved plan batches related entity changes
-- use `page-sync` as the preferred page write path
-- keep the local verification fallback through `page-get` when the page-sync response does not expose a reusable verified body
+- follow the clio-advertised canonical page flow `page-list -> page-get -> page-sync -> page-get`
+- keep the local verification fallback through `page-get` when the `page-sync` response does not expose a reusable verified body
 
 ## Minimal Example
 

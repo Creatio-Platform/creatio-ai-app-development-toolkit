@@ -19,3 +19,4 @@ copilot-session-*.md
 output/
 .tmp-tests/
 context/.cache/
+.serena/
