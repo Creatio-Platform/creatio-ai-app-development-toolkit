@@ -1,7 +1,7 @@
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime page-sync flow. `page-update` is fallback-only.
+Used by coding agents with the runtime page-sync flow that this repo consumes from `clio`. `page-update` remains fallback-only in the local workflow.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -78,7 +78,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
-3. Use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+3. Follow the clio guidance and use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
 **Step 3 — Choosing the right container for new elements:**
 
@@ -484,7 +484,7 @@ Usr-prefixed keys without explicit values in `resources` are auto-derived from k
 }
 ```
 
-Save through the canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
+Save through the clio-advertised canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
 
 ---
 

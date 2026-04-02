@@ -17,9 +17,10 @@ Use `clio` MCP discovery plus MCP prompts/resources for:
 - canonical main-entity rules
 - lookup display-field rules
 - default semantics
-- current `schema-sync` and `page-sync` behavior
+- current `schema-sync` and `page-sync` behavior, including page-tool roles and fallback hints
 
 For app-modeling guidance, use `docs://mcp/guides/app-modeling`.
+For page maintenance guidance, use `docs://mcp/guides/existing-app-maintenance`.
 
 ## Local Transport
 
@@ -96,8 +97,8 @@ Use these helpers after MCP calls:
 
 Local helper rules:
 - use `schema-sync` as the preferred entity write path when the approved plan batches related entity changes
-- use `page-sync` as the preferred page write path
-- keep the local verification fallback through `page-get` when the page-sync response does not expose a reusable verified body
+- follow the clio-advertised canonical page flow `page-list -> page-get -> page-sync -> page-get`
+- keep the local verification fallback through `page-get` when the `page-sync` response does not expose a reusable verified body
 
 ## Minimal Example
 

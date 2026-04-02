@@ -22,6 +22,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Discovery path for existing apps is `application-get-list`
 - Canonical refresh path is `application-get-info`
 - For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- For single-record-type apps, extend that template-created section entity instead of creating a second main `BaseEntity` for the same business object
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **Entity Schema Sync (DB-first)**
@@ -148,7 +149,7 @@ Canonical entity flow:
 2. `schema-sync`
 3. `application-get-info`
 
-Canonical page flow:
+Canonical page flow from the current `clio` contract:
 
 1. `page-list`
 2. `page-get`
@@ -197,7 +198,7 @@ Use this repo’s wrapper docs and helper scripts for:
 - normalized result-file handling
 - evidence generation and follow-up apply helpers
 
-Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+For repo-local page editing, use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
 ---
 

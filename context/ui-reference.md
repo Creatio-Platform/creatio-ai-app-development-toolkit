@@ -635,13 +635,13 @@ If the live page already contains `converters` or `validators`, preserve them an
 
 ## MCP Page Tools — Reading and Editing Pages
 
-Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
+Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. The executable tool semantics come from `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance`; this section keeps only the repo-local consumer workflow.
 
 | Tool | Description |
 |------|-------------|
 | `page-list` | Discover page schemas by package or name pattern |
 | `page-get` | Read a page schema's metadata and raw JS body |
-| `page-sync` | Canonical write path for edited page bodies, batch validation, and server-side verification |
+| `page-sync` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
 | `page-update` | Fallback single-page dry-run or legacy save path |
 | `component-info` | Inspect curated Freedom UI component properties and example payloads |
 
@@ -652,8 +652,8 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 1. call `page-list` with `search-pattern: "MyApp"`
 2. call `page-get` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. If the page contains unfamiliar `crt.*` components, inspect them with `component-info` and `component-type: "..."`
-5. call `page-sync` with the edited page body and verify the saved page; use `page-update` only as an explicit fallback
+4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `component-info` and `component-type: "..."`
+5. call `page-sync` with the edited page body and verify the saved page; keep `page-update` only as an explicit fallback
 ```
 
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page-get`.

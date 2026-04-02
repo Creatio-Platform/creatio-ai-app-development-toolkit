@@ -47,7 +47,7 @@ Orchestrator flow:
 3. Requirements gathering produces a BA-style `requirements.md`, writes `request-spec.json`, persists approved `workflow-state.json`, and initializes draft docs under `output/<AppName>/docs/**`.
    The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`.
 4. Implementation plan generates `output/<AppName>/technical-annex.md` and `output/<AppName>/plan.md` when implementation is explicitly requested.
-5. Implementation runs synchronously, resolves executable contract metadata through `tool-contract-get`, initializes canonical context in `mcp-application-result.json`, applies the canonical entity flow `application-create -> schema-sync -> application-get-info`, and applies the canonical page flow `page-list -> page-get -> page-sync -> page-get`.
+5. Implementation runs synchronously, resolves executable contract metadata through `tool-contract-get`, initializes canonical context in `mcp-application-result.json`, applies the canonical entity flow `application-create -> schema-sync -> application-get-info`, and follows the clio-advertised canonical page flow `page-list -> page-get -> page-sync -> page-get`.
 6. Existing-app branching stays explicit through `application-get-list -> application-get-info`. Individual entity/page tools remain fallback-only compatibility paths.
 
 All generated artifacts are under `output/<AppName>/`.
@@ -92,7 +92,7 @@ $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
 
 `mcp-application-result.json` stores the compact short MCP response in flat runtime form (`package-u-id`, `package-name`, `entities`, optional `canonical-main-entity-name`) plus `editableContext`, `operationLog`, `pageEvidence`, and any persisted acceptance evidence. Reports must be derived from that runtime evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
 
-When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly. `page-sync` is the preferred write path, while `mcp_page_sync.py` keeps a mandatory verification fallback through `page-get` when the server response does not include a reusable verified body.
+When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly. The executable page-tool semantics come from `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance`; locally, `mcp_page_sync.py` follows that canonical path and keeps a mandatory verification fallback through `page-get` when the server response does not include a reusable verified body.
 
 ## Architecture
 
