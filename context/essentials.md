@@ -39,9 +39,8 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **Data Binding And Schema Inspection**
 - `get-entity-schema-properties` returns a deployed schema summary with column metadata
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
-- `create-data-binding-db` persists bindings in DB and installs data immediately
-- `upsert-data-binding-row-db` updates rows only in an already existing binding
-- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
+- For DB-first binding behavior, payload shape, and fallback semantics, resolve the current canonical path through `tool-contract-get`
+- For lookup seeding, keep only the orchestration decision in this repo and defer executable semantics to `clio`
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules

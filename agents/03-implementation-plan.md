@@ -131,7 +131,7 @@ Rules:
 - Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
 - For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
 - Create lookup entities before entities that reference them.
-- Prefer batched lookup seeding inside the canonical schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Prefer batched lookup seeding inside the canonical schema mutation flow. When the approved workflow needs an explicit DB-first binding fallback or separate artifact, resolve the exact path through `tool-contract-get`.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.

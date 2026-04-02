@@ -19,7 +19,7 @@ Resolve exact tool names, parameters, aliases, defaults, and response shapes thr
 Prefer plan-driven or composite flows first:
 
 1. use batched lookup seeding inside `schema-sync` for normal lookup seeding
-2. use explicit binding tools only when a distinct binding artifact or post-sync seed step is actually required
+2. use explicit binding tools only when the approved workflow explicitly needs a distinct binding artifact or post-sync binding step, based on the current `clio` contract
 
 Typical fallback tool families:
 
@@ -43,8 +43,7 @@ Typical fallback tool families:
 5. `SysModule.SectionSchemaUId` must match the list page UId in the current app context.
 6. `filter.json` stays empty for standard section registration and lookup seed bindings unless a custom filter is explicitly required.
 7. Generate fresh GUIDs for lookup seed rows at execution time.
-8. For ordinary lookup seeding, do not create a second binding artifact under a different binding name unless the plan explicitly requires it.
-9. Treat DB persistence and immediate install as the primary effect; server-side file materialization is secondary.
+8. Verify binding results through workflow evidence and installed artifacts, not through inferred tool behavior.
 
 ## Source Inputs
 
@@ -61,7 +60,7 @@ Typical fallback tool families:
 1. Inspect deployed schema metadata only when needed for stable IDs or column discovery.
 2. Prefer batched lookup seeding through `schema-sync` when the same workflow already creates or updates the lookup.
 3. Use explicit binding creation only when the workflow needs `SysModule`, `SysModuleEntity`, or a separate binding artifact.
-4. Upsert targeted rows only after the binding identity is known.
+4. Upsert targeted rows only after the target binding has been established by the current workflow.
 5. Verify the result from execution evidence instead of assuming success from planned rows.
 
 ## Validation Checklist
@@ -69,10 +68,10 @@ Typical fallback tool families:
 - binding targets match the current app context
 - lookup seed rows contain all required values
 - every generated row GUID is fresh
-- no duplicate binding artifact is created without explicit intent
+- any explicit fallback binding step is justified by the approved workflow
 - evidence shows the installed result, not only the requested rows
 
 ## Notes
 
 - Template files under `templates/data-bindings/` are reference examples only.
-- This skill defines binding policy and invariants, not executable payload syntax.
+- This skill defines repo-local orchestration guidance and artifact invariants, not executable binding semantics.

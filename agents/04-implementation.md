@@ -70,8 +70,7 @@ Fallback execution paths:
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
-- Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
-- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
+- Prefer batched lookup seeding inside `schema-sync`; when the approved run needs an explicit DB-first binding fallback or separate artifact, resolve the exact tool path through `tool-contract-get`
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 

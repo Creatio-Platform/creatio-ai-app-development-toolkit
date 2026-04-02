@@ -67,7 +67,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | `viewConfigDiff` recipes | `context/viewconfig-reference.md` | container discovery and field recipes |
 | Handler patterns and request types | `context/handlers-reference.md` | page-body handler policy |
 | Safe SDK usage in page bodies | `context/devkit-common-reference.md` | page-body runtime API guidance |
-| Data bindings and lookup seeding | `context/data-bindings-reference.md` | binding policy and tool usage |
+| Data bindings and lookup seeding | `context/data-bindings-reference.md` | section/navigation invariants and local evidence guidance |
 | Local MCP transport and normalization | `context/mcp-application-tools-reference.md` | local wrapper, stdio transport, normalization |
 | MCP transport helper | `scripts/mcp_client.py` | stdio client wrapper |
 
