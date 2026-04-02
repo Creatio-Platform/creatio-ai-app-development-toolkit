@@ -141,6 +141,9 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 
 ### Canonical Execution Paths
 
+The canonical entity flow is `application-create -> schema-sync -> application-get-info`.
+The canonical page flow is `page-list -> page-get -> page-sync -> page-get`.
+
 Resolve exact tool sequences, parameters, and fallback paths through `tool-contract-get` and the Clio MCP guidance resources (`docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`). This repository defines only the orchestration policy for when to invoke each flow phase—not the executable MCP contract.
 
 ### Working With MCP Tools
@@ -161,6 +164,7 @@ Use discovered MCP tool schema plus `clio` prompts/resources for:
 - lookup display-field semantics
 - default semantics and lookup-seed implications
 - current `schema-sync` and `page-sync` behavior
+- canonical page flow: `page-list -> page-get -> page-sync -> page-get`; keep `page-update` only as fallback
 
 Use this repo’s wrapper docs and helper scripts for:
 - local transport invocation patterns

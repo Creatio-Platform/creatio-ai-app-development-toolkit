@@ -35,6 +35,9 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 ## Canonical Execution Order
 
+The canonical entity flow is `application-create -> schema-sync -> application-get-info`.
+The canonical page flow is `page-list -> page-get -> page-sync -> page-get`.
+
 1. Verify MCP reachability through `scripts/mcp_client.py`.
 2. Call `tools/list` and verify required tools exist.
 3. Resolve executable contract metadata through `tool-contract-get`.
