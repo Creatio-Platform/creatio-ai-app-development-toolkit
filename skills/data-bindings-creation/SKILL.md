@@ -30,9 +30,8 @@ Typical fallback tool families:
 ## Outputs
 
 - MCP response with `{"success": true}`
-- binding persisted in Creatio DB
-- immediate installed state in Creatio
-- execution evidence captured in the workflow result document
+- workflow evidence captured in the result document
+- installed artifact verification recorded when the workflow requires it
 
 ## Rules
 
