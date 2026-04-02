@@ -31,6 +31,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
 - For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
+- Do not restate field-level default rules in this repo; resolve them through live `clio` guidance
 
 **Data Binding And Schema Inspection**
 - `get-entity-schema-properties` returns a deployed schema summary with column metadata
@@ -46,8 +47,8 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
 
 **Entity Model**
-- Entities extend a parent such as `BaseEntity` or `BaseLookup`
-- Columns use DataValueType identifiers
+- Entities extend a server-defined parent selected through the current `clio` contract and guidance
+- Columns use server-defined data value types discovered through live contract metadata
 - Schemas use a diff-oriented metadata model
 
 **System Tables For Navigation**

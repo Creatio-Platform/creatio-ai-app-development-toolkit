@@ -151,6 +151,19 @@ Technical question policy:
 - runtime credentials or endpoints remain execution blockers when the selected routing mode requires them
 - if the developer asks for an autonomous flow without required runtime inputs, ask only for the missing blockers
 
+## Execution Environment Guard
+
+Before the first shell, Python, Node, `clio`, or MCP execution step, validate executor health through the same command path that will be used for the real work.
+
+- determine the current operating system and the executor required by the next command syntax
+- if executor startup fails with errors such as `File not found`, `shell not found`, startup failure, or equivalent boot errors, stop immediately with a blocker
+- treat this as an execution-environment blocker, not as a filesystem, path, permission, business-logic, or MCP-contract issue
+- do not retry the same stage in alternate syntax variants before executor health is confirmed
+- do not infer missing directories, missing project roots, or write-permission problems until executor health is confirmed
+- state the expected executor, the actually available or failing executor, and that implementation execution did not start because preflight failed
+
+Detailed preflight rules and platform-specific checks live in `agents/01-environment-setup.md`.
+
 Execution order is conditional:
 
 - `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3 -> Agent 4

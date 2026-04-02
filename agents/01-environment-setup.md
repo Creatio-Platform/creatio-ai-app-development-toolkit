@@ -17,6 +17,44 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.m
 
 ## Steps
 
+### 0. Execution preflight
+
+Before any `dotnet`, `clio`, Python, Node, or MCP-related command, validate the command executor through the same execution path that will be used for the real work.
+
+Preflight contract:
+
+- detect the current operating system and active command executor
+- determine the executor required by the next command syntax
+- run one trivial shell-health command through that exact executor path
+- continue only if shell-health succeeds
+
+Platform-specific rules:
+
+- if the next commands use Windows PowerShell syntax or require a PowerShell-backed executor, validate that executor first; a `cmd.exe`-only environment is not an acceptable substitute
+- if the next commands use Windows `cmd.exe` syntax, validate `cmd.exe` first
+- if the next commands use macOS or Linux POSIX shell syntax, validate the active POSIX shell first; use the current `environment_context.shell` when available unless a later step explicitly requires a different shell
+- if a later step requires a different executor than the current shell, validate that executor before the first dependent command
+
+Recommended shell-health checks:
+
+- Windows PowerShell-backed flow: `Get-Location` or `Write-Host ok`
+- Windows `cmd.exe` flow: `cd` or `echo ok`
+- macOS/Linux POSIX flow: `pwd` or `printf ok`
+
+Fail-fast rules:
+
+- if the shell-health command fails with executor-level errors such as `File not found`, `shell not found`, startup failure, or equivalent boot errors, stop immediately with a blocker
+- do not continue to `dotnet`, `clio`, Python, Node, or MCP bootstrap commands
+- do not retry the same stage in alternate syntax variants such as `New-Item`, `mkdir`, `cmd /c`, `python -c`, `node -e`, or alternate shell IDs before executor health is confirmed
+- do not diagnose path, permission, project-root, or directory-creation problems until the executor has been proven healthy
+
+User-facing blocker message:
+
+- state which executor was expected
+- state which executor was actually available or failing
+- state that implementation execution did not start because execution preflight failed
+- ask only for the minimum environment correction needed to continue
+
 ### 1. Verify prerequisites
 
 **Step 1a — Check .NET SDK:**
@@ -148,6 +186,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 |-------|--------|
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
+| Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |

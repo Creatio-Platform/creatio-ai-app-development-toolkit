@@ -115,6 +115,10 @@ Rules:
 - When refreshed application context exposes server-owned canonical main-entity metadata, use that selector for the app’s main entity and only document the orchestration consequence in the plan.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
+- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
+- Resolve title/display field reuse from refreshed app context plus live `clio` modeling guidance; do not encode duplicate-column heuristics in the plan.
+- Model enum-like business values as lookup entities first.
+- Resolve field-type semantics and lookup display rules through `tool-contract-get` plus `docs://mcp/guides/app-modeling`; do not restate those rules in the plan.
 - Do not encode executable schema payload field names in the plan. Resolve them at runtime through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
@@ -182,7 +186,7 @@ When page sync is required:
 
 - Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
 - Resolve executable parameter names, aliases, defaults, and nested request shapes from `tool-contract-get` instead of hard-coding them in the plan.
-- Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
+- Do not introduce local validation rules for inherited, display, or title-field conflicts; rely on the live `clio` contract and modeling guidance.
 - Never treat seeded rows as implementation of a default rule.
 
 ## Plan Output
