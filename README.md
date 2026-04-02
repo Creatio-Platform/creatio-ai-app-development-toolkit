@@ -38,6 +38,85 @@ Primary workflow is natural language:
 
 Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
 
+## Support Mode (Troubleshooting)
+
+Support mode is a user-friendly troubleshooting mode that maximizes visible session traceability.
+
+### Start and Stop
+
+Use natural language (case-insensitive):
+
+- `support mode on`
+- `turn on support mode`
+- `support mode off`
+
+Support mode is run-scoped and non-persistent by default (`support_mode_active: true|false`).
+
+### Guarantees While Active
+
+- No subagents, no background tasks, no delegated execution.
+- Work is executed in the main thread/session only.
+- If a task is only possible through delegation/background execution, the agent proceeds and records a support-mode exception that explains why background execution was required.
+- Existing delegation behavior remains unchanged when support mode is off.
+
+### Expected Support Output
+
+For each substantial step:
+
+- `Action`: what the agent is doing
+- `Result`: success/fail and key output
+- `If failed`: error and the next recovery attempt
+
+Final response includes:
+
+- ordered execution summary
+- unresolved blockers
+- collected evidence summary
+- support-mode exceptions summary for unavoidable background/delegated steps
+- completion handoff prompt asking the user to share the session with support
+
+Reasoning visibility in support mode:
+
+- Include concise decision evidence (`Instruction check`, `Decision rationale`, `Constraint conflicts`, `Skipped options`, `Self-check`).
+- Internal private chain-of-thought is non-contractual and not required to be exposed.
+
+### Copy-Paste Examples
+
+```text
+Add print button on the page. Support mode on.
+```
+
+```text
+Hide obsolete field from the form page. Support mode on.
+```
+
+```text
+Analyze why the page-sync step did not update the list page. Support mode on.
+```
+
+```text
+Support mode off. Continue with normal execution.
+```
+
+```text
+Support mode is on. Please share this session with support for analysis.
+```
+
+```text
+Support mode is on. Please share this session with support for analysis using /share.
+```
+
+### Verification Checklist
+
+1. Activation/deactivation is acknowledged when user says `support mode on` or `support mode off`.
+2. While active, delegated/background execution is avoided by default; unavoidable cases are explicitly logged as support-mode exceptions with reason.
+3. While active, each major step reports action/result and failure recovery when needed.
+4. While active, final response includes execution summary, blockers, evidence, support-mode exceptions (if any), and completion handoff prompt.
+5. Support mode ON + success: completion handoff prompt is present.
+6. Support mode ON + failure: completion handoff prompt is present.
+7. Support mode OFF: completion handoff prompt is absent.
+8. With support mode off, existing delegation behavior is unchanged.
+
 ## Workflow
 
 Orchestrator flow:

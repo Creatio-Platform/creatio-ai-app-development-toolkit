@@ -46,6 +46,42 @@ Do not substitute, omit, reorder, or wrap those sections in a generic Steps/Veri
 Before reading any context or agent files, read `context/INDEX.md` first.
 It maps every file to line ranges per phase so you can load only the relevant sections.
 
+## Support Mode (Troubleshooting)
+
+Support mode is a policy overlay for troubleshooting and session traceability.
+
+Activation phrases are case-insensitive:
+
+- `support mode on`
+- `turn on support mode`
+- `support mode off`
+
+Behavior while active:
+
+- Forbid subagents, background tasks, and delegated execution.
+- Execute all work in the main thread/session only.
+- If a required step can only run through background/delegated execution, proceed and log a support-mode exception that explains why background execution is required for that step.
+- Keep existing delegation rules unchanged when support mode is not active.
+
+Precedence:
+
+- Support mode overrides delegation/background behavior only while active.
+- Support mode does not change Gate P/Gate R rules or BA/implementation-plan format contracts.
+
+Reporting contract while active:
+
+- Per substantial step, include: `Action`, `Result`, and `If failed` (error + next recovery attempt).
+- Final response must include: ordered execution summary, unresolved blockers, collected evidence summary, and support-mode exceptions summary for unavoidable background/delegated steps.
+- Include a concise reasoning summary with: `Instruction check`, `Decision rationale`, `Constraint conflicts`, `Skipped options`, `Self-check`.
+- Private internal chain-of-thought is non-contractual and is not required to be exposed.
+
+Completion hook while active:
+
+- When `support_mode_active=true` and the response is a completion/final task result (not an intermediate progress update), append a support handoff line after the result and evidence summary.
+- Copilot CLI output requirement: `Support mode is on. Please share this session with support for analysis using /share.`
+- Cross-agent fallback in unknown/non-Copilot hosts: `Support mode is on. Please share this session with support for analysis.`
+- Applies on both successful and failed task completions.
+
 ## Execution Rules
 
 1. Read `context/INDEX.md` first, then `AGENTS.md`.
