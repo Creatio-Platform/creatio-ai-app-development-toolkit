@@ -250,6 +250,22 @@ def summarize_response(response):
             if source_key in response:
                 summary[target_key] = copy.deepcopy(response[source_key])
                 break
+    page_metadata = response.get("page")
+    if isinstance(page_metadata, dict):
+        nested_field_map = {
+            "schemaName": ("schemaName",),
+            "packageUId": ("packageUId",),
+            "packageName": ("packageName",),
+            "uId": ("schemaUId", "uId"),
+            "parentSchemaName": ("parentSchemaName",),
+        }
+        for target_key, source_keys in nested_field_map.items():
+            if target_key in summary:
+                continue
+            for source_key in source_keys:
+                if source_key in page_metadata:
+                    summary[target_key] = copy.deepcopy(page_metadata[source_key])
+                    break
     raw_body = response.get("raw", {}).get("body") if isinstance(response.get("raw"), dict) else response.get("body")
     if "bodyLength" not in summary and isinstance(raw_body, str):
         summary["bodyLength"] = len(raw_body)
@@ -266,15 +282,24 @@ def summarize_response(response):
             summary["entity"] = entity_summary
     pages = response.get("pages")
     if isinstance(pages, list):
-        summary["pages"] = [
-            {
-                target_key: copy.deepcopy(page[source_key])
-                for target_key, source_key in (("schemaName", "schema-name"), ("uId", "uId"), ("packageName", "packageName"))
-                if isinstance(page, dict) and source_key in page
-            }
-            for page in pages
-            if isinstance(page, dict)
-        ]
+        summarized_pages = []
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            page_metadata = page.get("page") if isinstance(page.get("page"), dict) else {}
+            page_summary = {}
+            schema_name = page.get("schema-name") or page.get("schemaName")
+            if schema_name is not None:
+                page_summary["schemaName"] = copy.deepcopy(schema_name)
+            u_id = page.get("uId") or page_metadata.get("schemaUId")
+            if u_id is not None:
+                page_summary["uId"] = copy.deepcopy(u_id)
+            package_name = page.get("packageName") or page_metadata.get("packageName")
+            if package_name is not None:
+                page_summary["packageName"] = copy.deepcopy(package_name)
+            if page_summary:
+                summarized_pages.append(page_summary)
+        summary["pages"] = summarized_pages
     error = response.get("error")
     if isinstance(error, dict) and error:
         summary["error"] = copy.deepcopy(error)
@@ -457,7 +482,7 @@ def attach_page_evidence(result_document, page_name, verification, response=None
     page_entry = copy.deepcopy(document["pageEvidence"].get(page_name, {}))
     if response is not None:
         response_summary = summarize_response(response)
-        for key in ("schemaName", "bodyLength", "success", "uId", "parentSchemaName", "packageName"):
+        for key in ("schemaName", "bodyLength", "success", "uId", "parentSchemaName", "packageName", "packageUId"):
             if key in response_summary:
                 page_entry[key] = response_summary[key]
     page_entry["verification"] = copy.deepcopy(verification)
