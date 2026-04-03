@@ -114,6 +114,15 @@ py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get
 The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
 Always register through `clio reg-web-app` if the environment does not exist.
 
+### Ambiguous Match Guardrail
+
+If `clio show-web-app-list` returns multiple registered environments whose normalized URL matches the current request URL:
+
+1. Treat the environment choice as ambiguous.
+2. Ask the developer to choose the exact `environmentName`.
+3. Do not auto-select based on prior runs, `output/<AppName>/.creatio-env.json`, active-environment status, or an internal plan that mentions one of the matching aliases.
+4. Skip the question only when the current conversation explicitly names the environment key to use for the current URL.
+
 ### Existing Output Guard
 
 If `output/<AppName>/.creatio-env.json` already exists:
@@ -133,7 +142,8 @@ clio show-web-app-list
 Display the list to the developer. Check if an environment for the current request URL already exists.
 
 - Ignore `output/<AppName>/.creatio-env.json` as the runtime source of truth for a new run.
-- **If an environment for the current request URL exists** — use that environment name and skip to Step 5.
+- **If exactly one environment for the current request URL exists** — use that environment name and skip to Step 5.
+- **If two or more environments for the current request URL exist** — stop and ask the developer which environment name to use. Do not guess.
 - **If it does not exist** — proceed to Step 3.
 
 ### 3. Register the environment
