@@ -19,12 +19,12 @@ Start with `AGENTS.md`, then follow the current stage runbook in `agents/`.
 
 Apply a focused change to an existing app or runtime page.
 
-| Task | Skill | Read Next |
-|------|-------|-----------|
-| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` |
-| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` |
-| Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` |
-| Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only |
+| Task | Skill | Read Next | Canonical MCP Guidance |
+|------|-------|-----------|------------------------|
+| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/app-modeling` |
+| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance` |
+| Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | Resolve preferred vs fallback path through `clio` MCP guidance |
+| Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only | no MCP write path required |
 
 ## Executable Contract
 
@@ -67,14 +67,17 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | `viewConfigDiff` recipes | `context/viewconfig-reference.md` | container discovery and field recipes |
 | Handler patterns and request types | `context/handlers-reference.md` | page-body handler policy |
 | Safe SDK usage in page bodies | `context/devkit-common-reference.md` | page-body runtime API guidance |
-| Data bindings and lookup seeding | `context/data-bindings-reference.md` | section/navigation invariants and local evidence guidance |
+| Data bindings and lookup seeding | `context/data-bindings-reference.md` | binding policy and tool usage |
 | Local MCP transport and normalization | `context/mcp-application-tools-reference.md` | local wrapper, stdio transport, normalization |
 | MCP transport helper | `scripts/mcp_client.py` | stdio client wrapper |
 
-## Canonical Execution Paths
+## Canonical MCP Guidance
 
-Resolve exact tool sequences, parameters, and fallback paths through `tool-contract-get` and the Clio MCP guidance resources (`docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`).
-Local orchestration policy for each flow is documented in the agent runbooks (`agents/*.md`).
+Resolve canonical execution paths, fallback-only compatibility tools, and verify/read-back policy through:
+
+- `tool-contract-get`
+- `docs://mcp/guides/app-modeling`
+- `docs://mcp/guides/existing-app-maintenance`
 
 ## Skill Notes
 

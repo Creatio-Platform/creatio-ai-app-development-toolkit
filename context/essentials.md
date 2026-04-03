@@ -18,11 +18,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
 
 **MCP Application Creation (DB-first)**
-- Primary generation path is `application-create`
-- Discovery path for existing apps is `application-get-list`
-- Canonical refresh path is `application-get-info`
-- For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
-- For single-record-type apps, extend that template-created section entity instead of creating a second main `BaseEntity` for the same business object
+- Resolve current application creation, discovery, refresh, and main-entity semantics through `tool-contract-get` and the `clio` MCP guidance resources
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **Entity Schema Sync (DB-first)**
@@ -33,14 +29,16 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **Default Semantics**
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
 - For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
-- Do not restate field-level default rules in this repo; resolve them through live `clio` guidance
+- Binary-like columns do not support constant defaults
 
 **Data Binding And Schema Inspection**
 - `get-entity-schema-properties` returns a deployed schema summary with column metadata
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
-- For DB-first binding behavior, payload shape, and fallback semantics, resolve the current canonical path through `tool-contract-get`
-- For lookup seeding, keep only the orchestration decision in this repo and defer executable semantics to `clio`
+- `create-data-binding-db` persists bindings in DB and installs data immediately
+- `upsert-data-binding-row-db` updates rows only in an already existing binding
+- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules
@@ -49,8 +47,8 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
 
 **Entity Model**
-- Entities extend a server-defined parent selected through the current `clio` contract and guidance
-- Columns use server-defined data value types discovered through live contract metadata
+- Entities extend a server-defined parent discovered through live contract metadata
+- Columns use server-defined value-type identifiers
 - Schemas use a diff-oriented metadata model
 
 **System Tables For Navigation**
@@ -140,37 +138,8 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 - `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
 - Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract
 - Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
-
-Canonical entity flow:
-
-1. `application-create`
-2. `schema-sync`
-3. `application-get-info`
-
-Canonical page flow from the current `clio` contract:
-
-1. `page-list`
-2. `page-get`
-3. edit body
-4. `page-sync`
-5. `page-get`
-
-Compact reference:
-- `application-create -> schema-sync -> application-get-info`
-- `page-list -> page-get -> page-sync -> page-get`
-
-Fallbacks:
-
-- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`
-- Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows
-
-Critical patterns:
-
-- Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable
-- Do not create a second `BaseEntity` for the same primary records already represented by the template-created section entity
-- `application-create` stays scalar-only; localized captions belong to follow-up schema tools
-- When server-advertised canonical main-entity metadata is present, use it as the primary selector for the app’s main entity and fall back to the section entity that matches the app code only when that metadata is absent
-- Treat `editableContext` as a local helper projection, not as the primary MCP response contract
+- Resolve human-readable MCP flow, fallback, verification, main-entity, localization, and page inspection guidance through `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
+- Treat `editableContext` as a local helper projection, not as the primary MCP response contract.
 
 ### Working With MCP Tools
 
@@ -190,14 +159,11 @@ Use discovered MCP tool schema plus `clio` prompts/resources for:
 - lookup display-field semantics
 - default semantics and lookup-seed implications
 - current `schema-sync` and `page-sync` behavior
-- canonical page flow: `page-list -> page-get -> page-sync -> page-get`; keep `page-update` only as fallback
 
 Use this repo’s wrapper docs and helper scripts for:
 - local transport invocation patterns
 - normalized result-file handling
 - evidence generation and follow-up apply helpers
-
-For repo-local page editing, use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
 ---
 
@@ -241,8 +207,9 @@ clio set-syssetting MySetting "Value" -e myenv
 
 ## Local MCP Workflow
 
-Resolve the exact tool sequence and parameters through `tool-contract-get` and Clio MCP guidance resources.
-The local orchestration pattern follows: initialize canonical context → schema mutations → refresh → verify.
+```text
+MCP result -> normalize into repo-local context -> run approved helper orchestration -> persist evidence and reports
+```
 
 Local rule:
 - Keep the result file flat and source-backed
