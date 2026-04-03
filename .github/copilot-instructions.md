@@ -32,9 +32,9 @@ Repository docs must not define an independent MCP API contract. They stay autho
 
 For ADAC or Copilot session-log analysis, use `.agents/skills/analyze-adac-logs/SKILL.md` as the canonical workflow.
 
-- Read the repo-local skill before analyzing raw logs or summary reports.
+- Read the repo-local skill before analyzing a raw session log.
 - Use `.agents/skills/analyze-adac-logs/scripts/analyze_session_log.py` first for counts and timeline extraction.
-- Treat the raw session log as the source of truth over any generated summary.
+- Treat the raw session log as the source of truth.
 - For remediation planning, follow `.agents/skills/analyze-adac-logs/references/remediation-workflow.md` and prefer CLIO-first ownership when the issue touches MCP contract truth.
 
 ## Plan Mode Override

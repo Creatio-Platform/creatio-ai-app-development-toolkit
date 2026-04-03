@@ -1,6 +1,6 @@
 # Analysis Rules
 
-Use these rules whenever you analyze exported ADAC session logs or compare a written report against a raw session log.
+Use these rules whenever you analyze exported ADAC session logs.
 
 ## Source of truth
 
@@ -27,15 +27,8 @@ Use these rules whenever you analyze exported ADAC session logs or compare a wri
 - Distinguish “created script” from “executed script”.
 - Distinguish “looked up contract” from “retried failed tool”.
 
-## Comparison rules
-
-- Verify every disputed claim against the raw log before accepting it.
-- When a report compresses multiple failures into one bucket, say so explicitly.
-- When a report invents an action that was only discussed in reasoning, mark it as unsupported.
-- When a report shifts timestamps, cite the exact raw-log timestamp that contradicts it.
-
 ## Useful prompts for sub-agents
 
 - Timeline: reconstruct milestones and phase durations from the raw log only.
 - Incidents: enumerate unique failures and recoveries, counted by event block.
-- Comparison: compare the raw log to a summary file and list factual mismatches only.
+- Bottlenecks: identify the slowest phase, repeated retries, and recovery path from the raw log only.

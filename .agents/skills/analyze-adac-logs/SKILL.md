@@ -1,11 +1,12 @@
 ---
 name: analyze-adac-logs
-description: Analyze exported ADAC session logs and related summary files to produce verified timing, tool-call counts, timeline milestones, incidents, bottlenecks, factual mismatches, and a remediation plan. Use when the user asks to inspect an ADAC or Copilot-style session transcript, “show session stats”, “compare this report with the raw log”, “find discrepancies”, “summarize timing and problems”, validate whether a written analysis matches the source log, or fix session errors in ADAC and CLIO with CLIO MCP treated as the source of truth.
+description: Analyze exported ADAC session logs to produce verified timing, tool-call counts, timeline milestones, incidents, bottlenecks, and a remediation plan. Use when the user asks to inspect an ADAC or Copilot-style session transcript, show session stats, summarize timing and problems, or fix session errors in ADAC and CLIO with CLIO MCP treated as the source of truth.
 ---
 
 # Analyze ADAC Logs
 
 Treat the raw session log as the source of truth. Use generated summaries, notes, or reports only as claims to verify against that log.
+The only required input to start analysis is the raw session log path.
 
 For this repository, the canonical skill copy lives at `.agents/skills/analyze-adac-logs/`. Keep any home-directory Codex copy only as a temporary compatibility mirror.
 
@@ -38,18 +39,16 @@ This gives you the mechanical baseline for:
 1. Identify the artifacts.
 
 - Raw log: usually exported markdown with repeated blocks like `<sub>⏱️ ...</sub>` and `### ...`
-- Optional comparison target: a `.txt` or `.md` analysis that claims counts, timings, or conclusions
 
 2. Build the machine baseline.
 
 - Run the helper script on the raw log before doing manual interpretation.
 - Use the script output to anchor objective counts.
-- If the log is small and no comparison file exists, the script plus one manual pass may be enough.
+- For smaller logs, the script plus one manual pass may be enough.
 
 3. Use sub-agents by default for quality and speed when possible.
 
 - For logs over roughly 500 lines, always fan out work in parallel.
-- For any “compare this report with the raw log” request, always fan out work in parallel.
 - Parallelize only independent analysis tracks. Do not split stateful edits, one shared output file, or sequential remediation steps across agents.
 - Keep sub-agent prompts independent. Pass file paths and the task only. Do not pass your conclusions.
 - Reuse the current model by default. Do not intentionally downgrade sub-agents unless the task is trivial and speed matters more than depth.
@@ -65,7 +64,6 @@ This gives you the mechanical baseline for:
 - Stats
 - Timeline
 - Problems
-- Mismatches versus the candidate report, if one was provided
 - Assumptions or confidence notes only when needed
 
 6. If the user wants remediation, switch to the remediation workflow.
@@ -109,21 +107,19 @@ Suggested prompt:
 Use $analyze-adac-logs at /absolute/path/to/repo/.agents/skills/analyze-adac-logs to enumerate unique incidents in /absolute/path/to/session-log.md. Count incidents by event block, not by raw string frequency. Distinguish real runtime failures from repeated stack-trace text or contract examples.
 ```
 
-### Agent C: report verification
-
-Use this only when a candidate summary exists.
+### Agent C: bottlenecks and recoveries
 
 Ask for:
 
-- factual mismatches
-- missing context
-- overclaims
-- time shifts
+- longest slow phase
+- repeated retries or dead ends
+- recovery path after failures
+- where time was spent versus value delivered
 
 Suggested prompt:
 
 ```text
-Use $analyze-adac-logs at /absolute/path/to/repo/.agents/skills/analyze-adac-logs to compare /absolute/path/to/session-log.md against /absolute/path/to/report.txt. List only factual mismatches, each backed by direct evidence from the raw log.
+Use $analyze-adac-logs at /absolute/path/to/repo/.agents/skills/analyze-adac-logs to identify bottlenecks and recoveries in /absolute/path/to/session-log.md. Use the raw log only. Report where time was lost, what the agent retried, and how the session recovered.
 ```
 
 ### Agent D: remediation ownership split
@@ -182,13 +178,6 @@ rg -n "^### |^<sub>⏱️ |Parameter validation failed|JSONDecodeError|body is r
 nl -ba /absolute/path/to/session-log.md | sed -n 'start,endp'
 ```
 
-When a comparison file is present:
-
-```bash
-wc -l /absolute/path/to/report.txt
-nl -ba /absolute/path/to/report.txt | sed -n '1,220p'
-```
-
 ## Output contract
 
 Prefer this structure unless the user asks for a different one:
@@ -212,11 +201,6 @@ Prefer this structure unless the user asks for a different one:
 - recovery or fix
 - bottlenecks
 
-### Mismatches
-
-- only when comparing against another file
-- each mismatch should say what the report claimed, what the raw log shows, and where
-
 ### Remediation plan
 
 - root cause per confirmed incident
@@ -232,7 +216,6 @@ Prefer this structure unless the user asks for a different one:
 - Never inflate counts from grep alone.
 - Never claim an action happened if it only appeared in reasoning text.
 - When uncertain about a timing boundary, say it is approximate.
-- When two files disagree, quote the disagreement briefly and point to exact evidence.
 - Before planning or making fixes in CLIO, explicitly confirm the user's path to the CLIO source code.
 - Before changing CLIO, update the local CLIO checkout to the latest state for the current branch. If the user is on a feature branch, bring it up to date with the latest `main` before coding.
 - Before pushing or opening a PR, ask whether the user wants you to push now or prefers to test locally first.

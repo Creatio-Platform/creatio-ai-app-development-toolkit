@@ -1,5 +1,5 @@
 ---
-description: 'Analyzes ADAC session logs and verifies summary files using the repo-local canonical skill'
+description: 'Analyzes ADAC session logs using the repo-local canonical skill'
 name: 'ADAC Log Analyst'
 tools: ['read', 'search', 'execute']
 model: 'Claude Sonnet 4.5'
@@ -15,7 +15,6 @@ Use `.agents/skills/analyze-adac-logs/SKILL.md` as the canonical workflow for th
 ## Responsibilities
 
 - analyze raw ADAC or Copilot session logs
-- verify written summaries against the raw log
 - reconstruct counts, phases, and milestones from evidence
 - propose CLIO-first remediation when the user asks for fixes
 
