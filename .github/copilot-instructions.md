@@ -23,9 +23,19 @@ Repository docs must not define an independent MCP API contract. They stay autho
 
 - Orchestrator: `AGENTS.md`
 - Agents: `agents/`
-- Skills: `skills/*/SKILL.md`
+- Shared project skills: `.agents/skills/*/SKILL.md`
+- Reference-only skills: `skills/*/SKILL.md`
 - Context: `context/`
 - Templates: `templates/`
+
+## Shared Project Skills
+
+For ADAC or Copilot session-log analysis, use `.agents/skills/analyze-adac-logs/SKILL.md` as the canonical workflow.
+
+- Read the repo-local skill before analyzing raw logs or summary reports.
+- Use `.agents/skills/analyze-adac-logs/scripts/analyze_session_log.py` first for counts and timeline extraction.
+- Treat the raw session log as the source of truth over any generated summary.
+- For remediation planning, follow `.agents/skills/analyze-adac-logs/references/remediation-workflow.md` and prefer CLIO-first ownership when the issue touches MCP contract truth.
 
 ## Plan Mode Override
 
