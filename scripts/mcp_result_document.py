@@ -171,7 +171,10 @@ def collect_package_entities(package):
 
 def build_app_context(document):
     if isinstance(document.get("app"), dict) and document["app"]:
-        return copy.deepcopy(document["app"])
+        app = copy.deepcopy(document["app"])
+        if app.get("app-code") and not app.get("code"):
+            app["code"] = app.pop("app-code")
+        return app
     app = {}
     app_id = document.get("appId") or document.get("app-id")
     app_name = document.get("appName") or document.get("app-name")
@@ -181,7 +184,7 @@ def build_app_context(document):
     if app_name:
         app["name"] = app_name
     if app_code:
-        app["app-code"] = app_code
+        app["code"] = app_code
     return app
 
 
@@ -319,7 +322,7 @@ def _detect_runtime_shape(document):
         if not isinstance(error, dict) or not error:
             raise ContextError("Failed result document requires structured error evidence")
         return "error"
-    if isinstance(document.get("app"), dict) and document.get("packages"):
+    if isinstance(document.get("app"), dict) and "packages" in document:
         return "nested-short"
     package_u_id = document.get("packageUId") or document.get("package-u-id")
     package_name = document.get("packageName") or document.get("package-name")
@@ -411,7 +414,7 @@ def validate_result_document(document):
     if not isinstance(editable_context, dict):
         raise ContextError("Successful result document must contain editableContext")
     packages = editable_context.get("packages")
-    if not isinstance(packages, list) or not packages:
+    if not isinstance(packages, list):
         raise ContextError("Successful result document must contain editableContext packages")
     return document
 

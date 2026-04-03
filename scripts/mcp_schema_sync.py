@@ -546,29 +546,33 @@ def build_sync_plan(current_context, edited_context):
 
 def resolve_app_selector(result_document):
     app = result_document.get("app") or {}
+    if app.get("code"):
+        return {
+            "code": app["code"]
+        }
     if app.get("app-code"):
         return {
-            "app-code": app["app-code"]
+            "code": app["app-code"]
         }
     if app.get("id"):
         return {
-            "app-id": app["id"]
+            "id": app["id"]
         }
     if result_document.get("appId"):
         return {
-            "app-id": result_document["appId"]
+            "id": result_document["appId"]
         }
     if result_document.get("appCode"):
         return {
-            "app-code": result_document["appCode"]
+            "code": result_document["appCode"]
         }
     if result_document.get("packageName"):
         return {
-            "app-code": result_document["packageName"]
+            "code": result_document["packageName"]
         }
     if result_document.get("package-name"):
         return {
-            "app-code": result_document["package-name"]
+            "code": result_document["package-name"]
         }
     raise WorkflowError("Application identifier is missing in current result document")
 

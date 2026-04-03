@@ -14,7 +14,7 @@ def build_short_context():
         "success": True,
         "app": {
             "id": "11111111-1111-1111-1111-111111111111",
-            "app-code": "UsrMyApp"
+            "code": "UsrMyApp"
         },
         "packages": {
             "UsrMyPkg": {
@@ -128,7 +128,7 @@ class McpContextAdapterTests(unittest.TestCase):
         self.assertEqual(normalized["operationLog"], [])
         self.assertEqual(normalized["pageEvidence"], {})
         editable_context = normalized["editableContext"]
-        self.assertEqual(editable_context["app"]["app-code"], "UsrMyApp")
+        self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
         self.assertEqual(len(editable_context["packages"]), 1)
         package = editable_context["packages"][0]
         self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")
@@ -155,7 +155,7 @@ class McpContextAdapterTests(unittest.TestCase):
     def test_normalize_result_document_supports_flat_short_contract(self):
         normalized = normalize_result_document(build_flat_short_context())
         editable_context = normalized["editableContext"]
-        self.assertEqual(editable_context["app"]["app-code"], "UsrMyApp")
+        self.assertEqual(editable_context["app"]["code"], "UsrMyApp")
         self.assertEqual(len(editable_context["packages"]), 1)
         package = editable_context["packages"][0]
         self.assertEqual(package["packageUId"], "22222222-2222-2222-2222-222222222222")
@@ -183,6 +183,19 @@ class McpContextAdapterTests(unittest.TestCase):
 
         self.assertEqual(entity["caption"], "Vehicle")
         self.assertEqual(column["caption"], "UsrVehicleStatus")
+
+    def test_normalize_result_document_upgrades_legacy_app_code_field(self):
+        normalized = normalize_result_document({
+            "success": True,
+            "app": {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "app-code": "UsrLegacyApp"
+            },
+            "packages": {}
+        })
+
+        self.assertEqual(normalized["editableContext"]["app"]["code"], "UsrLegacyApp")
+        self.assertNotIn("app-code", normalized["editableContext"]["app"])
 
 
 if __name__ == "__main__":

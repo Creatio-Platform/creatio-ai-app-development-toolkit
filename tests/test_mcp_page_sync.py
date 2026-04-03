@@ -30,38 +30,117 @@ def build_result_document():
     return normalize_result_document({
         "success": True,
         "app": {
-            "app-code": "UsrTodoList"
+            "code": "UsrTodoList"
         },
         "packageUId": "22222222-2222-2222-2222-222222222222",
         "packageName": "UsrTodoList",
         "entities": []
     })
 
-
-def build_form_body():
-    return """define("UsrTodoList_FormPage", function() {
-  return {
-    viewConfigDiff: /**SCHEMA_VIEW_CONFIG_DIFF*/[]/**SCHEMA_VIEW_CONFIG_DIFF*/,
-    viewModelConfigDiff: /**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/{}/**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/,
-    modelConfigDiff: /**SCHEMA_MODEL_CONFIG_DIFF*/{}/**SCHEMA_MODEL_CONFIG_DIFF*/,
+def build_form_body(include_status=True, include_lookup_action=False):
+    status_insert = ""
+    if include_status:
+        status_insert = """,
+      {
+        "operation": "insert",
+        "name": "ComboBox_status123",
+        "values": {
+          "type": "crt.ComboBox",
+          "control": "$PDS_UsrStatus_status123"
+        },
+        "parentName": "SideAreaProfileContainer",
+        "propertyName": "items",
+        "index": 1
+      }"""
+    lookup_action = ""
+    if include_lookup_action:
+        lookup_action = """,
+      {
+        "operation": "insert",
+        "name": "addRecord_status123",
+        "values": {
+          "type": "crt.ComboboxSearchTextAction"
+        },
+        "parentName": "ComboBox_status123",
+        "propertyName": "listActions",
+        "index": 0
+      }"""
+    status_attribute = ""
+    if include_status:
+        status_attribute = """,
+        "PDS_UsrStatus_status123": {
+          "modelConfig": {
+            "path": "PDS.UsrStatus"
+          }
+        }"""
+    return f"""define("UsrTodoList_FormPage", function() {{
+  return {{
+    deps: /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/,
+    args: /**SCHEMA_ARGS*/()/**SCHEMA_ARGS*/,
+    viewConfigDiff: /**SCHEMA_VIEW_CONFIG_DIFF*/[
+      {{
+        "operation": "insert",
+        "name": "Input_name123",
+        "values": {{
+          "type": "crt.Input",
+          "control": "$Name"
+        }},
+        "parentName": "SideAreaProfileContainer",
+        "propertyName": "items",
+        "index": 0
+      }}{status_insert}{lookup_action}
+    ]/**SCHEMA_VIEW_CONFIG_DIFF*/,
+    viewModelConfig: /**SCHEMA_VIEW_MODEL_CONFIG*/{{
+      "attributes": {{
+        "Name": {{
+          "modelConfig": {{
+            "path": "PDS.Name"
+          }}
+        }}{status_attribute}
+      }}
+    }}/**SCHEMA_VIEW_MODEL_CONFIG*/,
+    modelConfig: /**SCHEMA_MODEL_CONFIG*/{{}}/**SCHEMA_MODEL_CONFIG*/,
     handlers: /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/,
-    converters: /**SCHEMA_CONVERTERS*/{}/**SCHEMA_CONVERTERS*/,
-    validators: /**SCHEMA_VALIDATORS*/{}/**SCHEMA_VALIDATORS*/
-  };
-});"""
+    converters: /**SCHEMA_CONVERTERS*/{{}}/**SCHEMA_CONVERTERS*/,
+    validators: /**SCHEMA_VALIDATORS*/{{}}/**SCHEMA_VALIDATORS*/
+  }};
+}});"""
 
 
-def build_list_body():
-    return """define("UsrTodoList_ListPage", function() {
-  return {
-    viewConfigDiff: /**SCHEMA_VIEW_CONFIG_DIFF*/[]/**SCHEMA_VIEW_CONFIG_DIFF*/,
-    viewModelConfigDiff: /**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/{}/**SCHEMA_VIEW_MODEL_CONFIG_DIFF*/,
-    modelConfigDiff: /**SCHEMA_MODEL_CONFIG_DIFF*/{}/**SCHEMA_MODEL_CONFIG_DIFF*/,
+def build_list_body(include_status=True):
+    status_column = ""
+    if include_status:
+        status_column = """,
+            {
+              "code": "PDS_UsrStatus"
+            }"""
+    return f"""define("UsrTodoList_ListPage", function() {{
+  return {{
+    deps: /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/,
+    args: /**SCHEMA_ARGS*/()/**SCHEMA_ARGS*/,
+    viewConfigDiff: /**SCHEMA_VIEW_CONFIG_DIFF*/[
+      {{
+        "operation": "merge",
+        "name": "DataTable",
+        "values": {{
+          "columns": [
+            {{
+              "code": "PDS_Name"
+            }}{status_column}
+          ]
+        }}
+      }}
+    ]/**SCHEMA_VIEW_CONFIG_DIFF*/,
+    viewModelConfig: /**SCHEMA_VIEW_MODEL_CONFIG*/{{
+      "attributes": {{
+      }}
+    }}/**SCHEMA_VIEW_MODEL_CONFIG*/,
+    modelConfig: /**SCHEMA_MODEL_CONFIG*/{{}}/**SCHEMA_MODEL_CONFIG*/,
     handlers: /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/,
-    converters: /**SCHEMA_CONVERTERS*/{}/**SCHEMA_CONVERTERS*/,
-    validators: /**SCHEMA_VALIDATORS*/{}/**SCHEMA_VALIDATORS*/
-  };
-});"""
+    converters: /**SCHEMA_CONVERTERS*/{{}}/**SCHEMA_CONVERTERS*/,
+    validators: /**SCHEMA_VALIDATORS*/{{}}/**SCHEMA_VALIDATORS*/
+  }};
+}});"""
 
 
 class FakePageClient:
@@ -337,6 +416,116 @@ class McpPageSyncTests(unittest.TestCase):
             )
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertIn("UsrTodoList_ListPage", persisted["pageEvidence"])
+
+    def test_apply_page_sync_plan_materializes_form_fields_from_structured_edit_spec(self):
+        pages = {
+            "UsrTodoList_FormPage": {
+                "uId": "11111111-1111-1111-1111-111111111111",
+                "packageName": "UsrTodoList",
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "parentSchemaName": "PageWithTabsFreedomTemplate",
+                "body": build_form_body(False)
+            }
+        }
+        fake_client = FakePageClient(pages)
+        result_document = build_result_document()
+        with temp_workdir() as temp_path:
+            result_path = temp_path / "mcp-application-result.json"
+            result_path.write_text(json.dumps(result_document), encoding="utf-8")
+            apply_page_sync_plan(
+                fake_client,
+                result_document,
+                {
+                    "packageName": "UsrTodoList",
+                    "pages": [
+                        {
+                            "schemaName": "UsrTodoList_FormPage",
+                            "kind": "form",
+                            "body": build_form_body(False),
+                            "formFields": [
+                                {
+                                    "name": "UsrStatus",
+                                    "type": "crt.ComboBox",
+                                    "path": "PDS.UsrStatus"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                result_path
+            )
+            persisted = json.loads(result_path.read_text(encoding="utf-8"))
+        self.assertTrue(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["machineChecked"])
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        self.assertIn("PDS.UsrStatus", page_sync_call[1]["pages"][0]["body"])
+
+    def test_apply_page_sync_plan_materializes_list_columns_from_structured_edit_spec_with_trailing_commas(self):
+        pages = {
+            "UsrTodoList_ListPage": {
+                "uId": "33333333-3333-3333-3333-333333333333",
+                "packageName": "UsrTodoList",
+                "packageUId": "22222222-2222-2222-2222-222222222222",
+                "parentSchemaName": "BaseSectionTemplate",
+                "body": build_list_body(False)
+            }
+        }
+        fake_client = FakePageClient(pages)
+        result_document = build_result_document()
+        list_body_with_trailing_comma = """define("UsrTodoList_ListPage", function() {
+  return {
+    viewConfigDiff: /**SCHEMA_VIEW_CONFIG_DIFF*/[
+      {
+        "operation": "merge",
+        "name": "DataTable",
+        "values": {
+          "columns": [
+            {
+              "code": "PDS_Name"
+            },
+          ]
+        }
+      },
+    ]/**SCHEMA_VIEW_CONFIG_DIFF*/,
+    viewModelConfig: /**SCHEMA_VIEW_MODEL_CONFIG*/{
+      "attributes": {
+      }
+    }/**SCHEMA_VIEW_MODEL_CONFIG*/,
+    handlers: /**SCHEMA_HANDLERS*/[]/**SCHEMA_HANDLERS*/,
+    converters: /**SCHEMA_CONVERTERS*/{}/**SCHEMA_CONVERTERS*/,
+    validators: /**SCHEMA_VALIDATORS*/{}/**SCHEMA_VALIDATORS*/,
+    modelConfig: /**SCHEMA_MODEL_CONFIG*/{}/**SCHEMA_MODEL_CONFIG*/,
+    deps: /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*/,
+    args: /**SCHEMA_ARGS*/()/**SCHEMA_ARGS*/
+  };
+});"""
+        with temp_workdir() as temp_path:
+            result_path = temp_path / "mcp-application-result.json"
+            result_path.write_text(json.dumps(result_document), encoding="utf-8")
+            apply_page_sync_plan(
+                fake_client,
+                result_document,
+                {
+                    "packageName": "UsrTodoList",
+                    "pages": [
+                        {
+                            "schemaName": "UsrTodoList_ListPage",
+                            "kind": "list",
+                            "body": list_body_with_trailing_comma,
+                            "listColumns": [
+                                {
+                                    "code": "PDS_UsrStatus",
+                                    "dataValueType": 10
+                                }
+                            ]
+                        }
+                    ]
+                },
+                result_path
+            )
+            persisted = json.loads(result_path.read_text(encoding="utf-8"))
+        self.assertTrue(persisted["pageEvidence"]["UsrTodoList_ListPage"]["status"]["machineChecked"])
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        self.assertIn("PDS_UsrStatus", page_sync_call[1]["pages"][0]["body"])
 
     def test_apply_page_sync_plan_does_not_invent_environment_name(self):
         pages = {
