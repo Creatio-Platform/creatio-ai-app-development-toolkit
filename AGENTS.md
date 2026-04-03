@@ -154,19 +154,6 @@ Technical question policy:
 - runtime credentials or endpoints remain execution blockers when the selected routing mode requires them
 - if the developer asks for an autonomous flow without required runtime inputs, ask only for the missing blockers
 
-## Execution Environment Guard
-
-Before the first shell, Python, Node, `clio`, or MCP execution step, validate executor health through the same command path that will be used for the real work.
-
-- determine the current operating system and the executor required by the next command syntax
-- if executor startup fails with errors such as `File not found`, `shell not found`, startup failure, or equivalent boot errors, stop immediately with a blocker
-- treat this as an execution-environment blocker, not as a filesystem, path, permission, business-logic, or MCP-contract issue
-- do not retry the same stage in alternate syntax variants before executor health is confirmed
-- do not infer missing directories, missing project roots, or write-permission problems until executor health is confirmed
-- state the expected executor, the actually available or failing executor, and that implementation execution did not start because preflight failed
-
-Detailed preflight rules and platform-specific checks live in `agents/01-environment-setup.md`.
-
 Execution order is conditional:
 
 - `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3 -> Agent 4
@@ -282,9 +269,7 @@ Authority model:
 - Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `tool-contract-get`.
 - Repository docs must not define an independent MCP API contract.
 - Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
-- Resolve canonical entity and page execution paths through `tool-contract-get` and Clio MCP guidance resources. See `context/essentials.md` for orchestration policy.
-- The canonical entity flow is `application-create -> schema-sync -> application-get-info`.
-- The canonical page flow is `page-list -> page-get -> page-sync -> page-get`.
+- Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 
 Canonical repository references:
 
@@ -302,3 +287,10 @@ Canonical repository references:
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
 Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `tool-contract-get` instead of duplicating payload rules in agent prompts.
+
+Project-local shared skills:
+
+- `.agents/skills/analyze-adac-logs/` is the canonical skill for ADAC or Copilot session-log analysis in this repository.
+- When the task is session stats, timeline reconstruction, incident analysis, or CLIO-first remediation planning, open `.agents/skills/analyze-adac-logs/SKILL.md`.
+- Use `.agents/skills/analyze-adac-logs/scripts/analyze_session_log.py` before manual interpretation so counts and timeline extraction come from one deterministic baseline.
+- For this repository, prefer the repo-local skill copy over any home-directory compatibility copy.
