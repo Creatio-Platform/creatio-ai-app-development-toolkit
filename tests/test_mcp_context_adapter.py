@@ -124,7 +124,6 @@ def build_preview_context():
 class McpContextAdapterTests(unittest.TestCase):
     def test_normalize_result_document_builds_editable_package_entity_context(self):
         normalized = normalize_result_document(build_short_context())
-        self.assertEqual(normalized["contractType"], "short")
         self.assertIn("editableContext", normalized)
         self.assertEqual(normalized["operationLog"], [])
         self.assertEqual(normalized["pageEvidence"], {})
@@ -148,7 +147,6 @@ class McpContextAdapterTests(unittest.TestCase):
 
     def test_normalize_result_document_keeps_short_error_without_editable_context(self):
         normalized = normalize_result_document(build_short_error_context())
-        self.assertEqual(normalized["contractType"], "short")
         self.assertIsNone(normalized["editableContext"])
         self.assertEqual(normalized["acceptanceEvidence"], {})
         self.assertFalse(normalized["success"])
@@ -156,7 +154,6 @@ class McpContextAdapterTests(unittest.TestCase):
 
     def test_normalize_result_document_supports_flat_short_contract(self):
         normalized = normalize_result_document(build_flat_short_context())
-        self.assertEqual(normalized["contractType"], "short")
         editable_context = normalized["editableContext"]
         self.assertEqual(editable_context["app"]["app-code"], "UsrMyApp")
         self.assertEqual(len(editable_context["packages"]), 1)
@@ -172,6 +169,12 @@ class McpContextAdapterTests(unittest.TestCase):
     def test_normalize_result_document_rejects_legacy_preview_contract(self):
         with self.assertRaises(ContextError):
             normalize_result_document(build_preview_context())
+
+    def test_normalize_result_document_rejects_persisted_contract_type(self):
+        payload = build_short_context()
+        payload["contractType"] = "short"
+        with self.assertRaises(ContextError):
+            normalize_result_document(payload)
 
     def test_normalize_result_document_trims_text_and_falls_back_from_blank_caption(self):
         normalized = normalize_result_document(build_flat_short_context_with_whitespace_caption())

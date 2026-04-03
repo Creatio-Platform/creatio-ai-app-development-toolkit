@@ -213,7 +213,8 @@ MCP result -> normalize into repo-local context -> run approved helper orchestra
 
 Local rule:
 - Keep the result file flat and source-backed
-- The normalized runtime document starts from the MCP response and adds local helper state such as `contractType`, `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- The normalized runtime document starts from the MCP response and adds local helper state such as `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- Normalization is canonicalization plus strict validation; invalid local helper state must fail before persistence
 
 ---
 

@@ -25,9 +25,9 @@ import time
 from pathlib import Path
 
 try:
-    from scripts.mcp_context_adapter import normalize_result_document
+    from scripts.mcp_result_document import ensure_result_document
     from scripts.mcp_page_sync import apply_page_sync_plan, load_page_sync_payload
-    from scripts.mcp_result_evidence import build_report_markdown, ensure_result_document
+    from scripts.mcp_result_evidence import build_report_markdown
     from scripts.mcp_schema_sync import (
         WorkflowError,
         apply_sync_plan,
@@ -35,9 +35,9 @@ try:
         load_mcp_client,
     )
 except ImportError:
-    from mcp_context_adapter import normalize_result_document
+    from mcp_result_document import ensure_result_document
     from mcp_page_sync import apply_page_sync_plan, load_page_sync_payload
-    from mcp_result_evidence import build_report_markdown, ensure_result_document
+    from mcp_result_evidence import build_report_markdown
     from mcp_schema_sync import (
         WorkflowError,
         apply_sync_plan,

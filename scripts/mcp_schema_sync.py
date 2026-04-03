@@ -7,11 +7,21 @@ import time
 from pathlib import Path
 
 try:
-    from scripts.mcp_context_adapter import infer_contract_type, normalize_column, normalize_result_document
-    from scripts.mcp_result_evidence import append_operation, ensure_result_document
+    from scripts.mcp_result_document import (
+        append_operation,
+        ensure_result_document,
+        normalize_column,
+        normalize_result_document,
+        refresh_result_document,
+    )
 except ImportError:
-    from mcp_context_adapter import infer_contract_type, normalize_column, normalize_result_document
-    from mcp_result_evidence import append_operation, ensure_result_document
+    from mcp_result_document import (
+        append_operation,
+        ensure_result_document,
+        normalize_column,
+        normalize_result_document,
+        refresh_result_document,
+    )
 
 KIND_PRIORITY = {
     "lookup": 0,
@@ -256,8 +266,7 @@ def extract_editable_context(document):
             first_package = raw_packages[0]
             if isinstance(first_package, dict) and "entities" in first_package:
                 return document
-    contract_type = infer_contract_type(document)
-    if contract_type == "short":
+    if "success" in document:
         normalized = normalize_result_document(document)
         if normalized.get("editableContext"):
             return normalized["editableContext"]
@@ -671,12 +680,7 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
     except WorkflowError as error:
         last_action = sync_plan["actions"][-1]
         raise build_refresh_failure(last_action, error)
-    normalized_context = ensure_result_document(refreshed_context)
-    normalized_context["schemaSync"] = list(current_document.get("schemaSync", []))
-    normalized_context["operationLog"] = list(current_document.get("operationLog", []))
-    normalized_context["pageEvidence"] = dict(current_document.get("pageEvidence", {}))
-    normalized_context["acceptanceEvidence"] = dict(current_document.get("acceptanceEvidence", {}))
-    current_document = normalized_context
+    current_document = refresh_result_document(refreshed_context, current_document)
     write_json(result_path, current_document)
     return current_document
 

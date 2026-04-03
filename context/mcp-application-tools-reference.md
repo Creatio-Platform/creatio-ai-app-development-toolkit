@@ -65,7 +65,6 @@ python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-applicatio
 ```
 
 Normalization keeps the flat runtime contract and adds repo-local helper state:
-- `contractType`
 - `schemaSync`
 - `operationLog`
 - `pageEvidence`
@@ -73,6 +72,7 @@ Normalization keeps the flat runtime contract and adds repo-local helper state:
 - `editableContext`
 
 `editableContext` is a local derived projection for helper scripts. It is not the MCP response contract.
+Normalization is strict: persisted result documents must already match the canonical helper-state shape and must not carry legacy fields such as `contractType`.
 
 ## Local Refresh Pattern
 

@@ -6,11 +6,13 @@ import re
 from pathlib import Path
 
 try:
-    from scripts.mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
+    from scripts.mcp_result_document import append_operation, attach_page_evidence, ensure_result_document
+    from scripts.mcp_result_evidence import build_report_markdown
     from scripts.mcp_schema_sync import WorkflowError, load_mcp_client
     from scripts.page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 except ImportError:
-    from mcp_result_evidence import append_operation, attach_page_evidence, build_report_markdown, ensure_result_document
+    from mcp_result_document import append_operation, attach_page_evidence, ensure_result_document
+    from mcp_result_evidence import build_report_markdown
     from mcp_schema_sync import WorkflowError, load_mcp_client
     from page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 
@@ -104,6 +106,11 @@ def normalize_page_entry(page):
         "kind": page_kind,
         "body": body
     }
+    resources = page.get("resources")
+    if resources is not None:
+        if not isinstance(resources, (dict, str)) or resources == "":
+            raise WorkflowError(f"Page {schema_name} contains invalid resources payload")
+        normalized["resources"] = copy.deepcopy(resources)
     if page_kind == "form":
         normalized["requiredModelPaths"] = normalize_string_list(page.get("requiredModelPaths"), "requiredModelPaths", schema_name)
     if page_kind == "list":
@@ -213,10 +220,10 @@ def sync_page(client, current_document, result_path, discovered_pages, page):
     original_response = ensure_success("page-get", client.call_tool_json("page-get", {"schema-name": schema_name}))
     current_document = append_operation_and_persist(current_document, result_path, "page-get", schema_name, "success", response=original_response)
     original_body = get_page_body(original_response, schema_name)
-    dry_run_args = build_page_update_arguments(schema_name, page["body"], dry_run=True)
+    dry_run_args = build_page_update_arguments(schema_name, page["body"], dry_run=True, resources=page.get("resources"))
     dry_run_response = ensure_success("page-update", client.call_tool_json("page-update", dry_run_args))
     current_document = append_operation_and_persist(current_document, result_path, "page-update", schema_name, "validated", response=dry_run_response)
-    save_args = build_page_update_arguments(schema_name, page["body"], dry_run=False)
+    save_args = build_page_update_arguments(schema_name, page["body"], dry_run=False, resources=page.get("resources"))
     save_response = ensure_success("page-update", client.call_tool_json("page-update", save_args))
     current_document = append_operation_and_persist(current_document, result_path, "page-update", schema_name, "success", response=save_response)
     verify_response = ensure_success("page-get", client.call_tool_json("page-get", {"schema-name": schema_name}))
