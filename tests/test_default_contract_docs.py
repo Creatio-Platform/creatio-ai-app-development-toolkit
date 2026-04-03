@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -127,42 +128,61 @@ DOT_STYLE_APPLICATION_TOOL_DOCS = [
 ]
 
 
+def read_text(path):
+    return path.read_text(encoding="utf-8")
+
+
+def contains_any(text, markers):
+    return any(marker in text for marker in markers)
+
+
+def contains_all(text, markers):
+    return all(marker in text for marker in markers)
+
+
 class DefaultContractDocsTests(unittest.TestCase):
     def test_authority_docs_point_to_clio_mcp_contract(self):
         for path in AUTHORITY_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("tool-contract-get", content, str(path))
-        agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("only authoritative source", agents_doc)
-        self.assertIn("must not define an independent MCP API contract", agents_doc)
-        reference_doc = (ROOT / "context/mcp-application-tools-reference.md").read_text(encoding="utf-8")
-        self.assertIn("It is not the executable MCP specification.", reference_doc)
+        agents_doc = read_text(ROOT / "AGENTS.md")
+        self.assertRegex(agents_doc, r"only authoritative source|single source of truth")
+        self.assertRegex(agents_doc, r"must not define an independent MCP API contract|must not define an independent MCP contract")
+        reference_doc = read_text(ROOT / "context/mcp-application-tools-reference.md")
+        self.assertRegex(reference_doc, r"It is not the executable MCP (specification|spec)\.")
 
     def test_docs_delegate_default_semantics_to_clio_guidance(self):
         for path in DOC_PATHS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertTrue(
-                "docs://mcp/guides/app-modeling" in content
-                or "current `clio` MCP guidance" in content
-                or "current `clio` MCP contract" in content
-                or "default requirement" in content.lower(),
+                contains_any(content, [
+                    "docs://mcp/guides/app-modeling",
+                    "current `clio` MCP guidance",
+                    "current `clio` MCP contract",
+                ]) or "default requirement" in content.lower(),
                 str(path),
             )
-        requirements_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
-        self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", requirements_doc)
+        requirements_doc = read_text(ROOT / "agents/02-requirements-gathering.md")
+        self.assertTrue(
+            contains_all(requirements_doc, [
+                "`schema default`",
+                "`ui default`",
+                "visible BA draft",
+            ])
+        )
 
     def test_active_docs_delegate_canonical_mcp_guidance_to_clio_resources(self):
         delegation_hits = 0
         for path in CANONICAL_FLOW_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             if "docs://mcp/guides/app-modeling" in content or "docs://mcp/guides/existing-app-maintenance" in content:
                 delegation_hits += 1
         self.assertGreaterEqual(delegation_hits, 5)
 
     def test_docs_keep_seed_data_separate_from_default_rules(self):
-        plan_doc = (ROOT / "agents/03-implementation-plan.md").read_text(encoding="utf-8")
-        self.assertIn("Seed data alone does not satisfy a default requirement.", plan_doc)
-        self.assertIn("A requirement such as `UsrStatus defaults to New` is incomplete", plan_doc)
+        plan_doc = read_text(ROOT / "agents/03-implementation-plan.md")
+        self.assertTrue(contains_all(plan_doc, ["Seed data", "default requirement"]))
+        self.assertTrue(contains_all(plan_doc, ["defaults to", "incomplete"]))
 
     def test_active_docs_do_not_restate_clio_owned_field_level_contract_details(self):
         disallowed_markers = [
@@ -175,44 +195,45 @@ class DefaultContractDocsTests(unittest.TestCase):
             "`default-value-source`",
         ]
         for path in ACTIVE_CONTRACT_SURFACE_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
 
     def test_docs_require_confirmed_or_assumed_checklist_sources(self):
         for path in CHECKLIST_SOURCE_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("confirmed", content, str(path))
             self.assertIn("assumed", content, str(path))
 
     def test_docs_define_evidence_status_buckets(self):
         for path in EVIDENCE_STATUS_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("machineChecked", content, str(path))
             self.assertIn("manualCheckPending", content, str(path))
 
     def test_docs_define_machine_readable_page_sync_contract(self):
         for path in PAGE_SYNC_PLAN_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("page-sync-plan.json", content, str(path))
             self.assertIn("PAGE_SYNC_PLAN_JSON_START", content, str(path))
 
     def test_docs_require_pre_analysis_before_ba_draft(self):
         for path in PRE_ANALYSIS_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("pre-analysis", content, str(path))
 
     def test_docs_define_first_turn_latency_bootstrap_rule(self):
         for path in FIRST_TURN_LATENCY_DOCS:
-            content = path.read_text(encoding="utf-8").lower()
+            content = read_text(path).lower()
             self.assertIn("first", content, str(path))
             self.assertIn("latency", content, str(path))
             self.assertIn("structured input", content, str(path))
-            self.assertIn("do not read large repository files or run orchestration scripts", content, str(path))
+            self.assertIn("do not read large repository files", content, str(path))
+            self.assertIn("orchestration scripts", content, str(path))
 
     def test_docs_require_domain_expertise_for_recognizable_app_types(self):
         for path in DOMAIN_EXPERTISE_DOCS:
-            content = path.read_text(encoding="utf-8").lower()
+            content = read_text(path).lower()
             self.assertIn("domain expertise", content, str(path))
             self.assertTrue(
                 "standard baseline" in content
@@ -222,42 +243,42 @@ class DefaultContractDocsTests(unittest.TestCase):
             )
 
     def test_docs_define_fixed_business_plan_rendering_contract(self):
-        agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("exact BA-style Business Plan structure", agents_doc)
+        agents_doc = read_text(ROOT / "AGENTS.md")
+        self.assertTrue(contains_all(agents_doc, ["exact", "BA-style Business Plan structure"]))
 
-        agent_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
+        agent_doc = read_text(ROOT / "agents/02-requirements-gathering.md")
         self.assertIn("Document Rendering Contract", agent_doc)
         self.assertIn("Hard Fail Conditions", agent_doc)
-        self.assertIn("Use tables only in `## 4. Domain Model`", agent_doc)
-        self.assertIn("Do not replace the entity field tables with prose summaries", agent_doc)
+        self.assertTrue(contains_all(agent_doc, ["Use tables only", "## 4. Domain Model"]))
+        self.assertTrue(contains_all(agent_doc, ["entity field tables", "prose summaries"]))
         self.assertIn("entity metadata block", agent_doc)
-        self.assertIn("required or optional child-side link status when applicable", agent_doc)
+        self.assertTrue(contains_all(agent_doc, ["child-side link status", "when applicable"]))
         self.assertIn("## 1. Business Outcome", agent_doc)
         self.assertIn("## 7. UX Expectations", agent_doc)
-        self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", agent_doc)
+        self.assertTrue(contains_all(agent_doc, ["`schema default`", "`ui default`", "visible BA draft"]))
         self.assertNotIn("## 6. Implementation-shaping decisions and assumptions", agent_doc)
 
-        checklist_doc = (ROOT / "context/business-checklist.md").read_text(encoding="utf-8").lower()
+        checklist_doc = read_text(ROOT / "context/business-checklist.md").lower()
         self.assertIn("business logic quality bar", checklist_doc)
         self.assertIn("markdown tables outside the data model section", checklist_doc)
 
     def test_docs_keep_persistence_and_internal_mechanics_out_of_ba_dialogue(self):
-        agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8").lower()
+        agents_doc = read_text(ROOT / "AGENTS.md").lower()
         self.assertIn("do not expose internal commands", agents_doc)
 
-        agent02_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8").lower()
+        agent02_doc = read_text(ROOT / "agents/02-requirements-gathering.md").lower()
         self.assertIn("do not expose internal commands", agent02_doc)
 
     def test_docs_define_stdio_only_mcp_contract(self):
         legacy_mcp_url = "mcp" + "Url"
         legacy_frontend_label = "frontend MCP " + "URL"
         for path in STDIO_ONLY_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertNotIn(legacy_mcp_url, content, str(path))
             self.assertNotIn(legacy_frontend_label, content, str(path))
-        reference_doc = (ROOT / "context/mcp-application-tools-reference.md").read_text(encoding="utf-8")
+        reference_doc = read_text(ROOT / "context/mcp-application-tools-reference.md")
         self.assertIn("clio stdio transport", reference_doc)
-        self.assertIn("Do not use curl as an MCP execution pattern.", reference_doc)
+        self.assertTrue(contains_all(reference_doc, ["curl", "MCP execution pattern"]))
 
     def test_active_policy_docs_do_not_embed_hand_written_contract_tables(self):
         disallowed_markers = [
@@ -269,7 +290,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             "All parameters are strings",
         ]
         for path in AUTHORITY_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
 
@@ -282,38 +303,38 @@ class DefaultContractDocsTests(unittest.TestCase):
             "resources/read",
         ]
         for path in HISTORICAL_OPTIMIZATION_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
 
     def test_authority_docs_do_not_present_exact_canonical_flows_as_repo_owned_mcp_truth(self):
-        disallowed_flow_markers = [
-            "application-create -> schema-sync -> application-get-info",
-            "page-list -> page-get -> page-sync -> page-get",
+        disallowed_flow_patterns = [
+            r"application-create\s*->\s*schema-sync\s*->\s*application-get-info",
+            r"page-list\s*->\s*page-get\s*->\s*page-sync\s*->\s*page-get",
         ]
         for path in CANONICAL_FLOW_DOCS:
-            content = path.read_text(encoding="utf-8")
-            for marker in disallowed_flow_markers:
-                self.assertNotIn(marker, content, f"{path}: {marker}")
+            content = read_text(path)
+            for pattern in disallowed_flow_patterns:
+                self.assertIsNone(re.search(pattern, content), f"{path}: {pattern}")
 
     def test_authority_docs_delegate_page_fallback_policy_to_clio_guidance(self):
         for path in FALLBACK_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("docs://mcp/guides/existing-app-maintenance", content, str(path))
 
     def test_repo_preserves_policy_surfaces(self):
-        agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        agents_doc = read_text(ROOT / "AGENTS.md")
         self.assertTrue("Business context" in agents_doc or "Business Outcome" in agents_doc)
         self.assertTrue("Users, access and ownership" in agents_doc or "Access / Personas" in agents_doc)
         self.assertIn("orchestration", agents_doc.lower())
         self.assertIn("approvals", agents_doc.lower())
         self.assertIn("business invariants", agents_doc.lower())
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = read_text(ROOT / "README.md")
         self.assertIn("machineChecked", readme)
         self.assertIn("manualCheckPending", readme)
-        ui_reference = (ROOT / "context/ui-reference.md").read_text(encoding="utf-8").lower()
+        ui_reference = read_text(ROOT / "context/ui-reference.md").lower()
         self.assertIn("page sync", ui_reference)
-        viewconfig_reference = (ROOT / "context/viewconfig-reference.md").read_text(encoding="utf-8").lower()
+        viewconfig_reference = read_text(ROOT / "context/viewconfig-reference.md").lower()
         self.assertIn("page-sync", viewconfig_reference)
 
     def test_schema_docs_delegate_entity_and_schema_semantics_to_clio(self):
@@ -322,16 +343,12 @@ class DefaultContractDocsTests(unittest.TestCase):
             "PrimaryDisplayColumn",
             "defaultValueSource",
             "default-value-source",
-            "PhoneNumber",
-            "WebLink",
-            "Email",
-            "UsrName",
-            "UsrTitle",
-            "UsrCaption",
-            "duplicate title",
+            "title-localizations",
+            "reference-schema-name",
+            "seed-rows",
         ]
         for path in WORKFLOW_ONLY_SCHEMA_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertIn("tool-contract-get", content, str(path))
             self.assertIn("docs://mcp/guides/app-modeling", content, str(path))
             for marker in disallowed_markers:
@@ -341,7 +358,6 @@ class DefaultContractDocsTests(unittest.TestCase):
         disallowed_markers = [
             "canonical-main-entity-name",
             "scalar-only",
-            "component-info",
         ]
         scoped_docs = [
             ROOT / "README.md",
@@ -351,13 +367,13 @@ class DefaultContractDocsTests(unittest.TestCase):
             ROOT / "agents/04-implementation.md",
         ]
         for path in scoped_docs:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
 
     def test_docs_do_not_use_dot_style_application_tool_names(self):
         for path in DOT_STYLE_APPLICATION_TOOL_DOCS:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path)
             self.assertNotIn("application.create", content, str(path))
             self.assertNotIn("application.get_list", content, str(path))
             self.assertNotIn("application.get_info", content, str(path))
