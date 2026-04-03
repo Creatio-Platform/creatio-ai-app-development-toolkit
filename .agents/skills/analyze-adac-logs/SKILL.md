@@ -217,5 +217,5 @@ Prefer this structure unless the user asks for a different one:
 - Never claim an action happened if it only appeared in reasoning text.
 - When uncertain about a timing boundary, say it is approximate.
 - Before planning or making fixes in CLIO, explicitly confirm the user's path to the CLIO source code.
-- Before changing CLIO, update the local CLIO checkout to the latest state for the current branch. If the user is on a feature branch, bring it up to date with the latest `main` before coding.
+- Before changing CLIO, update the local CLIO checkout to the latest state for the current branch. If the user is on a feature branch, bring it up to date with the latest `master` before coding.
 - Before pushing or opening a PR, ask whether the user wants you to push now or prefers to test locally first.

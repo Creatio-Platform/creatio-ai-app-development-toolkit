@@ -24,8 +24,8 @@ Do not guess it from a session log unless the user explicitly says that path sho
 After the user confirms the CLIO source path:
 
 1. Inspect the current branch.
-2. If already on `main` or `master`, pull the latest remote state.
-3. If on a feature branch, fetch the latest `main` and bring the branch up to date with it before coding.
+2. If already on `master`, pull the latest remote state.
+3. If on a feature branch, fetch the latest `master` and bring the branch up to date with it before coding.
 4. Do not create a new branch automatically unless the user explicitly asks.
 5. Do not push automatically after making changes.
 
