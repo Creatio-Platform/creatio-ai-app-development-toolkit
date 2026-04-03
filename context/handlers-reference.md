@@ -410,7 +410,7 @@ These are advanced capabilities. Only surface them in generated page logic when 
 
 ## MCP Page Editing Workflow
 
-Use these MCP tools to read and edit handler logic in deployed pages:
+Use these MCP tools to read and edit handler logic in deployed pages. Resolve tool semantics through `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance`, then apply this repo-local workflow:
 
 1. `page-list` — discover pages
 2. `page-get` — read metadata and raw JS body

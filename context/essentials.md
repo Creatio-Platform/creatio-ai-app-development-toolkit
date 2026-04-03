@@ -47,8 +47,8 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
 
 **Entity Model**
-- Entities extend a parent such as `BaseEntity` or `BaseLookup`
-- Columns use DataValueType identifiers
+- Entities extend a server-defined parent discovered through live contract metadata
+- Columns use server-defined value-type identifiers
 - Schemas use a diff-oriented metadata model
 
 **System Tables For Navigation**
@@ -213,7 +213,8 @@ MCP result -> normalize into repo-local context -> run approved helper orchestra
 
 Local rule:
 - Keep the result file flat and source-backed
-- The normalized runtime document starts from the MCP response and adds local helper state such as `contractType`, `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- The normalized runtime document starts from the MCP response and adds local helper state such as `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- Normalization is canonicalization plus strict validation; invalid local helper state must fail before persistence
 
 ---
 

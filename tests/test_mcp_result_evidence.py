@@ -99,6 +99,33 @@ class McpResultEvidenceTests(unittest.TestCase):
         self.assertTrue(page_entry["status"]["machineChecked"])
         self.assertTrue(page_entry["status"]["manualCheckPending"])
 
+    def test_attach_page_evidence_reads_nested_page_metadata(self):
+        updated = attach_page_evidence(
+            build_result_document(),
+            "UsrTodoList_FormPage",
+            {
+                "implemented": True,
+                "machineChecked": True,
+                "manualChecked": False
+            },
+            response={
+                "success": True,
+                "body-length": 7024,
+                "page": {
+                    "schemaName": "UsrTodoList_FormPage",
+                    "schemaUId": "44444444-4444-4444-4444-444444444444",
+                    "packageName": "UsrTodoList",
+                    "packageUId": "22222222-2222-2222-2222-222222222222",
+                    "parentSchemaName": "PageWithTabsFreedomTemplate"
+                }
+            }
+        )
+        page_entry = updated["pageEvidence"]["UsrTodoList_FormPage"]
+        self.assertEqual(page_entry["schemaName"], "UsrTodoList_FormPage")
+        self.assertEqual(page_entry["uId"], "44444444-4444-4444-4444-444444444444")
+        self.assertEqual(page_entry["packageUId"], "22222222-2222-2222-2222-222222222222")
+        self.assertEqual(page_entry["parentSchemaName"], "PageWithTabsFreedomTemplate")
+
     def test_build_report_markdown_uses_machine_checked_and_manual_pending_labels(self):
         updated = attach_page_evidence(
             append_operation(build_result_document(), "page-update", "UsrTodoList_FormPage", "success"),

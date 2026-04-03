@@ -65,7 +65,6 @@ python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-applicatio
 ```
 
 Normalization keeps the flat runtime contract and adds repo-local helper state:
-- `contractType`
 - `schemaSync`
 - `operationLog`
 - `pageEvidence`
@@ -73,6 +72,7 @@ Normalization keeps the flat runtime contract and adds repo-local helper state:
 - `editableContext`
 
 `editableContext` is a local derived projection for helper scripts. It is not the MCP response contract.
+Normalization is strict: persisted result documents must already match the canonical helper-state shape and must not carry legacy fields such as `contractType`.
 
 ## Local Refresh Pattern
 
@@ -89,11 +89,11 @@ Use these helpers after MCP calls:
 - `scripts/mcp_context_adapter.py normalize` to normalize the runtime result
 - `scripts/mcp_result_evidence.py report` to generate `mcp-application-report.md`
 - `scripts/mcp_schema_sync.py plan` and `apply` for repo-local schema sync orchestration
-- `scripts/mcp_page_sync.py build-plan` and `apply` for repo-local page sync orchestration
+- `scripts/mcp_page_sync.py build-plan` and `apply` for repo-local page plan materialization and evidence persistence around `page-sync`
 
 Local helper rules:
 - follow the current `clio` MCP guidance for preferred entity/page write paths and read-back verification
-- keep helper responsibilities local to transport, normalization, orchestration, evidence, and result persistence
+- keep helper responsibilities local to transport, normalization, evidence, and result persistence
 
 ## Minimal Example
 

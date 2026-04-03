@@ -11,8 +11,8 @@ Usage:
       --report output/<App>/mcp-application-report.md
 
 Runs entity mutations through the canonical entity flow and page changes through the canonical
-page flow in one process using a single persistent MCP connection. The helper prefers
-page-sync and uses page-update only as an explicit fallback when page-sync is unavailable.
+page flow in one process using a single persistent MCP connection. The page helper acts as
+a thin adapter around page-sync and persists repo-local evidence from the clio response.
 
 Skipping phases:
     --skip-schema   Skip entity schema sync (only run page sync)
@@ -25,9 +25,9 @@ import time
 from pathlib import Path
 
 try:
-    from scripts.mcp_context_adapter import normalize_result_document
+    from scripts.mcp_result_document import ensure_result_document
     from scripts.mcp_page_sync import apply_page_sync_plan, load_page_sync_payload
-    from scripts.mcp_result_evidence import build_report_markdown, ensure_result_document
+    from scripts.mcp_result_evidence import build_report_markdown
     from scripts.mcp_schema_sync import (
         WorkflowError,
         apply_sync_plan,
@@ -35,9 +35,9 @@ try:
         load_mcp_client,
     )
 except ImportError:
-    from mcp_context_adapter import normalize_result_document
+    from mcp_result_document import ensure_result_document
     from mcp_page_sync import apply_page_sync_plan, load_page_sync_payload
-    from mcp_result_evidence import build_report_markdown, ensure_result_document
+    from mcp_result_evidence import build_report_markdown
     from mcp_schema_sync import (
         WorkflowError,
         apply_sync_plan,

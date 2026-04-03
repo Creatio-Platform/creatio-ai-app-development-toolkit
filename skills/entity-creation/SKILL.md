@@ -16,11 +16,8 @@ Resolve exact tool names, parameters, aliases, defaults, validators, response sh
 
 ## Canonical Entity Flow
 
-1. `application-create` for a new app shell when needed
-2. `schema-sync`
-3. `application-get-info`
-
-Keep individual entity tools such as `create-entity-schema`, `create-lookup`, and `update-entity-schema` as fallback-only compatibility paths.
+Resolve the exact tool sequence, parameters, and fallback paths through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
+Prefer `schema-sync` for grouped entity work. Use individual entity tools only when the approved plan explicitly requires a fallback path.
 
 ## What This Skill Covers
 
@@ -37,14 +34,15 @@ Keep individual entity tools such as `create-entity-schema`, `create-lookup`, an
 3. Prefer `schema-sync` over individual entity mutations.
 4. Create lookup entities before referencing them from other schemas.
 5. Omission never means delete.
-6. `BaseLookup` already provides `Name` and `Description`; never add duplicate lookup title columns.
-7. If the current entity snapshot already contains `Name`, do not add `UsrName`.
+6. Resolve lookup display and inherited-column semantics through `tool-contract-get` and `docs://mcp/guides/app-modeling`; do not treat this skill as the source of truth.
+7. Resolve existing title/display field reuse from refreshed app context plus live `clio` modeling guidance instead of hardcoded repo heuristics.
 8. Enum-like business values must be modeled as lookup entities.
 9. Requirements phrased as “defaults to X” are incomplete until the plan defines either a schema default or a UI default.
 10. Lookup seed rows alone do not satisfy a default requirement.
 11. Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for lookup/display/default semantics instead of restating them locally.
 12. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
-13. Preserve semantic text field types in runtime payloads: use `Email`, `PhoneNumber`, and `WebLink` when the approved business field is an email, phone, or URL, instead of generic `ShortText`.
+13. Resolve runtime field-type semantics through live `clio` MCP contract metadata and app-modeling guidance rather than hardcoded repo rules.
+14. Do not create a second main entity right after `application-create` for the same primary record type; extend the canonical main entity unless the approved plan proves a distinct business object.
 
 ## Planning Inputs
 
@@ -60,8 +58,6 @@ From the approved plan, keep only the semantic requirements:
 
 Translate these into executable payloads only at runtime through `tool-contract-get`.
 
-This flat application context is the primary runtime contract for this repo. After normalization, `mcp-application-result.json` may also contain `editableContext`, but that is a repo-local helper projection rather than the MCP response contract.
-
 ## Refresh Policy
 
 After a successful `schema-sync` batch:
@@ -76,12 +72,9 @@ Do not document per-operation refresh as the primary flow.
 
 ## Validation Checklist
 
-- `success=true`
-- `package-u-id` is non-empty
-- `entities` contains the expected schema after refresh
+- MCP response shape validated through `tool-contract-get` contract
 - schema operations follow lookup-before-reference ordering
-- no inherited lookup columns are redefined
-- no duplicate title column such as `UsrName` is introduced when `Name` already exists
+- inherited/display/title-field conflicts are delegated to live `clio` contract semantics instead of repo-local rules
 - explicit defaults are classified as schema defaults or UI defaults
 - canonical context was refreshed through `application-get-info`
 - `canonical-main-entity-name` is used when deciding whether to extend the template-created main entity or create an additional business object

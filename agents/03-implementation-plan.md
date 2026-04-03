@@ -118,11 +118,9 @@ Rules:
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
-- Reuse `Name` when it already exists.
-- Never plan duplicate title-like columns when `Name` is already present.
+- Reuse server-provided display fields when they already satisfy the approved business intent.
 - Model enum-like business values as lookup entities first.
-- Preserve semantic text field types in schema plans: use `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields instead of downgrading them to generic `ShortText`.
-- For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
+- Preserve business semantics for contact and URL fields, but resolve the concrete runtime field type through the live `clio` contract.
 - Do not encode executable schema payload field names in the plan. Resolve them at runtime through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
@@ -176,7 +174,7 @@ When page sync is required:
 
 - Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
 - Resolve executable parameter names, aliases, defaults, and nested request shapes from `tool-contract-get` instead of hard-coding them in the plan.
-- Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
+- Never add redundant custom lookup columns that duplicate server-provided display fields.
 - Never treat seeded rows as implementation of a default rule.
 
 ## Plan Output

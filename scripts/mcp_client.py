@@ -3,9 +3,12 @@
 Reusable stdio MCP client for clio.
 
 Usage:
+    python3 scripts/mcp_client.py --check-clio-version [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> <args-json> [timeout]
     python3 scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
+    python3 scripts/mcp_client.py resources/list {} [timeout]
+    python3 scripts/mcp_client.py resources/read '{"uri":"docs://mcp/guides/app-modeling"}' [timeout]
 
 clio resolution (first match wins):
     1. CLIO_CMD env var — custom clio path provided by user at startup
@@ -36,10 +39,11 @@ import sys
 import threading
 import time
 
-MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 37)
+MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 50)
 MIN_SUPPORTED_CLIO_VERSION_TEXT = ".".join(str(part) for part in MIN_SUPPORTED_CLIO_VERSION)
 _CLIO_VERSION_CACHE = {"key": None, "info": None}
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
+SCHEMA_SYNC_ALLOWED_OPERATION_TYPES = {"create-lookup", "create-entity", "update-entity"}
 
 def _resolve_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
@@ -120,6 +124,19 @@ def validate_clio_version(min_version=MIN_SUPPORTED_CLIO_VERSION, timeout=30):
 
 def ensure_supported_clio_version(timeout=30):
     return validate_clio_version(timeout=timeout)
+
+
+def check_clio_version(timeout=30):
+    info = validate_clio_version(timeout=timeout)
+    return {
+        "success": True,
+        "data": {
+            "version": info["version"],
+            "minimum-supported-version": MIN_SUPPORTED_CLIO_VERSION_TEXT,
+            "command": info["command"],
+        },
+        "raw": info["raw"],
+    }
 
 
 def _parse_rpc_result(message_id, collected, expect_tool_result):
@@ -261,6 +278,12 @@ class PersistentMcpClient:
 
     def list_tools(self, timeout=None):
         return self.call_method("tools/list", {}, timeout=timeout, expect_tool_result=False)
+
+    def list_resources(self, timeout=None):
+        return self.call_method("resources/list", {}, timeout=timeout, expect_tool_result=False)
+
+    def read_resource(self, uri, timeout=None):
+        return self.call_method("resources/read", {"uri": uri}, timeout=timeout, expect_tool_result=False)
 
     def call_tools_batch(self, calls):
         results = []
@@ -514,6 +537,39 @@ def _apply_validator(validator: dict, arguments: dict) -> list[str]:
     return []
 
 
+def _validate_schema_sync_operations(arguments: dict) -> list[str]:
+    operations = arguments.get("operations")
+    if not isinstance(operations, list):
+        return []
+    errors = []
+    for index, operation in enumerate(operations):
+        prefix = f"operations[{index}]"
+        if not isinstance(operation, dict):
+            errors.append(f"{prefix} must be an object.")
+            continue
+        has_type = "type" in operation and not _value_is_missing(operation.get("type"))
+        has_legacy_operation = "operation" in operation and not _value_is_missing(operation.get("operation"))
+        if has_legacy_operation:
+            if has_type:
+                errors.append(f"{prefix}.operation is not supported. Use only {prefix}.type.")
+            else:
+                errors.append(
+                    f"{prefix}.type is required; received legacy field 'operation'. Use '{prefix}.type' instead."
+                )
+            continue
+        if not has_type:
+            errors.append(f"{prefix}.type is required.")
+            continue
+        operation_type = operation.get("type")
+        if not isinstance(operation_type, str):
+            errors.append(f"{prefix}.type must be a string, not {type(operation_type).__name__}.")
+            continue
+        if operation_type not in SCHEMA_SYNC_ALLOWED_OPERATION_TYPES:
+            allowed_values = ", ".join(sorted(SCHEMA_SYNC_ALLOWED_OPERATION_TYPES))
+            errors.append(f"{prefix}.type must be one of: {allowed_values}.")
+    return errors
+
+
 def _normalize_and_validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> tuple[dict, list[str]]:
     contract_index = contract_index or {}
     spec = contract_index.get(tool_name)
@@ -554,6 +610,8 @@ def _normalize_and_validate_params(tool_name: str, arguments: dict, contract_ind
     for validator in input_schema.get("validators") or []:
         if isinstance(validator, dict):
             errors.extend(_apply_validator(validator, normalized_arguments))
+    if tool_name == "schema-sync":
+        errors.extend(_validate_schema_sync_operations(normalized_arguments))
     return normalized_arguments, errors
 
 
@@ -650,6 +708,26 @@ def list_mcp_tools(timeout: int = 120) -> dict:
         return client.list_tools(timeout)
 
 
+def list_mcp_resources(timeout: int = 120) -> dict:
+    client = _get_shared_client()
+    try:
+        return client.list_resources(timeout)
+    except Exception:
+        client.close()
+        return client.list_resources(timeout)
+
+
+def read_mcp_resource(uri: str, timeout: int = 120) -> dict:
+    if not isinstance(uri, str) or not uri.strip():
+        return _build_validation_result(["Missing required parameter 'uri'"])
+    client = _get_shared_client()
+    try:
+        return client.read_resource(uri.strip(), timeout)
+    except Exception:
+        client.close()
+        return client.read_resource(uri.strip(), timeout)
+
+
 def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_text=None):
     sources = sum(1 for source in (args_json is not None, args_file is not None, args_stdin) if source)
     if sources != 1:
@@ -667,9 +745,12 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
 def parse_cli_request(argv):
     if not argv:
         raise ValueError(
-            "Usage: mcp_client.py <tool-name> <args-json> [timeout]\n"
+            "Usage: mcp_client.py --check-clio-version [--timeout <seconds>]\n"
+            "   or: mcp_client.py <tool-name> <args-json> [timeout]\n"
             "   or: mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
-            "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]"
+            "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]\n"
+            "   or: mcp_client.py resources/list {} [timeout]\n"
+            "   or: mcp_client.py resources/read '{\"uri\":\"docs://mcp/guides/app-modeling\"}' [timeout]"
         )
     tool_name = argv[0]
     remainder = argv[1:]
@@ -705,13 +786,38 @@ def parse_cli_request(argv):
     }
 
 
+def parse_clio_version_check_request(argv):
+    if not argv or argv[0] != "--check-clio-version":
+        return None
+    parser = argparse.ArgumentParser(prog="mcp_client.py", add_help=True)
+    parser.add_argument("--check-clio-version", action="store_true")
+    parser.add_argument("--timeout", type=int, default=30)
+    parsed = parser.parse_args(argv)
+    return {"timeout": parsed.timeout}
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    version_check = parse_clio_version_check_request(argv)
+    if version_check is not None:
+        try:
+            result = check_clio_version(timeout=version_check["timeout"])
+        except (ValueError, json.JSONDecodeError, OSError, RuntimeError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return 0
     try:
-        request = parse_cli_request(sys.argv[1:] if argv is None else argv)
+        request = parse_cli_request(argv)
     except (ValueError, json.JSONDecodeError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 1
-    result = call_mcp_tool(request["tool_name"], request["arguments"], request["timeout"])
+    if request["tool_name"] == "resources/list":
+        result = list_mcp_resources(request["timeout"])
+    elif request["tool_name"] == "resources/read":
+        result = read_mcp_resource((request["arguments"] or {}).get("uri"), request["timeout"])
+    else:
+        result = call_mcp_tool(request["tool_name"], request["arguments"], request["timeout"])
     print(json.dumps(result, indent=2))
     return 0
 

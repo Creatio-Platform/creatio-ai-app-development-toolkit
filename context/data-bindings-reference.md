@@ -3,7 +3,7 @@
 Data bindings register sections, connect entities to navigation, and seed lookup values.
 
 Executable MCP contract is authoritative only in `clio MCP` through `tool-contract-get`.
-This document defines binding policy, target invariants, and data-shape expectations only.
+This document defines repo-local binding invariants for section/navigation artifacts plus local evidence-oriented guidance.
 
 ## Role In The Workflow
 
@@ -11,8 +11,7 @@ Use this reference for:
 
 - section registration policy
 - `SysModule` and `SysModuleEntity` invariants
-- lookup seed row semantics
-- binding identity rules
+- lookup seed data constraints that affect business behavior
 - stable system IDs sourced from `context/bindings-lookup.json`
 
 Do not use this file as a hand-written tool API reference.
@@ -59,18 +58,11 @@ Seeds rows for lookup entities such as statuses, priorities, or categories.
 Key invariants:
 
 - do not treat seed rows alone as a default-selection implementation
-- prefer batched lookup seeding when the lookup is already part of the same schema batch
-- `create-data-binding-db` is not required for standard lookup seeding; use it only for custom filters, cross-package references, or standalone binding artifacts
-
-## Binding Identity Rules
-
-- treat `package + binding identity` as the persisted binding target
-- for standard lookup seed workflows, use the default schema-named binding unless a separate artifact is explicitly required
-- do not create parallel bindings for the same lookup only by varying a decorative binding name
+- keep seed values aligned with the approved lookup semantics from the current plan
+- generate fresh row GUIDs at execution time when the workflow materializes seed rows explicitly
 
 ## Practical Guidance
 
 - prefer deployed schema inspection only when you need stable IDs or column discovery
-- treat DB persistence plus immediate install as the primary effect of binding execution
-- treat file materialization as a secondary side effect
-- keep `filter.json` empty for standard section registration and lookup seed bindings unless the workflow explicitly requires a custom filter
+- treat execution evidence and installed artifacts as the source for result verification
+- keep `filter.json` empty for standard section registration bindings unless the workflow explicitly requires a custom filter

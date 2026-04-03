@@ -17,6 +17,44 @@ Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.m
 
 ## Steps
 
+### 0. Execution preflight
+
+Before any `dotnet`, `clio`, Python, Node, or MCP-related command, validate the command executor through the same execution path that will be used for the real work.
+
+Preflight contract:
+
+- detect the current operating system and active command executor
+- determine the executor required by the next command syntax
+- run one trivial shell-health command through that exact executor path
+- continue only if shell-health succeeds
+
+Platform-specific rules:
+
+- if the next commands use Windows PowerShell syntax or require a PowerShell-backed executor, validate that executor first; a `cmd.exe`-only environment is not an acceptable substitute
+- if the next commands use Windows `cmd.exe` syntax, validate `cmd.exe` first
+- if the next commands use macOS or Linux POSIX shell syntax, validate the active POSIX shell first; use the current `environment_context.shell` when available unless a later step explicitly requires a different shell
+- if a later step requires a different executor than the current shell, validate that executor before the first dependent command
+
+Recommended shell-health checks:
+
+- Windows PowerShell-backed flow: `Get-Location` or `Write-Host ok`
+- Windows `cmd.exe` flow: `cd` or `echo ok`
+- macOS/Linux POSIX flow: `pwd` or `printf ok`
+
+Fail-fast rules:
+
+- if the shell-health command fails with executor-level errors such as `File not found`, `shell not found`, startup failure, or equivalent boot errors, stop immediately with a blocker
+- do not continue to `dotnet`, `clio`, Python, Node, or MCP bootstrap commands
+- do not retry the same stage in alternate syntax variants such as `New-Item`, `mkdir`, `cmd /c`, `python -c`, `node -e`, or alternate shell IDs before executor health is confirmed
+- do not diagnose path, permission, project-root, or directory-creation problems until the executor has been proven healthy
+
+User-facing blocker message:
+
+- state which executor was expected
+- state which executor was actually available or failing
+- state that implementation execution did not start because execution preflight failed
+- ask only for the minimum environment correction needed to continue
+
 ### 1. Verify prerequisites
 
 **Step 1a — Check .NET SDK:**
@@ -46,20 +84,27 @@ Then wait for confirmation and retry.
 **Scenario 2 — clio installed globally (standard):**
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
+python3 scripts/mcp_client.py --check-clio-version
 ```
-Note the version and proceed. No additional configuration needed.
+The released version must be `8.0.2.50` or newer.
+If the check fails, stop immediately and ask the developer to upgrade:
+```bash
+dotnet tool update clio -g
+```
 
 **Scenario 3 — user provided a custom clio path:**
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
 dotnet /full/path/to/clio.dll ver
+python3 scripts/mcp_client.py --check-clio-version
 ```
 `scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
 
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
+py -3 .\scripts\mcp_client.py --check-clio-version
 py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
 ```
 
@@ -68,6 +113,15 @@ py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get
 **CRITICAL:** Never use a URL (e.g., `http://localhost:5001`) as `environmentName`.
 The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
 Always register through `clio reg-web-app` if the environment does not exist.
+
+### Ambiguous Match Guardrail
+
+If `clio show-web-app-list` returns multiple registered environments whose normalized URL matches the current request URL:
+
+1. Treat the environment choice as ambiguous.
+2. Ask the developer to choose the exact `environmentName`.
+3. Do not auto-select based on prior runs, `output/<AppName>/.creatio-env.json`, active-environment status, or an internal plan that mentions one of the matching aliases.
+4. Skip the question only when the current conversation explicitly names the environment key to use for the current URL.
 
 ### Existing Output Guard
 
@@ -88,7 +142,8 @@ clio show-web-app-list
 Display the list to the developer. Check if an environment for the current request URL already exists.
 
 - Ignore `output/<AppName>/.creatio-env.json` as the runtime source of truth for a new run.
-- **If an environment for the current request URL exists** — use that environment name and skip to Step 5.
+- **If exactly one environment for the current request URL exists** — use that environment name and skip to Step 5.
+- **If two or more environments for the current request URL exist** — stop and ask the developer which environment name to use. Do not guess.
 - **If it does not exist** — proceed to Step 3.
 
 ### 3. Register the environment
@@ -148,6 +203,8 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 |-------|--------|
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
+| `clio` version is older than `8.0.2.50` | Stop. Tell developer to upgrade clio: `dotnet tool update clio -g` |
+| Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |

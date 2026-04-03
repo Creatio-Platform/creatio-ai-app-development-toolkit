@@ -203,6 +203,9 @@ Run Gate P once at the start of each app workflow.
 - Never treat a pre-existing `output/<AppName>/.creatio-env.json` as satisfying Environment Setup for a new user request.
 - When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
 - Agent 1 must resolve the environment from the current request URL and rewrite `output/<AppName>/.creatio-env.json` for the current run before Agent 3 or Agent 4 reads it.
+- If `clio show-web-app-list` returns multiple registered environments for the same normalized current-request URL, treat the environment choice as ambiguous and ask the developer to choose the environment name explicitly before continuing.
+- Do not auto-select one of several matching environments based on internal artifacts, stale plans, previous runs, active-environment status, or a familiar alias.
+- Reuse a matching environment without asking only when the current conversation explicitly names the environment key to use for that URL.
 - If `output/<AppName>/` already exists for the same app name but points to a different URL or environment, treat its runtime artifacts as stale for the current run.
 - Existing `.workflow-state/<AppName>/planning-state.json` or `output/<AppName>/` artifacts are internal implementation details. Do not surface them in business dialogue unless they create a real blocker that changes business intent.
 
@@ -346,3 +349,10 @@ Canonical repository references:
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
 Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `tool-contract-get` instead of duplicating payload rules in agent prompts.
+
+Project-local shared skills:
+
+- `.agents/skills/analyze-adac-logs/` is the canonical skill for ADAC or Copilot session-log analysis in this repository.
+- When the task is session stats, timeline reconstruction, incident analysis, or CLIO-first remediation planning, open `.agents/skills/analyze-adac-logs/SKILL.md`.
+- Use `.agents/skills/analyze-adac-logs/scripts/analyze_session_log.py` before manual interpretation so counts and timeline extraction come from one deterministic baseline.
+- For this repository, prefer the repo-local skill copy over any home-directory compatibility copy.

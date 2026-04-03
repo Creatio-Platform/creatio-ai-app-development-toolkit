@@ -4,15 +4,24 @@ import json
 import os
 import re
 import time
-import uuid
 from pathlib import Path
 
 try:
-    from scripts.mcp_context_adapter import infer_contract_type, normalize_column, normalize_result_document
-    from scripts.mcp_result_evidence import append_operation, ensure_result_document
+    from scripts.mcp_result_document import (
+        append_operation,
+        ensure_result_document,
+        normalize_column,
+        normalize_result_document,
+        refresh_result_document,
+    )
 except ImportError:
-    from mcp_context_adapter import infer_contract_type, normalize_column, normalize_result_document
-    from mcp_result_evidence import append_operation, ensure_result_document
+    from mcp_result_document import (
+        append_operation,
+        ensure_result_document,
+        normalize_column,
+        normalize_result_document,
+        refresh_result_document,
+    )
 
 KIND_PRIORITY = {
     "lookup": 0,
@@ -21,10 +30,6 @@ KIND_PRIORITY = {
     "entity": 3
 }
 CUSTOM_COLUMN_PREFIX = "Usr"
-LOOKUP_INHERITED_COLUMN_NAMES = {"Name", "Description"}
-LOOKUP_DUPLICATE_TITLE_COLUMN_NAMES = {"UsrName", "UsrTitle", "UsrCaption"}
-SUPPORTED_DEFAULT_VALUE_SOURCES = {"Const", "None"}
-BINARY_LIKE_DATA_VALUE_TYPES = {"binary", "blob", "image", "file"}
 TYPE_FALLBACK_RULES = (
     {
         "aliases": {"securetext", "encrypted", "password"},
@@ -261,8 +266,7 @@ def extract_editable_context(document):
             first_package = raw_packages[0]
             if isinstance(first_package, dict) and "entities" in first_package:
                 return document
-    contract_type = infer_contract_type(document)
-    if contract_type == "short":
+    if "success" in document:
         normalized = normalize_result_document(document)
         if normalized.get("editableContext"):
             return normalized["editableContext"]
@@ -285,21 +289,6 @@ def collect_column_names(columns):
     }
 
 
-def get_entity_column_names(entity):
-    source_columns = entity.get("rawColumns")
-    if not isinstance(source_columns, list):
-        source_columns = entity.get("columns", [])
-    return collect_column_names(source_columns)
-
-
-def has_column_named(columns, target_name):
-    for raw_column in columns or []:
-        column = normalize_column(raw_column)
-        if column["name"] == target_name:
-            return True
-    return False
-
-
 def build_entity_index(editable_context):
     index = {}
     for package in editable_context.get("packages", []):
@@ -316,7 +305,6 @@ def build_entity_index(editable_context):
             indexed_entity["caption"] = normalize_title(indexed_entity.get("caption"), name)
             indexed_entity["kind"] = indexed_entity.get("kind") or "entity"
             indexed_entity["rawColumns"] = raw_columns
-            indexed_entity["hasNameColumn"] = has_column_named(raw_columns, "Name")
             indexed_entity["columns"] = filter_mutable_columns(raw_columns)
             index[(package_u_id, name)] = indexed_entity
     return index
@@ -330,56 +318,6 @@ def validate_lookup_reference(column, available_names):
     reference_name = column.get("referenceSchemaName")
     if reference_name and reference_name not in available_names:
         raise WorkflowError(f"Lookup reference {reference_name} is not available in current or edited context")
-
-
-def is_lookup_column(column):
-    return column.get("referenceSchemaName") or column.get("dataValueTypeName") == "Lookup"
-
-
-def is_binary_like_column(column):
-    data_value_type_name = column.get("dataValueTypeName")
-    if not isinstance(data_value_type_name, str):
-        return False
-    return data_value_type_name.lower() in BINARY_LIKE_DATA_VALUE_TYPES
-
-
-def is_guid_string(value):
-    if not isinstance(value, str):
-        return False
-    try:
-        uuid.UUID(value)
-    except (ValueError, AttributeError, TypeError):
-        return False
-    return True
-
-
-def validate_column_default(column):
-    has_default_value_source = column.get("defaultValueSource") not in (None, "")
-    has_default_value = "defaultValue" in column
-    column_name = column["name"]
-    if has_default_value and not has_default_value_source:
-        raise WorkflowError(f"Column {column_name} requires defaultValueSource when defaultValue is specified")
-    if not has_default_value_source:
-        return
-    default_value_source = column["defaultValueSource"]
-    if default_value_source not in SUPPORTED_DEFAULT_VALUE_SOURCES:
-        raise WorkflowError(
-            f"Column {column_name} supports only defaultValueSource values: Const, None"
-        )
-    if default_value_source == "None":
-        if has_default_value and column["defaultValue"] not in (None, ""):
-            raise WorkflowError(f"Column {column_name} cannot set defaultValue when defaultValueSource is None")
-        return
-    if is_binary_like_column(column):
-        raise WorkflowError(
-            f"Column {column_name} with type {column['dataValueTypeName']} does not support defaultValueSource Const"
-        )
-    if not has_default_value:
-        raise WorkflowError(f"Column {column_name} requires defaultValue when defaultValueSource is Const")
-    if is_lookup_column(column) and not is_guid_string(column["defaultValue"]):
-        raise WorkflowError(
-            f"Lookup column {column_name} requires defaultValue as a seeded row GUID, not a caption"
-        )
 
 
 def build_column_map(columns):
@@ -400,48 +338,12 @@ def columns_equal(left_column, right_column):
     return normalize_column_for_compare(left_column) == normalize_column_for_compare(right_column)
 
 
-def validate_display_field_rules(current_entity, edited_entity, current_columns, edited_columns):
-    entity_name = edited_entity["name"]
-    entity_kind = edited_entity.get("kind") or current_entity.get("kind")
-    current_raw_column_names = get_entity_column_names(current_entity)
-    edited_raw_column_names = get_entity_column_names(edited_entity)
-    inherited_conflicts = sorted(
-        name for name in LOOKUP_INHERITED_COLUMN_NAMES
-        if name in edited_raw_column_names and name not in current_raw_column_names
-    )
-    if entity_kind == "lookup" and inherited_conflicts:
-        inherited_columns = ", ".join(inherited_conflicts)
-        raise WorkflowError(
-            f"Lookup {entity_name} inherits BaseLookup columns. Do not add inherited columns: {inherited_columns}"
-        )
-    duplicate_title_like_conflicts = sorted(
-        name for name in LOOKUP_DUPLICATE_TITLE_COLUMN_NAMES
-        if name in edited_raw_column_names and name not in current_raw_column_names
-    )
-    if entity_kind == "lookup" and duplicate_title_like_conflicts:
-        duplicate_columns = ", ".join(duplicate_title_like_conflicts)
-        raise WorkflowError(
-            f"Lookup {entity_name} must use inherited Name as PrimaryDisplayColumn; do not add duplicate title-like columns: {duplicate_columns}"
-        )
-    is_adding_usr_name = "UsrName" in edited_columns and "UsrName" not in current_columns
-    if entity_kind == "lookup" and is_adding_usr_name:
-        raise WorkflowError(
-            f"Lookup {entity_name} must use inherited Name as PrimaryDisplayColumn; do not add UsrName"
-        )
-    if (current_entity.get("hasNameColumn") or "Name" in current_columns) and is_adding_usr_name:
-        raise WorkflowError(
-            f"Entity {entity_name} already contains Name; do not add duplicate UsrName"
-        )
-
-
 def build_column_operations(current_entity, edited_entity, available_names):
     current_columns = build_column_map(current_entity.get("columns", []))
     edited_columns = build_column_map(edited_entity.get("columns", []))
-    validate_display_field_rules(current_entity, edited_entity, current_columns, edited_columns)
     operations = []
     for name in sorted(edited_columns):
         column = edited_columns[name]
-        validate_column_default(column)
         validate_lookup_reference(column, available_names)
         if name not in current_columns:
             operations.append({
@@ -543,9 +445,6 @@ def build_update_operations_payload(operations):
 def build_create_action(entity):
     tool_name = "create-lookup" if entity.get("kind") == "lookup" else "create-entity-schema"
     filtered_columns = filter_mutable_columns(entity.get("columns", []))
-    validate_display_field_rules({}, entity, {}, build_column_map(filtered_columns))
-    for column in filtered_columns:
-        validate_column_default(column)
     arguments = {
         "package-name": entity["packageName"],
         "schema-name": entity["name"],
@@ -647,29 +546,33 @@ def build_sync_plan(current_context, edited_context):
 
 def resolve_app_selector(result_document):
     app = result_document.get("app") or {}
+    if app.get("code"):
+        return {
+            "code": app["code"]
+        }
     if app.get("app-code"):
         return {
-            "app-code": app["app-code"]
+            "code": app["app-code"]
         }
     if app.get("id"):
         return {
-            "app-id": app["id"]
+            "id": app["id"]
         }
     if result_document.get("appId"):
         return {
-            "app-id": result_document["appId"]
+            "id": result_document["appId"]
         }
     if result_document.get("appCode"):
         return {
-            "app-code": result_document["appCode"]
+            "code": result_document["appCode"]
         }
     if result_document.get("packageName"):
         return {
-            "app-code": result_document["packageName"]
+            "code": result_document["packageName"]
         }
     if result_document.get("package-name"):
         return {
-            "app-code": result_document["package-name"]
+            "code": result_document["package-name"]
         }
     raise WorkflowError("Application identifier is missing in current result document")
 
@@ -781,12 +684,7 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
     except WorkflowError as error:
         last_action = sync_plan["actions"][-1]
         raise build_refresh_failure(last_action, error)
-    normalized_context = ensure_result_document(refreshed_context)
-    normalized_context["schemaSync"] = list(current_document.get("schemaSync", []))
-    normalized_context["operationLog"] = list(current_document.get("operationLog", []))
-    normalized_context["pageEvidence"] = dict(current_document.get("pageEvidence", {}))
-    normalized_context["acceptanceEvidence"] = dict(current_document.get("acceptanceEvidence", {}))
-    current_document = normalized_context
+    current_document = refresh_result_document(refreshed_context, current_document)
     write_json(result_path, current_document)
     return current_document
 

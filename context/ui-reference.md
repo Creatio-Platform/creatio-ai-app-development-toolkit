@@ -79,7 +79,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.NumberInput` supports `format.decimalPrecision`; use it when the numeric column scale is known.
 - `crt.DateTimePicker` supports `pickerType`, `useSeconds`, `startView`, `mode`, and `timeInterval`. Match `pickerType` to the real field kind (`date`, `time`, or `datetime`).
 - `crt.PhoneInput`, `crt.EmailInput`, and `crt.WebInput` are backed by preprocessors that can promote a bound text input to a more specific control based on the underlying data value type.
-- Keep the schema data type semantic when the business meaning is explicit: use `PhoneNumber`, `Email`, and `WebLink` in entity payloads instead of collapsing them to `ShortText`.
+- Resolve schema-side field-type semantics through `tool-contract-get` and `docs://mcp/guides/app-modeling`; this file is only about page control behavior.
 - `crt.ComboBox` is also preprocessor-backed: it can auto-build lookup loading requests, pagination wiring, and lookup list attributes from the main binding.
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
@@ -490,7 +490,7 @@ Rules:
 - Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
 - **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `page-sync` `resources` param.
-  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `page-sync`. Always pass `resources` alongside new field inserts: `{"PDS_UsrStatus_ab12cd3": {"en-US": "Status"}}`. Without this, the label renders blank until the field is first touched in the designer.
+  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `page-sync`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
 
 ### Runtime Lookup Special Case
 
@@ -635,13 +635,13 @@ If the live page already contains `converters` or `validators`, preserve them an
 
 ## MCP Page Tools — Reading and Editing Pages
 
-Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
+Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. The executable tool semantics come from `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance`; this section keeps only the repo-local consumer workflow.
 
 | Tool | Description |
 |------|-------------|
 | `page-list` | Discover page schemas by package or name pattern |
 | `page-get` | Read a page schema's metadata and raw JS body |
-| `page-sync` | Canonical write path for edited page bodies, batch validation, and server-side verification |
+| `page-sync` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
 | `page-update` | Fallback single-page dry-run or legacy save path |
 | `component-info` | Inspect curated Freedom UI component properties and example payloads |
 
@@ -652,8 +652,8 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 1. call `page-list` with `search-pattern: "MyApp"`
 2. call `page-get` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. If the page contains unfamiliar `crt.*` components, inspect them with `component-info` and `component-type: "..."`
-5. call `page-sync` with the edited page body and verify the saved page; use `page-update` only as an explicit fallback
+4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `component-info` and `component-type: "..."`
+5. call `page-sync` with the edited page body and verify the saved page; keep `page-update` only as an explicit fallback
 ```
 
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page-get`.

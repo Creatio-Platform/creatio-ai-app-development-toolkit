@@ -16,8 +16,12 @@ from scripts.mcp_client import (
     _parse_rpc_result,
     _validate_params,
     call_mcp_tool,
+    check_clio_version,
     load_cli_arguments,
+    list_mcp_resources,
+    parse_clio_version_check_request,
     parse_cli_request,
+    read_mcp_resource,
     validate_clio_version,
 )
 
@@ -73,7 +77,7 @@ PAGE_LIST_CONTRACT = build_contract(
     "page-list",
     properties=[
         field("package-name", "string", "Package name to inspect."),
-        field("app-code", "string", "Installed application code to inspect."),
+        field("code", "string", "Installed application code to inspect."),
         field("search-pattern", "string", "Optional page schema name pattern."),
         field("environment-name", "string", "Registered clio environment name."),
         field("uri", "string", "Explicit Creatio URL."),
@@ -89,8 +93,8 @@ PAGE_LIST_CONTRACT = build_contract(
         {
             "name": "mutually-exclusive-fields",
             "code": "invalid-workflow-shape",
-            "fields": ["package-name", "app-code"],
-            "context": "page-list accepts package-name or app-code, not both.",
+            "fields": ["package-name", "code"],
+            "context": "page-list accepts package-name or code, not both.",
         }
     ],
 )
@@ -139,18 +143,32 @@ class McpClientTests(unittest.TestCase):
     def test_validate_clio_version_rejects_older_release(self):
         with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-old.dll"}, clear=False), patch(
             "scripts.mcp_client.subprocess.run",
-            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.32\n", stderr=""),
+            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.49\n", stderr=""),
         ), patch("scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
-            with self.assertRaisesRegex(RuntimeError, "Minimum supported released version is 8.0.2.37"):
+            with self.assertRaisesRegex(RuntimeError, "Minimum supported released version is 8.0.2.50"):
                 validate_clio_version()
 
     def test_validate_clio_version_accepts_minimum_release(self):
         with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-min.dll"}, clear=False), patch(
             "scripts.mcp_client.subprocess.run",
-            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.37\n", stderr=""),
+            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.50\n", stderr=""),
         ), patch("scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
             info = validate_clio_version()
-        self.assertEqual(info["version"], "8.0.2.37")
+        self.assertEqual(info["version"], "8.0.2.50")
+
+    def test_check_clio_version_returns_structured_result(self):
+        with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-min.dll"}, clear=False), patch(
+            "scripts.mcp_client.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.50\n", stderr=""),
+        ), patch("scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
+            result = check_clio_version()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["version"], "8.0.2.50")
+        self.assertEqual(result["data"]["minimum-supported-version"], "8.0.2.50")
+
+    def test_parse_clio_version_check_request_accepts_timeout(self):
+        parsed = parse_clio_version_check_request(["--check-clio-version", "--timeout", "45"])
+        self.assertEqual(parsed["timeout"], 45)
 
     def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
         client = PersistentMcpClient()
@@ -159,6 +177,27 @@ class McpClientTests(unittest.TestCase):
             result = client.list_tools(timeout=15)
         self.assertEqual(result, expected)
         mocked.assert_called_once_with("tools/list", {}, timeout=15, expect_tool_result=False)
+
+    def test_persistent_client_list_resources_uses_mcp_resources_list_method(self):
+        client = PersistentMcpClient()
+        expected = {"success": True, "data": {"resources": [{"uri": "docs://mcp/guides/app-modeling"}]}, "raw": "{}"}
+        with patch.object(PersistentMcpClient, "call_method", return_value=expected) as mocked:
+            result = client.list_resources(timeout=15)
+        self.assertEqual(result, expected)
+        mocked.assert_called_once_with("resources/list", {}, timeout=15, expect_tool_result=False)
+
+    def test_persistent_client_read_resource_uses_mcp_resources_read_method(self):
+        client = PersistentMcpClient()
+        expected = {"success": True, "data": {"contents": [{"uri": "docs://mcp/guides/app-modeling"}]}, "raw": "{}"}
+        with patch.object(PersistentMcpClient, "call_method", return_value=expected) as mocked:
+            result = client.read_resource("docs://mcp/guides/app-modeling", timeout=15)
+        self.assertEqual(result, expected)
+        mocked.assert_called_once_with(
+            "resources/read",
+            {"uri": "docs://mcp/guides/app-modeling"},
+            timeout=15,
+            expect_tool_result=False,
+        )
 
     def test_parse_cli_request_accepts_legacy_positional_mode(self):
         parsed = parse_cli_request(["application-get-list", '{"environment-name":"local"}', "30"])
@@ -269,10 +308,10 @@ class McpClientTests(unittest.TestCase):
             "scripts.mcp_client._get_shared_client",
             return_value=fake_client,
         ):
-            result = call_mcp_tool("page-list", {"environment-name": "local", "appCode": "UsrTest"})
+            result = call_mcp_tool("page-list", {"environment-name": "local", "app-code": "UsrTest"})
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "invalid-request")
-        self.assertIn("Unknown parameter 'appCode'", result["raw"])
+        self.assertIn("Unknown parameter 'app-code'", result["raw"])
         fake_client.call_tool.assert_not_called()
 
     def test_call_mcp_tool_returns_tool_contract_unavailable(self):
@@ -281,6 +320,26 @@ class McpClientTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "tool-contract-unavailable")
         self.assertIn("metadata unavailable", result["raw"])
+
+    def test_list_mcp_resources_uses_shared_client(self):
+        fake_client = SimpleNamespace(list_resources=Mock(return_value={"success": True, "data": {"resources": []}, "raw": "{}"}))
+        with patch("scripts.mcp_client._get_shared_client", return_value=fake_client):
+            result = list_mcp_resources(timeout=20)
+        self.assertTrue(result["success"])
+        fake_client.list_resources.assert_called_once_with(20)
+
+    def test_read_mcp_resource_rejects_missing_uri(self):
+        result = read_mcp_resource("")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "invalid-request")
+        self.assertIn("Missing required parameter 'uri'", result["raw"])
+
+    def test_read_mcp_resource_uses_shared_client(self):
+        fake_client = SimpleNamespace(read_resource=Mock(return_value={"success": True, "data": {"contents": []}, "raw": "{}"}))
+        with patch("scripts.mcp_client._get_shared_client", return_value=fake_client):
+            result = read_mcp_resource("docs://mcp/guides/app-modeling", timeout=20)
+        self.assertTrue(result["success"])
+        fake_client.read_resource.assert_called_once_with("docs://mcp/guides/app-modeling", 20)
 
 
 class ParamValidationTests(unittest.TestCase):
@@ -318,13 +377,13 @@ class ParamValidationTests(unittest.TestCase):
         errors = _validate_params("page-list", {"environment-name": "local", "search-pattern": "UsrTodo*"}, self.contract_index)
         self.assertEqual(errors, [])
 
-    def test_page_list_rejects_package_name_and_app_code_together(self):
+    def test_page_list_rejects_package_name_and_code_together(self):
         errors = _validate_params(
             "page-list",
-            {"environment-name": "local", "package-name": "UsrTodo", "app-code": "UsrTodo"},
+            {"environment-name": "local", "package-name": "UsrTodo", "code": "UsrTodo"},
             self.contract_index,
         )
-        self.assertTrue(any("package-name or app-code" in error for error in errors))
+        self.assertTrue(any("package-name or code" in error for error in errors))
 
     def test_validation_uses_server_declared_types(self):
         errors = _validate_params("page-sync", {
@@ -335,19 +394,32 @@ class ParamValidationTests(unittest.TestCase):
         self.assertTrue(any("pages" in error and "array" in error for error in errors))
         self.assertTrue(any("validate" in error and "boolean" in error for error in errors))
 
-    def test_nested_schema_sync_shape_is_not_validated_locally(self):
+    def test_nested_schema_sync_shape_rejects_legacy_operation_field(self):
         errors = _validate_params("schema-sync", {
             "environment-name": "local",
             "package-name": "Pkg",
             "operations": [
                 {
-                    "type": "create-lookup",
+                    "operation": "create-lookup",
                     "schema-name": "UsrVehicleStatus",
-                    "title": "Legacy Title",
                 }
             ],
         }, self.contract_index)
-        self.assertEqual(errors, [])
+        self.assertTrue(any("operations[0].type is required" in error for error in errors))
+        self.assertTrue(any("legacy field 'operation'" in error for error in errors))
+
+    def test_nested_schema_sync_shape_rejects_invalid_operation_type(self):
+        errors = _validate_params("schema-sync", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "operations": [
+                {
+                    "type": "seed-data",
+                    "schema-name": "UsrVehicleStatus",
+                }
+            ],
+        }, self.contract_index)
+        self.assertTrue(any("operations[0].type must be one of" in error for error in errors))
 
     def test_metadata_alias_validation_still_rejects_top_level_aliases(self):
         errors = _validate_params("schema-sync", {
@@ -359,8 +431,8 @@ class ParamValidationTests(unittest.TestCase):
         self.assertTrue(any("packageName" in error for error in errors))
 
     def test_unknown_parameter_rejection_uses_normalized_contract_fields(self):
-        errors = _validate_params("page-list", {"environment-name": "local", "appCode": "UsrTodo"}, self.contract_index)
-        self.assertTrue(any("Unknown parameter 'appCode'" in error for error in errors))
+        errors = _validate_params("page-list", {"environment-name": "local", "app-code": "UsrTodo"}, self.contract_index)
+        self.assertTrue(any("Unknown parameter 'app-code'" in error for error in errors))
 
 
 if __name__ == "__main__":

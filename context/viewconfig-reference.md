@@ -1,7 +1,7 @@
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime page-sync flow. `page-update` is fallback-only.
+Used by coding agents with the runtime page-sync flow that this repo consumes from `clio`. `page-update` remains fallback-only in the local workflow.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -78,7 +78,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
-3. Use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+3. Follow the clio guidance and use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
 **Step 3 — Choosing the right container for new elements:**
 
@@ -142,8 +142,8 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 The `label` value depends on whether a custom "Title on page" is set:
 
 - **No custom title** — `label` = `$Resources.Strings.` + the attribute name from `control` (strip the leading `$`). Example: `control: "$PDS_UsrCode_ab12cd3"` → `label: "$Resources.Strings.PDS_UsrCode_ab12cd3"`.
-  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `page-sync`, you MUST also pass the resource values explicitly via the `resources` param: `{"PDS_UsrCode_ab12cd3": {"en-US": "Code"}}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
-- **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `page-sync` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": {"en-US": "My Title"}}`.
+  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `page-sync`, you MUST also pass the resource values explicitly via the `resources` param as a flat JSON map string: `{"PDS_UsrCode_ab12cd3": "Code"}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
+- **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `page-sync` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": "My Title"}`.
 
 ### Generic Runtime Field Insert Example
 
@@ -484,7 +484,7 @@ Usr-prefixed keys without explicit values in `resources` are auto-derived from k
 }
 ```
 
-Save through the canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
+Save through the clio-advertised canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
 
 ---
 
