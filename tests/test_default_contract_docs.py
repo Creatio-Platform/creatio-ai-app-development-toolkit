@@ -51,16 +51,12 @@ CANONICAL_FLOW_DOCS = [
     ROOT / "context/INDEX.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "agents/04-implementation.md",
-    ROOT / "docs/mcp-testing-guide.md",
-    ROOT / ".github/copilot-instructions.md",
 ]
 
 FALLBACK_DOCS = [
     ROOT / "context/essentials.md",
+    ROOT / "README.md",
     ROOT / "agents/04-implementation.md",
-    ROOT / "skills/page-schema-editing/SKILL.md",
-    ROOT / "context/ui-reference.md",
-    ROOT / "context/viewconfig-reference.md",
 ]
 
 CHECKLIST_SOURCE_DOCS = [
@@ -145,6 +141,14 @@ class DefaultContractDocsTests(unittest.TestCase):
             )
         requirements_doc = (ROOT / "agents/02-requirements-gathering.md").read_text(encoding="utf-8")
         self.assertIn("Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.", requirements_doc)
+
+    def test_active_docs_delegate_canonical_mcp_guidance_to_clio_resources(self):
+        delegation_hits = 0
+        for path in CANONICAL_FLOW_DOCS:
+            content = path.read_text(encoding="utf-8")
+            if "docs://mcp/guides/app-modeling" in content or "docs://mcp/guides/existing-app-maintenance" in content:
+                delegation_hits += 1
+        self.assertGreaterEqual(delegation_hits, 5)
 
     def test_docs_keep_seed_data_separate_from_default_rules(self):
         plan_doc = (ROOT / "agents/03-implementation-plan.md").read_text(encoding="utf-8")
@@ -273,23 +277,20 @@ class DefaultContractDocsTests(unittest.TestCase):
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
 
-    def test_canonical_entity_and_page_flows_are_documented_consistently(self):
-        entity_flow_hits = 0
-        page_flow_hits = 0
+    def test_authority_docs_do_not_present_exact_canonical_flows_as_repo_owned_mcp_truth(self):
+        disallowed_flow_markers = [
+            "application-create -> schema-sync -> application-get-info",
+            "page-list -> page-get -> page-sync -> page-get",
+        ]
         for path in CANONICAL_FLOW_DOCS:
             content = path.read_text(encoding="utf-8")
-            if "application-create -> schema-sync -> application-get-info" in content:
-                entity_flow_hits += 1
-            if "page-list -> page-get -> page-sync -> page-get" in content:
-                page_flow_hits += 1
-        self.assertGreaterEqual(entity_flow_hits, 5)
-        self.assertGreaterEqual(page_flow_hits, 5)
+            for marker in disallowed_flow_markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
 
-    def test_page_update_is_documented_as_fallback_only(self):
+    def test_authority_docs_delegate_page_fallback_policy_to_clio_guidance(self):
         for path in FALLBACK_DOCS:
-            content = path.read_text(encoding="utf-8").lower()
-            self.assertIn("page-update", content, str(path))
-            self.assertIn("fallback", content, str(path))
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("docs://mcp/guides/existing-app-maintenance", content, str(path))
 
     def test_repo_preserves_policy_surfaces(self):
         agents_doc = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -321,6 +322,24 @@ class DefaultContractDocsTests(unittest.TestCase):
 
         implementation_doc = (ROOT / "agents/04-implementation.md").read_text(encoding="utf-8")
         self.assertIn("emit `Email`, `PhoneNumber`, and `WebLink`", implementation_doc)
+
+    def test_authority_docs_do_not_restate_clio_owned_guidance_markers(self):
+        disallowed_markers = [
+            "canonical-main-entity-name",
+            "scalar-only",
+            "component-info",
+        ]
+        scoped_docs = [
+            ROOT / "README.md",
+            ROOT / "context/INDEX.md",
+            ROOT / "context/essentials.md",
+            ROOT / "agents/03-implementation-plan.md",
+            ROOT / "agents/04-implementation.md",
+        ]
+        for path in scoped_docs:
+            content = path.read_text(encoding="utf-8")
+            for marker in disallowed_markers:
+                self.assertNotIn(marker, content, f"{path}: {marker}")
 
     def test_docs_do_not_use_dot_style_application_tool_names(self):
         for path in DOT_STYLE_APPLICATION_TOOL_DOCS:

@@ -113,10 +113,8 @@ Rules:
 
 ### Main Entity And Lookup Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
-- `application-create` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
 - Use the current `clio` MCP contract and prompts/resources for canonical main-entity selection and lookup display semantics instead of redefining them here.
-- When refreshed application context exposes `canonical-main-entity-name`, use it as the primary selector for the app’s main entity. Fall back to the section entity that matches the app code only when the canonical field is absent.
+- Resolve application-shell constraints, main-entity behavior, and localization rules from `docs://mcp/guides/app-modeling`.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
@@ -131,14 +129,13 @@ Rules:
 ### Schema Sync Plan
 
 - Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
-- For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
+- For existing-app work, include the current `clio`-owned discovery and inspection flow instead of hard-coding request semantics here.
 - Create lookup entities before entities that reference them.
-- Prefer batched lookup seeding inside the canonical schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Prefer batched lookup seeding inside the current `clio`-owned schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
-- Canonical entity flow is `application-create -> schema-sync -> application-get-info`.
-- Refresh once through `application-get-info` after the schema-sync batch completes.
+- Resolve the preferred post-mutation refresh step through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
 ### Default Rules
@@ -167,21 +164,7 @@ ListPage defaults:
 - exclude inherited audit/system fields unless explicitly requested
 - exclude long/rich/blob fields unless explicitly requested or required
 
-Required execution sequence for each page:
-
-1. `page-list`
-2. `page-get`
-3. edit body
-4. `page-sync`
-5. `page-get` again for verification
-
-Fallback page sequence:
-
-1. `page-list`
-2. `page-get`
-3. `page-update` with `dry-run: true`
-4. `page-update`
-5. `page-get` again for verification
+Resolve the preferred page execution and verification sequence through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance`.
 
 When page sync is required:
 

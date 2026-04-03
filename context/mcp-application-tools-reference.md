@@ -76,15 +76,12 @@ Normalization keeps the flat runtime contract and adds repo-local helper state:
 
 ## Local Refresh Pattern
 
-Use this repo-local refresh policy:
-1. Create or discover the app via `application-create` or `application-get-info`
+This repository keeps a local refresh and persistence loop around the current `clio`-owned MCP flow:
+1. Initialize the runtime result through the current app create or app discovery step resolved from `tool-contract-get`
 2. Normalize and persist the result file
-3. Run approved schema mutations, preferably via `schema-sync`
-4. Call `application-get-info` once after entity mutations complete
-5. Overwrite and normalize `mcp-application-result.json` again
-6. Run page sync and evidence helpers when required
-
-When the application context includes server-advertised canonical main-entity metadata, use it as the primary selector for the app’s main entity. Only fall back to matching the app code when that metadata is absent.
+3. Run approved helper orchestration
+4. Re-read and normalize the runtime result again when the chosen `clio` workflow requires refresh
+5. Run page sync and evidence helpers when required
 
 ## Local Follow-up Helpers
 
@@ -95,9 +92,8 @@ Use these helpers after MCP calls:
 - `scripts/mcp_page_sync.py build-plan` and `apply` for repo-local page sync orchestration
 
 Local helper rules:
-- use `schema-sync` as the preferred entity write path when the approved plan batches related entity changes
-- use `page-sync` as the preferred page write path
-- keep the local verification fallback through `page-get` when the page-sync response does not expose a reusable verified body
+- follow the current `clio` MCP guidance for preferred entity/page write paths and read-back verification
+- keep helper responsibilities local to transport, normalization, orchestration, evidence, and result persistence
 
 ## Minimal Example
 

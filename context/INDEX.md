@@ -19,11 +19,11 @@ Start with `AGENTS.md`, then follow the current stage runbook in `agents/`.
 
 Apply a focused change to an existing app or runtime page.
 
-| Task | Skill | Read Next | Canonical MCP Flow |
-|------|-------|-----------|--------------------|
-| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | `application-create -> schema-sync -> application-get-info` |
-| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | `page-list -> page-get -> page-sync -> page-get` |
-| Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | `schema-sync` preferred, individual binding tools are fallback |
+| Task | Skill | Read Next | Canonical MCP Guidance |
+|------|-------|-----------|------------------------|
+| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/app-modeling` |
+| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance` |
+| Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | Resolve preferred vs fallback path through `clio` MCP guidance |
 | Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only | no MCP write path required |
 
 ## Executable Contract
@@ -71,28 +71,13 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Local MCP transport and normalization | `context/mcp-application-tools-reference.md` | local wrapper, stdio transport, normalization |
 | MCP transport helper | `scripts/mcp_client.py` | stdio client wrapper |
 
-## Canonical Execution Paths
+## Canonical MCP Guidance
 
-Use these repository-level paths consistently.
+Resolve canonical execution paths, fallback-only compatibility tools, and verify/read-back policy through:
 
-### Entity path
-
-1. `application-create`
-2. `schema-sync`
-3. `application-get-info`
-
-### Page path
-
-1. `page-list`
-2. `page-get`
-3. edit body
-4. `page-sync`
-5. `page-get`
-
-Fallback-only compatibility paths:
-
-- `create-lookup`, `create-entity-schema`, `update-entity-schema`, `create-data-binding-db`
-- `page-update` for single-page dry-run or legacy save workflows
+- `tool-contract-get`
+- `docs://mcp/guides/app-modeling`
+- `docs://mcp/guides/existing-app-maintenance`
 
 ## Skill Notes
 
