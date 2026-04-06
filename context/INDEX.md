@@ -53,7 +53,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Agent 1 | `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
 | Agent 2 | `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
 | Agent 3 | `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md` | canonical entity and page plan policy |
-| Agent 4 | `agents/04-implementation.md`, `context/mcp-application-tools-reference.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
+| Agent 4 | `agents/04-implementation.md`, `context/mcp-application-tools-reference.md`, `context/ui-reference.md`, `context/viewconfig-reference.md` | developer-triggered execution handoff and runbook preparation |
 
 ## Topic Map
 
@@ -105,4 +105,4 @@ When you need executable tool parameters or current response shape:
 | App-modeling semantics | `docs://mcp/guides/app-modeling` |
 | Local invocation pattern | `scripts/mcp_client.py` |
 | Local result normalization | `context/mcp-application-tools-reference.md` |
-| Repo-local execution flow | `agents/04-implementation.md` and the relevant skill file |
+| Repo-local execution handoff flow | `agents/04-implementation.md` and the relevant skill file |

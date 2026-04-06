@@ -55,7 +55,9 @@ Fallback (if bundle unavailable or stale):
 - Produce an execution-ready MCP payload.
 - Produce an ordered schema sync plan.
 - Produce a page sync plan whenever the main entity is created or extended.
+- Produce a decision-complete, atomic execution sequence in `plan.md`.
 - Make blocker conditions explicit.
+- Do not execute runtime `clio` MCP mutation tools in this stage.
 
 ## Validation Before Planning
 
@@ -177,6 +179,15 @@ When page sync is required:
 - Never add redundant custom lookup columns that duplicate server-provided display fields.
 - Never treat seeded rows as implementation of a default rule.
 
+### Execution Step Contract
+
+- Each `plan.md` execution step must be atomic: one `clio` MCP tool call or one small atomic group that cannot be split safely.
+- Every step must name the exact `clio` MCP tool to invoke.
+- Every step must define required arguments or argument sources.
+- Every step must define an independent success signal.
+- Every step must define failure action or fallback.
+- Steps must be self-contained and independently verifiable in the declared order.
+
 ## Plan Output
 
 `technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, and verification strategy.
@@ -188,4 +199,5 @@ When page sync is required:
 - ordered schema sync
 - default implementation strategy
 - page sync contract when required
+- atomic per-step tool mapping with per-step success and failure checks
 - explicit blocker notes when the approved business draft is insufficient for safe execution

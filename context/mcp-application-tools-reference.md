@@ -1,14 +1,19 @@
 # Local MCP Workflow Wrapper
 
-This file documents how this repository invokes `clio` MCP and how it persists runtime results locally.
+This file documents optional script-driven `clio` MCP invocation and local runtime-result helpers.
 
 It is not the executable MCP specification.
+
+## Workflow Position
+
+Agent 4 canonical output is `output/<AppName>/docs/execution-runbook.md`.
+This document is a reference for optional local wrapper scripts that can be used during Developer + AI execution.
 
 ## Source Of Truth
 
 Use this repo for:
 - local transport helpers such as `scripts/mcp_client.py`
-- local normalization into `output/<AppName>/mcp-application-result.json`
+- optional local normalization into `output/<AppName>/mcp-application-result.json`
 - local follow-up helpers and evidence generation
 
 Use `clio` MCP discovery plus MCP prompts/resources for:
@@ -38,7 +43,6 @@ Local transport rules:
 - prefer `--args-file` or `--args-stdin` for JSON-heavy payloads
 - do not call `clio mcp-server` directly from ad-hoc shell pipes
 - do not use `curl`; this flow is stdio, not HTTP
-- Do not use curl as an MCP execution pattern.
 - respect `CLIO_CMD` when the environment config points to a custom `clio`
 
 ### PowerShell
@@ -48,7 +52,7 @@ $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
 & $env:PYTHON_CMD .\scripts\mcp_client.py application-get-list --args-file .\args.json --timeout 30
 ```
 
-## Canonical Runtime Result
+## Optional Runtime Result
 
 The primary application context used by this repo starts from the flat MCP response returned by `application-create` or `application-get-info`.
 
@@ -56,7 +60,7 @@ Use `tool-contract-get` plus `clio` prompts/resources for the current executable
 This repo only normalizes the current response envelope into local helper state and evidence files.
 Do not treat legacy `app/packages` examples as the MCP response contract.
 
-## Normalize Into `mcp-application-result.json`
+## Optional Normalize Into `mcp-application-result.json`
 
 After writing the raw MCP result to `output/<AppName>/mcp-application-result.json`, normalize it:
 
@@ -74,7 +78,7 @@ Normalization keeps the flat runtime contract and adds repo-local helper state:
 `editableContext` is a local derived projection for helper scripts. It is not the MCP response contract.
 Normalization is strict: persisted result documents must already match the canonical helper-state shape and must not carry legacy fields such as `contractType`.
 
-## Local Refresh Pattern
+## Optional Local Refresh Pattern
 
 This repository keeps a local refresh and persistence loop around the current `clio`-owned MCP flow:
 1. Initialize the runtime result through the current app create or app discovery step resolved from `tool-contract-get`
@@ -83,7 +87,7 @@ This repository keeps a local refresh and persistence loop around the current `c
 4. Re-read and normalize the runtime result again when the chosen `clio` workflow requires refresh
 5. Run page sync and evidence helpers when required
 
-## Local Follow-up Helpers
+## Optional Local Follow-up Helpers
 
 Use these helpers after MCP calls:
 - `scripts/mcp_context_adapter.py normalize` to normalize the runtime result

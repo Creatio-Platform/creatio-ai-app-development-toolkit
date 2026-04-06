@@ -54,6 +54,7 @@ Fallback (if bundle unavailable or stale):
 10. Present the full BA-style Business Plan.
 11. Ask for natural-language approval.
 12. After approval, persist Gate R artifacts and initialize docs.
+13. Do not execute runtime `clio` MCP mutation tools in this stage.
 
 ## Checklist Authority
 

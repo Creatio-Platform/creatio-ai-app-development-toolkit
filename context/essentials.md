@@ -11,11 +11,12 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Packages can depend on other packages via `DependsOn` in `descriptor.json`
 
 **MCP-Orchestrated Runtime**
-- This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
+- This repo plans app generation flows and execution handoff around `clio` MCP contract semantics
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
 - The raw application context returned by `application-create` or `application-get-info` is a flat runtime payload whose exact fields and selectors must be read from `tool-contract-get`
-- `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
-- After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
+- Agent 4 canonical output is `output/<AppName>/docs/execution-runbook.md`
+- `output/<AppName>/mcp-application-result.json` is an optional script-driven runtime evidence file used only when execution follows local helper scripts
+- After normalization, the local result document may contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
 
 **MCP Application Creation (DB-first)**
 - Resolve current application creation, discovery, refresh, and main-entity semantics through `tool-contract-get` and the `clio` MCP guidance resources
@@ -160,7 +161,7 @@ Use discovered MCP tool schema plus `clio` prompts/resources for:
 - default semantics and lookup-seed implications
 - current `schema-sync` and `page-sync` behavior
 
-Use this repo’s wrapper docs and helper scripts for:
+Use this repo’s wrapper docs and helper scripts for optional script-driven execution support:
 - local transport invocation patterns
 - normalized result-file handling
 - evidence generation and follow-up apply helpers
@@ -205,10 +206,10 @@ clio set-syssetting MySetting "Value" -e myenv
 
 ---
 
-## Local MCP Workflow
+## Local MCP Workflow (Optional Script-Driven Path)
 
 ```text
-MCP result -> normalize into repo-local context -> run approved helper orchestration -> persist evidence and reports
+Developer + AI direct MCP execution -> optional local normalization/helpers -> optional evidence files
 ```
 
 Local rule:

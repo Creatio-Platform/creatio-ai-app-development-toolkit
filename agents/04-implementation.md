@@ -1,8 +1,25 @@
-# Agent 4 — Implementation
+# Agent 4 — AI Execution Guide
 
 ## Role
 
-Execute the approved plan through `clio` MCP, persist runtime evidence, refresh the canonical app context, and report only what is materially implemented.
+Prepare a developer-facing execution runbook from the approved `plan.md`.
+
+Agent 4 does not execute `clio` MCP calls.
+Agent 4 provides a decision-complete handoff so Developer + AI can execute the plan directly through `clio` MCP.
+
+## Input
+
+- `output/<AppName>/plan.md`
+- `output/<AppName>/technical-annex.md`
+- `output/<AppName>/requirements.md`
+- `output/<AppName>/request-spec.json`
+- `output/<AppName>/.creatio-env.json` when runtime inputs are available
+
+## Output
+
+- `output/<AppName>/docs/execution-runbook.md`
+
+This file is the canonical Agent 4 artifact.
 
 ## Read First
 
@@ -12,178 +29,107 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
-- `scripts/mcp_client.py`
 
-Resolve executable tool details through `tool-contract-get`.
-Use `context/mcp-application-tools-reference.md` only for local wrapper and normalization guidance.
-
-## MCP Transport
-
-- Use `scripts/mcp_client.py`
-- Use `tool-contract-get` and `tools/list` before execution
-- Respect `CLIO_CMD` when a custom clio binary is configured
-- Do not use raw curl for clio stdio transport
-- Pass boolean MCP parameters as booleans, not strings
+Resolve executable `clio` MCP tool details through `tool-contract-get`.
+Resolve app-modeling semantics through `docs://mcp/guides/app-modeling` and page/maintenance fallback guidance through `docs://mcp/guides/existing-app-maintenance`.
 
 ## Preconditions
 
 - `scripts/check-approval-gate.sh <AppName>` passes
-- `output/<AppName>/.creatio-env.json` exists and is valid
-- when the current run has a request URL, `.creatio-env.json.url` matches it exactly
-- `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
-- Agent 4 runs in the foreground
+- `output/<AppName>/plan.md` exists and is non-empty
+- `output/<AppName>/technical-annex.md` exists and is non-empty
+- runtime URL, credentials, and environment name are known for the selected routing mode
+- if runtime inputs are deferred, mark execution as blocked and document the missing runtime inputs in the runbook
 
-## Execution Order
+## Non-Goals
 
-1. Verify MCP reachability through `scripts/mcp_client.py`.
-2. Call `tools/list` and verify required tools exist.
-3. Resolve executable contract metadata through `tool-contract-get`.
-4. Resolve the execution branch through the current `clio` contract and guidance resources.
-5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path.
-7. Run the post-mutation refresh step required by the current `clio` guidance and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
-9. Persist page evidence and verification results.
-10. Validate the final normalized result.
-11. Build `mcp-application-report.md` from persisted evidence only.
-12. Sync and validate docs under `output/<AppName>/docs/`.
+- Do not run `clio` MCP tools from Agent 4.
+- Do not generate `mcp-application-result.json`.
+- Do not generate `mcp-application-report.md`.
+- Do not claim implementation success from planned steps.
 
-## Branching Rules
+## Branch Selection Rules
 
-- If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
-- Surface which branch actually ran in the persisted evidence and final report
+The runbook must define the branch before listing execution steps:
 
-## Schema Sync Rules
+- `application-create` branch for new app creation
+- existing-app branch when the approved plan targets an already created app or a known collision path
 
-- Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
-- Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity
-- Use `create-entity-schema` only for additional business objects with distinct meaning
-- Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
-- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
-- Create lookup entities before entities that reference them
-- Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
-- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
-- Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
-- If post-mutation refresh fails, stop with a blocker
+The branch decision must reference the branch strategy defined in `plan.md` and include branch-specific first steps.
 
-## Default Rules
+## Step Mapping Rules
 
-When the approved plan requires defaults, implement them explicitly.
-Seed data alone does not satisfy a default requirement.
+Map every executable step from `plan.md` to a runbook step.
 
-For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
-- Resolve the executable schema-side or page-side mechanism from the live contract and current page/runtime context; do not guess field-level request shape from repo docs
-- Either mechanism must be in the page-sync plan and executed — never mark lookup defaults as `manualCheckPending`
+- one runbook step equals one `clio` MCP tool call or one small atomic group that cannot be split safely
+- each step must name the exact tool
+- each step must include required args
+- each step must include a pre-check
+- each step must include a success signal
+- each step must include a failure action
+- each step must be independently verifiable
 
-## Page Sync Rules
+## Required Runbook Step Template
 
-Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
+Every execution step in `execution-runbook.md` must use this exact field set:
 
-If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
-The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
+- `Step ID`
+- `Goal`
+- `Tool`
+- `Required args`
+- `Pre-check`
+- `Success signal`
+- `Failure action`
 
-Resolve page inspection, fallback, and verification guidance through `docs://mcp/guides/existing-app-maintenance`.
+## Verification Rules
 
-## Evidence Rules
+The runbook must include explicit verification checkpoints:
 
-Use `scripts/mcp_result_evidence.py` and the normalized result document as the source for:
+- schema checkpoints for required entities and columns
+- lookup checkpoints for required values
+- page checkpoints for `FormPage` and `ListPage` when page sync is required
+- default-behavior checkpoints where defaults are part of requirements
 
-- `schemaSync`
-- `operationLog`
-- `pageEvidence`
-- `acceptanceEvidence`
+Each checkpoint must define whether the expected result is machine-checkable or manual.
 
-Persist page and report evidence with explicit status buckets:
+## Refresh Cycle Rules
 
-- `implemented`
-- `machineChecked`
-- `manualCheckPending`
+When plan steps include schema mutations, the runbook must include the refresh cycle required by current `clio` guidance:
 
-Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
+1. execute mutation step
+2. refresh application context through the current app-info/read-back flow
+3. verify materialized state before continuing
 
-## Steps
+Do not skip refresh checkpoints between dependent mutation steps.
 
-### 0. Check Gate R
+## Failure Handling Rules
 
-- Run `scripts/check-approval-gate.sh <AppName>`
-- If this fails, stop immediately
+The runbook must include failure handling for:
 
-### 1. Parse `plan.md`
+- contract or parameter validation errors
+- missing required tools
+- branch mismatch or app collision mismatch
+- refresh/read-back mismatch after mutation
+- page save or page read-back mismatch
 
-- Extract the execution branch, resolved business defaults, ordered schema sync steps, and page sync requirements
-- Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
+Failure actions must tell the executor whether to retry, stop, or switch branch.
 
-### 2. Verify MCP reachability
+## Runbook Structure
 
-- Validate that `.creatio-env.json.url` matches the current request URL for this run
-- Only after that validation, read the environment from `.creatio-env.json`
-- If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
-- Call `tools/list` through `scripts/mcp_client.py`
-- Resolve the executable contract through `tool-contract-get`
-- Stop with blocker if required tools are missing or `tool-contract-get` fails
+`output/<AppName>/docs/execution-runbook.md` must contain:
 
-### 3. Initialize application context
-
-- Use the current `clio`-owned application create or discovery flow for the selected branch.
-- Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
-- Normalize it with `scripts/mcp_context_adapter.py normalize`
-
-### 4. Execute schema sync
-
-- Prefer the current `clio`-owned schema path resolved from `tool-contract-get` and guidance resources.
-- Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
-- After each approved schema batch, run the current `clio`-owned refresh step, overwrite `mcp-application-result.json`, and normalize again
-- Stop with blocker if required fields or columns are still missing after verification
-
-### 5. Execute page sync
-
-- Read the live page bodies through the current `clio`-owned inspection flow
-- Apply page-body edits with the local page-body helpers
-- Apply the preferred page write path resolved from `tool-contract-get` and the maintenance guide
-- Verify the saved body again via the current `clio`-owned read-back step
-- Persist verification results for both `FormPage` and `ListPage`
-
-### 6. Validate final result
-
-Validate the normalized result payload:
-
-- top-level `success` exists and is boolean
-- when `success=true`, package identity is present
-- when `success=true`, entity evidence is present
-- when `success=false`, failure evidence is present
-- schema refresh evidence exists after entity mutations
-- page evidence exists when page sync was required
-- server-advertised canonical selectors are respected when present
-
-### 7. Write summary report
-
-Create `output/<AppName>/mcp-application-report.md`.
-
-Include:
-
-- branch that actually ran
-- resolved defaults that were applied
-- schema sync steps executed and refreshed through `application-get-info`
-- page sync steps executed and verification results for `FormPage` and `ListPage`
-- explicit distinction between `implemented`, `machineChecked`, and `manualCheckPending`
-- blockers or manual verification gaps that remain
-
-Never claim UI acceptance is verified unless the corresponding evidence exists in `mcp-application-result.json`.
-
-## Retry And Failure Policy
-
-- Retry transient MCP transport failures up to 3 times with a short delay
-- If required tools are missing in `tools/list`, stop with blocker
-- If `tool-contract-get` cannot provide executable metadata, stop with blocker
-- If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence
-- If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it
+1. execution context and prerequisites
+2. branch decision with trigger condition
+3. ordered execution steps using the required step template
+4. checkpoint matrix with machine versus manual checks
+5. open blockers and missing runtime inputs
 
 ## Completion Criteria
 
-- Gate R passed
-- MCP reachability and contract discovery succeeded
-- Initial application context was persisted
-- All required schema sync steps executed and canonical context refreshed
-- No created or updated schema is left in `Database update required`
-- Page sync executed and verified for every run that required it
-- Result and report are derived from runtime evidence
+Agent 4 is complete when:
+
+- `execution-runbook.md` exists and is non-empty
+- all executable `plan.md` steps are mapped to runbook steps
+- each step contains all required template fields
+- branch logic, verification checkpoints, and failure handling are explicit
+- no section claims that execution already happened unless explicit runtime evidence is provided by the developer

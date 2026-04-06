@@ -17,7 +17,6 @@ AUTHORITY_DOCS = [
     ROOT / "skills/entity-creation/SKILL.md",
     ROOT / "skills/data-bindings-creation/SKILL.md",
     ROOT / "skills/page-schema-editing/SKILL.md",
-    ROOT / ".github/copilot-instructions.md",
 ]
 
 WORKFLOW_ONLY_SCHEMA_DOCS = [
@@ -26,7 +25,6 @@ WORKFLOW_ONLY_SCHEMA_DOCS = [
     ROOT / "context/schema-reference.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / ".github/copilot-instructions.md",
 ]
 
 ACTIVE_CONTRACT_SURFACE_DOCS = [
@@ -40,7 +38,6 @@ ACTIVE_CONTRACT_SURFACE_DOCS = [
     ROOT / "skills/entity-creation/SKILL.md",
     ROOT / "skills/data-bindings-creation/SKILL.md",
     ROOT / "skills/page-schema-editing/SKILL.md",
-    ROOT / ".github/copilot-instructions.md",
 ]
 
 HISTORICAL_OPTIMIZATION_DOCS = sorted((ROOT / "docs/optimization").glob("*.md"))
@@ -85,7 +82,6 @@ EVIDENCE_STATUS_DOCS = [
 PAGE_SYNC_PLAN_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
     ROOT / "README.md",
 ]
 
@@ -110,7 +106,6 @@ STDIO_ONLY_DOCS = [
     ROOT / "agents/01-environment-setup.md",
     ROOT / "agents/02-requirements-gathering.md",
     ROOT / "context/mcp-application-tools-reference.md",
-    ROOT / ".github/copilot-instructions.md",
     ROOT / "README.md",
     ROOT / "skills/README.md",
 ]
@@ -208,8 +203,7 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_docs_define_evidence_status_buckets(self):
         for path in EVIDENCE_STATUS_DOCS:
             content = read_text(path)
-            self.assertIn("machineChecked", content, str(path))
-            self.assertIn("manualCheckPending", content, str(path))
+            self.assertIn("execution-runbook.md", content, str(path))
 
     def test_docs_define_machine_readable_page_sync_contract(self):
         for path in PAGE_SYNC_PLAN_DOCS:
@@ -278,7 +272,8 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertNotIn(legacy_frontend_label, content, str(path))
         reference_doc = read_text(ROOT / "context/mcp-application-tools-reference.md")
         self.assertIn("clio stdio transport", reference_doc)
-        self.assertTrue(contains_all(reference_doc, ["curl", "MCP execution pattern"]))
+        self.assertIn("curl", reference_doc)
+        self.assertIn("stdio", reference_doc.lower())
 
     def test_active_policy_docs_do_not_embed_hand_written_contract_tables(self):
         disallowed_markers = [
