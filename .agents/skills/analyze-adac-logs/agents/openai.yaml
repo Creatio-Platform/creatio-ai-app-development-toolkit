@@ -1,4 +1,0 @@
-interface:
-  display_name: "ADAC Log Analysis"
-  short_description: "Analyze ADAC logs and plan CLIO-first fixes"
-  default_prompt: "Use $analyze-adac-logs to analyze this ADAC session log, confirm the real incidents, and propose a CLIO-first remediation plan."
