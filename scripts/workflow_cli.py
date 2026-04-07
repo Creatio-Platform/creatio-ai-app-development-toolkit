@@ -91,14 +91,6 @@ def output_file_text(app_name, filename):
     return f"{workflow_root_text()}/output/{app_name}/{filename}"
 
 
-def output_docs_file_path(app_name, filename):
-    return workflow_root_path() / "output" / app_name / "docs" / filename
-
-
-def output_docs_file_text(app_name, filename):
-    return f"{workflow_root_text()}/output/{app_name}/docs/{filename}"
-
-
 def utc_now_text():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -469,37 +461,6 @@ def check_approval_gate(app_name):
     return f"GATE_OK {app_name}"
 
 
-def check_execution_handoff(app_name):
-    check_approval_gate(app_name)
-    plan_file_path = output_file_path(app_name, "plan.md")
-    technical_annex_file_path = output_file_path(app_name, "technical-annex.md")
-    runbook_file_path = output_docs_file_path(app_name, "execution-runbook.md")
-    plan_file_text = output_file_text(app_name, "plan.md")
-    technical_annex_file_text = output_file_text(app_name, "technical-annex.md")
-    runbook_file_text = output_docs_file_text(app_name, "execution-runbook.md")
-    result_file_path = output_file_path(app_name, "mcp-application-result.json")
-    report_file_path = output_file_path(app_name, "mcp-application-report.md")
-    result_file_text = output_file_text(app_name, "mcp-application-result.json")
-    report_file_text = output_file_text(app_name, "mcp-application-report.md")
-    if not plan_file_path.is_file():
-        raise WorkflowError(f"Execution handoff failed: plan.md not found: {plan_file_text}")
-    if plan_file_path.stat().st_size == 0:
-        raise WorkflowError(f"Execution handoff failed: plan.md is empty: {plan_file_text}")
-    if not technical_annex_file_path.is_file():
-        raise WorkflowError(f"Execution handoff failed: technical-annex.md not found: {technical_annex_file_text}")
-    if technical_annex_file_path.stat().st_size == 0:
-        raise WorkflowError(f"Execution handoff failed: technical-annex.md is empty: {technical_annex_file_text}")
-    if not runbook_file_path.is_file():
-        raise WorkflowError(f"Execution handoff failed: execution-runbook.md not found: {runbook_file_text}")
-    if runbook_file_path.stat().st_size == 0:
-        raise WorkflowError(f"Execution handoff failed: execution-runbook.md is empty: {runbook_file_text}")
-    if result_file_path.exists():
-        raise WorkflowError(f"Execution handoff failed: runbook mode forbids mcp-application-result.json: {result_file_text}")
-    if report_file_path.exists():
-        raise WorkflowError(f"Execution handoff failed: runbook mode forbids mcp-application-report.md: {report_file_text}")
-    return f"HANDOFF_OK {app_name}"
-
-
 def build_parser():
     parser = argparse.ArgumentParser(prog="workflow_cli.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -517,8 +478,6 @@ def build_parser():
     write_approval_parser.add_argument("approval_text")
     check_approval_parser = subparsers.add_parser("check-approval-gate")
     check_approval_parser.add_argument("app_name")
-    check_execution_parser = subparsers.add_parser("check-execution-handoff")
-    check_execution_parser.add_argument("app_name")
     return parser
 
 
@@ -533,9 +492,7 @@ def run_command(args):
         return validate_requirements_doc(args.requirements_file)
     if args.command == "write-approval-state":
         return write_approval_state(args.app_name, args.approved_by, args.approval_text)
-    if args.command == "check-approval-gate":
-        return check_approval_gate(args.app_name)
-    return check_execution_handoff(args.app_name)
+    return check_approval_gate(args.app_name)
 
 
 def main(argv=None):

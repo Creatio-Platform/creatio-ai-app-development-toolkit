@@ -9,7 +9,6 @@ if [ "$#" -lt 1 ]; then
   echo "  plan-check          <AppName>" >&2
   echo "  requirements-approve <AppName> <approver> <text>" >&2
   echo "  requirements-check  <AppName>" >&2
-  echo "  execution-check     <AppName>" >&2
   exit 1
 fi
 cmd="$1"
@@ -29,9 +28,6 @@ case "$cmd" in
   requirements-check)
     exec "$PYTHON_CMD" "${script_dir}/workflow_cli.py" check-approval-gate "$@"
     ;;
-  execution-check)
-    exec "$PYTHON_CMD" "${script_dir}/workflow_cli.py" check-execution-handoff "$@"
-    ;;
   *)
     echo "Usage: workflow_gate.sh <command> [args...]" >&2
     echo "Commands:" >&2
@@ -39,7 +35,6 @@ case "$cmd" in
     echo "  plan-check          <AppName>" >&2
     echo "  requirements-approve <AppName> <approver> <text>" >&2
     echo "  requirements-check  <AppName>" >&2
-    echo "  execution-check     <AppName>" >&2
     exit 1
     ;;
 esac

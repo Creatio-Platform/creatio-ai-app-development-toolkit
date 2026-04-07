@@ -19,10 +19,8 @@ from scripts.mcp_client import (
     check_clio_version,
     load_cli_arguments,
     list_mcp_resources,
-    main as mcp_client_main,
     parse_clio_version_check_request,
     parse_cli_request,
-    preflight_mcp_tool_call,
     read_mcp_resource,
     validate_clio_version,
 )
@@ -322,17 +320,6 @@ class McpClientTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "tool-contract-unavailable")
         self.assertIn("metadata unavailable", result["raw"])
-
-    def test_preflight_mcp_tool_call_rejects_non_object_arguments(self):
-        _, preflight_result = preflight_mcp_tool_call("schema-sync", ["bad"], timeout=15)
-        self.assertFalse(preflight_result["success"])
-        self.assertEqual(preflight_result["data"]["error"]["code"], "invalid-request")
-        self.assertIn("arguments must be a JSON object", preflight_result["raw"])
-
-    def test_main_returns_nonzero_on_failed_tool_call(self):
-        with patch("scripts.mcp_client.call_mcp_tool", return_value={"success": False, "data": {"error": {"code": "invalid-request"}}, "raw": "bad"}):
-            exit_code = mcp_client_main(["schema-sync", '{"environment-name":"local"}'])
-        self.assertEqual(exit_code, 1)
 
     def test_list_mcp_resources_uses_shared_client(self):
         fake_client = SimpleNamespace(list_resources=Mock(return_value={"success": True, "data": {"resources": []}, "raw": "{}"}))

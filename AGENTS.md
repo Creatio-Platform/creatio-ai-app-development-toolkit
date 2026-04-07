@@ -89,8 +89,6 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 - Do not ask the developer to provide `APPROVE_*` tokens.
 - Treat natural-language confirmation as the approval source and persist it through the provided scripts.
 - Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
-- In this repository workflow, orchestration ends at planning plus execution handoff. Do not run runtime `clio` MCP mutation tools as part of Agents 1-4.
-- If the developer asks for autonomous full app creation, still produce `plan.md` and `docs/execution-runbook.md`, then hand off execution to Developer + AI.
 
 ## UX Contract
 
@@ -158,13 +156,11 @@ Technical question policy:
 
 Execution order is conditional:
 
-- `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3
-- `planning-first`: Agent 2 -> initialize draft docs after Gate R -> wait for runtime inputs -> Agent 1 -> Agent 3
+- `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3 -> Agent 4
+- `planning-first`: Agent 2 -> initialize draft docs after Gate R -> wait for runtime inputs -> Agent 1 -> Agent 3 -> Agent 4
 
 Agent 3 is the Technical Annex / execution-plan step. Run it only when implementation or technical execution detail is explicitly requested.
 In `planning-first` mode, the developer providing runtime credentials or Creatio URL after Gate R counts as an explicit implementation request and triggers Agent 3.
-Agent 4 is a developer-triggered handoff stage that converts `plan.md` into an execution guide.
-Runtime mutation execution is outside this orchestrator workflow and is performed by Developer + AI using the runbook.
 
 ## Agent Responsibilities
 
@@ -174,10 +170,10 @@ Runtime mutation execution is outside this orchestrator workflow and is performe
    Output: `output/<AppName>/requirements.md`, `output/<AppName>/request-spec.json`, `output/<AppName>/workflow-state.json`, `output/<AppName>/docs/**`
 3. Implementation Plan
    Output: `output/<AppName>/technical-annex.md`, `output/<AppName>/plan.md`, `output/<AppName>/page-sync-plan.json` when required
-4. Execution Handoff
-   Output: `output/<AppName>/docs/execution-runbook.md`
+4. Implementation
+   Output: `output/<AppName>/mcp-application-result.json`, `output/<AppName>/mcp-application-report.md`, `output/<AppName>/docs/**`
 
-Agent 2 is interactive and must not be delegated. Agent 4 runs only on explicit developer request.
+Agent 2 is interactive and must not be delegated. Agent 4 runs synchronously.
 
 ## Gate Rules
 
@@ -215,9 +211,8 @@ Approval-ready vs execution-ready rule:
 - Enum-like business values must be modeled as lookup entities.
 - For MCP transport, tool request/response shape, canonical app-modeling rules, and lookup/default semantics, follow the current `clio` MCP contract and prompts/resources such as `docs://mcp/guides/app-modeling` rather than re-declaring those rules locally.
 - If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
-- Final user-facing implementation readiness status must be derived from `plan.md` and `docs/execution-runbook.md`.
-- Do not report planned items as implemented without explicit execution evidence.
-- When execution evidence is captured in a runbook or follow-up artifacts, use explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
+- Final user-facing status must be derived from `mcp-application-result.json`. Do not report planned items as implemented without persisted evidence.
+- Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
 - When page sync is required, the machine-readable page sync contract must be embedded in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, and may also be materialized as `page-sync-plan.json`.
 - App code, workflow-state collisions, and stale output artifacts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
 - A stale `output/<AppName>/.creatio-env.json` must never rebind a new run to an old site.
@@ -239,10 +234,9 @@ Approval-ready vs execution-ready rule:
 5. Initialize draft docs immediately after Gate R.
 6. Verify Gate R with the canonical gate-check script before Agents 3 and 4.
 7. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract.
-8. Run Agent 4 only when the developer asks for execution handoff, and generate `output/<AppName>/docs/execution-runbook.md`.
+8. Run Agent 4 synchronously.
 9. Before moving to the next stage, verify expected artifacts for that stage exist and are non-empty.
 10. On failure, either retry with a justified fix or stop with a blocker.
-11. Do not execute runtime mutation calls (`application-create`, `schema-sync`, `update-entity-schema`, `page-sync`, or equivalent write paths) from this orchestration pipeline.
 
 Optimization rule:
 - Do not repeat the same gate check unnecessarily within the same uninterrupted stage transition.
@@ -260,7 +254,7 @@ In that case:
 1. Derive `<AppName>` from the approved plan or current request.
 2. Persist Gate P and Gate R artifacts from the current conversation.
 3. Initialize required draft docs if missing.
-4. Proceed directly to Agent 3 when the execution trigger is satisfied, and run Agent 4 only if execution handoff is requested.
+4. Proceed directly to Agent 3 and Agent 4 when the execution trigger is satisfied.
 
 Fast-path guardrails:
 - Use this fast path only when the approved plan is for the current request, not a stale prior run.

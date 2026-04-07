@@ -645,29 +645,6 @@ def _build_validation_result(validation_errors: list[str]) -> dict:
     }
 
 
-def preflight_mcp_tool_call(tool_name: str, arguments, timeout: int = 120) -> tuple[dict | None, dict]:
-    if tool_name in {"tools/list", "tool-contract-get"}:
-        if not isinstance(arguments, dict):
-            return None, _build_validation_result([f"Tool '{tool_name}' arguments must be a JSON object."])
-        return arguments, {"success": True}
-    if not isinstance(arguments, dict):
-        return None, _build_validation_result([f"Tool '{tool_name}' arguments must be a JSON object."])
-    try:
-        contract_index = _get_tool_contract_index(timeout=min(timeout, 60))
-    except Exception as error:
-        return None, {
-            "success": False,
-            "data": {"error": {"code": "tool-contract-unavailable", "message": str(error)}},
-            "raw": str(error),
-        }
-    if tool_name not in contract_index:
-        return None, _build_unknown_tool_result(tool_name, contract_index)
-    normalized_arguments, validation_errors = _normalize_and_validate_params(tool_name, arguments, contract_index)
-    if validation_errors:
-        return None, _build_validation_result(validation_errors)
-    return normalized_arguments, {"success": True}
-
-
 def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     """
     Call a clio MCP tool via stdio transport.
@@ -692,18 +669,28 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
         (True/False), NOT strings ('true'/'false'). Passing a string causes
         MCP SDK deserialization failure and a generic invocation error.
     """
-    normalized_arguments, preflight_result = preflight_mcp_tool_call(tool_name, arguments, timeout)
-    if not preflight_result.get("success"):
-        return preflight_result
     if tool_name == "tools/list":
         return list_mcp_tools(timeout=timeout)
     if tool_name == "tool-contract-get":
         client = _get_shared_client()
         try:
-            return client.call_tool(tool_name, normalized_arguments, timeout)
+            return client.call_tool(tool_name, arguments, timeout)
         except Exception:
             client.close()
-            return client.call_tool(tool_name, normalized_arguments, timeout)
+            return client.call_tool(tool_name, arguments, timeout)
+    try:
+        contract_index = _get_tool_contract_index(timeout=min(timeout, 60))
+    except Exception as error:
+        return {
+            "success": False,
+            "data": {"error": {"code": "tool-contract-unavailable", "message": str(error)}},
+            "raw": str(error),
+        }
+    if tool_name not in contract_index:
+        return _build_unknown_tool_result(tool_name, contract_index)
+    normalized_arguments, validation_errors = _normalize_and_validate_params(tool_name, arguments, contract_index)
+    if validation_errors:
+        return _build_validation_result(validation_errors)
     client = _get_shared_client()
     try:
         return client.call_tool(tool_name, normalized_arguments, timeout)
@@ -832,7 +819,7 @@ def main(argv=None):
     else:
         result = call_mcp_tool(request["tool_name"], request["arguments"], request["timeout"])
     print(json.dumps(result, indent=2))
-    return 0 if result.get("success") is True else 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $scriptDir "find_python.ps1")
 function Show-Usage {
-    Write-Error "Usage: workflow_gate.ps1 <command> [args...]`nCommands:`n  plan-approve         <AppName> <planner> <routingMode> <credentialsStatus> <understanding> <confirmation>`n  plan-check           <AppName>`n  requirements-approve <AppName> <approver> <text>`n  requirements-check   <AppName>`n  execution-check      <AppName>"
+    Write-Error "Usage: workflow_gate.ps1 <command> [args...]`nCommands:`n  plan-approve         <AppName> <planner> <routingMode> <credentialsStatus> <understanding> <confirmation>`n  plan-check           <AppName>`n  requirements-approve <AppName> <approver> <text>`n  requirements-check   <AppName>"
 }
 if ($args.Count -lt 1) {
     Show-Usage
@@ -32,10 +32,6 @@ switch ($command) {
     }
     "requirements-check" {
         & $env:PYTHON_CMD (Join-Path $scriptDir "workflow_cli.py") "check-approval-gate" @commandArgs
-        exit $LASTEXITCODE
-    }
-    "execution-check" {
-        & $env:PYTHON_CMD (Join-Path $scriptDir "workflow_cli.py") "check-execution-handoff" @commandArgs
         exit $LASTEXITCODE
     }
     default {

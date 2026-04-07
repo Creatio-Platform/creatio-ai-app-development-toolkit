@@ -4,10 +4,10 @@ This directory contains **reference documents** that describe workflows and best
 
 ## Current Approach
 
-Agent 4 prepares an execution handoff runbook for Developer + AI execution through `clio` MCP:
-- `agents/04-implementation.md` — Agent instructions for runbook generation
-- `context/essentials.md` — repository policy and execution handoff model
-- `context/mcp-application-tools-reference.md` — optional local wrapper/script reference
+Agent 4 executes MCP tools through the clio stdio client flow documented in:
+- `agents/04-implementation.md` — Agent instructions with stdio execution guidance
+- `context/essentials.md` — repository policy and canonical execution flow
+- `scripts/mcp_client.py` — transport and local normalization
 
 Executable tool names, parameters, aliases, defaults, response shapes, and error shapes are authoritative only in `clio MCP` through `tool-contract-get`.
 These skill documents keep workflow and page-editing policy only; they must not define an independent MCP API contract.
