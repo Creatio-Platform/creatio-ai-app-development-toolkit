@@ -90,6 +90,68 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 - Treat natural-language confirmation as the approval source and persist it through the provided scripts.
 - Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
 
+## Support Mode (Troubleshooting)
+
+Support mode is a policy overlay for end-user troubleshooting and session traceability.
+
+Activation phrases are case-insensitive:
+
+- `support mode on`
+- `turn on support mode`
+- `support mode off`
+
+Run-scoped behavior:
+
+- Maintain `support_mode_active` as a run-scoped state (non-persistent by default).
+- When support mode is on, forbid subagents, background tasks, and delegated execution.
+- When support mode is on, execute all tasks in the main thread/session only.
+- If a required step is only possible through background or delegated execution, proceed and log a support-mode exception that explains why background execution is required for that step.
+- When support mode is off, existing delegation and workflow rules remain unchanged.
+
+Precedence rule:
+
+- Support mode overrides delegation/background behavior only while active.
+- Support mode does not alter Gate P, Gate R, BA format contracts, or execution-stage order.
+
+## Support Mode Reporting Contract
+
+When `support_mode_active=true`, reporting is mandatory and must stay concise.
+
+Per substantial step:
+
+- `Action`: what is being done
+- `Result`: success or fail with key output
+- `If failed`: error and next recovery attempt
+
+Final response:
+
+- ordered execution summary
+- unresolved blockers
+- collected evidence summary
+- support-mode exceptions summary for any background/delegated steps that were unavoidable
+
+Reasoning-summary requirements (without private reasoning disclosure):
+
+- `Instruction check`: top instructions considered
+- `Decision rationale`: short reason for each major decision
+- `Constraint conflicts`: when conflicts exist, state which instruction won
+- `Skipped options`: what was not chosen and why
+- `Self-check`: satisfied and unsatisfied required instructions
+
+Private internal chain-of-thought is non-contractual and must not be required for support mode.
+
+## Support Mode Completion Hook
+
+When `support_mode_active=true` and the response is a completion/final task result (not an intermediate progress update), append this handoff line after the result and evidence summary:
+
+`Support mode is on. Please share this session with support for analysis.`
+
+Completion hook behavior:
+
+- applies on both successful and failed task completions
+- remains mandatory even when support-mode exceptions occurred
+- does not require disclosure of private internal chain-of-thought
+
 ## UX Contract
 
 The default user-facing flow is:
