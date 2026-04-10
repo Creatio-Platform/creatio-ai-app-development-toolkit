@@ -34,6 +34,35 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 - Agent 4 runs in the foreground
 - when the plan contains ambiguous entity, lookup, or reference choices, `plan.md` includes explicit `Model Decisions` for those choices
 
+## Support-Mode Branch (Diagnostic-First)
+
+Apply this branch only when support mode is on:
+
+- Keep execution in the main thread/session; do not start delegated/background actions.
+- If no main-thread equivalent exists, allow one unavoidable support-mode exception record:
+  - `attempted_action`
+  - `no_main_thread_equivalent_reason`
+  - `main_thread_evidence_captured`
+- When an unavoidable non-main-thread action completes, surface its result in the main-thread support output before proceeding or stopping.
+- For any stage-critical failure in the current active stage, create a canonical failure record immediately.
+- Allow at most one confirmation probe, and only with the same tool + same contract path.
+- Severity routing in this stage:
+  - `clio_mcp_issue` is the primary critical-by-default target defect category and remains strict fail-fast after the optional single confirmation probe when blocking.
+  - `instruction_issue`, `environment_issue`, and `orchestration_tool_failure` are non-critical by default and should use bounded retry/workaround-first handling.
+  - `orchestration_tool_failure` may run one canonicalization pass before fail-fast, limited to call-shape normalization (argument format, wrapper invocation shape, serialization wrapper shape) on the same tool path.
+  - Canonicalization must not change the target tool, branch, business logic, or stage.
+  - Escalation rule: non-critical categories become fail-fast only when unresolvable and they prevent trustworthy CLIO MCP diagnosis/evidence.
+- For critical `clio_mcp_issue` failures, do not switch to alternate workaround branches, fallback strategy changes, or different mutation paths.
+- For non-critical failures, bounded same-path recovery is allowed within retry budgets.
+- After the optional confirmation probe, stop the blocked stage and emit:
+  - `exit_decision=fail_fast`
+  - `blocked_stage=<current_active_stage_label>`
+  - `why_continue_is_unsafe=<reason>`
+- In CLIO-focused support runs, attempt at least one real MCP tool invocation before concluding unless blocked by an unresolvable environment failure after bounded retries.
+- Page-sync classification rule in support mode:
+  - classify client-side validation issues caused by generated/edit strategy or known binding patterns as `instruction_issue`;
+  - classify as `clio_mcp_issue` only when page-sync tool/backend behavior violates advertised contract semantics.
+
 ## Execution Order
 
 1. Verify MCP reachability through `scripts/mcp_client.py`.
@@ -41,7 +70,7 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 3. Resolve executable contract metadata through `tool-contract-get`.
 4. Resolve the execution branch through the current `clio` contract and guidance resources.
 5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path.
+6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
 7. Run the post-mutation refresh step required by the current `clio` guidance and overwrite `mcp-application-result.json`.
 8. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
 9. Persist page evidence and verification results.
@@ -189,6 +218,8 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence
 - Use standalone `dataforge-status`, `dataforge-context`, `dataforge-initialize`, and `dataforge-update` only in explicit inspection or remediation branches, not as automatic retries for the standard create flow
 - If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it
+- In support mode, a stage-critical failure allows only one same-path confirmation probe before fail-fast when escalation conditions are met
+- In support mode, resolved or temporary `orchestration_tool_failure` / `instruction_issue` items are reported as `Non-target friction`, not `Confirmed failures`
 - If execution reveals a missing or contradictory `Model Decision` for an ambiguous model choice, stop with blocker instead of improvising a new reuse/create path
 
 ## Completion Criteria
@@ -200,3 +231,4 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
 - Result and report are derived from runtime evidence
+- When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`
