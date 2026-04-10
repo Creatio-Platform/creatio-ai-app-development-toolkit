@@ -55,6 +55,8 @@ The primary application context used by this repo starts from the flat MCP respo
 Use `tool-contract-get` plus `clio` prompts/resources for the current executable response shape and field names.
 This repo only normalizes the current response envelope into local helper state and evidence files.
 Do not treat legacy `app/packages` examples as the MCP response contract.
+For the standard new-app branch, treat `application-create` as already DataForge-assisted. Standalone `dataforge-*` tools are for explicit inspection or remediation flows only.
+For planning, this policy is narrower: standalone `dataforge-*` tools are not a mandatory preflight, but read-only discovery becomes required when the model is ambiguous or strong existing-schema candidates exist. That discovery must end in explicit `Model Decisions` recorded in the plan.
 
 ## Normalize Into `mcp-application-result.json`
 
@@ -93,6 +95,8 @@ Use these helpers after MCP calls:
 
 Local helper rules:
 - follow the current `clio` MCP guidance for preferred entity/page write paths and read-back verification
+- preserve top-level `dataforge` diagnostics from `application-create` and treat degraded Data Forge coverage as advisory unless the run explicitly entered a remediation branch
+- when planning-time discovery surfaces candidates, convert them into explicit `reuse` / `extend` / `create` decisions before execution; do not let execution infer those decisions from raw Data Forge output
 - keep helper responsibilities local to transport, normalization, evidence, and result persistence
 
 ## Minimal Example

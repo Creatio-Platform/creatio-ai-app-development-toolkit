@@ -389,6 +389,37 @@ def _get_tool_contract_index(timeout=120, force_refresh=False):
     return index
 
 
+def _merge_tool_contracts_into_cache(contracts: dict) -> dict:
+    cache_key = _current_clio_resolution_key()
+    cached_contracts = _TOOL_CONTRACT_CACHE["contracts"]
+    if _TOOL_CONTRACT_CACHE["key"] != cache_key or cached_contracts is None:
+        cached_contracts = {}
+    merged_contracts = dict(cached_contracts)
+    merged_contracts.update(contracts)
+    _TOOL_CONTRACT_CACHE["key"] = cache_key
+    _TOOL_CONTRACT_CACHE["contracts"] = merged_contracts
+    return merged_contracts
+
+
+def _load_explicit_tool_contract(tool_name: str, timeout=120):
+    client = _get_shared_client()
+    result = client.call_tool("tool-contract-get", {"tool-names": [tool_name]}, timeout=timeout)
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("tool-contract-get returned a non-object payload")
+    if data.get("success") is not True:
+        error = data.get("error")
+        if isinstance(error, dict) and error.get("code") == "tool-not-found":
+            return None
+        if isinstance(error, dict):
+            message = error.get("message") or json.dumps(error, ensure_ascii=True)
+        else:
+            message = json.dumps(data, ensure_ascii=True)
+        raise RuntimeError(message)
+    contracts = _normalize_tool_contract_index(data)
+    return _merge_tool_contracts_into_cache(contracts)
+
+
 def _find_property(contract_spec: dict, name: str) -> dict | None:
     input_schema = contract_spec.get("input-schema")
     if not isinstance(input_schema, dict):
@@ -686,6 +717,17 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
             "data": {"error": {"code": "tool-contract-unavailable", "message": str(error)}},
             "raw": str(error),
         }
+    if tool_name not in contract_index:
+        try:
+            explicit_contract_index = _load_explicit_tool_contract(tool_name, timeout=min(timeout, 60))
+        except Exception as error:
+            return {
+                "success": False,
+                "data": {"error": {"code": "tool-contract-unavailable", "message": str(error)}},
+                "raw": str(error),
+            }
+        if explicit_contract_index is not None:
+            contract_index = explicit_contract_index
     if tool_name not in contract_index:
         return _build_unknown_tool_result(tool_name, contract_index)
     normalized_arguments, validation_errors = _normalize_and_validate_params(tool_name, arguments, contract_index)

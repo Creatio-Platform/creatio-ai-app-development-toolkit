@@ -32,6 +32,7 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 - when the current run has a request URL, `.creatio-env.json.url` matches it exactly
 - `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
 - Agent 4 runs in the foreground
+- when the plan contains ambiguous entity, lookup, or reference choices, `plan.md` includes explicit `Model Decisions` for those choices
 
 ## Support-Mode Branch (Diagnostic-First)
 
@@ -80,11 +81,13 @@ Apply this branch only when support mode is on:
 ## Branching Rules
 
 - If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
+- Treat `application-create` as a DataForge-assisted create step; do not add an automatic standalone `dataforge-status` or `dataforge-context` preflight in the standard new-app branch.
 - Surface which branch actually ran in the persisted evidence and final report
 
 ## Schema Sync Rules
 
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
+- Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
 - Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity
 - Use `create-entity-schema` only for additional business objects with distinct meaning
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
@@ -128,6 +131,12 @@ Persist page and report evidence with explicit status buckets:
 - `machineChecked`
 - `manualCheckPending`
 
+If `application-create` returns a top-level `dataforge` block:
+
+- preserve it in `mcp-application-result.json`
+- report it as advisory execution diagnostics
+- do not treat degraded coverage or warnings as a blocker when the app shell itself was created successfully
+
 Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
 
 ## Steps
@@ -139,8 +148,9 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ### 1. Parse `plan.md`
 
-- Extract the execution branch, resolved business defaults, ordered schema sync steps, and page sync requirements
+- Extract the execution branch, resolved business defaults, `Model Decisions`, ordered schema sync steps, and page sync requirements
 - Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
+- Stop with blocker if the plan contains ambiguous entity, lookup, or reference choices but does not define explicit `Model Decisions`
 
 ### 2. Verify MCP reachability
 
@@ -154,6 +164,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 ### 3. Initialize application context
 
 - Use the current `clio`-owned application create or discovery flow for the selected branch.
+- For the standard new-app branch, call `application-create` directly and consume its returned `dataforge` diagnostics instead of issuing standalone `dataforge-*` calls first.
 - Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
 - Normalize it with `scripts/mcp_context_adapter.py normalize`
 
@@ -205,9 +216,11 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - If required tools are missing in `tools/list`, stop with blocker
 - If `tool-contract-get` cannot provide executable metadata, stop with blocker
 - If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence
+- Use standalone `dataforge-status`, `dataforge-context`, `dataforge-initialize`, and `dataforge-update` only in explicit inspection or remediation branches, not as automatic retries for the standard create flow
 - If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it
 - In support mode, a stage-critical failure allows only one same-path confirmation probe before fail-fast when escalation conditions are met
 - In support mode, resolved or temporary `orchestration_tool_failure` / `instruction_issue` items are reported as `Non-target friction`, not `Confirmed failures`
+- If execution reveals a missing or contradictory `Model Decision` for an ambiguous model choice, stop with blocker instead of improvising a new reuse/create path
 
 ## Completion Criteria
 
