@@ -55,6 +55,7 @@ Fallback (if bundle unavailable or stale):
 - Produce an execution-ready MCP payload.
 - Produce an ordered schema sync plan.
 - Produce a page sync plan whenever the main entity is created or extended.
+- Produce explicit `Model Decisions` for ambiguous `reuse` / `extend` / `create` choices before execution planning begins.
 - Make blocker conditions explicit.
 
 ## Validation Before Planning
@@ -85,6 +86,14 @@ Parse the approved requirements with these business sections as primary inputs:
 - data model
 - explicit assumptions
 
+Before technical planning, derive a draft business-object map from the approved requirements:
+
+- main business object
+- secondary business objects
+- enum-like lookups
+- external references
+- any stated or implied reuse candidates
+
 If the approved artifact is wrapped by host tooling such as `<proposed_plan>`, ignore the wrapper and validate the inner document structure only.
 
 ## Planning Rules
@@ -104,6 +113,7 @@ Resolve:
 Rules:
 
 - Resolve exact executable parameter names, aliases, defaults, and validation rules from `tool-contract-get`.
+- Treat `application-create` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
 - `useAIContentGeneration` must be `false`.
@@ -124,9 +134,81 @@ Rules:
 - Do not encode executable schema payload field names in the plan. Resolve them at runtime through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
+### Model Discovery Gate
+
+Run a planning-time model discovery pass whenever there is model uncertainty or a plausible existing schema candidate.
+
+#### Triggers
+
+Open the conditional discovery branch if any of the following is true:
+
+- a business object resembles a standard or already-existing platform concept such as case, request, article, knowledge, activity, comment, account, or contact
+- a secondary managed entity could plausibly reuse an existing platform or custom schema
+- a reference field has a non-obvious target schema
+- the plan may be choosing between `update-entity-schema` and `create-entity-schema`
+- the run is an existing-app branch
+- a candidate existing `Usr*` schema already appears relevant
+- the current discovery step or prior evidence surfaces strong schema candidates through Data Forge
+
+If none of these triggers fire, keep the standard new-app flow simple and continue without standalone planning-time Data Forge calls.
+
+#### Canonical Discovery Sequence
+
+For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
+
+1. `dataforge-find-tables`
+2. `dataforge-find-lookups`
+3. `dataforge-context`
+4. When a strong candidate is found:
+   - `application-get-info` for app-level context when the candidate belongs to an existing app
+   - `get-entity-schema-properties` for candidate schema inspection
+   - `get-entity-schema-column-properties` only when a specific column remains ambiguous
+
+Do not use `dataforge-initialize` or `dataforge-update` during planning.
+
+#### Required Model Decisions
+
+After discovery, the plan must record a `Model Decisions` section for:
+
+- the main entity when there is any plausible existing candidate
+- every additional business entity
+- every new lookup when an existing lookup candidate was considered
+- every non-obvious reference field target
+
+Each decision record must include:
+
+- `business-concept`
+- `candidates-considered`
+- `chosen-action`: `reuse` | `extend` | `create`
+- `chosen-schema`
+- `rationale`
+- `rejected-candidates`
+
+The plan is incomplete if discovery surfaced a strong candidate and the resulting `reuse` / `extend` / `create` choice is not recorded explicitly.
+
+#### Deterministic Choice Rules
+
+- Choose `reuse` when an existing schema already satisfies the required business role without unacceptable coupling cost.
+- Choose `extend` when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
+- Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
+
+Acceptable reasons for `create`:
+
+- ownership boundary
+- unwanted coupling to a platform schema
+- lifecycle or semantics mismatch
+- the candidate schema is broader than the approved scope
+
+Unacceptable reasons for `create`:
+
+- the BA plan already mentioned a custom entity
+- the team already intended to create a new schema
+- `Usr*` naming preference without further architectural rationale
+
 ### Schema Sync Plan
 
 - Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- Do not add a separate mandatory `dataforge-*` preflight to the standard new-app branch; standalone Data Forge tools are for explicit inspection or remediation only.
 - For existing-app work, include the current `clio`-owned discovery and inspection flow instead of hard-coding request semantics here.
 - Create lookup entities before entities that reference them.
 - Prefer batched lookup seeding inside the current `clio`-owned schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
@@ -179,12 +261,13 @@ When page sync is required:
 
 ## Plan Output
 
-`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, and verification strategy.
+`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, verification strategy, and any planning-time reuse decisions.
 
 `plan.md` should be execution-ready and include:
 
 - app payload
 - branch choice and collision handling
+- `Model Decisions` with explicit `reuse` / `extend` / `create` records for every ambiguous model choice
 - ordered schema sync
 - default implementation strategy
 - page sync contract when required

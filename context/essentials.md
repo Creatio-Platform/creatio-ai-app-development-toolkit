@@ -19,6 +19,9 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 
 **MCP Application Creation (DB-first)**
 - Resolve current application creation, discovery, refresh, and main-entity semantics through `tool-contract-get` and the `clio` MCP guidance resources
+- `application-create` is the canonical new-app entrypoint and may return top-level `dataforge` diagnostics produced internally by `clio`
+- Do not add a separate mandatory Data Forge preflight in repo-local orchestration for the standard new-app branch
+- Planning-time read-only discovery is still required when the model is ambiguous or strong existing-schema candidates exist; use that discovery to decide `reuse`, `extend`, or `create` before execution
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **Entity Schema Sync (DB-first)**
@@ -137,9 +140,11 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 
 - `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
 - Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract
+- When a tool is not present in the default bootstrap contract set, resolve it through explicit `tool-contract-get {"tool-names":[...]}` lookup instead of assuming it is unavailable
 - Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
 - Resolve human-readable MCP flow, fallback, verification, main-entity, localization, and page inspection guidance through `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 - Treat `editableContext` as a local helper projection, not as the primary MCP response contract.
+- When `dataforge-find-tables`, `dataforge-find-lookups`, or `dataforge-context` surfaces strong model candidates, persist the resulting `reuse` / `extend` / `create` decision in the plan instead of treating the discovery output as advisory only.
 
 ### Working With MCP Tools
 
