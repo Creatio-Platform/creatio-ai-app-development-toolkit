@@ -123,7 +123,6 @@ Final response must include (in this exact order):
 - `Next recovery attempts`
 - `Support-mode exceptions`
 - `Non-target friction` (resolved or temporary `orchestration_tool_failure` / `instruction_issue` items)
-- completion handoff prompt asking the user to share the session with support
 
 Zero-state rule:
 
