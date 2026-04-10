@@ -66,12 +66,12 @@ Recovery budget while active:
 - The first stage-critical failure must produce a canonical failure record immediately.
 - At most one confirmation probe is allowed, and only with the same tool + same contract path.
 - Severity routing:
-  - `clio_mcp_issue` is the primary critical target category. Keep strict diagnostic handling: canonical incident record, one same-path confirmation probe, then fail-fast when blocking.
+  - `clio_mcp_issue` is the primary critical-by-default target defect category. Keep strict diagnostic handling: canonical incident record, one same-path confirmation probe, then fail-fast when blocking.
   - `instruction_issue`, `environment_issue`, and `orchestration_tool_failure` are non-critical by default. Use bounded retry/workaround-first handling and fail-fast only when unresolvable.
   - `orchestration_tool_failure` may run one canonicalization pass before fail-fast, limited to call-shape normalization (argument format, wrapper invocation shape, serialization wrapper shape) on the same tool path.
-  - Canonicalization does not allow branch switching or business-logic changes.
+  - Canonicalization is not a workaround branch switch and must not change business logic, target tool, or execution stage.
   - Transient site reachability errors under `environment_issue` should use a bounded reconnect budget before fail-fast classification: retry the same registration/healthcheck path up to 3 additional attempts with 15-second delays.
-  - Escalation rule: any non-critical category becomes fail-fast only when it prevents trustworthy CLIO MCP tool invocation or contract verification, or leaves evidence unreliable.
+  - Escalation rule: any non-critical category becomes fail-fast only when it prevents trustworthy CLIO MCP tool invocation or contract verification, or leaves evidence unreliable for the current run.
 - For `clio_mcp_issue` critical failures, do not switch to alternate workaround branches or fallback strategy changes after the first failed attempt.
 - For non-critical categories, bounded recovery is allowed on the same target path within the configured retry budget.
 - After escalation conditions are met, emit fail-fast evidence and stop the blocked stage.
