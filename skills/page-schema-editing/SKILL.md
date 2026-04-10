@@ -16,6 +16,13 @@ Resolve exact tool names, parameters, aliases, defaults, response shapes, and er
 
 ## Runtime Flow Used By This Repo
 
+Precondition for data-backed details:
+
+- Before the page runtime flow starts, resolve the backing schema from current app context rather than from requirement wording alone.
+- Inspect `application-get-info` first, then `page-list` and `page-get`, and use `get-entity-schema-properties` when the backing schema or relation is still unclear.
+- If the target package already contains a supporting or link schema for the requested detail, reuse it. Do not initiate schema creation from the page-editing flow unless the inspect phase proves a real object-model gap.
+- Absence of a tab, detail, or grid on the page does not mean the backing entity is missing.
+
 1. `page-list`
 2. `page-get`
 3. edit `raw.body`
@@ -37,6 +44,7 @@ Read before executing:
 
 - Use `raw.body` from `page-get` as the editable source of truth.
 - Treat the `page` block from `page-get` as metadata only.
+- For detail/grid requests, treat the current object model as the source of truth for the backing schema. Do not infer a new schema name from a business caption when runtime context already exposes an existing technical code.
 - If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `component-info` as part of the clio-guided page workflow before editing nested configuration.
 - If the edited body introduces new localizable captions, persist them through the live page write contract resolved at runtime.
 - Keep repository docs for workflow and page-editing policy only. Do not copy MCP parameter tables into plans or prompts.

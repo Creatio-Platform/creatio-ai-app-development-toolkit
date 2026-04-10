@@ -33,6 +33,10 @@ def status_label(status):
     return "notImplemented"
 
 
+def _bool_label(value):
+    return "yes" if bool(value) else "no"
+
+
 def build_report_markdown(result_document):
     document = ensure_result_document(result_document)
     title = document.get("appTitle") or document.get("appName") or document.get("app-name") or document.get("packageName") or document.get("package-name") or "Application"
@@ -49,6 +53,34 @@ def build_report_markdown(result_document):
         for page_name, page_entry in sorted(document["pageEvidence"].items()):
             page_states.append(f"{page_name}={status_label(page_entry.get('status', {}))}")
         lines.append(f"- Page evidence: {', '.join(page_states)}")
+    dataforge = document.get("dataforge")
+    if isinstance(dataforge, dict):
+        lines.append(f"- Data Forge used: {_bool_label(dataforge.get('used'))}")
+        health = dataforge.get("health")
+        if isinstance(health, dict):
+            lines.append(
+                "- Data Forge health: "
+                f"liveness={_bool_label(health.get('liveness'))}, "
+                f"readiness={_bool_label(health.get('readiness'))}"
+            )
+        status = dataforge.get("status")
+        if isinstance(status, dict):
+            status_label_value = status.get("status")
+            if status_label_value:
+                lines.append(f"- Data Forge status: {status_label_value}")
+        coverage = dataforge.get("coverage")
+        if isinstance(coverage, dict):
+            lines.append(
+                "- Data Forge coverage: "
+                f"health={_bool_label(coverage.get('health'))}, "
+                f"tables={_bool_label(coverage.get('tables'))}, "
+                f"lookups={_bool_label(coverage.get('lookups'))}, "
+                f"relations={_bool_label(coverage.get('relations'))}, "
+                f"table-columns={_bool_label(coverage.get('table-columns'))}"
+            )
+        warnings = dataforge.get("warnings")
+        if isinstance(warnings, list) and warnings:
+            lines.append(f"- Data Forge warnings: {', '.join(str(warning) for warning in warnings)}")
     lines.extend(["", "## Operations", ""])
     if document.get("operationLog"):
         for entry in document["operationLog"]:

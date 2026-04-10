@@ -150,6 +150,7 @@ Rules for the output:
 - Keep the document compact, structured, and business-focused.
 - Use business language rather than technical implementation language.
 - Technical choreography, exact MCP execution steps, and payload mechanics belong to Agent 3, not here.
+- Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery in Agent 3.
 - If the host environment requires a wrapper such as `<proposed_plan>`, keep the wrapper only as a container. The visible body must still use the BA-style headings defined here.
 - Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
 - Keep each top-level section concise. Prefer 1 short opening paragraph plus compact bullets unless the request genuinely needs more detail.
@@ -301,6 +302,7 @@ Use both acceptance checks before approval artifacts are written:
 - Enum-like fields must be separate lookup entities.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
+- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
 
 ## Default Resolution Rules
 

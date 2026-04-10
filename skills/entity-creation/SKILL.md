@@ -43,6 +43,9 @@ Prefer `schema-sync` for grouped entity work. Use individual entity tools only w
 12. When refreshed application context exposes `canonical-main-entity-name`, treat that entity as the default main entity for single-record-type app flows.
 13. Resolve runtime field-type semantics through live `clio` MCP contract metadata and app-modeling guidance rather than hardcoded repo rules.
 14. Do not create a second main entity right after `application-create` for the same primary record type; extend the canonical main entity unless the approved plan proves a distinct business object.
+15. Do not create a new supporting or link entity when refreshed app context already exposes a schema in the target package with the same business purpose and the same relation pair; reuse the existing schema instead.
+16. A business caption is not authority to mint a new technical schema code. If refreshed runtime context already maps the caption or title to an existing schema code, use that code.
+17. Creating a synonym supporting or link schema in the same package is a blocker-level planning error, not a harmless fallback.
 
 ## Planning Inputs
 
@@ -78,6 +81,8 @@ Do not document per-operation refresh as the primary flow.
 - explicit defaults are classified as schema defaults or UI defaults
 - canonical context was refreshed through `application-get-info`
 - `canonical-main-entity-name` is used when deciding whether to extend the template-created main entity or create an additional business object
+- existing supporting or link schemas in the target package were checked before planning a new supporting entity
+- business captions from requirements are reconciled against existing technical schema codes from refreshed runtime context
 - lookup references point to already existing schemas
 - evidence reflects the materialized result, not only the intended mutation
 
