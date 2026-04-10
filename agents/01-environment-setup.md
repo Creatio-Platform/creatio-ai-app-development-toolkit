@@ -13,6 +13,28 @@ Configure clio CLI and establish connection to the target Creatio runtime for th
 
 Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
 
+## Support-Mode Branch (Diagnostic-First)
+
+Apply this branch only when support mode is on:
+
+- Keep execution in the main thread/session; do not start delegated/background actions.
+- If no main-thread equivalent exists, allow one unavoidable support-mode exception record:
+  - `attempted_action`
+  - `no_main_thread_equivalent_reason`
+  - `main_thread_evidence_captured`
+- When an unavoidable non-main-thread action completes, surface its result in the main-thread support output before proceeding or stopping.
+- For any stage-critical failure in this agent's current active stage, create a canonical failure record immediately.
+- Allow at most one confirmation probe, and only with the same tool + same contract path.
+- In support mode, `clio_mcp_issue` remains the critical-by-default target defect category, while `environment_issue` and `orchestration_tool_failure` are non-critical by default in this stage and should use bounded recovery first.
+- For transient reachability errors (DNS resolution failures, connect timeouts, temporary host-unreachable), retry the same registration/healthcheck path up to 3 additional attempts with 15-second delays before fail-fast classification.
+- For critical `clio_mcp_issue` failures, do not switch to alternate workaround branches, fallback strategy changes, or different mutation paths.
+- For non-critical failures in this stage, bounded same-path recovery is allowed within retry budgets.
+- Escalate to fail-fast only when the failure remains unresolvable and blocks trustworthy CLIO MCP diagnosis/evidence.
+- After bounded recovery (and optional same-path confirmation probe where applicable), stop the stage and emit:
+  - `exit_decision=fail_fast`
+  - `blocked_stage=<current_active_stage_label>`
+  - `why_continue_is_unsafe=<reason>`
+
 ---
 
 ## Steps
@@ -209,8 +231,10 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
+| Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
 
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ `output/<AppName>/.creatio-env.json` exists with the current request URL, the correct `environment`, and persisted runtime MCP details  
+✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  

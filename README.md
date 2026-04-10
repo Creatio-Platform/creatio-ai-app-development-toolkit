@@ -54,31 +54,110 @@ Support mode is run-scoped and non-persistent by default (`support_mode_active: 
 
 ### Guarantees While Active
 
-- No subagents, no background tasks, no delegated execution.
-- Work is executed in the main thread/session only.
-- If a task is only possible through delegation/background execution, the agent proceeds and records a support-mode exception that explains why background execution was required.
+- No subagents, no background tasks, no delegated execution by default.
+- Work is executed in the main thread/session first so evidence stays in the shared trace.
+- If no main-thread equivalent exists for a required step, allow one unavoidable support-mode exception record and proceed with the minimal non-main-thread action.
 - Existing delegation behavior remains unchanged when support mode is off.
+
+Recovery budget while active:
+
+- Support mode is for diagnosis, not workaround completion.
+- A stage-critical failure is any failure in the current active stage that blocks trustworthy continuation or trustworthy evidence for the current run.
+- The first stage-critical failure must produce a canonical failure record immediately.
+- At most one confirmation probe is allowed, and only with the same tool + same contract path.
+- Severity routing:
+  - `clio_mcp_issue` is the primary critical target category. Keep strict diagnostic handling: canonical incident record, one same-path confirmation probe, then fail-fast when blocking.
+  - `instruction_issue`, `environment_issue`, and `orchestration_tool_failure` are non-critical by default. Use bounded retry/workaround-first handling and fail-fast only when unresolvable.
+  - `orchestration_tool_failure` may run one canonicalization pass before fail-fast, limited to call-shape normalization (argument format, wrapper invocation shape, serialization wrapper shape) on the same tool path.
+  - Canonicalization does not allow branch switching or business-logic changes.
+  - Transient site reachability errors under `environment_issue` should use a bounded reconnect budget before fail-fast classification: retry the same registration/healthcheck path up to 3 additional attempts with 15-second delays.
+  - Escalation rule: any non-critical category becomes fail-fast only when it prevents trustworthy CLIO MCP tool invocation or contract verification, or leaves evidence unreliable.
+- For `clio_mcp_issue` critical failures, do not switch to alternate workaround branches or fallback strategy changes after the first failed attempt.
+- For non-critical categories, bounded recovery is allowed on the same target path within the configured retry budget.
+- After escalation conditions are met, emit fail-fast evidence and stop the blocked stage.
 
 ### Expected Support Output
 
-For each substantial step:
+Support mode logs only actionable failures:
 
-- `Action`: what the agent is doing
-- `Result`: success/fail and key output
-- `If failed`: error and the next recovery attempt
+- `orchestration_tool_failure`
+- `instruction_issue`
+- `clio_mcp_issue`
+- `environment_issue` (auth/network/runtime/preflight)
+- Category scope: use `orchestration_tool_failure` for caller/orchestration-side failures; use `clio_mcp_issue` for CLIO MCP/backend contract or transport failures.
+- Reporting stays session-only by default (conversation summary), without persisted support metrics artifacts.
 
-Final response includes:
+Category decision matrix:
 
-- ordered execution summary
-- unresolved blockers
-- collected evidence summary
-- support-mode exceptions summary for unavoidable background/delegated steps
+- `clio_mcp_issue`: CLIO MCP contract, transport, backend tool request/response faults.
+- `instruction_issue`: guidance or expected-pattern defects, including incorrect generated/edit strategies.
+- `orchestration_tool_failure`: caller or wrapper invocation faults such as args shape, adapter, or normalizer issues.
+- `environment_issue`: auth, network, runtime reachability, or preflight failures.
+- Page-sync validation rule:
+  - classify as `instruction_issue` when failure is caused by generated/edit strategy or known binding rules;
+  - classify as `clio_mcp_issue` only when tool/backend behavior violates advertised contract semantics.
+
+Canonical failure record:
+
+- One canonical failure record is required for each unique incident.
+- `category`
+- `what_failed`
+- `evidence` (tool/error snippet/session reference)
+- `expected_behavior`
+- `fix_target` (`instructions|clio_mcp|tooling|environment`)
+- `next_recovery_attempt`
+- `error_signature`
+- `repeat_count`
+- `timestamps` (optional when `repeat_count > 1`)
+
+Deduplication rule:
+
+- Keep one canonical record per unique failure signature.
+- Treat incidents as identical when `error_signature` and tool/context match.
+- For repeats, update `repeat_count` (and optional `timestamps`) instead of repeating raw dumps.
+
+Final response must include (in this exact order):
+
+- `Confirmed failures`
+- `Unresolved blockers`
+- `Next recovery attempts`
+- `Support-mode exceptions`
+- `Non-target friction` (resolved or temporary `orchestration_tool_failure` / `instruction_issue` items)
 - completion handoff prompt asking the user to share the session with support
 
-Reasoning visibility in support mode:
+Zero-state rule:
 
-- Include concise decision evidence (`Instruction check`, `Decision rationale`, `Constraint conflicts`, `Skipped options`, `Self-check`).
-- Internal private chain-of-thought is non-contractual and not required to be exposed.
+- When a required section has no items, include the section and set its value to `None` instead of omitting it.
+
+CLIO-focused reporting rules:
+
+- Keep `Confirmed failures` focused on unresolved blockers and target defects.
+- Do not list resolved or temporary instruction/tooling friction under `Confirmed failures`; put it under `Non-target friction` when needed.
+- In CLIO-focused support runs, attempt at least one real MCP tool invocation before concluding unless an environment failure remains unresolvable after the bounded retry budget.
+- Present categories in this priority order: `clio_mcp_issue`, `environment_issue`, `orchestration_tool_failure`, `instruction_issue`.
+
+Noise control:
+
+- Prefer phase checkpoints only: `env`, `gates`, `schema`, `pages`, `final`.
+- Emit interim status only when timeout thresholds are crossed or recovery path changes.
+
+Fail-fast decision evidence:
+
+- Before blocker summary, include:
+  - `exit_decision=fail_fast`
+  - `blocked_stage=<current_active_stage_label>`
+  - `why_continue_is_unsafe=<reason>`
+
+Support-mode exception record (when unavoidable):
+
+- `attempted_action`
+- `no_main_thread_equivalent_reason`
+- `main_thread_evidence_captured`
+- When an unavoidable non-main-thread action completes, its result must be surfaced in the main-thread support output before proceeding or stopping.
+
+CLIO mismatch rule:
+
+- Contract/transport mismatches are `category=clio_mcp_issue` and include normalized `error_signature` (example: `html_instead_of_json_response`).
 
 ### Copy-Paste Examples
 
@@ -102,20 +181,23 @@ Support mode off. Continue with normal execution.
 Support mode is on. Please share this session with support for analysis.
 ```
 
-```text
-Support mode is on. Please share this session with support for analysis using /share.
-```
-
 ### Verification Checklist
 
 1. Activation/deactivation is acknowledged when user says `support mode on` or `support mode off`.
-2. While active, delegated/background execution is avoided by default; unavoidable cases are explicitly logged as support-mode exceptions with reason.
-3. While active, each major step reports action/result and failure recovery when needed.
-4. While active, final response includes execution summary, blockers, evidence, support-mode exceptions (if any), and completion handoff prompt.
-5. Support mode ON + success: completion handoff prompt is present.
-6. Support mode ON + failure: completion handoff prompt is present.
-7. Support mode OFF: completion handoff prompt is absent.
-8. With support mode off, existing delegation behavior is unchanged.
+2. While active, delegated/background execution is forbidden by default; unavoidable cases produce one explicit support-mode exception record.
+3. Failure logs use canonical categories and canonical failure-record fields.
+4. Repeated failures are deduplicated with `repeat_count` (+ optional `timestamps`).
+5. Heartbeat chatter is suppressed; phase-checkpoint reporting is used.
+6. In support mode, first stage-critical failure records an incident; only one same-path confirmation probe is allowed.
+7. No fallback branch switching or workaround path changes are allowed for critical `clio_mcp_issue` failures; non-critical categories use bounded recovery first.
+8. Fail-fast exits include `exit_decision=fail_fast`, `blocked_stage`, and `why_continue_is_unsafe`.
+9. For CLIO-focused support runs, at least one real MCP tool invocation is attempted unless an environment failure remains unresolvable after the bounded retry budget.
+10. Final response includes `Confirmed failures`, `Unresolved blockers`, `Next recovery attempts`, `Support-mode exceptions`, and `Non-target friction` (use `None` when empty).
+11. Support mode ON + success: completion handoff prompt is present.
+12. Support mode ON + failure: completion handoff prompt is present.
+13. Support mode OFF: completion handoff prompt is absent.
+14. With support mode off, existing delegation behavior is unchanged.
+15. Missing any required final support section is a support-mode reporting failure.
 
 ## Workflow
 
