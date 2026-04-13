@@ -18,7 +18,7 @@ clio resolution (first match wins):
 
 Notes:
     - clio MCP uses stdio transport (NOT HTTP/SSE)
-    - Tool names use dashes: application-create, create-lookup, page-update (NOT dots)
+    - Tool names use dashes: application-create, create-lookup, page-update, application-section-delete (NOT dots)
     - All parameters are wrapped in an "args" object
     - clio does not support notifications/initialized — it is omitted
     - NEVER pass -e flag to mcp-server — it is not supported

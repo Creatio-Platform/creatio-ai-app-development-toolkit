@@ -24,6 +24,14 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Planning-time read-only discovery is still required when the model is ambiguous or strong existing-schema candidates exist; use that discovery to decide `reuse`, `extend`, or `create` before execution
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
+**MCP Section Management**
+- Use `application-section-get-list` to list all sections of an installed application
+- Use `application-section-delete` to remove a section from an installed application
+- Canonical section discovery flow: `application-get-list` → `application-get-info` → `application-section-get-list`
+- Canonical section delete flow: `application-get-list` → `application-get-info` → `application-section-get-list` → `application-section-delete`
+- `delete-entity-schema` on `application-section-delete` is destructive and irreversible; it requires explicit opt-in
+- Resolve full tool parameter contract through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance`
+
 **Entity Schema Sync (DB-first)**
 - Prefer `schema-sync` for grouped entity work
 - Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`

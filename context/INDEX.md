@@ -25,6 +25,7 @@ Apply a focused change to an existing app or runtime page.
 | Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance` |
 | Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | Resolve preferred vs fallback path through `clio` MCP guidance |
 | Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only | no MCP write path required |
+| Manage app sections (list, delete) | — | `context/essentials.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance` |
 
 ## Executable Contract
 
