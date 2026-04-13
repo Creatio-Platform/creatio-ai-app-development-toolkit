@@ -287,7 +287,8 @@ class McpClientTests(unittest.TestCase):
 
     def test_call_mcp_tool_returns_structured_unknown_tool_error(self):
         contract_index = build_contract_index(PAGE_SYNC_CONTRACT, PAGE_LIST_CONTRACT)
-        with patch("scripts.mcp_client._get_tool_contract_index", return_value=contract_index):
+        with patch("scripts.mcp_client._get_tool_contract_index", return_value=contract_index), \
+             patch("scripts.mcp_client._load_explicit_tool_contract", return_value=None):
             result = call_mcp_tool("sync-page", {})
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "tool-not-found")

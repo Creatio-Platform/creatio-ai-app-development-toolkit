@@ -37,6 +37,11 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `sync-schemas`
 - Create lookup entities before entities or updates that reference them
 
+**Schema Cleanup**
+- `delete-schema` removes any workspace schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
+- The schema must belong to one of the packages in the specified local workspace; `delete-schema` resolves ownership before deleting
+- This operation is destructive and cannot be undone; confirm the schema name and workspace path before calling it
+
 **Default Semantics**
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
 - A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
