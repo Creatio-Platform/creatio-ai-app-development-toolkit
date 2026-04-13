@@ -3,7 +3,7 @@
 Read this file first.
 Use it to choose the smallest set of repository documents for the current task.
 
-Executable MCP contract is authoritative only in `clio MCP` through `tool-contract-get`.
+Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
 This repository is authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product or business invariants.
 
 ## Quick Capability Map
@@ -21,17 +21,18 @@ Apply a focused change to an existing app or runtime page.
 
 | Task | Skill | Read Next | Canonical MCP Guidance |
 |------|-------|-----------|------------------------|
-| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/app-modeling` |
-| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | Resolve through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance` |
+| Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/app-modeling` |
+| Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance` |
 | Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | Resolve preferred vs fallback path through `clio` MCP guidance |
 | Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only | no MCP write path required |
+| Manage app sections (list, delete) | — | `context/essentials.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance` |
 
 ## Executable Contract
 
 When you need exact tool names, required fields, aliases, defaults, response shapes, or error codes:
 
 1. Call `tools/list` to confirm tool availability.
-2. Call `tool-contract-get` through `scripts/mcp_client.py`.
+2. Call `get-tool-contract` through `scripts/mcp_client.py`.
 3. Use `docs://mcp/guides/app-modeling` for app-modeling semantics.
 4. Treat repository docs as workflow and policy guidance only.
 
@@ -43,7 +44,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 2. Determine whether the task is full app generation or a targeted change.
 3. Load only the stage runbook or skill that matches the task.
 4. Read only the supporting context files needed for that stage.
-5. Resolve executable MCP details through `tool-contract-get` instead of searching docs for payload syntax.
+5. Resolve executable MCP details through `get-tool-contract` instead of searching docs for payload syntax.
 
 ## Full App Generation Reads
 
@@ -75,7 +76,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 
 Resolve canonical execution paths, fallback-only compatibility tools, and verify/read-back policy through:
 
-- `tool-contract-get`
+- `get-tool-contract`
 - `docs://mcp/guides/app-modeling`
 - `docs://mcp/guides/existing-app-maintenance`
 
@@ -83,7 +84,7 @@ Resolve canonical execution paths, fallback-only compatibility tools, and verify
 
 ### `skills/entity-creation/SKILL.md`
 
-Use for entity planning and schema-sync-oriented mutation policy.
+Use for entity planning and sync-schemas-oriented mutation policy.
 
 ### `skills/page-schema-editing/SKILL.md`
 

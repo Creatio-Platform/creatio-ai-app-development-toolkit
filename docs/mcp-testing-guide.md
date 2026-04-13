@@ -3,7 +3,7 @@
 > Для візуального UI-тестування дивіться [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md).
 
 Цей документ описує, як перевіряти released clio MCP bootstrap і wrapper behavior через `scripts/mcp_client.py`.
-Executable contract визначається тільки `clio MCP` через `tool-contract-get`; цей документ не дублює tool payload shape.
+Executable contract визначається тільки `clio MCP` через `get-tool-contract`; цей документ не дублює tool payload shape.
 
 ## Базові правила
 
@@ -12,11 +12,11 @@ Executable contract визначається тільки `clio MCP` через 
 - Виконання MCP іде через clio stdio, не через HTTP/SSE
 - Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
 - Для JSON-heavy payloads використовуйте `--args-file` або `--args-stdin`, а не inline quoting
-- Спочатку перевіряйте manifest через `tools/list`, а executable contract через `tool-contract-get`
-- Canonical entity flow: `application-create -> schema-sync -> application-get-info`
-- clio-advertised canonical page flow: `page-list -> page-get -> page-sync -> page-get`
-- `page-update` лишається тільки fallback path для single-page dry-run або legacy save
-- Якщо потрібен точний tool shape, дочитуйте його в момент виконання через `tool-contract-get` і `docs://mcp/guides/app-modeling`
+- Спочатку перевіряйте manifest через `tools/list`, а executable contract через `get-tool-contract`
+- Canonical entity flow: `create-app -> sync-schemas -> get-app-info`
+- clio-advertised canonical page flow: `list-pages -> get-page -> sync-pages -> get-page`
+- `update-page` лишається тільки fallback path для single-page dry-run або legacy save
+- Якщо потрібен точний tool shape, дочитуйте його в момент виконання через `get-tool-contract` і `docs://mcp/guides/app-modeling`
 
 ## Швидка перевірка середовища
 
@@ -24,14 +24,14 @@ Executable contract визначається тільки `clio MCP` через 
 clio ver
 python3 scripts/mcp_client.py --check-clio-version
 python3 scripts/mcp_client.py tools/list '{}' 30
-python3 scripts/mcp_client.py tool-contract-get '{}' 30
+python3 scripts/mcp_client.py get-tool-contract '{}' 30
 ```
 
 ```powershell
 clio ver
 py -3 .\scripts\mcp_client.py --check-clio-version
 py -3 .\scripts\mcp_client.py tools/list '{}' 30
-py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
+py -3 .\scripts\mcp_client.py get-tool-contract '{}' 30
 ```
 
 Очікування:
@@ -39,14 +39,14 @@ py -3 .\scripts\mcp_client.py tool-contract-get '{}' 30
 - `clio ver` повертає `8.0.2.50` або новіше
 - `--check-clio-version` завершується успішно
 - `tools/list` повертає non-empty manifest
-- `tool-contract-get` повертає non-empty metadata для доступних tools
+- `get-tool-contract` повертає non-empty metadata для доступних tools
 
 ## Generic Invocation Pattern
 
 Для будь-якого non-bootstrap tool:
 
 1. перевірити, що tool присутній у `tools/list`
-2. отримати exact params, aliases, required fields, type expectations, response hints і rejected aliases через `tool-contract-get`
+2. отримати exact params, aliases, required fields, type expectations, response hints і rejected aliases через `get-tool-contract`
 3. підготувати payload у `args.json` або через stdin
 4. викликати `scripts/mcp_client.py <tool-name> --args-file ./args.json --timeout <seconds>`
 5. якщо виклик змінює entity metadata, виконати подальшу перевірку через canonical refresh path
@@ -67,8 +67,8 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 
 Перевіряйте локальний wrapper на такі властивості:
 
-- `tools/list` і `tool-contract-get` працюють без попереднього contract cache
-- non-bootstrap tools вимагають успішного `tool-contract-get`
+- `tools/list` і `get-tool-contract` працюють без попереднього contract cache
+- non-bootstrap tools вимагають успішного `get-tool-contract`
 - top-level metadata validation використовує лише live contract data:
   - `required`
   - `any-of`
@@ -79,9 +79,9 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 
 ## Перевірки після mutation flows
 
-- Після entity mutation flow виконайте canonical refresh через `application-get-info`
-- Після page write flow повторно перевірте результат через `page-get`, якщо helper або server response не дає достатньої verification evidence
-- Не тримайте локальні hard-coded param або response expectations; якщо потрібен точний shape, дочитайте його через `tool-contract-get`
+- Після entity mutation flow виконайте canonical refresh через `get-app-info`
+- Після page write flow повторно перевірте результат через `get-page`, якщо helper або server response не дає достатньої verification evidence
+- Не тримайте локальні hard-coded param або response expectations; якщо потрібен точний shape, дочитайте його через `get-tool-contract`
 
 ## Типові помилки
 
@@ -96,7 +96,7 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 - оновити `clio`
 - або вказати сумісний released binary через `CLIO_CMD`
 
-### `tool-contract-get` недоступний
+### `get-tool-contract` недоступний
 
 Причина:
 
@@ -108,7 +108,7 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 
 - перевірити `clio ver`
 - перевірити `tools/list`
-- окремо перевірити `tool-contract-get`
+- окремо перевірити `get-tool-contract`
 - не намагатися будувати non-bootstrap payload з repo docs
 
 ### Generic invocation error from clio
@@ -120,7 +120,7 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 
 Рішення:
 
-- звірити exact params, aliases, validators, prompt/resource guidance і tool-specific notes через `tool-contract-get`
+- звірити exact params, aliases, validators, prompt/resource guidance і tool-specific notes через `get-tool-contract`
 - для app-modeling semantics дочитати `docs://mcp/guides/app-modeling`
 
 ## Дивіться також

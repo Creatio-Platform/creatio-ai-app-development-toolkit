@@ -8,7 +8,7 @@
 
 Зменшити кількість окремих round trips у flows, де агент майже завжди виконує фіксовану послідовність пов’язаних operations.
 
-## A6. `schema-sync`
+## A6. `sync-schemas`
 
 ### Motivation
 
@@ -35,7 +35,7 @@
 - composite flow не повинен ставати альтернативною hand-written contract spec у repo docs
 - client side має далі довіряти live contract discovery, а не historical прикладам
 
-## A7. `page-sync`
+## A7. `sync-pages`
 
 ### Motivation
 

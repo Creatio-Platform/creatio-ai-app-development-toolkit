@@ -148,7 +148,7 @@ class FakePageClient:
         self.pages = pages
         self.calls = []
         self.include_verified_body = include_verified_body
-        self.tools = tools or ["page-sync"]
+        self.tools = tools or ["sync-pages"]
         self.failed_pages = failed_pages or {}
         self.missing_results = set(missing_results or [])
 
@@ -157,7 +157,7 @@ class FakePageClient:
 
     def call_tool_json(self, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
-        if tool_name != "page-sync":
+        if tool_name != "sync-pages":
             raise AssertionError(tool_name)
         results = []
         for page_payload in arguments["pages"]:
@@ -300,8 +300,8 @@ class McpPageSyncTests(unittest.TestCase):
         self.assertEqual(list_entry["uId"], "33333333-3333-3333-3333-333333333333")
         self.assertEqual(form_entry["packageUId"], "22222222-2222-2222-2222-222222222222")
         self.assertEqual(len(persisted["schemaSync"]), 1)
-        self.assertEqual([call[0] for call in fake_client.calls].count("page-sync"), 1)
-        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        self.assertEqual([call[0] for call in fake_client.calls].count("sync-pages"), 1)
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "sync-pages")
         self.assertEqual(page_sync_call[1]["pages"][0]["resources"], "{\"PDS_UsrStatus_status123\": \"Status\"}")
         self.assertIn("UsrTodoList_FormPage=machineChecked", report)
         self.assertIn("manualCheckPending=true", report)
@@ -373,7 +373,7 @@ class McpPageSyncTests(unittest.TestCase):
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertTrue(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["implemented"])
         self.assertFalse(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["machineChecked"])
-        self.assertEqual([call[0] for call in fake_client.calls], ["page-sync"])
+        self.assertEqual([call[0] for call in fake_client.calls], ["sync-pages"])
 
     def test_apply_page_sync_plan_accepts_markdown_embedded_plan_payload(self):
         pages = {
@@ -456,7 +456,7 @@ class McpPageSyncTests(unittest.TestCase):
             )
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertTrue(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["machineChecked"])
-        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "sync-pages")
         self.assertIn("PDS.UsrStatus", page_sync_call[1]["pages"][0]["body"])
 
     def test_apply_page_sync_plan_materializes_list_columns_from_structured_edit_spec_with_trailing_commas(self):
@@ -524,7 +524,7 @@ class McpPageSyncTests(unittest.TestCase):
             )
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertTrue(persisted["pageEvidence"]["UsrTodoList_ListPage"]["status"]["machineChecked"])
-        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "sync-pages")
         self.assertIn("PDS_UsrStatus", page_sync_call[1]["pages"][0]["body"])
 
     def test_apply_page_sync_plan_does_not_invent_environment_name(self):
@@ -556,7 +556,7 @@ class McpPageSyncTests(unittest.TestCase):
                 },
                 result_path
             )
-        page_sync_call = next(call for call in fake_client.calls if call[0] == "page-sync")
+        page_sync_call = next(call for call in fake_client.calls if call[0] == "sync-pages")
         self.assertNotIn("environment-name", page_sync_call[1])
 
     def test_apply_page_sync_plan_accepts_page_sync_only_tool(self):
@@ -568,7 +568,7 @@ class McpPageSyncTests(unittest.TestCase):
                 "parentSchemaName": "BaseSectionTemplate"
             }
         }
-        fake_client = FakePageClient(pages, tools=["page-sync"])
+        fake_client = FakePageClient(pages, tools=["sync-pages"])
         result_document = build_result_document()
         with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
@@ -588,7 +588,7 @@ class McpPageSyncTests(unittest.TestCase):
                 },
                 result_path
             )
-        self.assertEqual([call[0] for call in fake_client.calls].count("page-sync"), 1)
+        self.assertEqual([call[0] for call in fake_client.calls].count("sync-pages"), 1)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ The business contract for this agent is the BA-style requirements draft approved
 - `output/<AppName>/technical-annex.md`
 - `output/<AppName>/plan.md`
 - `output/<AppName>/page-sync-plan.json` when page sync is required
-- `output/<AppName>/page-sync/*.body.js` when page bodies are materialized outside `plan.md`
+- `output/<AppName>/sync-pages/*.body.js` when page bodies are materialized outside `plan.md`
 
 ## Read First
 Preferred: read `context/.cache/agent-3-bundle.md` when available.
@@ -112,8 +112,8 @@ Resolve:
 
 Rules:
 
-- Resolve exact executable parameter names, aliases, defaults, and validation rules from `tool-contract-get`.
-- Treat `application-create` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
+- Resolve exact executable parameter names, aliases, defaults, and validation rules from `get-tool-contract`.
+- Treat `create-app` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
 - `useAIContentGeneration` must be `false`.
@@ -131,7 +131,7 @@ Rules:
 - Reuse server-provided display fields when they already satisfy the approved business intent.
 - Model enum-like business values as lookup entities first.
 - Preserve business semantics for contact and URL fields, but resolve the concrete runtime field type through the live `clio` contract.
-- Do not encode executable schema payload field names in the plan. Resolve them at runtime through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
+- Do not encode executable schema payload field names in the plan. Resolve them at runtime through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
 ### Model Discovery Gate
@@ -160,7 +160,7 @@ For the conditional discovery branch, use read-only tools only and resolve candi
 2. `dataforge-find-lookups`
 3. `dataforge-context`
 4. When a strong candidate is found:
-   - `application-get-info` for app-level context when the candidate belongs to an existing app
+   - `get-app-info` for app-level context when the candidate belongs to an existing app
    - `get-entity-schema-properties` for candidate schema inspection
    - `get-entity-schema-column-properties` only when a specific column remains ambiguous
 
@@ -207,7 +207,7 @@ Unacceptable reasons for `create`:
 
 ### Schema Sync Plan
 
-- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- Resolve whether `create-app` is sufficient for the app shell and which fields still require follow-up DB-first sync.
 - Do not add a separate mandatory `dataforge-*` preflight to the standard new-app branch; standalone Data Forge tools are for explicit inspection or remediation only.
 - For existing-app work, include the current `clio`-owned discovery and inspection flow instead of hard-coding request semantics here.
 - Create lookup entities before entities that reference them.
@@ -215,7 +215,7 @@ Unacceptable reasons for `create`:
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
-- Resolve the preferred post-mutation refresh step through `tool-contract-get` and `docs://mcp/guides/app-modeling`.
+- Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
 ### Default Rules
@@ -223,7 +223,7 @@ Unacceptable reasons for `create`:
 - A requirement such as `UsrStatus defaults to New` is incomplete until the plan names the field, the default value, and the step that applies it.
 - Seed data alone does not satisfy a default requirement.
 - For lookup-backed defaults, the plan must choose an executable mechanism resolved at runtime through the live contract or an explicit page-side handler when the default belongs to page behavior.
-- The chosen mechanism must be included in the page-sync plan and executed. It must never be deferred as `manualCheckPending`.
+- The chosen mechanism must be included in the sync-pages plan and executed. It must never be deferred as `manualCheckPending`.
 
 ### Page Sync Plan
 
@@ -244,7 +244,7 @@ ListPage defaults:
 - exclude inherited audit/system fields unless explicitly requested
 - exclude long/rich/blob fields unless explicitly requested or required
 
-Resolve the preferred page execution and verification sequence through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance`.
+Resolve the preferred page execution and verification sequence through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`.
 
 When page sync is required:
 
@@ -254,8 +254,8 @@ When page sync is required:
 
 ### Validation Rules
 
-- Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
-- Resolve executable parameter names, aliases, defaults, and nested request shapes from `tool-contract-get` instead of hard-coding them in the plan.
+- Prefer `sync-schemas` for entity mutations and `sync-pages` for page writes.
+- Resolve executable parameter names, aliases, defaults, and nested request shapes from `get-tool-contract` instead of hard-coding them in the plan.
 - Never add redundant custom lookup columns that duplicate server-provided display fields.
 - Never treat seeded rows as implementation of a default rule.
 

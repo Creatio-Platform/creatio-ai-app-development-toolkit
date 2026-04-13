@@ -29,7 +29,7 @@ Important guardrails:
 
 ## How to use this reference
 
-### For page-body handler work in the runtime page-sync flow
+### For page-body handler work in the runtime sync-pages flow
 
 Most practical imports come from the services layer:
 
@@ -288,5 +288,5 @@ Prefer these exports when generating custom frontend modules or controls:
 ### What not to do by default
 
 - Do not treat root-barrel access to `internal/*` as permission to generate internal imports.
-- Do not replace page-body marker editing with frontend-source decorators when the task is specifically runtime page-body editing through `page-get` and `page-sync`.
+- Do not replace page-body marker editing with frontend-source decorators when the task is specifically runtime page-body editing through `get-page` and `sync-pages`.
 - Do not assume every exported helper is appropriate for page-body handlers; many decorator and bootstrap helpers are meaningful only in frontend-source modules.

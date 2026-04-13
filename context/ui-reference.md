@@ -79,12 +79,12 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.NumberInput` supports `format.decimalPrecision`; use it when the numeric column scale is known.
 - `crt.DateTimePicker` supports `pickerType`, `useSeconds`, `startView`, `mode`, and `timeInterval`. Match `pickerType` to the real field kind (`date`, `time`, or `datetime`).
 - `crt.PhoneInput`, `crt.EmailInput`, and `crt.WebInput` are backed by preprocessors that can promote a bound text input to a more specific control based on the underlying data value type.
-- Resolve schema-side field-type semantics through `tool-contract-get` and `docs://mcp/guides/app-modeling`; this file is only about page control behavior.
+- Resolve schema-side field-type semantics through `get-tool-contract` and `docs://mcp/guides/app-modeling`; this file is only about page control behavior.
 - `crt.ComboBox` is also preprocessor-backed: it can auto-build lookup loading requests, pagination wiring, and lookup list attributes from the main binding.
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
 
-When editing raw page bodies through the canonical runtime page-sync flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `page-get` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
+When editing raw page bodies through the canonical runtime sync-pages flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `get-page` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `get-component-info`.
 
 ---
 
@@ -127,7 +127,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `page-sync` or the fallback `page-update` path to register the localizableString.
+- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `sync-pages` or the fallback `update-page` path to register the localizableString.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -147,7 +147,7 @@ Use this policy when a new app is generated or the main section entity gains app
 
 ### ListPage DataGrid Sorting for Runtime Page Sync
 
-This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through the runtime page-sync flow.
+This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through the runtime sync-pages flow.
 
 The runtime contract is centered on the DataGrid collection attribute, not on the visual `sorting` property stored inside the DataGrid node:
 
@@ -177,7 +177,7 @@ The frontend preprocessor can auto-inject DataGrid view properties from this met
 - `viewConfig.sorting`
 - `viewConfig.sortingChange`
 
-When editing raw page bodies through the runtime page-sync flow, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
+When editing raw page bodies through the runtime sync-pages flow, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
 
 #### Minimal Safe Example
 
@@ -332,7 +332,7 @@ Binds page attributes to data source:
 
 ### Runtime Binding Pattern for Preserving Live Form Page Lookup Lists
 
-When editing an existing FormPage through the runtime page-sync flow, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
+When editing an existing FormPage through the runtime sync-pages flow, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
 
 This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting for Runtime Page Sync` above.
 
@@ -428,7 +428,7 @@ Use this policy when a new app is generated or the main section entity gains app
 
 ### Runtime Field Insertion via Page Sync
 
-Use the current page body from `page-get` as the source of truth. For live FormPage field sync, identify the **primary field container** by inspecting the existing `viewConfigDiff` — it is the container that holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`). Append missing resolved field controls to that discovered container.
+Use the current page body from `get-page` as the source of truth. For live FormPage field sync, identify the **primary field container** by inspecting the existing `viewConfigDiff` — it is the container that holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`). Append missing resolved field controls to that discovered container.
 
 ```json
 {
@@ -489,8 +489,8 @@ Rules:
 - Keep `Name` as the header/title when it already exists and do not duplicate it.
 - Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
-- **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `page-sync` `resources` param.
-  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `page-sync`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
+- **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `sync-pages` `resources` param.
+  **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `sync-pages`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
 
 ### Runtime Lookup Special Case
 
@@ -635,28 +635,28 @@ If the live page already contains `converters` or `validators`, preserve them an
 
 ## MCP Page Tools — Reading and Editing Pages
 
-Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. The executable tool semantics come from `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance`; this section keeps only the repo-local consumer workflow.
+Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. The executable tool semantics come from `get-tool-contract` plus `docs://mcp/guides/existing-app-maintenance`; this section keeps only the repo-local consumer workflow.
 
 | Tool | Description |
 |------|-------------|
-| `page-list` | Discover page schemas by package or name pattern |
-| `page-get` | Read a page schema's metadata and raw JS body |
-| `page-sync` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
-| `page-update` | Fallback single-page dry-run or legacy save path |
-| `component-info` | Inspect curated Freedom UI component properties and example payloads |
+| `list-pages` | Discover page schemas by package or name pattern |
+| `get-page` | Read a page schema's metadata and raw JS body |
+| `sync-pages` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
+| `update-page` | Fallback single-page dry-run or legacy save path |
+| `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
 
 See `skills/page-schema-editing/SKILL.md` for the full workflow:
 ```
-1. call `page-list` with `search-pattern: "MyApp"`
-2. call `page-get` with `schema-name: "UsrMyApp_FormPage"`
+1. call `list-pages` with `search-pattern: "MyApp"`
+2. call `get-page` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `component-info` and `component-type: "..."`
-5. call `page-sync` with the edited page body and verify the saved page; keep `page-update` only as an explicit fallback
+4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `get-component-info` and `component-type: "..."`
+5. call `sync-pages` with the edited page body and verify the saved page; keep `update-page` only as an explicit fallback
 ```
 
-**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page-get`.
+**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `get-page`.
 
 ---
 

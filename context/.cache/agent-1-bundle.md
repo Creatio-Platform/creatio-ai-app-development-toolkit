@@ -67,19 +67,19 @@ dotnet /full/path/to/clio.dll ver
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
-py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
+py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
 ### Environment Name Guardrail
 
 **CRITICAL:** Never use a URL (e.g., `http://localhost:5001`) as `environmentName`.
-The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
+The `environmentName` must be a registered clio environment name from `clio list-environments`.
 Always register through `clio reg-web-app` if the environment does not exist.
 
 ### 2. List existing environments
 
 ```bash
-clio show-web-app-list
+clio list-environments
 ```
 
 Display the list to the developer. Check if an environment for the target URL already exists.
@@ -116,7 +116,7 @@ Creatio instances can be .NET Core or .NET Framework. Detect this automatically:
    ```
 4. Save the detected `isNetCore` value (`true` or `false`) for the env file.
 
-**Critical:** Getting `isNetCore` wrong causes page-get/page-update MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
+**Critical:** Getting `isNetCore` wrong causes get-page/update-page MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
 
 ### 5. Verify the connection
 
@@ -151,7 +151,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
-| Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
+| Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 
 ## Completion Criteria
@@ -176,7 +176,7 @@ clio set-syssetting MySetting "Value" -e myenv
 ## Local MCP Workflow
 
 ```text
-MCP application-create or application-get-info -> initialize canonical context -> optional schema-sync or fallback entity tools -> application-get-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
+MCP create-app or get-app-info -> initialize canonical context -> optional sync-schemas or fallback entity tools -> get-app-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
 ```
 
 Local rule:

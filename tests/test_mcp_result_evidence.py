@@ -65,11 +65,11 @@ class McpResultEvidenceTests(unittest.TestCase):
                 }
             },
             phase="schema",
-            refreshed_by="application-get-info"
+            refreshed_by="get-app-info"
         )
         self.assertEqual(updated["schemaSync"][0]["tool"], "update-entity-schema")
         self.assertEqual(updated["schemaSync"][0]["evidence"]["entity"]["columns"], ["Name", "UsrStatus"])
-        self.assertEqual(updated["operationLog"][0]["refreshedBy"], "application-get-info")
+        self.assertEqual(updated["operationLog"][0]["refreshedBy"], "get-app-info")
 
     def test_attach_page_evidence_marks_manual_check_pending(self):
         updated = attach_page_evidence(
@@ -128,7 +128,7 @@ class McpResultEvidenceTests(unittest.TestCase):
 
     def test_build_report_markdown_uses_machine_checked_and_manual_pending_labels(self):
         updated = attach_page_evidence(
-            append_operation(build_result_document(), "page-update", "UsrTodoList_FormPage", "success"),
+            append_operation(build_result_document(), "update-page", "UsrTodoList_FormPage", "success"),
             "UsrTodoList_FormPage",
             {
                 "implemented": True,

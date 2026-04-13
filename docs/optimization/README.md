@@ -1,6 +1,6 @@
 # MCP Performance Optimization — Overview
 
-> Historical design notes only. These documents are not the executable MCP contract source of truth. For current tool names, parameters, response shapes, and errors, use `clio MCP` via `tool-contract-get`.
+> Historical design notes only. These documents are not the executable MCP contract source of truth. For current tool names, parameters, response shapes, and errors, use `clio MCP` via `get-tool-contract`.
 
 Результат аналізу сесії `84576484` (8m 11s, UsrTodoList) та аудиту коду clio MCP server + Python client.
 
@@ -19,7 +19,7 @@
 | Документ | Трек | Зміст |
 |----------|------|-------|
 | [01-clio-quick-wins.md](01-clio-quick-wins.md) | Clio Server | Sleep, lock, enriched responses |
-| [02-clio-composite-tools.md](02-clio-composite-tools.md) | Clio Server | schema-sync, page-sync composite tools |
+| [02-clio-composite-tools.md](02-clio-composite-tools.md) | Clio Server | sync-schemas, sync-pages composite tools |
 | [03-clio-backend-optimization.md](03-clio-backend-optimization.md) | Clio Server | N+1 fix, HTTP batching, connection pooling |
 | [04-python-client-improvements.md](04-python-client-improvements.md) | Python Client | Batch, parsing, buffering, single process |
 | [05-mcp-protocol-features.md](05-mcp-protocol-features.md) | MCP Protocol | Resources, Prompts, Progress, Subscriptions |

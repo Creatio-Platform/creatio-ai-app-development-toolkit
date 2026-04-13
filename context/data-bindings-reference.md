@@ -2,7 +2,7 @@
 
 Data bindings register sections, connect entities to navigation, and seed lookup values.
 
-Executable MCP contract is authoritative only in `clio MCP` through `tool-contract-get`.
+Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
 This document defines repo-local binding invariants for section/navigation artifacts plus local evidence-oriented guidance.
 
 ## Role In The Workflow
@@ -20,7 +20,7 @@ Do not use this file as a hand-written tool API reference.
 
 - stable system column UIds live in `context/bindings-lookup.json`
 - template examples live under `templates/data-bindings/`
-- exact tool names, params, and error codes come from `tool-contract-get`
+- exact tool names, params, and error codes come from `get-tool-contract`
 
 ## Binding Targets
 

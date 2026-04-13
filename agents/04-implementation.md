@@ -14,13 +14,13 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
-Resolve executable tool details through `tool-contract-get`.
+Resolve executable tool details through `get-tool-contract`.
 Use `context/mcp-application-tools-reference.md` only for local wrapper and normalization guidance.
 
 ## MCP Transport
 
 - Use `scripts/mcp_client.py`
-- Use `tool-contract-get` and `tools/list` before execution
+- Use `get-tool-contract` and `tools/list` before execution
 - Respect `CLIO_CMD` when a custom clio binary is configured
 - Do not use raw curl for clio stdio transport
 - Pass boolean MCP parameters as booleans, not strings
@@ -61,13 +61,13 @@ Apply this branch only when support mode is on:
 - In CLIO-focused support runs, attempt at least one real MCP tool invocation before concluding unless blocked by an unresolvable environment failure after bounded retries.
 - Page-sync classification rule in support mode:
   - classify client-side validation issues caused by generated/edit strategy or known binding patterns as `instruction_issue`;
-  - classify as `clio_mcp_issue` only when page-sync tool/backend behavior violates advertised contract semantics.
+  - classify as `clio_mcp_issue` only when sync-pages tool/backend behavior violates advertised contract semantics.
 
 ## Execution Order
 
 1. Verify MCP reachability through `scripts/mcp_client.py`.
 2. Call `tools/list` and verify required tools exist.
-3. Resolve executable contract metadata through `tool-contract-get`.
+3. Resolve executable contract metadata through `get-tool-contract`.
 4. Resolve the execution branch through the current `clio` contract and guidance resources.
 5. Persist the initial normalized result to `mcp-application-result.json`.
 6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
@@ -80,21 +80,21 @@ Apply this branch only when support mode is on:
 
 ## Branching Rules
 
-- If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
-- Treat `application-create` as a DataForge-assisted create step; do not add an automatic standalone `dataforge-status` or `dataforge-context` preflight in the standard new-app branch.
+- If `create-app` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
+- Treat `create-app` as a DataForge-assisted create step; do not add an automatic standalone `dataforge-status` or `dataforge-context` preflight in the standard new-app branch.
 - Surface which branch actually ran in the persisted evidence and final report
 
 ## Schema Sync Rules
 
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
-- Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity
+- Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity
 - Use `create-entity-schema` only for additional business objects with distinct meaning
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
 - Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
 - Create lookup entities before entities that reference them
-- Prefer batched lookup seeding inside `schema-sync`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
-- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a schema-sync batch
+- Prefer batched lookup seeding inside `sync-schemas`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
+- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a sync-schemas batch
 - Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
 - If post-mutation refresh fails, stop with a blocker
 
@@ -105,7 +105,7 @@ Seed data alone does not satisfy a default requirement.
 
 For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
 - Resolve the executable schema-side or page-side mechanism from the live contract and current page/runtime context; do not guess field-level request shape from repo docs
-- Either mechanism must be in the page-sync plan and executed — never mark lookup defaults as `manualCheckPending`
+- Either mechanism must be in the sync-pages plan and executed — never mark lookup defaults as `manualCheckPending`
 
 ## Page Sync Rules
 
@@ -131,7 +131,7 @@ Persist page and report evidence with explicit status buckets:
 - `machineChecked`
 - `manualCheckPending`
 
-If `application-create` returns a top-level `dataforge` block:
+If `create-app` returns a top-level `dataforge` block:
 
 - preserve it in `mcp-application-result.json`
 - report it as advisory execution diagnostics
@@ -158,19 +158,19 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - Only after that validation, read the environment from `.creatio-env.json`
 - If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
 - Call `tools/list` through `scripts/mcp_client.py`
-- Resolve the executable contract through `tool-contract-get`
-- Stop with blocker if required tools are missing or `tool-contract-get` fails
+- Resolve the executable contract through `get-tool-contract`
+- Stop with blocker if required tools are missing or `get-tool-contract` fails
 
 ### 3. Initialize application context
 
 - Use the current `clio`-owned application create or discovery flow for the selected branch.
-- For the standard new-app branch, call `application-create` directly and consume its returned `dataforge` diagnostics instead of issuing standalone `dataforge-*` calls first.
+- For the standard new-app branch, call `create-app` directly and consume its returned `dataforge` diagnostics instead of issuing standalone `dataforge-*` calls first.
 - Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
 - Normalize it with `scripts/mcp_context_adapter.py normalize`
 
 ### 4. Execute schema sync
 
-- Prefer the current `clio`-owned schema path resolved from `tool-contract-get` and guidance resources.
+- Prefer the current `clio`-owned schema path resolved from `get-tool-contract` and guidance resources.
 - Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
 - After each approved schema batch, run the current `clio`-owned refresh step, overwrite `mcp-application-result.json`, and normalize again
 - Stop with blocker if required fields or columns are still missing after verification
@@ -179,7 +179,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 - Read the live page bodies through the current `clio`-owned inspection flow
 - Apply page-body edits with the local page-body helpers
-- Apply the preferred page write path resolved from `tool-contract-get` and the maintenance guide
+- Apply the preferred page write path resolved from `get-tool-contract` and the maintenance guide
 - Verify the saved body again via the current `clio`-owned read-back step
 - Persist verification results for both `FormPage` and `ListPage`
 
@@ -203,7 +203,7 @@ Include:
 
 - branch that actually ran
 - resolved defaults that were applied
-- schema sync steps executed and refreshed through `application-get-info`
+- schema sync steps executed and refreshed through `get-app-info`
 - page sync steps executed and verification results for `FormPage` and `ListPage`
 - explicit distinction between `implemented`, `machineChecked`, and `manualCheckPending`
 - blockers or manual verification gaps that remain
@@ -214,7 +214,7 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 
 - Retry transient MCP transport failures up to 3 times with a short delay
 - If required tools are missing in `tools/list`, stop with blocker
-- If `tool-contract-get` cannot provide executable metadata, stop with blocker
+- If `get-tool-contract` cannot provide executable metadata, stop with blocker
 - If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence
 - Use standalone `dataforge-status`, `dataforge-context`, `dataforge-initialize`, and `dataforge-update` only in explicit inspection or remediation branches, not as automatic retries for the standard create flow
 - If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it

@@ -1,7 +1,7 @@
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime page-sync flow that this repo consumes from `clio`. `page-update` remains fallback-only in the local workflow.
+Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -39,11 +39,11 @@ When inserting a new generic element, ask the user for:
 1. **Parent container name** (`parentName`) — where to place the element. The user must provide the exact container name from the target page.
 2. **Action** — what the element should do when clicked/activated (e.g., "open AppFeature_ListPage", "create a new Contact record").
 
-Use `page-get` to inspect the current page structure and identify available containers if the user is unsure.
+Use `get-page` to inspect the current page structure and identify available containers if the user is unsure.
 
 ### Deep Container Discovery
 
-`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `page-get`.
+`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `get-page`.
 
 **Step 1 — Build a container map from `bundle.viewConfig`:**
 
@@ -66,7 +66,7 @@ def map_containers(node, parent='(root)', depth=0):
         if isinstance(v, (list, dict)):
             map_containers(v, child_parent, depth + (1 if name and is_container else 0))
 
-r = call_mcp_tool('page-get', {'schema-name': '<PageName>', 'environment-name': '<env>'})
+r = call_mcp_tool('get-page', {'schema-name': '<PageName>', 'environment-name': '<env>'})
 map_containers(r['data']['bundle']['viewConfig'])
 ```
 
@@ -78,7 +78,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
-3. Follow the clio guidance and use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+3. Follow the clio guidance and use `get-component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
 **Step 3 — Choosing the right container for new elements:**
 
@@ -93,7 +93,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 When the task is "entity columns were added and the FormPage must surface them", do **not** ask the user for `parentName`. Use this deterministic workflow instead:
 
-1. Call `page-get` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
+1. Call `get-page` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
 2. **Identify the primary field container** — the container that already holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`, `crt.DateTimePicker`). This is typically `SideAreaProfileContainer` for standard templates, but may differ for custom or non-standard pages.
 3. Append missing field controls to **that discovered container**.
 4. Keep `propertyName: "items"`.
@@ -106,21 +106,21 @@ When the task is "entity columns were added and the FormPage must surface them",
 
 When the task is "main entity columns were added and the ListPage must show the main columns", do **not** ask the user for the DataGrid node name or column order. Use this deterministic workflow instead:
 
-1. Call `page-get` and inspect the live `crt.DataGrid` configuration and its current `columns`.
+1. Call `get-page` and inspect the live `crt.DataGrid` configuration and its current `columns`.
 2. Resolve the target column set from the explicit plan first. If the plan is partial or missing, use the canonical default policy from `context/ui-reference.md`.
 3. Preserve existing grid columns and their order.
 4. Append only the missing resolved columns.
 5. Keep the live `items` binding, `primaryColumnName`, and collection path intact unless the plan explicitly changes them.
 6. Exclude inherited audit/system fields and long/rich/blob fields from default auto-selection unless they are explicitly requested or required.
-7. After `page-sync`, re-read or verify the page and confirm the required fields and resolved selected columns are present in the live DataGrid.
+7. After `sync-pages`, re-read or verify the page and confirm the required fields and resolved selected columns are present in the live DataGrid.
 
 ---
 
 ## Runtime FormPage Field Recipes
 
-Use these recipes when syncing entity fields into a live FormPage through the canonical runtime page-sync flow.
+Use these recipes when syncing entity fields into a live FormPage through the canonical runtime sync-pages flow.
 
-If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `component-info` for that exact type before changing container-specific properties or children.
+If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `get-component-info` for that exact type before changing container-specific properties or children.
 
 | Field shape | Control type | Binding property | Default properties | Notes |
 |-------------|--------------|------------------|--------------------|-------|
@@ -142,8 +142,8 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 The `label` value depends on whether a custom "Title on page" is set:
 
 - **No custom title** — `label` = `$Resources.Strings.` + the attribute name from `control` (strip the leading `$`). Example: `control: "$PDS_UsrCode_ab12cd3"` → `label: "$Resources.Strings.PDS_UsrCode_ab12cd3"`.
-  **Critical for programmatic `page-sync`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `page-sync`, you MUST also pass the resource values explicitly via the `resources` param as a flat JSON map string: `{"PDS_UsrCode_ab12cd3": "Code"}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
-- **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `page-sync` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": "My Title"}`.
+  **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `sync-pages`, you MUST also pass the resource values explicitly via the `resources` param as a flat JSON map string: `{"PDS_UsrCode_ab12cd3": "Code"}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
+- **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `sync-pages` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": "My Title"}`.
 
 ### Generic Runtime Field Insert Example
 
@@ -390,7 +390,7 @@ See `context/handlers-reference.md` for the full request type reference.
 
 ## Editing Safety Contract
 
-When editing page bodies for the runtime page-sync flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
+When editing page bodies for the runtime sync-pages flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
 
 ### Correct: FormPage field insertion via parsed JSON
 
@@ -446,7 +446,7 @@ FormPage typically uses the object variant; ListPage typically uses the array va
 
 ## ResourceString Localization for Custom Elements
 
-When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `page-sync` or the fallback `page-update` path.
+When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `sync-pages` or the fallback `update-page` path.
 
 ### How it works
 
@@ -484,7 +484,7 @@ Usr-prefixed keys without explicit values in `resources` are auto-derived from k
 }
 ```
 
-Save through the clio-advertised canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
+Save through the clio-advertised canonical `sync-pages` batch path and keep `update-page` only as a fallback save mechanism.
 
 ---
 

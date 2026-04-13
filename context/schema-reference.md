@@ -2,7 +2,7 @@
 
 This file is a structural reference for repository workflows.
 
-Use `tool-contract-get` and `docs://mcp/guides/app-modeling` for all executable entity or schema semantics, including:
+Use `get-tool-contract` and `docs://mcp/guides/app-modeling` for all executable entity or schema semantics, including:
 - parent selection
 - localized title or description rules
 - lookup display-field behavior
@@ -104,6 +104,6 @@ For page editing mechanics, use `context/ui-reference.md`, `context/viewconfig-r
 ## Usage Rule
 
 Before planning or mutating schemas:
-1. Discover the live contract with `tool-contract-get`.
+1. Discover the live contract with `get-tool-contract`.
 2. Read `docs://mcp/guides/app-modeling`.
 3. Use this file only for structural orientation.

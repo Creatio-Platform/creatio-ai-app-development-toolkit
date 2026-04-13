@@ -127,18 +127,18 @@ Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
 py -3 .\scripts\mcp_client.py --check-clio-version
-py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
+py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
 ### Environment Name Guardrail
 
 **CRITICAL:** Never use a URL (e.g., `http://localhost:5001`) as `environmentName`.
-The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
+The `environmentName` must be a registered clio environment name from `clio list-environments`.
 Always register through `clio reg-web-app` if the environment does not exist.
 
 ### Ambiguous Match Guardrail
 
-If `clio show-web-app-list` returns multiple registered environments whose normalized URL matches the current request URL:
+If `clio list-environments` returns multiple registered environments whose normalized URL matches the current request URL:
 
 1. Treat the environment choice as ambiguous.
 2. Ask the developer to choose the exact `environmentName`.
@@ -152,13 +152,13 @@ If `output/<AppName>/.creatio-env.json` already exists:
 1. Read it only to detect staleness.
 2. Compare its `url` with the current request URL.
 3. If the URLs differ, do not reuse its `environment` value and do not trust any runtime artifacts under `output/<AppName>/`.
-4. Resolve the environment again from `clio show-web-app-list` using the current request URL and overwrite `.creatio-env.json`.
+4. Resolve the environment again from `clio list-environments` using the current request URL and overwrite `.creatio-env.json`.
 5. Reuse is allowed only when the existing `.creatio-env.json` points to the exact same URL as the current request.
 
 ### 2. List existing environments
 
 ```bash
-clio show-web-app-list
+clio list-environments
 ```
 
 Display the list to the developer. Check if an environment for the current request URL already exists.
@@ -229,7 +229,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 | Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
-| Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
+| Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 | Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
 
