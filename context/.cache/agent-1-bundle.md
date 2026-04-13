@@ -73,13 +73,13 @@ py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --time
 ### Environment Name Guardrail
 
 **CRITICAL:** Never use a URL (e.g., `http://localhost:5001`) as `environmentName`.
-The `environmentName` must be a registered clio environment name from `clio show-web-app-list`.
+The `environmentName` must be a registered clio environment name from `clio list-environments`.
 Always register through `clio reg-web-app` if the environment does not exist.
 
 ### 2. List existing environments
 
 ```bash
-clio show-web-app-list
+clio list-environments
 ```
 
 Display the list to the developer. Check if an environment for the target URL already exists.
@@ -151,7 +151,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
-| Registration fails | Check if the environment name is already taken (`clio show-web-app-list`). Try a different name or update the existing one. |
+| Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 
 ## Completion Criteria

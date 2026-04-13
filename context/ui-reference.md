@@ -84,7 +84,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
 
-When editing raw page bodies through the canonical runtime sync-pages flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `get-page` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
+When editing raw page bodies through the canonical runtime sync-pages flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `get-page` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `get-component-info`.
 
 ---
 
@@ -643,7 +643,7 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. Th
 | `get-page` | Read a page schema's metadata and raw JS body |
 | `sync-pages` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
 | `update-page` | Fallback single-page dry-run or legacy save path |
-| `component-info` | Inspect curated Freedom UI component properties and example payloads |
+| `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
 
@@ -652,7 +652,7 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 1. call `list-pages` with `search-pattern: "MyApp"`
 2. call `get-page` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `component-info` and `component-type: "..."`
+4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `get-component-info` and `component-type: "..."`
 5. call `sync-pages` with the edited page body and verify the saved page; keep `update-page` only as an explicit fallback
 ```
 

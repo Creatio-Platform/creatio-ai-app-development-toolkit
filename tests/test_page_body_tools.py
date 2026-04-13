@@ -209,8 +209,8 @@ class McpClientValidationTests(unittest.TestCase):
                 },
                 "aliases": [],
             },
-            "component-info": {
-                "name": "component-info",
+            "get-component-info": {
+                "name": "get-component-info",
                 "input-schema": {
                     "required": [],
                     "properties": [
@@ -271,12 +271,12 @@ class McpClientValidationTests(unittest.TestCase):
 
     def test_component_info_accepts_empty_args(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("component-info", {}, self.contract_index)
+        errors = _validate_params("get-component-info", {}, self.contract_index)
         self.assertEqual(errors, [])
 
     def test_component_info_rejects_camel_case_param_name(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("component-info", {"componentType": "crt.TabContainer"}, self.contract_index)
+        errors = _validate_params("get-component-info", {"componentType": "crt.TabContainer"}, self.contract_index)
         self.assertTrue(any("component-type" in e for e in errors))
 
     def test_passes_valid_application_create(self):

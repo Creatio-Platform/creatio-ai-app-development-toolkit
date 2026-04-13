@@ -162,7 +162,7 @@ Read the skill doc: `skills/page-schema-editing/SKILL.md`.
 - Preserve all marker pairs, existing handlers, and live SDK alias style.
 - Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field or column binding.
 - For datasource-bound lookup fields, add only the main bound attribute unless the live page already materializes extra lookup-list bindings.
-- Use `component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
+- Use `get-component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
 
 ## Evidence Rules
 
@@ -355,7 +355,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
 
-When editing raw page bodies through the canonical runtime sync-pages flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `get-page` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
+When editing raw page bodies through the canonical runtime sync-pages flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `get-page` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `get-component-info`.
 
 ---
 
@@ -916,7 +916,7 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
 | `get-page` | Read a page schema's metadata and raw JS body |
 | `sync-pages` | Canonical write path for edited page bodies, batch validation, and server-side verification |
 | `update-page` | Fallback single-page dry-run or legacy save path |
-| `component-info` | Inspect curated Freedom UI component properties and example payloads |
+| `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
 
@@ -925,7 +925,7 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 1. call `list-pages` with `search-pattern: "MyApp"`
 2. call `get-page` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. If the page contains unfamiliar `crt.*` components, inspect them with `component-info` and `component-type: "..."`
+4. If the page contains unfamiliar `crt.*` components, inspect them with `get-component-info` and `component-type: "..."`
 5. call `sync-pages` with the edited page body and verify the saved page; use `update-page` only as an explicit fallback
 ```
 
@@ -1019,7 +1019,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
-3. Use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+3. Use `get-component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
 **Step 3 — Choosing the right container for new elements:**
 
@@ -1061,7 +1061,7 @@ When the task is "main entity columns were added and the ListPage must show the 
 
 Use these recipes when syncing entity fields into a live FormPage through the canonical runtime sync-pages flow.
 
-If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `component-info` for that exact type before changing container-specific properties or children.
+If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `get-component-info` for that exact type before changing container-specific properties or children.
 
 | Field shape | Control type | Binding property | Default properties | Notes |
 |-------------|--------------|------------------|--------------------|-------|

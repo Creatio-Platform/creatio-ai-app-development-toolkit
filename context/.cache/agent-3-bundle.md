@@ -413,7 +413,7 @@ contracts = call_mcp_tool("get-tool-contract", {})
 apps = call_mcp_tool("list-apps", {"environment-name": "local"})
 ```
 
-Use `component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+Use `get-component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
 ---
 
@@ -454,7 +454,7 @@ clio last-compilation-log -e myenv
 clio new-pkg UsrMyPackage
 
 # List installed packages
-clio get-pkg-list -e myenv
+clio list-packages -e myenv
 
 # Pull package from environment
 clio pull-pkg MyPackage -e myenv

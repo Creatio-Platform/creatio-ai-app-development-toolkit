@@ -1,7 +1,7 @@
 ---
 name: page-schema-editing
 description: Edit Freedom UI page schemas by modifying the full JS body directly and persisting changes through the clio-advertised runtime sync-pages flow.
-compatibility: Requires clio MCP with `list-pages`, `get-page`, `sync-pages`, and `component-info` available. `update-page` is fallback-only.
+compatibility: Requires clio MCP with `list-pages`, `get-page`, `sync-pages`, and `get-component-info` available. `update-page` is fallback-only.
 metadata:
   version: "3.0"
   category: creatio-schema-generation
@@ -45,7 +45,7 @@ Read before executing:
 - Use `raw.body` from `get-page` as the editable source of truth.
 - Treat the `page` block from `get-page` as metadata only.
 - For detail/grid requests, treat the current object model as the source of truth for the backing schema. Do not infer a new schema name from a business caption when runtime context already exposes an existing technical code.
-- If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `component-info` as part of the clio-guided page workflow before editing nested configuration.
+- If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `get-component-info` as part of the clio-guided page workflow before editing nested configuration.
 - If the edited body introduces new localizable captions, persist them through the live page write contract resolved at runtime.
 - Keep repository docs for workflow and page-editing policy only. Do not copy MCP parameter tables into plans or prompts.
 

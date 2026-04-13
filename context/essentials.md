@@ -207,7 +207,7 @@ clio last-compilation-log -e myenv
 
 ```bash
 clio new-pkg UsrMyPackage
-clio get-pkg-list -e myenv
+clio list-packages -e myenv
 clio pull-pkg MyPackage -e myenv
 clio delete-pkg-remote MyPackage -e myenv
 clio validation-pkg ./MyPackage

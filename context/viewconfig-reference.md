@@ -78,7 +78,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
-3. Follow the clio guidance and use `component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+3. Follow the clio guidance and use `get-component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
 **Step 3 — Choosing the right container for new elements:**
 
@@ -120,7 +120,7 @@ When the task is "main entity columns were added and the ListPage must show the 
 
 Use these recipes when syncing entity fields into a live FormPage through the canonical runtime sync-pages flow.
 
-If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `component-info` for that exact type before changing container-specific properties or children.
+If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `get-component-info` for that exact type before changing container-specific properties or children.
 
 | Field shape | Control type | Binding property | Default properties | Notes |
 |-------------|--------------|------------------|--------------------|-------|
