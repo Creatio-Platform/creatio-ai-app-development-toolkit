@@ -12,13 +12,13 @@ metadata:
 Use this skill when the workflow must register sections, bind entities to navigation, or seed lookup rows.
 
 This skill is not an MCP API reference.
-Resolve exact tool names, parameters, aliases, defaults, and response shapes through `tool-contract-get`.
+Resolve exact tool names, parameters, aliases, defaults, and response shapes through `get-tool-contract`.
 
 ## Primary Flow
 
 Prefer plan-driven or composite flows first:
 
-1. use batched lookup seeding inside `schema-sync` for normal lookup seeding
+1. use batched lookup seeding inside `sync-schemas` for normal lookup seeding
 2. use explicit binding tools only when the approved workflow explicitly needs a distinct binding artifact or post-sync binding step, based on the current `clio` contract
 
 Typical fallback tool families:
@@ -57,7 +57,7 @@ Typical fallback tool families:
 ## Typical Workflow
 
 1. Inspect deployed schema metadata only when needed for stable IDs or column discovery.
-2. Prefer batched lookup seeding through `schema-sync` when the same workflow already creates or updates the lookup.
+2. Prefer batched lookup seeding through `sync-schemas` when the same workflow already creates or updates the lookup.
 3. Use explicit binding creation only when the workflow needs `SysModule`, `SysModuleEntity`, or a separate binding artifact.
 4. Upsert targeted rows only after the target binding has been established by the current workflow.
 5. Verify the result from execution evidence instead of assuming success from planned rows.

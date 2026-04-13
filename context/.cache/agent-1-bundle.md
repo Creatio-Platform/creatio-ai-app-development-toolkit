@@ -67,7 +67,7 @@ dotnet /full/path/to/clio.dll ver
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
-py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
+py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
 ### Environment Name Guardrail
@@ -116,7 +116,7 @@ Creatio instances can be .NET Core or .NET Framework. Detect this automatically:
    ```
 4. Save the detected `isNetCore` value (`true` or `false`) for the env file.
 
-**Critical:** Getting `isNetCore` wrong causes page-get/page-update MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
+**Critical:** Getting `isNetCore` wrong causes get-page/update-page MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
 
 ### 5. Verify the connection
 
@@ -176,7 +176,7 @@ clio set-syssetting MySetting "Value" -e myenv
 ## Local MCP Workflow
 
 ```text
-MCP application-create or application-get-info -> initialize canonical context -> optional schema-sync or fallback entity tools -> application-get-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
+MCP create-app or get-app-info -> initialize canonical context -> optional sync-schemas or fallback entity tools -> get-app-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
 ```
 
 Local rule:

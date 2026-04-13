@@ -17,7 +17,7 @@ Use `clio` MCP discovery plus MCP prompts/resources for:
 - canonical main-entity rules
 - lookup display-field rules
 - default semantics
-- current `schema-sync` and `page-sync` behavior
+- current `sync-schemas` and `sync-pages` behavior
 
 For app-modeling guidance, use `docs://mcp/guides/app-modeling`.
 
@@ -29,7 +29,7 @@ Use clio stdio transport instead of ad-hoc shell pipes or HTTP wrappers.
 ```python
 from scripts.mcp_client import call_mcp_tool
 
-result = call_mcp_tool('application-get-list', {'environment-name': 'local'})
+result = call_mcp_tool('list-apps', {'environment-name': 'local'})
 if not result['success']:
     raise RuntimeError(result['raw'])
 ```
@@ -45,17 +45,17 @@ Local transport rules:
 
 ```powershell
 $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
-& $env:PYTHON_CMD .\scripts\mcp_client.py application-get-list --args-file .\args.json --timeout 30
+& $env:PYTHON_CMD .\scripts\mcp_client.py list-apps --args-file .\args.json --timeout 30
 ```
 
 ## Canonical Runtime Result
 
-The primary application context used by this repo starts from the flat MCP response returned by `application-create` or `application-get-info`.
+The primary application context used by this repo starts from the flat MCP response returned by `create-app` or `get-app-info`.
 
-Use `tool-contract-get` plus `clio` prompts/resources for the current executable response shape and field names.
+Use `get-tool-contract` plus `clio` prompts/resources for the current executable response shape and field names.
 This repo only normalizes the current response envelope into local helper state and evidence files.
 Do not treat legacy `app/packages` examples as the MCP response contract.
-For the standard new-app branch, treat `application-create` as already DataForge-assisted. Standalone `dataforge-*` tools are for explicit inspection or remediation flows only.
+For the standard new-app branch, treat `create-app` as already DataForge-assisted. Standalone `dataforge-*` tools are for explicit inspection or remediation flows only.
 For planning, this policy is narrower: standalone `dataforge-*` tools are not a mandatory preflight, but read-only discovery becomes required when the model is ambiguous or strong existing-schema candidates exist. That discovery must end in explicit `Model Decisions` recorded in the plan.
 
 ## Normalize Into `mcp-application-result.json`
@@ -79,7 +79,7 @@ Normalization is strict: persisted result documents must already match the canon
 ## Local Refresh Pattern
 
 This repository keeps a local refresh and persistence loop around the current `clio`-owned MCP flow:
-1. Initialize the runtime result through the current app create or app discovery step resolved from `tool-contract-get`
+1. Initialize the runtime result through the current app create or app discovery step resolved from `get-tool-contract`
 2. Normalize and persist the result file
 3. Run approved helper orchestration
 4. Re-read and normalize the runtime result again when the chosen `clio` workflow requires refresh
@@ -91,11 +91,11 @@ Use these helpers after MCP calls:
 - `scripts/mcp_context_adapter.py normalize` to normalize the runtime result
 - `scripts/mcp_result_evidence.py report` to generate `mcp-application-report.md`
 - `scripts/mcp_schema_sync.py plan` and `apply` for repo-local schema sync orchestration
-- `scripts/mcp_page_sync.py build-plan` and `apply` for repo-local page plan materialization and evidence persistence around `page-sync`
+- `scripts/mcp_page_sync.py build-plan` and `apply` for repo-local page plan materialization and evidence persistence around `sync-pages`
 
 Local helper rules:
 - follow the current `clio` MCP guidance for preferred entity/page write paths and read-back verification
-- preserve top-level `dataforge` diagnostics from `application-create` and treat degraded Data Forge coverage as advisory unless the run explicitly entered a remediation branch
+- preserve top-level `dataforge` diagnostics from `create-app` and treat degraded Data Forge coverage as advisory unless the run explicitly entered a remediation branch
 - when planning-time discovery surfaces candidates, convert them into explicit `reuse` / `extend` / `create` decisions before execution; do not let execution infer those decisions from raw Data Forge output
 - keep helper responsibilities local to transport, normalization, evidence, and result persistence
 
@@ -106,8 +106,8 @@ from scripts.mcp_client import call_mcp_tool
 import json
 from pathlib import Path
 
-contracts = call_mcp_tool('tool-contract-get', {
-    'tool-names': ['application-get-info'],
+contracts = call_mcp_tool('get-tool-contract', {
+    'tool-names': ['get-app-info'],
 })
 if not contracts['success']:
     raise RuntimeError(contracts['raw'])
@@ -116,7 +116,7 @@ runtime_args = {
     'environment-name': 'local',
 }
 
-result = call_mcp_tool('application-get-info', runtime_args)
+result = call_mcp_tool('get-app-info', runtime_args)
 if not result['success']:
     raise RuntimeError(result['raw'])
 

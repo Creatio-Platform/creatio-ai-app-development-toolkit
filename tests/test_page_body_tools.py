@@ -130,8 +130,8 @@ class PageBodyToolsTests(unittest.TestCase):
 class McpClientValidationTests(unittest.TestCase):
     def setUp(self):
         self.contract_index = {
-            "application-create": {
-                "name": "application-create",
+            "create-app": {
+                "name": "create-app",
                 "input-schema": {
                     "required": ["environment-name", "name", "code", "template-code", "icon-background"],
                     "properties": [
@@ -146,7 +146,7 @@ class McpClientValidationTests(unittest.TestCase):
                             "name": "forbid-fields",
                             "code": "invalid-workflow-shape",
                             "fields": ["title-localizations", "description-localizations"],
-                            "context": "application-create stays scalar-only; localized captions belong to follow-up schema tools.",
+                            "context": "create-app stays scalar-only; localized captions belong to follow-up schema tools.",
                         }
                     ],
                     "any-of": [],
@@ -168,8 +168,8 @@ class McpClientValidationTests(unittest.TestCase):
                     },
                 ],
             },
-            "page-get": {
-                "name": "page-get",
+            "get-page": {
+                "name": "get-page",
                 "input-schema": {
                     "required": ["schema-name"],
                     "properties": [
@@ -196,8 +196,8 @@ class McpClientValidationTests(unittest.TestCase):
                     },
                 ],
             },
-            "application-delete": {
-                "name": "application-delete",
+            "delete-app": {
+                "name": "delete-app",
                 "input-schema": {
                     "required": ["app-name"],
                     "properties": [
@@ -234,7 +234,7 @@ class McpClientValidationTests(unittest.TestCase):
 
     def test_rejects_wrong_param_names_for_application_create(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("application-create", {
+        errors = _validate_params("create-app", {
             "environment-name": "local",
             "app-code": "UsrTest",
             "app-name": "Test",
@@ -248,13 +248,13 @@ class McpClientValidationTests(unittest.TestCase):
 
     def test_validates_page_get_requires_kebab_case(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("page-get", {"environmentName": "local", "schemaName": "X"}, self.contract_index)
+        errors = _validate_params("get-page", {"environmentName": "local", "schemaName": "X"}, self.contract_index)
         self.assertTrue(any("environment-name" in e for e in errors))
         self.assertTrue(any("schema-name" in e for e in errors))
 
     def test_application_delete_accepts_explicit_connection_without_environment_name(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("application-delete", {
+        errors = _validate_params("delete-app", {
             "app-name": "UsrTest",
             "uri": "http://localhost:5001",
             "login": "Supervisor",
@@ -264,7 +264,7 @@ class McpClientValidationTests(unittest.TestCase):
 
     def test_application_delete_requires_environment_or_explicit_connection(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("application-delete", {
+        errors = _validate_params("delete-app", {
             "app-name": "UsrTest",
         }, self.contract_index)
         self.assertTrue(any("connection parameters" in e for e in errors))
@@ -281,7 +281,7 @@ class McpClientValidationTests(unittest.TestCase):
 
     def test_passes_valid_application_create(self):
         from scripts.mcp_client import _validate_params
-        errors = _validate_params("application-create", {
+        errors = _validate_params("create-app", {
             "environment-name": "local",
             "code": "UsrTest",
             "name": "Test",

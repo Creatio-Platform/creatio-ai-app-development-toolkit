@@ -45,13 +45,13 @@ During app-generation execution, write only inside `output/<AppName>/`.
 ## Contract Authority
 
 - `clio MCP` is the only authoritative source for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints.
-- Resolve executable contract metadata through `tool-contract-get`.
+- Resolve executable contract metadata through `get-tool-contract`.
 - Repository runbooks define workflow policy, evidence requirements, and page-editing rules only.
 
 ## MCP Transport And Tooling
 
 - Prefer `scripts/mcp_client.py` for clio stdio transport; it handles MCP initialization internally.
-- `scripts/mcp_client.py` validates requests against `tool-contract-get` and normalizes nested tool failures.
+- `scripts/mcp_client.py` validates requests against `get-tool-contract` and normalizes nested tool failures.
 - Prefer `scripts/mcp_full_sync.py` when the plan batches schema and page synchronization in one process.
 - Respect `CLIO_CMD` when a custom clio binary is configured; otherwise use global `clio`.
 - Do not use raw curl for clio stdio transport.
@@ -68,14 +68,14 @@ During app-generation execution, write only inside `output/<AppName>/`.
 
 1. Verify MCP reachability through `scripts/mcp_client.py`.
 2. Call `tools/list` and verify required tools exist.
-3. Resolve executable contract metadata through `tool-contract-get`.
+3. Resolve executable contract metadata through `get-tool-contract`.
 4. Resolve the execution branch:
-   - new app: `application-create`
-   - existing app: `application-get-list -> application-get-info`
+   - new app: `create-app`
+   - existing app: `list-apps -> get-app-info`
 5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute ordered schema sync through `schema-sync`.
-7. Refresh once through `application-get-info` and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, run `page-list -> page-get -> page-sync -> page-get`.
+6. Execute ordered schema sync through `sync-schemas`.
+7. Refresh once through `get-app-info` and overwrite `mcp-application-result.json`.
+8. If the plan requires page sync, run `list-pages -> get-page -> sync-pages -> get-page`.
 9. Persist page evidence and verification results.
 10. Validate the final normalized result.
 11. Build `mcp-application-report.md` from persisted evidence only.
@@ -84,22 +84,22 @@ During app-generation execution, write only inside `output/<AppName>/`.
 Fallback execution paths:
 
 - Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the approved plan explicitly requires an individual-tool fallback.
-- Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows. It is not the canonical page write path.
+- Use `update-page` only as an explicit fallback for single-page dry-run or legacy save workflows. It is not the canonical page write path.
 
 ## Branching Rules
 
-- If `application-create` reports that the app or configuration schema already exists, stop the create flow and switch to the documented existing-app discovery flow.
+- If `create-app` reports that the app or configuration schema already exists, stop the create flow and switch to the documented existing-app discovery flow.
 - Surface which branch actually ran in the persisted evidence and final report.
-- Keep `application-create` scalar-only. Do not model localized captions there; apply them later through schema tools after the app shell exists.
+- Keep `create-app` scalar-only. Do not model localized captions there; apply them later through schema tools after the app shell exists.
 
 ## Schema Sync Rules
 
-- Treat the template-created section entity from `application-create` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
-- Use `update-entity-schema` semantics inside `schema-sync` to extend that main entity.
+- Treat the template-created section entity from `create-app` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
+- Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity.
 - Use `create-entity` only for additional business objects with distinct meaning.
 - Create lookup entities before entities that reference them.
-- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
-- After `schema-sync` completes successfully, call `application-get-info` once and overwrite `mcp-application-result.json`.
+- Prefer inline lookup `seed-rows` in `sync-schemas`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- After `sync-schemas` completes successfully, call `get-app-info` once and overwrite `mcp-application-result.json`.
 - Treat schema mutations as successful only when refreshed metadata is available immediately and the schema is not left in `Database update required`.
 - If post-mutation refresh fails, stop with a blocker.
 
@@ -118,19 +118,19 @@ If `plan.md` carries the embedded page sync contract, read it from the block bet
 
 Canonical page sequence:
 
-1. `page-list`
-2. `page-get`
+1. `list-pages`
+2. `get-page`
 3. edit body
-4. `page-sync`
-5. `page-get`
+4. `sync-pages`
+5. `get-page`
 
 Fallback page sequence:
 
-1. `page-list`
-2. `page-get`
-3. `page-update` with `dry-run: true`
-4. `page-update`
-5. `page-get`
+1. `list-pages`
+2. `get-page`
+3. `update-page` with `dry-run: true`
+4. `update-page`
+5. `get-page`
 
 FormPage policy:
 
@@ -155,14 +155,14 @@ Sorting policy:
 
 Read the skill doc: `skills/page-schema-editing/SKILL.md`.
 
-- Always use `page-get` before editing. Never construct a page body from scratch.
+- Always use `get-page` before editing. Never construct a page body from scratch.
 - Always use marker-based section extraction and structured JSON modification.
 - Use `scripts/page_body_edit.py` and `scripts/page_body_tools.py` for standard field and column edits.
 - Direct string manipulation of page bodies is prohibited.
 - Preserve all marker pairs, existing handlers, and live SDK alias style.
 - Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field or column binding.
 - For datasource-bound lookup fields, add only the main bound attribute unless the live page already materializes extra lookup-list bindings.
-- Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
+- Use `component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
 
 ## Evidence Rules
 
@@ -198,31 +198,31 @@ Persist page/report evidence with explicit status buckets:
 
 - Read the environment from `.creatio-env.json`.
 - Call `tools/list` through `scripts/mcp_client.py`.
-- Resolve the executable contract through `tool-contract-get`.
-- Stop with blocker if required tools are missing or `tool-contract-get` fails.
+- Resolve the executable contract through `get-tool-contract`.
+- Stop with blocker if required tools are missing or `get-tool-contract` fails.
 
 ### 3. Initialize application context
 
-- New app flow: call `application-create`.
-- Existing app flow: call `application-get-list`, then `application-get-info` with the resolved app identifier.
+- New app flow: call `create-app`.
+- Existing app flow: call `list-apps`, then `get-app-info` with the resolved app identifier.
 - Persist the normalized result to `mcp-application-result.json`.
 - Stop with blocker if the normalized result does not contain persisted success evidence.
 
 ### 4. Execute schema sync
 
-- Execute the approved schema batch through `schema-sync`.
+- Execute the approved schema batch through `sync-schemas`.
 - If the plan contains an approved individual-tool fallback, execute it in the documented dependency order.
-- Refresh once through `application-get-info`.
+- Refresh once through `get-app-info`.
 - Overwrite `mcp-application-result.json`.
 - Stop with blocker on the first failed schema step or refresh failure.
 
 ### 5. Execute page sync
 
-- Discover the generated pages with `page-list`.
-- Read the current bodies with `page-get`.
+- Discover the generated pages with `list-pages`.
+- Read the current bodies with `get-page`.
 - Edit bodies through `scripts/page_body_edit.py` and the approved page sync plan.
-- Apply the canonical write path through `page-sync`.
-- Read pages back through `page-get` for verification.
+- Apply the canonical write path through `sync-pages`.
+- Read pages back through `get-page` for verification.
 - Persist page verification with explicit status buckets.
 - Stop with blocker if required fields or columns are still missing after verification.
 
@@ -245,7 +245,7 @@ Include:
 
 - branch that actually ran
 - resolved defaults that were applied
-- schema sync steps executed and refreshed through `application-get-info`
+- schema sync steps executed and refreshed through `get-app-info`
 - page sync steps executed and verification results for `FormPage` and `ListPage`
 - explicit distinction between `implemented`, `machineChecked`, and `manualCheckPending`
 - blockers or manual verification gaps that remain
@@ -256,7 +256,7 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 
 - Retry transient MCP transport failures up to 3 times with a short delay.
 - If required tools are missing in `tools/list`, stop with blocker.
-- If `tool-contract-get` cannot provide executable metadata, stop with blocker.
+- If `get-tool-contract` cannot provide executable metadata, stop with blocker.
 - If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence.
 - If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing it.
 
@@ -355,7 +355,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
 
-When editing raw page bodies through the canonical runtime page-sync flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `page-get` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
+When editing raw page bodies through the canonical runtime sync-pages flow, prefer minimal explicit config plus correct bindings, and only add preprocessor-generated properties manually when the current page body already stores them explicitly or when the scenario requires deterministic raw-body output. If `get-page` returns unfamiliar `crt.*` types in `bundle.viewConfig`, inspect them first with `component-info`.
 
 ---
 
@@ -398,7 +398,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `page-sync` or the fallback `page-update` path to register the localizableString.
+- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `sync-pages` or the fallback `update-page` path to register the localizableString.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -418,7 +418,7 @@ Use this policy when a new app is generated or the main section entity gains app
 
 ### ListPage DataGrid Sorting for Runtime Page Sync
 
-This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through the runtime page-sync flow.
+This section is the canonical source of truth for default row sorting on a Freedom UI ListPage edited through the runtime sync-pages flow.
 
 The runtime contract is centered on the DataGrid collection attribute, not on the visual `sorting` property stored inside the DataGrid node:
 
@@ -448,7 +448,7 @@ The frontend preprocessor can auto-inject DataGrid view properties from this met
 - `viewConfig.sorting`
 - `viewConfig.sortingChange`
 
-When editing raw page bodies through the runtime page-sync flow, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
+When editing raw page bodies through the runtime sync-pages flow, treat the `viewModelConfig` sorting contract as canonical. Do not rely on manually inserting `sorting` or `sortingChange` into the DataGrid unless the live page body already persists that explicit behavior and you need to preserve it.
 
 #### Minimal Safe Example
 
@@ -603,7 +603,7 @@ Binds page attributes to data source:
 
 ### Runtime Binding Pattern for Preserving Live Form Page Lookup Lists
 
-When editing an existing FormPage through the runtime page-sync flow, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
+When editing an existing FormPage through the runtime sync-pages flow, mirror the binding keys already present in the live page body instead of blindly reusing template placeholders. This is a preservation pattern for pages that already materialize lookup-list bindings in raw schema. It is not a recipe for creating new lookup-list attributes for datasource-bound `crt.ComboBox` controls.
 
 This pattern sorts lookup records inside a ComboBox list. It is not the ListPage DataGrid row-sorting contract. For ListPage sorting, use `ListPage DataGrid Sorting for Runtime Page Sync` above.
 
@@ -699,7 +699,7 @@ Use this policy when a new app is generated or the main section entity gains app
 
 ### Runtime Field Insertion via Page Sync
 
-Use the current page body from `page-get` as the source of truth. For live FormPage field sync, identify the **primary field container** by inspecting the existing `viewConfigDiff` — it is the container that holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`). Append missing resolved field controls to that discovered container.
+Use the current page body from `get-page` as the source of truth. For live FormPage field sync, identify the **primary field container** by inspecting the existing `viewConfigDiff` — it is the container that holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`). Append missing resolved field controls to that discovered container.
 
 ```json
 {
@@ -823,7 +823,7 @@ The frontend also supports these field controls:
 
 ### Template Note
 
-`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime page-sync edits. When editing a live page, trust `page-get` and preserve the current container and binding pattern.
+`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime sync-pages edits. When editing a live page, trust `get-page` and preserve the current container and binding pattern.
 
 ---
 
@@ -912,24 +912,24 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
 
 | Tool | Description |
 |------|-------------|
-| `page-list` | Discover page schemas by package or name pattern |
-| `page-get` | Read a page schema's metadata and raw JS body |
-| `page-sync` | Canonical write path for edited page bodies, batch validation, and server-side verification |
-| `page-update` | Fallback single-page dry-run or legacy save path |
+| `list-pages` | Discover page schemas by package or name pattern |
+| `get-page` | Read a page schema's metadata and raw JS body |
+| `sync-pages` | Canonical write path for edited page bodies, batch validation, and server-side verification |
+| `update-page` | Fallback single-page dry-run or legacy save path |
 | `component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
 
 See `skills/page-schema-editing/SKILL.md` for the full workflow:
 ```
-1. call `page-list` with `search-pattern: "MyApp"`
-2. call `page-get` with `schema-name: "UsrMyApp_FormPage"`
+1. call `list-pages` with `search-pattern: "MyApp"`
+2. call `get-page` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
 4. If the page contains unfamiliar `crt.*` components, inspect them with `component-info` and `component-type: "..."`
-5. call `page-sync` with the edited page body and verify the saved page; use `page-update` only as an explicit fallback
+5. call `sync-pages` with the edited page body and verify the saved page; use `update-page` only as an explicit fallback
 ```
 
-**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `page-get`.
+**Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `get-page`.
 
 ---
 
@@ -942,7 +942,7 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime page-sync flow. `page-update` is fallback-only.
+Used by coding agents with the runtime sync-pages flow. `update-page` is fallback-only.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -980,11 +980,11 @@ When inserting a new generic element, ask the user for:
 1. **Parent container name** (`parentName`) — where to place the element. The user must provide the exact container name from the target page.
 2. **Action** — what the element should do when clicked/activated (e.g., "open AppFeature_ListPage", "create a new Contact record").
 
-Use `page-get` to inspect the current page structure and identify available containers if the user is unsure.
+Use `get-page` to inspect the current page structure and identify available containers if the user is unsure.
 
 ### Deep Container Discovery
 
-`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `page-get`.
+`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `get-page`.
 
 **Step 1 — Build a container map from `bundle.viewConfig`:**
 
@@ -1007,7 +1007,7 @@ def map_containers(node, parent='(root)', depth=0):
         if isinstance(v, (list, dict)):
             map_containers(v, child_parent, depth + (1 if name and is_container else 0))
 
-r = call_mcp_tool('page-get', {'schema-name': '<PageName>', 'environment-name': '<env>'})
+r = call_mcp_tool('get-page', {'schema-name': '<PageName>', 'environment-name': '<env>'})
 map_containers(r['data']['bundle']['viewConfig'])
 ```
 
@@ -1034,7 +1034,7 @@ Some page templates expose a minimal bundle tree. In that case, use these fallba
 
 When the task is "entity columns were added and the FormPage must surface them", do **not** ask the user for `parentName`. Use this deterministic workflow instead:
 
-1. Call `page-get` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
+1. Call `get-page` and inspect the current `SCHEMA_VIEW_CONFIG_DIFF`.
 2. **Identify the primary field container** — the container that already holds the most field-type insert operations (e.g., `crt.Input`, `crt.ComboBox`, `crt.DateTimePicker`). This is typically `SideAreaProfileContainer` for standard templates, but may differ for custom or non-standard pages.
 3. Append missing field controls to **that discovered container**.
 4. Keep `propertyName: "items"`.
@@ -1047,19 +1047,19 @@ When the task is "entity columns were added and the FormPage must surface them",
 
 When the task is "main entity columns were added and the ListPage must show the main columns", do **not** ask the user for the DataGrid node name or column order. Use this deterministic workflow instead:
 
-1. Call `page-get` and inspect the live `crt.DataGrid` configuration and its current `columns`.
+1. Call `get-page` and inspect the live `crt.DataGrid` configuration and its current `columns`.
 2. Resolve the target column set from the explicit plan first. If the plan is partial or missing, use the canonical default policy from `context/ui-reference.md`.
 3. Preserve existing grid columns and their order.
 4. Append only the missing resolved columns.
 5. Keep the live `items` binding, `primaryColumnName`, and collection path intact unless the plan explicitly changes them.
 6. Exclude inherited audit/system fields and long/rich/blob fields from default auto-selection unless they are explicitly requested or required.
-7. After `page-sync`, re-read or verify the page and confirm the required fields and resolved selected columns are present in the live DataGrid.
+7. After `sync-pages`, re-read or verify the page and confirm the required fields and resolved selected columns are present in the live DataGrid.
 
 ---
 
 ## Runtime FormPage Field Recipes
 
-Use these recipes when syncing entity fields into a live FormPage through the canonical runtime page-sync flow.
+Use these recipes when syncing entity fields into a live FormPage through the canonical runtime sync-pages flow.
 
 If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the target area, call `component-info` for that exact type before changing container-specific properties or children.
 
@@ -1323,7 +1323,7 @@ See `context/handlers-reference.md` for the full request type reference.
 
 ## Editing Safety Contract
 
-When editing page bodies for the runtime page-sync flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
+When editing page bodies for the runtime sync-pages flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
 
 ### Correct: FormPage field insertion via parsed JSON
 
@@ -1379,7 +1379,7 @@ FormPage typically uses the object variant; ListPage typically uses the array va
 
 ## ResourceString Localization for Custom Elements
 
-When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `page-sync` or the fallback `page-update` path.
+When adding new UI elements (tabs, buttons, actions) with localized captions, use `#ResourceString(key)#` macros and the `resources` parameter in `sync-pages` or the fallback `update-page` path.
 
 ### How it works
 
@@ -1417,7 +1417,7 @@ Usr-prefixed keys without explicit values in `resources` are auto-derived from k
 }
 ```
 
-Save through the canonical `page-sync` batch path and keep `page-update` only as a fallback save mechanism.
+Save through the canonical `sync-pages` batch path and keep `update-page` only as a fallback save mechanism.
 
 ---
 
@@ -1839,11 +1839,11 @@ These are advanced capabilities. Only surface them in generated page logic when 
 
 Use these MCP tools to read and edit handler logic in deployed pages:
 
-1. `page-list` — discover pages
-2. `page-get` — read metadata and raw JS body
+1. `list-pages` — discover pages
+2. `get-page` — read metadata and raw JS body
 3. edit `handlers`, `SCHEMA_DEPS`, `SCHEMA_ARGS`, and related sections in one pass
-4. `page-sync(..., validate: true, verify: true)`
-5. fallback to `page-update(..., dry-run: True)` plus `page-update(...)` only when `page-sync` is unavailable
+4. `sync-pages(..., validate: true, verify: true)`
+5. fallback to `update-page(..., dry-run: True)` plus `update-page(...)` only when `sync-pages` is unavailable
 
 When editing handler logic through MCP:
 
@@ -1886,7 +1886,7 @@ Important guardrails:
 
 ## How to use this reference
 
-### For page-body handler work in the runtime page-sync flow
+### For page-body handler work in the runtime sync-pages flow
 
 Most practical imports come from the services layer:
 
@@ -2145,7 +2145,7 @@ Prefer these exports when generating custom frontend modules or controls:
 ### What not to do by default
 
 - Do not treat root-barrel access to `internal/*` as permission to generate internal imports.
-- Do not replace page-body marker editing with frontend-source decorators when the task is specifically runtime page-body editing through `page-get` and `page-sync`.
+- Do not replace page-body marker editing with frontend-source decorators when the task is specifically runtime page-body editing through `get-page` and `sync-pages`.
 - Do not assume every exported helper is appropriate for page-body handlers; many decorator and bootstrap helpers are meaningful only in frontend-source modules.
 
 <!-- FILE: context/schema-reference.md (L7-29, L64-111) -->
@@ -2241,7 +2241,7 @@ clio resolution (first match wins):
 
 Notes:
     - clio MCP uses stdio transport (NOT HTTP/SSE)
-    - Tool names use dashes: application-create, create-lookup, page-update (NOT dots)
+    - Tool names use dashes: create-app, create-lookup, update-page (NOT dots)
     - All parameters are wrapped in an "args" object
     - clio does not support notifications/initialized — it is omitted
     - NEVER pass -e flag to mcp-server — it is not supported
@@ -2558,7 +2558,7 @@ def _is_tool_payload_success(data, top_level_is_error) -> bool:
 
 def _normalize_tool_contract_index(data):
     if not isinstance(data, dict):
-        raise RuntimeError("tool-contract-get returned a non-object payload")
+        raise RuntimeError("get-tool-contract returned a non-object payload")
     if data.get("success") is not True:
         error = data.get("error")
         if isinstance(error, dict):
@@ -2568,7 +2568,7 @@ def _normalize_tool_contract_index(data):
         raise RuntimeError(message)
     tools = data.get("tools")
     if not isinstance(tools, list):
-        raise RuntimeError("tool-contract-get did not return a tools array")
+        raise RuntimeError("get-tool-contract did not return a tools array")
     index = {}
     for contract in tools:
         if isinstance(contract, dict):
@@ -2576,7 +2576,7 @@ def _normalize_tool_contract_index(data):
             if isinstance(name, str) and name:
                 index[name] = contract
     if not index:
-        raise RuntimeError("tool-contract-get returned no usable tool contracts")
+        raise RuntimeError("get-tool-contract returned no usable tool contracts")
     return index
 
 
@@ -2585,7 +2585,7 @@ def _get_tool_contract_index(timeout=120, force_refresh=False):
     if not force_refresh and _TOOL_CONTRACT_CACHE["key"] == cache_key and _TOOL_CONTRACT_CACHE["contracts"] is not None:
         return _TOOL_CONTRACT_CACHE["contracts"]
     client = _get_shared_client()
-    result = client.call_tool("tool-contract-get", {}, timeout=timeout)
+    result = client.call_tool("get-tool-contract", {}, timeout=timeout)
     index = _normalize_tool_contract_index(result["data"])
     _TOOL_CONTRACT_CACHE["key"] = cache_key
     _TOOL_CONTRACT_CACHE["contracts"] = index
@@ -2680,7 +2680,7 @@ def _apply_validator(validator: dict, arguments: dict) -> list[str]:
         )
     if name == "update-operations-localizations":
         return _validate_update_operations(arguments.get(validator.get("field")), validator.get("field") or "operations")
-    if name == "schema-sync-operations-localizations":
+    if name == "sync-schemas-operations-localizations":
         errors = []
         operations = arguments.get(validator.get("field"))
         if not isinstance(operations, list):
@@ -2820,7 +2820,7 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     with the MCP server. Returns an error dict with hints if params are missing.
 
     Args:
-        tool_name: dash-separated tool name (e.g. 'application-create')
+        tool_name: dash-separated tool name (e.g. 'create-app')
         arguments: dict of tool arguments (will be wrapped in {"args": ...})
         timeout: seconds to wait for response (default 120)
 
@@ -2834,7 +2834,7 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     """
     if tool_name == "tools/list":
         return list_mcp_tools(timeout=timeout)
-    if tool_name == "tool-contract-get":
+    if tool_name == "get-tool-contract":
         client = _get_shared_client()
         try:
             return client.call_tool(tool_name, arguments, timeout)

@@ -1,6 +1,6 @@
 # 01 — Clio MCP Server: Quick Wins
 
-> Historical design note. This document explains optimization ideas, not the executable MCP contract. Resolve live tool names, params, response shapes, and errors through `tool-contract-get`.
+> Historical design note. This document explains optimization ideas, not the executable MCP contract. Resolve live tool names, params, response shapes, and errors through `get-tool-contract`.
 
 Нотатки про найшвидші зміни в clio MCP server, які можуть дати помітний виграш у latency без повного redesign.
 

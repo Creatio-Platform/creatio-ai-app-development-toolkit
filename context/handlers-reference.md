@@ -410,13 +410,13 @@ These are advanced capabilities. Only surface them in generated page logic when 
 
 ## MCP Page Editing Workflow
 
-Use these MCP tools to read and edit handler logic in deployed pages. Resolve tool semantics through `tool-contract-get` plus `docs://mcp/guides/existing-app-maintenance`, then apply this repo-local workflow:
+Use these MCP tools to read and edit handler logic in deployed pages. Resolve tool semantics through `get-tool-contract` plus `docs://mcp/guides/existing-app-maintenance`, then apply this repo-local workflow:
 
-1. `page-list` — discover pages
-2. `page-get` — read metadata and raw JS body
+1. `list-pages` — discover pages
+2. `get-page` — read metadata and raw JS body
 3. edit `handlers`, `SCHEMA_DEPS`, `SCHEMA_ARGS`, and related sections in one pass
-4. `page-sync(..., validate: true, verify: true)`
-5. fallback to `page-update(..., dry-run: True)` plus `page-update(...)` only when `page-sync` is unavailable
+4. `sync-pages(..., validate: true, verify: true)`
+5. fallback to `update-page(..., dry-run: True)` plus `update-page(...)` only when `sync-pages` is unavailable
 
 When editing handler logic through MCP:
 

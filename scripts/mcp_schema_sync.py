@@ -580,9 +580,9 @@ def resolve_app_selector(result_document):
 def resolve_tool_strategy(client, sync_plan):
     tools = client.list_tools()
     tool_names = {tool["name"] for tool in tools}
-    required = {"application-get-info"}
-    if "schema-sync" in tool_names:
-        return "schema-sync"
+    required = {"get-app-info"}
+    if "sync-schemas" in tool_names:
+        return "sync-schemas"
     required.update(action["toolName"] for action in sync_plan["actions"])
     missing = sorted(required - tool_names)
     if missing:
@@ -594,13 +594,13 @@ def build_refresh_failure(action, error):
     message = str(error)
     if "cannot be obtained from server metadata" in message:
         return WorkflowError(
-            f"application-get-info failed after {action['toolName']} for {action['target']}: "
+            f"get-app-info failed after {action['toolName']} for {action['target']}: "
             f"the schema is still missing from server metadata after a successful mutation. "
             f"This usually means the MCP entity tool did not fully materialize database/runtime metadata. "
             f"Original error: {message}"
         )
     return WorkflowError(
-        f"application-get-info failed after {action['toolName']} for {action['target']}: {message}"
+        f"get-app-info failed after {action['toolName']} for {action['target']}: {message}"
     )
 
 
@@ -643,26 +643,26 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
         return current_document
     tool_strategy = resolve_tool_strategy(client, sync_plan)
     app_selector = resolve_app_selector(current_document)
-    if tool_strategy == "schema-sync":
+    if tool_strategy == "sync-schemas":
         actions_by_package = {}
         for action in sync_plan["actions"]:
             actions_by_package.setdefault(action["packageName"], []).append(action)
         for package_name, package_actions in actions_by_package.items():
-            tool_response = call_tool_with_type_fallback(client, "schema-sync", {
+            tool_response = call_tool_with_type_fallback(client, "sync-schemas", {
                 "package-name": package_name,
                 "operations": [build_schema_sync_operation(action) for action in package_actions]
             })
             if tool_response.get("success") is not True:
-                error_message = _extract_error_text(tool_response) or "schema-sync failed"
+                error_message = _extract_error_text(tool_response) or "sync-schemas failed"
                 raise WorkflowError(error_message)
             current_document = append_operation(
                 current_document,
-                "schema-sync",
+                "sync-schemas",
                 package_name,
                 "success",
                 response=tool_response,
                 phase="schema",
-                refreshed_by="application-get-info"
+                refreshed_by="get-app-info"
             )
     else:
         for action in sync_plan["actions"]:
@@ -677,10 +677,10 @@ def apply_sync_plan(client, result_document, edited_context, result_path):
                 "success",
                 response=tool_response,
                 phase="schema",
-                refreshed_by="application-get-info"
+                refreshed_by="get-app-info"
             )
     try:
-        refreshed_context = client.call_tool_json("application-get-info", app_selector)
+        refreshed_context = client.call_tool_json("get-app-info", app_selector)
     except WorkflowError as error:
         last_action = sync_plan["actions"][-1]
         raise build_refresh_failure(last_action, error)

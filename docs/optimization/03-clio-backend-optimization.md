@@ -25,7 +25,7 @@
 
 ## Expected Effect
 
-- менше backend chatter під час `application-get-info`
+- менше backend chatter під час `get-app-info`
 - швидші multi-step entity flows
 - менше залежності від follow-up discovery лише для того, щоб підтвердити щойно виконану mutation
 

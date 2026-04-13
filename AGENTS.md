@@ -406,7 +406,7 @@ Fast-path guardrails:
 Authority model:
 
 - `clio MCP` is the only authoritative source for the executable MCP contract.
-- Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `tool-contract-get`.
+- Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `get-tool-contract`.
 - Repository docs must not define an independent MCP API contract.
 - Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
 - Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
@@ -426,7 +426,7 @@ Canonical repository references:
 
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
-Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `tool-contract-get` instead of duplicating payload rules in agent prompts.
+Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
 
 Project-local shared skills:
 

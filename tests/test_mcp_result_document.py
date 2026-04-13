@@ -56,7 +56,7 @@ class McpResultDocumentTests(unittest.TestCase):
     def test_validate_result_document_rejects_operation_without_target(self):
         document = ensure_result_document(build_runtime_result())
         document["operationLog"].append({
-            "tool": "page-update",
+            "tool": "update-page",
             "status": "success"
         })
         with self.assertRaises(ContextError):

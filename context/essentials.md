@@ -13,28 +13,28 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **MCP-Orchestrated Runtime**
 - This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
-- The raw application context returned by `application-create` or `application-get-info` is a flat runtime payload whose exact fields and selectors must be read from `tool-contract-get`
+- The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
 - `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
 - After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
 
 **MCP Application Creation (DB-first)**
-- Resolve current application creation, discovery, refresh, and main-entity semantics through `tool-contract-get` and the `clio` MCP guidance resources
-- `application-create` is the canonical new-app entrypoint and may return top-level `dataforge` diagnostics produced internally by `clio`
+- Resolve current application creation, discovery, refresh, and main-entity semantics through `get-tool-contract` and the `clio` MCP guidance resources
+- `create-app` is the canonical new-app entrypoint and may return top-level `dataforge` diagnostics produced internally by `clio`
 - Do not add a separate mandatory Data Forge preflight in repo-local orchestration for the standard new-app branch
 - Planning-time read-only discovery is still required when the model is ambiguous or strong existing-schema candidates exist; use that discovery to decide `reuse`, `extend`, or `create` before execution
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
 
 **MCP Section Management**
-- Use `application-section-get-list` to list all sections of an installed application
-- Use `application-section-delete` to remove a section from an installed application
-- Canonical section discovery flow: `application-get-list` → `application-get-info` → `application-section-get-list`
-- Canonical section delete flow: `application-get-list` → `application-get-info` → `application-section-get-list` → `application-section-delete`
-- `delete-entity-schema` on `application-section-delete` is destructive and irreversible; it requires explicit opt-in
-- Resolve full tool parameter contract through `tool-contract-get` and `docs://mcp/guides/existing-app-maintenance`
+- Use `list-app-sections` to list all sections of an installed application
+- Use `delete-app-section` to remove a section from an installed application
+- Canonical section discovery flow: `list-apps` → `get-app-info` → `list-app-sections`
+- Canonical section delete flow: `list-apps` → `get-app-info` → `list-app-sections` → `delete-app-section`
+- `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
+- Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
 
 **Entity Schema Sync (DB-first)**
-- Prefer `schema-sync` for grouped entity work
-- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`
+- Prefer `sync-schemas` for grouped entity work
+- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `sync-schemas`
 - Create lookup entities before entities or updates that reference them
 
 **Default Semantics**
@@ -147,8 +147,8 @@ For local MCP invocation helpers and result normalization, see `context/mcp-appl
 For executable MCP tool shape and app-modeling semantics, use discovered `clio` MCP tool schema and prompts/resources such as `docs://mcp/guides/app-modeling`.
 
 - `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
-- Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract
-- When a tool is not present in the default bootstrap contract set, resolve it through explicit `tool-contract-get {"tool-names":[...]}` lookup instead of assuming it is unavailable
+- Use `get-tool-contract` through `scripts/mcp_client.py` whenever you need the exact executable contract
+- When a tool is not present in the default bootstrap contract set, resolve it through explicit `get-tool-contract {"tool-names":[...]}` lookup instead of assuming it is unavailable
 - Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
 - Resolve human-readable MCP flow, fallback, verification, main-entity, localization, and page inspection guidance through `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 - Treat `editableContext` as a local helper projection, not as the primary MCP response contract.
@@ -162,8 +162,8 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 ```python
 from scripts.mcp_client import call_mcp_tool
 
-contracts = call_mcp_tool("tool-contract-get", {})
-apps = call_mcp_tool("application-get-list", {"environment-name": "local"})
+contracts = call_mcp_tool("get-tool-contract", {})
+apps = call_mcp_tool("list-apps", {"environment-name": "local"})
 ```
 
 Use discovered MCP tool schema plus `clio` prompts/resources for:
@@ -171,7 +171,7 @@ Use discovered MCP tool schema plus `clio` prompts/resources for:
 - canonical main-entity selection
 - lookup display-field semantics
 - default semantics and lookup-seed implications
-- current `schema-sync` and `page-sync` behavior
+- current `sync-schemas` and `sync-pages` behavior
 
 Use this repo’s wrapper docs and helper scripts for:
 - local transport invocation patterns

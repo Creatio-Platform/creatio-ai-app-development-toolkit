@@ -27,7 +27,7 @@ The business contract for this agent is the BA-style requirements draft approved
 - `output/<AppName>/technical-annex.md`
 - `output/<AppName>/plan.md`
 - `output/<AppName>/page-sync-plan.json` when page sync is required
-- `output/<AppName>/page-sync/*.body.js` when page bodies are materialized outside `plan.md`
+- `output/<AppName>/sync-pages/*.body.js` when page bodies are materialized outside `plan.md`
 
 ## Read First
 Preferred: read `context/.cache/agent-3-bundle.md` when available.
@@ -107,7 +107,7 @@ Resolve:
 
 Rules:
 
-- Resolve exact executable parameter names, aliases, defaults, and validation rules from `tool-contract-get`.
+- Resolve exact executable parameter names, aliases, defaults, and validation rules from `get-tool-contract`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
 - `useAIContentGeneration` must be `false`.
@@ -117,8 +117,8 @@ Rules:
 
 ### Main Entity And Lookup Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `application-create` as the canonical main entity.
-- `application-create` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
+- For a new app with one primary record type, treat the template-created section entity from `create-app` as the canonical main entity.
+- `create-app` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
 - Reuse `Name` when it already exists.
 - Never plan duplicate title-like columns when `Name` is already present.
@@ -129,15 +129,15 @@ Rules:
 
 ### Schema Sync Plan
 
-- Resolve whether `application-create` is sufficient for the app shell and which fields still require follow-up DB-first sync.
-- For existing-app work, include explicit discovery through `application-get-list` and `application-get-info`.
+- Resolve whether `create-app` is sufficient for the app shell and which fields still require follow-up DB-first sync.
+- For existing-app work, include explicit discovery through `list-apps` and `get-app-info`.
 - Create lookup entities before entities that reference them.
-- Prefer inline lookup `seed-rows` in `schema-sync`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Prefer inline lookup `seed-rows` in `sync-schemas`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
-- Canonical entity flow is `application-create -> schema-sync -> application-get-info`.
-- Refresh once through `application-get-info` after the schema-sync batch completes.
+- Canonical entity flow is `create-app -> sync-schemas -> get-app-info`.
+- Refresh once through `get-app-info` after the sync-schemas batch completes.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
 ### Default Rules
@@ -169,19 +169,19 @@ ListPage defaults:
 
 Required execution sequence for each page:
 
-1. `page-list`
-2. `page-get`
+1. `list-pages`
+2. `get-page`
 3. edit body
-4. `page-sync`
-5. `page-get` again for verification
+4. `sync-pages`
+5. `get-page` again for verification
 
 Fallback page sequence:
 
-1. `page-list`
-2. `page-get`
-3. `page-update` with `dry-run: true`
-4. `page-update`
-5. `page-get` again for verification
+1. `list-pages`
+2. `get-page`
+3. `update-page` with `dry-run: true`
+4. `update-page`
+5. `get-page` again for verification
 
 When page sync is required:
 
@@ -191,8 +191,8 @@ When page sync is required:
 
 ### Validation Rules
 
-- Prefer `schema-sync` for entity mutations and `page-sync` for page writes.
-- Resolve executable parameter names, aliases, and required fields from `tool-contract-get` instead of hard-coding them in the plan.
+- Prefer `sync-schemas` for entity mutations and `sync-pages` for page writes.
+- Resolve executable parameter names, aliases, and required fields from `get-tool-contract` instead of hard-coding them in the plan.
 - Keep `operations` / `update-operations` as native arrays.
 - For fallback `create-data-binding-db`, prefer omitting `binding-name` for default lookup seeding so the binding defaults to `<schema-name>`; include `binding-name` only when a distinct binding artifact is explicitly required. Always pass `rows` as a JSON string of `[{"values": {...}}]`.
 - Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
@@ -230,16 +230,16 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - Packages can depend on other packages (via `DependsOn` in descriptor.json)
 
 **MCP Application Creation (DB-first)**
-- Primary generation path is MCP tool `application-create`
-- Discovery path for existing apps is `application-get-list`
-- Canonical DB refresh path is `application-get-info`
+- Primary generation path is MCP tool `create-app`
+- Discovery path for existing apps is `list-apps`
+- Canonical DB refresh path is `get-app-info`
 - Tool creates application artifacts directly in Creatio DB (PostgreSQL)
-- For new Freedom UI apps, `application-create` also materializes the initial section entity whose schema name normally matches the app code
+- For new Freedom UI apps, `create-app` also materializes the initial section entity whose schema name normally matches the app code
 - Released schema tools (`create-lookup`, `create-entity-schema`, `update-entity-schema`) execute CREATE TABLE and ALTER TABLE directly
 - Schemas are immediately runtime-accessible — no compilation or deployment step required
 - Tool returns short compact context JSON (`success`, `package-u-id`, `package-name`, `entities`, `error`)
 - Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
-- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `application-create` or `application-get-info`
+- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `create-app` or `get-app-info`
 
 **Entity Schema Sync (DB-first)**
 - Secondary generation path is MCP `create-entity-schema`, `create-lookup`, `update-entity-schema`
@@ -259,7 +259,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 - `get-entity-schema-column-properties` returns detailed metadata for a single column (also requires `column-name`)
 - `create-data-binding-db` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately (requires `environment-name`, `package-name`, `schema-name`); accepts optional `rows` for initial seeding in one call
 - `upsert-data-binding-row-db` upserts a single row in an **already existing** data binding — the binding must have been created first via `create-data-binding-db`; calling it without a prior binding will fail with `binding-not-found` (requires `environment-name`, `package-name`, `schema-name`, `values`)
-- For initial lookup seeding prefer `schema-sync` with inline `seed-rows`; use `create-data-binding-db` with `rows` only as fallback; never use `upsert-data-binding-row-db` for initial seeding
+- For initial lookup seeding prefer `sync-schemas` with inline `seed-rows`; use `create-data-binding-db` with `rows` only as fallback; never use `upsert-data-binding-row-db` for initial seeding
 
 **Freedom UI (Angular-based)**
 - Modern UI framework with pages as AMD modules (JavaScript `define()`)
@@ -369,51 +369,51 @@ packages/<PackageName>/
 Executable MCP contract authority:
 
 - `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints.
-- Use `tool-contract-get` through `scripts/mcp_client.py` whenever you need the exact executable contract.
+- Use `get-tool-contract` through `scripts/mcp_client.py` whenever you need the exact executable contract.
 - Repository docs describe workflow policy and modeling rules only. They must not become a second MCP API specification.
 
 Canonical entity flow:
 
-1. `application-create`
-2. `schema-sync`
-3. `application-get-info`
+1. `create-app`
+2. `sync-schemas`
+3. `get-app-info`
 
 Canonical page flow:
 
-1. `page-list`
-2. `page-get`
+1. `list-pages`
+2. `get-page`
 3. edit body
-4. `page-sync`
-5. `page-get`
+4. `sync-pages`
+5. `get-page`
 
 Fallbacks:
 
-- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `schema-sync`.
-- Use `page-update` only as an explicit fallback for single-page dry-run or legacy save workflows.
+- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `sync-schemas`.
+- Use `update-page` only as an explicit fallback for single-page dry-run or legacy save workflows.
 
 Critical patterns:
 
-- Always call `application-get-info` once after `schema-sync` completes and verify the schema is immediately queryable.
+- Always call `get-app-info` once after `sync-schemas` completes and verify the schema is immediately queryable.
 - Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity unless requirements define an additional distinct business object.
-- `application-create` stays scalar-only. Localized captions belong to follow-up schema tools.
+- `create-app` stays scalar-only. Localized captions belong to follow-up schema tools.
 
 ### Working with MCP Tools
 
 Transport:
 
 - clio stdio via `scripts/mcp_client.py`
-- `scripts/mcp_client.py` resolves executable contract metadata from `tool-contract-get`
+- `scripts/mcp_client.py` resolves executable contract metadata from `get-tool-contract`
 
 Example:
 
 ```python
 from scripts.mcp_client import call_mcp_tool
 
-contracts = call_mcp_tool("tool-contract-get", {})
-apps = call_mcp_tool("application-get-list", {"environment-name": "local"})
+contracts = call_mcp_tool("get-tool-contract", {})
+apps = call_mcp_tool("list-apps", {"environment-name": "local"})
 ```
 
-Use `component-info` after `page-get` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+Use `component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
 
 ---
 
@@ -487,7 +487,7 @@ clio set-syssetting MySetting "Value" -e myenv
 ## MCP Workflow (DB-First)
 
 ```
-MCP application-create or application-get-info → initialize canonical context → [optional] schema-sync or create-lookup/create-entity-schema/update-entity-schema → application-get-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
+MCP create-app or get-app-info → initialize canonical context → [optional] sync-schemas or create-lookup/create-entity-schema/update-entity-schema → get-app-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
 ```
 
 **Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
@@ -558,10 +558,10 @@ Every entity **must extend** one of these parents. Parent UId goes to `metadata.
 ### Display Column Guardrails
 
 - BaseLookup entities must use inherited `Name` as the human-readable display field. Do not add `Name`, `Description`, or duplicate title-like columns as custom lookup columns.
-- The raw BaseEntity inherited column list above does not include template-generated columns. In this MCP flow, `application-create` or `application-get-info` can return section entities that already contain `Name`.
+- The raw BaseEntity inherited column list above does not include template-generated columns. In this MCP flow, `create-app` or `get-app-info` can return section entities that already contain `Name`.
 - Always inspect the current schema snapshot before adding a title field. If `Name` already exists, reuse `Name` in requirements, list pages, form headers, and entity updates. Do not add duplicate title fields such as `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
 
-A successful MCP `create-lookup` / `create-entity-schema` / `update-entity-schema` call must leave the schema fully materialized: no `Database update required` status in workspace explorer, immediate visibility through `application-get-info`, and usable DB structure for data bindings or inserts. If those conditions are not met, treat it as a core MCP materialization bug rather than a normal transient state.
+A successful MCP `create-lookup` / `create-entity-schema` / `update-entity-schema` call must leave the schema fully materialized: no `Database update required` status in workspace explorer, immediate visibility through `get-app-info`, and usable DB structure for data bindings or inserts. If those conditions are not met, treat it as a core MCP materialization bug rather than a normal transient state.
 
 ---
 

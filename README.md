@@ -17,7 +17,7 @@ Use these files as canonical:
 - `context/bindings-lookup.json`
 - `templates/**`
 
-Executable MCP contract is authoritative only in `clio MCP` through `tool-contract-get`.
+Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
 This repository is authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and business invariants.
 
 ## Developer UX
@@ -169,7 +169,7 @@ Hide obsolete field from the form page. Support mode on.
 ```
 
 ```text
-Analyze why the page-sync step did not update the list page. Support mode on.
+Analyze why the sync-pages step did not update the list page. Support mode on.
 ```
 
 ```text
@@ -207,7 +207,7 @@ Orchestrator flow:
 3. Requirements gathering produces a BA-style `requirements.md`, writes `request-spec.json`, persists approved `workflow-state.json`, and initializes draft docs under `output/<AppName>/docs/**`.
    The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`.
 4. Implementation plan generates `output/<AppName>/technical-annex.md` and `output/<AppName>/plan.md` when implementation is explicitly requested.
-5. Implementation runs synchronously, resolves executable contract metadata through `tool-contract-get`, initializes canonical context in `mcp-application-result.json`, and executes the current `clio`-owned entity and page flows referenced by `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
+5. Implementation runs synchronously, resolves executable contract metadata through `get-tool-contract`, initializes canonical context in `mcp-application-result.json`, and executes the current `clio`-owned entity and page flows referenced by `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 6. Existing-app branching remains explicit in the workflow, but the canonical discover/inspect/mutate path and fallback tool guidance are owned by `clio` rather than this repository.
 
 All generated artifacts are under `output/<AppName>/`.
@@ -240,19 +240,19 @@ For JSON-heavy MCP payloads, prefer `args.json` plus `--args-file` over inline s
 ### Bash
 
 ```bash
-python3 scripts/mcp_client.py application-get-list --args-file ./args.json --timeout 30
+python3 scripts/mcp_client.py list-apps --args-file ./args.json --timeout 30
 ```
 
 ### PowerShell
 
 ```powershell
 $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
-& $env:PYTHON_CMD .\scripts\mcp_client.py application-get-list --args-file .\args.json --timeout 30
+& $env:PYTHON_CMD .\scripts\mcp_client.py list-apps --args-file .\args.json --timeout 30
 ```
 
 `mcp-application-result.json` stores the normalized runtime context used by this repository, plus `editableContext`, `operationLog`, `pageEvidence`, and any persisted acceptance evidence. Reports must be derived from that runtime evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
 
-When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly. `scripts/mcp_page_sync.py` is a thin adapter: it reads the embedded plan, calls `page-sync`, and persists repo-local evidence. Resolve page-write and verification semantics through the current `clio` guidance resources; this repository no longer owns a custom page executor or fallback save flow.
+When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly. `scripts/mcp_page_sync.py` is a thin adapter: it reads the embedded plan, calls `sync-pages`, and persists repo-local evidence. Resolve page-write and verification semantics through the current `clio` guidance resources; this repository no longer owns a custom page executor or fallback save flow.
 
 ## Architecture
 

@@ -199,8 +199,8 @@ def normalize_page_sync_plan(plan_payload, result_document):
 def ensure_required_tools(client):
     tools = client.list_tools()
     tool_names = {tool["name"] for tool in tools}
-    if "page-sync" not in tool_names:
-        raise WorkflowError("Required MCP page tools are missing: page-sync")
+    if "sync-pages" not in tool_names:
+        raise WorkflowError("Required MCP page tools are missing: sync-pages")
 
 
 def append_operation_and_persist(current_document, result_path, tool_name, target, status, response=None):
@@ -272,12 +272,12 @@ def sync_pages(client, current_document, result_path, pages, environment_name=No
     }
     if environment_name:
         sync_args["environment-name"] = environment_name
-    sync_response = client.call_tool_json("page-sync", sync_args)
+    sync_response = client.call_tool_json("sync-pages", sync_args)
     operation_status = "success" if sync_response.get("success") is True else "failed"
-    current_document = append_operation_and_persist(current_document, result_path, "page-sync", "batch", operation_status, response=sync_response)
+    current_document = append_operation_and_persist(current_document, result_path, "sync-pages", "batch", operation_status, response=sync_response)
     page_results = sync_response.get("pages")
     if not isinstance(page_results, list):
-        raise WorkflowError("page-sync response must contain pages array")
+        raise WorkflowError("sync-pages response must contain pages array")
     result_by_name = {}
     for page_result in page_results:
         page_name = get_page_result_name(page_result)
@@ -291,7 +291,7 @@ def sync_pages(client, current_document, result_path, pages, environment_name=No
             page_result = {
                 "schemaName": schema_name,
                 "success": False,
-                "error": f"page-sync response is missing result for {schema_name}"
+                "error": f"sync-pages response is missing result for {schema_name}"
             }
         verification = build_page_verification(page_result)
         evidence_response = build_page_evidence_response(schema_name, page_result)

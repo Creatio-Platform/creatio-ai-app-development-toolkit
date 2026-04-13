@@ -9,7 +9,7 @@ Agent 4 executes MCP tools through the clio stdio client flow documented in:
 - `context/essentials.md` — repository policy and canonical execution flow
 - `scripts/mcp_client.py` — transport and local normalization
 
-Executable tool names, parameters, aliases, defaults, response shapes, and error shapes are authoritative only in `clio MCP` through `tool-contract-get`.
+Executable tool names, parameters, aliases, defaults, response shapes, and error shapes are authoritative only in `clio MCP` through `get-tool-contract`.
 These skill documents keep workflow and page-editing policy only; they must not define an independent MCP API contract.
 
 ## Skills as Reference Documentation

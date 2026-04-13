@@ -18,7 +18,7 @@ clio resolution (first match wins):
 
 Notes:
     - clio MCP uses stdio transport (NOT HTTP/SSE)
-    - Tool names use dashes: application-create, create-lookup, page-update, application-section-delete (NOT dots)
+    - Tool names use dashes: create-app, create-lookup, update-page, delete-app-section (NOT dots)
     - All parameters are wrapped in an "args" object
     - clio does not support notifications/initialized — it is omitted
     - NEVER pass -e flag to mcp-server — it is not supported
@@ -355,7 +355,7 @@ def _is_tool_payload_success(data, top_level_is_error) -> bool:
 
 def _normalize_tool_contract_index(data):
     if not isinstance(data, dict):
-        raise RuntimeError("tool-contract-get returned a non-object payload")
+        raise RuntimeError("get-tool-contract returned a non-object payload")
     if data.get("success") is not True:
         error = data.get("error")
         if isinstance(error, dict):
@@ -365,7 +365,7 @@ def _normalize_tool_contract_index(data):
         raise RuntimeError(message)
     tools = data.get("tools")
     if not isinstance(tools, list):
-        raise RuntimeError("tool-contract-get did not return a tools array")
+        raise RuntimeError("get-tool-contract did not return a tools array")
     index = {}
     for contract in tools:
         if isinstance(contract, dict):
@@ -373,7 +373,7 @@ def _normalize_tool_contract_index(data):
             if isinstance(name, str) and name:
                 index[name] = contract
     if not index:
-        raise RuntimeError("tool-contract-get returned no usable tool contracts")
+        raise RuntimeError("get-tool-contract returned no usable tool contracts")
     return index
 
 
@@ -382,7 +382,7 @@ def _get_tool_contract_index(timeout=120, force_refresh=False):
     if not force_refresh and _TOOL_CONTRACT_CACHE["key"] == cache_key and _TOOL_CONTRACT_CACHE["contracts"] is not None:
         return _TOOL_CONTRACT_CACHE["contracts"]
     client = _get_shared_client()
-    result = client.call_tool("tool-contract-get", {}, timeout=timeout)
+    result = client.call_tool("get-tool-contract", {}, timeout=timeout)
     index = _normalize_tool_contract_index(result["data"])
     _TOOL_CONTRACT_CACHE["key"] = cache_key
     _TOOL_CONTRACT_CACHE["contracts"] = index
@@ -403,10 +403,10 @@ def _merge_tool_contracts_into_cache(contracts: dict) -> dict:
 
 def _load_explicit_tool_contract(tool_name: str, timeout=120):
     client = _get_shared_client()
-    result = client.call_tool("tool-contract-get", {"tool-names": [tool_name]}, timeout=timeout)
+    result = client.call_tool("get-tool-contract", {"tool-names": [tool_name]}, timeout=timeout)
     data = result.get("data")
     if not isinstance(data, dict):
-        raise RuntimeError("tool-contract-get returned a non-object payload")
+        raise RuntimeError("get-tool-contract returned a non-object payload")
     if data.get("success") is not True:
         error = data.get("error")
         if isinstance(error, dict) and error.get("code") == "tool-not-found":
@@ -641,7 +641,7 @@ def _normalize_and_validate_params(tool_name: str, arguments: dict, contract_ind
     for validator in input_schema.get("validators") or []:
         if isinstance(validator, dict):
             errors.extend(_apply_validator(validator, normalized_arguments))
-    if tool_name == "schema-sync":
+    if tool_name == "sync-schemas":
         errors.extend(_validate_schema_sync_operations(normalized_arguments))
     return normalized_arguments, errors
 
@@ -688,7 +688,7 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     with the MCP server. Returns an error dict with hints if params are missing.
 
     Args:
-        tool_name: dash-separated tool name (e.g. 'application-create')
+        tool_name: dash-separated tool name (e.g. 'create-app')
         arguments: dict of tool arguments (will be wrapped in {"args": ...})
         timeout: seconds to wait for response (default 120)
 
@@ -702,7 +702,7 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
     """
     if tool_name == "tools/list":
         return list_mcp_tools(timeout=timeout)
-    if tool_name == "tool-contract-get":
+    if tool_name == "get-tool-contract":
         client = _get_shared_client()
         try:
             return client.call_tool(tool_name, arguments, timeout)

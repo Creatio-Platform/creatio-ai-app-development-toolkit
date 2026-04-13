@@ -127,7 +127,7 @@ Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
 py -3 .\scripts\mcp_client.py --check-clio-version
-py -3 .\scripts\mcp_client.py application-get-list --args-file .\application-get-list.args.json --timeout 30
+py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
 ### Environment Name Guardrail

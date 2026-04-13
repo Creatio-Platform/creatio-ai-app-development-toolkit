@@ -584,13 +584,13 @@ class FakeMcpClient:
 
     def list_tools(self):
         return [
-            {"name": "application-get-info"},
-            {"name": "schema-sync"}
+            {"name": "get-app-info"},
+            {"name": "sync-schemas"}
         ]
 
     def call_tool_json(self, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
-        if tool_name == "schema-sync":
+        if tool_name == "sync-schemas":
             package = self.context_document["packages"][arguments["package-name"]]
             results = []
             for operation in arguments["operations"]:
@@ -633,7 +633,7 @@ class FakeMcpClient:
                         entity["columns"][update["column-name"]] = payload
                     results.append({"operation": "update-entity", "schema-name": schema_name, "success": True})
             return {"success": True, "results": results}
-        if tool_name == "application-get-info":
+        if tool_name == "get-app-info":
             return self.context_document
         raise AssertionError(tool_name)
 
@@ -641,9 +641,9 @@ class FakeMcpClient:
 class FakeMcpClientRefreshFailure(FakeMcpClient):
     def call_tool_json(self, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
-        if tool_name == "schema-sync":
+        if tool_name == "sync-schemas":
             return {"success": True, "results": [{"operation": "update-entity", "schema-name": "UsrMyEntity", "success": True}]}
-        if tool_name == "application-get-info":
+        if tool_name == "get-app-info":
             raise WorkflowError(
                 'Instance of workspace item with type "Terrasoft.Configuration.UsrMyEntityTypeSchema" cannot be obtained from server metadata'
             )
@@ -657,7 +657,7 @@ class FakeMcpClientWithoutSchemaSync:
 
     def list_tools(self):
         return [
-            {"name": "application-get-info"},
+            {"name": "get-app-info"},
             {"name": "create-lookup"},
             {"name": "create-entity-schema"},
             {"name": "update-entity-schema"}
@@ -665,7 +665,7 @@ class FakeMcpClientWithoutSchemaSync:
 
     def call_tool_json(self, tool_name, arguments):
         self.calls.append((tool_name, dict(arguments)))
-        package = self.context_document["packages"][arguments["package-name"]] if tool_name != "application-get-info" else None
+        package = self.context_document["packages"][arguments["package-name"]] if tool_name != "get-app-info" else None
         if tool_name == "create-lookup":
             columns = {
                 "Name": {
@@ -739,7 +739,7 @@ class FakeMcpClientWithoutSchemaSync:
                     "columns": entity["columns"]
                 }
             }
-        if tool_name == "application-get-info":
+        if tool_name == "get-app-info":
             return self.context_document
         raise AssertionError(tool_name)
 
@@ -1053,10 +1053,10 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(my_entity["columns"][1]["referenceSchemaName"], "UsrMyEntityType")
         self.assertEqual(len(persisted["schemaSync"]), 1)
         self.assertEqual(len(persisted["operationLog"]), 1)
-        self.assertEqual(persisted["schemaSync"][0]["tool"], "schema-sync")
+        self.assertEqual(persisted["schemaSync"][0]["tool"], "sync-schemas")
         self.assertEqual(
             [call[0] for call in fake_client.calls],
-            ["schema-sync", "application-get-info"]
+            ["sync-schemas", "get-app-info"]
         )
 
     def test_apply_sync_plan_falls_back_to_individual_tools_when_schema_sync_missing(self):
@@ -1070,7 +1070,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertEqual(entity_names, ["UsrMyEntity", "UsrMyEntityType"])
         self.assertEqual(
             [call[0] for call in fake_client.calls],
-            ["create-lookup", "update-entity-schema", "application-get-info"]
+            ["create-lookup", "update-entity-schema", "get-app-info"]
         )
 
     def test_apply_sync_plan_raises_actionable_error_when_metadata_refresh_fails(self):
@@ -1080,7 +1080,7 @@ class McpSchemaSyncTests(unittest.TestCase):
             result_path = workdir / "mcp-application-result.json"
             with self.assertRaisesRegex(
                 WorkflowError,
-                "application-get-info failed after update-entity-schema for UsrMyEntity"
+                "get-app-info failed after update-entity-schema for UsrMyEntity"
             ):
                 apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
 
@@ -1090,7 +1090,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         with temp_workdir() as workdir:
             result_path = workdir / "mcp-application-result.json"
             apply_sync_plan(fake_client, result_document, build_edited_context(), result_path)
-        refresh_calls = [call for call in fake_client.calls if call[0] == "application-get-info"]
+        refresh_calls = [call for call in fake_client.calls if call[0] == "get-app-info"]
         self.assertTrue(refresh_calls)
         self.assertEqual(refresh_calls[0][1], {"code": "UsrMyApp"})
 
@@ -1123,7 +1123,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         fake_client = FakeUnsupportedTypeFallbackClient("SecureText")
         response = call_tool_with_type_fallback(
             fake_client,
-            "schema-sync",
+            "sync-schemas",
             {
                 "package-name": "UsrPkg",
                 "operations": [
@@ -1144,7 +1144,7 @@ class McpSchemaSyncTests(unittest.TestCase):
         self.assertTrue(response["success"])
         self.assertEqual(len(fake_client.calls), 2)
         retry_call = fake_client.calls[1]
-        self.assertEqual(retry_call[0], "schema-sync")
+        self.assertEqual(retry_call[0], "sync-schemas")
         retry_operation = retry_call[1]["operations"][0]["update-operations"][0]
         self.assertEqual(retry_operation["type"], "ShortText")
         self.assertNotIn("masked", retry_operation)
@@ -1172,11 +1172,11 @@ class McpSchemaSyncTests(unittest.TestCase):
     def test_clio_stdio_client_lists_tools_via_mcp_tools_list(self):
         with patch("scripts.mcp_client.ensure_supported_clio_version"), patch(
             "scripts.mcp_client.list_mcp_tools",
-            return_value={"success": True, "data": {"tools": [{"name": "schema-sync"}]}, "raw": "{}"}
+            return_value={"success": True, "data": {"tools": [{"name": "sync-schemas"}]}, "raw": "{}"}
         ):
             client = ClioStdioClient("local")
             tools = client.list_tools()
-        self.assertEqual(tools, [{"name": "schema-sync"}])
+        self.assertEqual(tools, [{"name": "sync-schemas"}])
 
 
 class LoadMcpClientTests(unittest.TestCase):
@@ -1221,7 +1221,7 @@ class LoadMcpClientTests(unittest.TestCase):
             mock_module.call_mcp_tool.return_value = {"success": True, "data": {"ok": True}, "raw": "{}"}
             client = ClioStdioClient("test-env")
             client._initialized = True
-            client.call_tool_json("schema-sync", original_args)
+            client.call_tool_json("sync-schemas", original_args)
         self.assertEqual(original_args, args_copy)
 
 

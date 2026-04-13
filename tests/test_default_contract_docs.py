@@ -144,7 +144,7 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_authority_docs_point_to_clio_mcp_contract(self):
         for path in AUTHORITY_DOCS:
             content = read_text(path)
-            self.assertIn("tool-contract-get", content, str(path))
+            self.assertIn("get-tool-contract", content, str(path))
         agents_doc = read_text(ROOT / "AGENTS.md")
         self.assertRegex(agents_doc, r"only authoritative source|single source of truth")
         self.assertRegex(agents_doc, r"must not define an independent MCP API contract|must not define an independent MCP contract")
@@ -309,8 +309,8 @@ class DefaultContractDocsTests(unittest.TestCase):
 
     def test_authority_docs_do_not_present_exact_canonical_flows_as_repo_owned_mcp_truth(self):
         disallowed_flow_patterns = [
-            r"application-create\s*->\s*schema-sync\s*->\s*application-get-info",
-            r"page-list\s*->\s*page-get\s*->\s*page-sync\s*->\s*page-get",
+            r"create-app\s*->\s*sync-schemas\s*->\s*get-app-info",
+            r"list-pages\s*->\s*get-page\s*->\s*sync-pages\s*->\s*get-page",
         ]
         for path in CANONICAL_FLOW_DOCS:
             content = read_text(path)
@@ -335,7 +335,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         ui_reference = read_text(ROOT / "context/ui-reference.md").lower()
         self.assertIn("page sync", ui_reference)
         viewconfig_reference = read_text(ROOT / "context/viewconfig-reference.md").lower()
-        self.assertIn("page-sync", viewconfig_reference)
+        self.assertIn("sync-pages", viewconfig_reference)
 
     def test_schema_docs_delegate_entity_and_schema_semantics_to_clio(self):
         disallowed_markers = [
@@ -349,7 +349,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         ]
         for path in WORKFLOW_ONLY_SCHEMA_DOCS:
             content = read_text(path)
-            self.assertIn("tool-contract-get", content, str(path))
+            self.assertIn("get-tool-contract", content, str(path))
             self.assertIn("docs://mcp/guides/app-modeling", content, str(path))
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
