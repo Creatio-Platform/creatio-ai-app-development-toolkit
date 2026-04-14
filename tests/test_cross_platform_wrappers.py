@@ -231,6 +231,37 @@ class UnixWrapperSmokeTests(unittest.TestCase):
             self.assertEqual(approval.returncode, 0, approval.stderr)
             self.assertIn("GATE_OK TodoList", approval.stdout)
 
+    def test_implementation_plan_wrapper_runs_in_bash(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir = Path(workflow_root) / "output" / "TodoList"
+            write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            write_file(output_dir / "plan.md", build_valid_plan_doc())
+            planning = run_bash_script(
+                "workflow_gate.sh",
+                "plan-approve",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(planning.returncode, 0, planning.stderr)
+            approval = run_bash_script(
+                "workflow_gate.sh",
+                "requirements-approve",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(approval.returncode, 0, approval.stderr)
+            result = run_bash_script("workflow_gate.sh", "implementation-check", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_GATE_OK TodoList", result.stdout)
+
 
 class PowerShellWrapperSmokeTests(unittest.TestCase):
     def test_planning_wrappers_work_in_powershell(self):

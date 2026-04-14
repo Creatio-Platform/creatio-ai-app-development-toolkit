@@ -159,6 +159,30 @@ def build_valid_plan_doc():
 """
 
 
+def setup_approved_todolist_workflow(workflow_root):
+    output_dir = Path(workflow_root) / "output" / "TodoList"
+    write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+    write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+    planning_result = run_workflow_cli(
+        "write-planning-state",
+        "TodoList",
+        "tester",
+        "planning-first",
+        "deferred",
+        "Todo app for daily work",
+        "Yes, proceed",
+        workflow_root=workflow_root,
+    )
+    approval_result = run_workflow_cli(
+        "write-approval-state",
+        "TodoList",
+        "tester",
+        "Approved, proceed",
+        workflow_root=workflow_root,
+    )
+    return output_dir, planning_result, approval_result
+
+
 def build_invalid_plan_doc_without_reuse_evidence():
     return """# Implementation Plan
 
@@ -824,7 +848,17 @@ class WorkflowCliTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Ordered Schema Sync references UsrTaskComment without a matching Model Decisions record", result.stderr)
 
-    def test_check_implementation_plan_gate_requires_plan_and_approval_gate(self):
+    def test_check_implementation_plan_gate_accepts_approved_state_with_plan(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir, planning_result, approval_result = setup_approved_todolist_workflow(workflow_root)
+            self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
+            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
+            write_file(output_dir / "plan.md", build_valid_plan_doc())
+            result = run_workflow_cli("check-implementation-plan-gate", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_GATE_OK TodoList", result.stdout)
+
+    def test_check_implementation_plan_gate_rejects_missing_approval_state(self):
         with temp_workflow_root() as workflow_root:
             output_dir = Path(workflow_root) / "output" / "TodoList"
             write_file(output_dir / "requirements.md", build_valid_requirements_doc())
@@ -840,18 +874,19 @@ class WorkflowCliTests(unittest.TestCase):
                 workflow_root=workflow_root,
             )
             self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
-            approval_result = run_workflow_cli(
-                "write-approval-state",
-                "TodoList",
-                "tester",
-                "Approved, proceed",
-                workflow_root=workflow_root,
-            )
-            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
             write_file(output_dir / "plan.md", build_valid_plan_doc())
             result = run_workflow_cli("check-implementation-plan-gate", "TodoList", workflow_root=workflow_root)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("IMPLEMENTATION_PLAN_GATE_OK TodoList", result.stdout)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("workflow-state.json not found", result.stderr)
+
+    def test_check_implementation_plan_gate_rejects_missing_plan_doc(self):
+        with temp_workflow_root() as workflow_root:
+            _, planning_result, approval_result = setup_approved_todolist_workflow(workflow_root)
+            self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
+            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
+            result = run_workflow_cli("check-implementation-plan-gate", "TodoList", workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Implementation plan gate failed: plan.md not found", result.stderr)
 
     def test_validate_implementation_plan_doc_accepts_reuse_action(self):
         with temp_workflow_root() as workflow_root:
