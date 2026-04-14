@@ -53,7 +53,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Gate P | `AGENTS.md` | UX contract, routing, Gate P, global invariants |
 | Agent 1 | `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
 | Agent 2 | `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
-| Agent 3 | `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md` | canonical entity and page plan policy |
+| Agent 3 | `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | canonical entity and page plan policy, reuse evidence ladder |
 | Agent 4 | `agents/04-implementation.md`, `context/mcp-application-tools-reference.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
 
 ## Topic Map
@@ -64,6 +64,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | BA checklist | `context/business-checklist.md` | required business plan shape and completeness |
 | Platform basics and canonical flows | `context/essentials.md` | high-level workflow only |
 | Entity parents, DVTs, schema formats | `context/schema-reference.md` | structural reference |
+| Reuse-evidence ladder and candidate comparison | `context/model-discovery-evidence.md` | strong-candidate discovery and rejection standards |
 | Freedom UI structure and runtime page patterns | `context/ui-reference.md` | form/list runtime policy |
 | `viewConfigDiff` recipes | `context/viewconfig-reference.md` | container discovery and field recipes |
 | Handler patterns and request types | `context/handlers-reference.md` | page-body handler policy |

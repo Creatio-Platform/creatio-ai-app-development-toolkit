@@ -301,6 +301,10 @@ Execution order is conditional:
 
 Agent 3 is the Technical Annex / execution-plan step. Run it only when implementation or technical execution detail is explicitly requested.
 In `planning-first` mode, the developer providing runtime credentials or Creatio URL after Gate R counts as an explicit implementation request and triggers Agent 3.
+Before implementation, Agent 3 must record explicit `Model Decisions` for every planned business object, supporting object, planned lookup, and every non-obvious reference target so reuse, extension, or new creation is intentional rather than inferred during execution.
+If any schema creation or extension would still depend on Agent 4 "figuring out" whether to reuse an existing model, the implementation plan is invalid and must be regenerated before execution.
+If live DataForge discovery surfaces a strong candidate, that discovery overrides any earlier placeholder `Usr*` naming or create-first bias from Agent 2, the BA draft, or an earlier plan.
+Strong candidates must default to `reuse` or `extend` after the Evidence Ladder unless a concrete capability failure is proven. This remains true even if the candidate is not a 100% match.
 
 ## Agent Responsibilities
 
@@ -374,9 +378,10 @@ Approval-ready vs execution-ready rule:
 5. Initialize draft docs immediately after Gate R.
 6. Verify Gate R with the canonical gate-check script before Agents 3 and 4.
 7. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract.
-8. Run Agent 4 synchronously.
-9. Before moving to the next stage, verify expected artifacts for that stage exist and are non-empty.
-10. On failure, either retry with a justified fix or stop with a blocker.
+8. Verify the implementation plan gate before implementation so explicit `Model Decisions` are present in `plan.md`, every planned creation or extension is covered by those decisions, and unsupported greenfield assumptions are blocked before Agent 4 runs.
+9. Run Agent 4 synchronously.
+10. Before moving to the next stage, verify expected artifacts for that stage exist and are non-empty.
+11. On failure, either retry with a justified fix or stop with a blocker.
 
 Optimization rule:
 - Do not repeat the same gate check unnecessarily within the same uninterrupted stage transition.

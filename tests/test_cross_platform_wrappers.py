@@ -51,6 +51,9 @@ def build_valid_request_spec():
             "environmentMode": "planning-first",
             "credentialsStatus": "deferred",
         },
+        "planningSignals": {
+            "reuseCheckRequired": [],
+        },
         "assumptions": [
             "Single user scope for MVP",
         ],
@@ -131,6 +134,29 @@ Tasks move through New, Active, and Archived statuses.
 ## 11. Assumptions
 
 - MVP uses a single workflow.
+"""
+
+
+def build_valid_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: Activity, existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  tradeoff-escalation: none
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
+  candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
+  required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
+  mismatch-evidence: dataforge-context confirmed Activity belongs to a broader interaction model; get-entity-schema-properties showed the required event linkage and app-owned lifecycle cannot be satisfied without unacceptable inherited behavior
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
 """
 
 
@@ -251,6 +277,35 @@ class PowerShellWrapperSmokeTests(unittest.TestCase):
             check_result = run_powershell_script("check-approval-gate.ps1", "TodoList", workflow_root=workflow_root)
             self.assertEqual(check_result.returncode, 0, check_result.stderr)
             self.assertIn("GATE_OK TodoList", check_result.stdout)
+
+    def test_implementation_plan_wrappers_work_in_powershell(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir = Path(workflow_root) / "output" / "TodoList"
+            write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            write_file(output_dir / "plan.md", build_valid_plan_doc())
+            planning_result = run_powershell_script(
+                "write-planning-state.ps1",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
+            approval_result = run_powershell_script(
+                "write-approval-state.ps1",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
+            check_result = run_powershell_script("check-implementation-plan-gate.ps1", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(check_result.returncode, 0, check_result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_GATE_OK TodoList", check_result.stdout)
 
 
 if __name__ == "__main__":

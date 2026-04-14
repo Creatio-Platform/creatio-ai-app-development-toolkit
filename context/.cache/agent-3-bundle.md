@@ -53,6 +53,7 @@ Fallback (if bundle unavailable or stale):
 - Implementation or technical execution detail was explicitly requested.
 - `scripts/check-planning-gate.sh <AppName>` passes.
 - `scripts/check-approval-gate.sh <AppName>` passes.
+- If runtime inputs are already available for the current run, `output/<AppName>/.creatio-env.json` exists and its `url` matches the current request URL.
 
 ## Planning Goals
 
@@ -61,7 +62,11 @@ Fallback (if bundle unavailable or stale):
 - Produce an execution-ready MCP payload.
 - Produce an ordered schema sync plan.
 - Produce a page sync plan whenever the main entity is created or extended.
+- Produce explicit `Model Decisions` for ambiguous `reuse` / `extend` / `create` choices before execution planning begins.
 - Make blocker conditions explicit.
+
+Agent 3 is the authoritative technical rewrite stage for model choice.
+The approved BA draft preserves business intent, but live discovery may amend the technical plan when schema or lookup reuse becomes viable.
 
 ## Validation Before Planning
 
@@ -74,6 +79,8 @@ Validate `request-spec.json` and `workflow-state.json`:
 - runtime inputs are either present or explicitly deferred
 - the approved requirements follow the BA-style structure from Agent 2
 - the approved requirements are not merely a generic planning wrapper with non-BA headings
+- when runtime inputs are available, `.creatio-env.json` points to the same URL as the current request for this run
+- if `.creatio-env.json` exists with a different URL, stop and rerun Agent 1 instead of reusing stale runtime artifacts
 
 If any of these checks fail, stop and report the blocker.
 
@@ -88,6 +95,15 @@ Parse the approved requirements with these business sections as primary inputs:
 - business workflow summary
 - data model
 - explicit assumptions
+
+Before technical planning, derive a draft business-object map from the approved requirements:
+
+- main business object
+- secondary business objects
+- enum-like lookups
+- external references
+- any stated or implied reuse candidates
+- any `planningSignals.reuseCheckRequired` concepts carried forward from Agent 2
 
 If the approved artifact is wrapped by host tooling such as `<proposed_plan>`, ignore the wrapper and validate the inner document structure only.
 
@@ -108,6 +124,7 @@ Resolve:
 Rules:
 
 - Resolve exact executable parameter names, aliases, defaults, and validation rules from `get-tool-contract`.
+- Treat `create-app` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
 - `useAIContentGeneration` must be `false`.
@@ -117,36 +134,224 @@ Rules:
 
 ### Main Entity And Lookup Rules
 
-- For a new app with one primary record type, treat the template-created section entity from `create-app` as the canonical main entity.
-- `create-app` itself stays scalar-only; localized entity captions are handled only by follow-up schema tools.
+- Use the current `clio` MCP contract and prompts/resources for canonical main-entity selection and lookup display semantics instead of redefining them here.
+- Resolve application-shell constraints, main-entity behavior, and localization rules from `docs://mcp/guides/app-modeling`.
 - Map synonymous business nouns back to that entity unless the requirements define a distinct business object.
-- Reuse `Name` when it already exists.
-- Never plan duplicate title-like columns when `Name` is already present.
+- Apply the naming contract from `AGENTS.md` Global Invariants for all newly planned entities and custom columns.
+- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
+- Reuse server-provided display fields when they already satisfy the approved business intent.
 - Model enum-like business values as lookup entities first.
-- For lookup entities, rely on inherited `Name` and keep it as `PrimaryDisplayColumn`.
-- For entity schema payloads, plan `title-localizations` and `description-localizations` as localization maps with an `en-US` entry; legacy scalar `title` and `description` fields are rejected by MCP.
+- Preserve business semantics for contact and URL fields, but resolve the concrete runtime field type through the live `clio` contract.
+- Do not encode executable schema payload field names in the plan. Resolve them at runtime through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
+
+### Plan Amendment Rule
+
+Agent 2 may suggest business concepts, likely schema names, and suspected candidates, but it does not freeze the final technical model.
+Live discovery may amend the technical plan after Gate R.
+If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, `technical-annex.md`, and ordered schema sync to reflect the stronger technical choice.
+`Model Decisions` are authoritative for execution.
+Earlier business wording is not a blocker to `reuse` or `extend` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
+This override still applies even if Agent 2, the BA draft, or an earlier plan preferred `create`.
+
+### Model Discovery Gate
+
+Run a planning-time reuse assessment for the approved business objects before execution planning begins.
+Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
+
+#### Triggers
+
+Open the discovery branch for any business object, supporting object, lookup, or reference target that could plausibly map to an existing app or schema.
+Treat this as mandatory planning work, not an optional optimization.
+Any concept listed in `request-spec.json -> planningSignals.reuseCheckRequired` is an automatic trigger.
+
+This includes, but is not limited to, cases where:
+
+- a business object resembles a standard or already-existing platform concept such as case, request, article, knowledge, activity, comment, account, or contact
+- a secondary managed entity could plausibly reuse an existing platform or custom schema
+- a reference field has a non-obvious target schema
+- the plan may be choosing between `update-entity-schema` and `create-entity-schema`
+- the run is an existing-app branch
+- a candidate existing `Usr*` schema already appears relevant
+- the current discovery step or prior evidence surfaces strong schema candidates through Data Forge
+
+If the approved requirements truly prove a business object is greenfield-only, record that outcome explicitly in `Model Decisions` instead of skipping the assessment silently.
+Never treat "the BA draft already named a `Usr*` schema" as proof that the object is greenfield-only.
+
+#### Canonical Discovery Sequence
+
+For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
+
+1. `dataforge-find-tables`
+2. `dataforge-find-lookups`
+3. `dataforge-context`
+4. When a strong candidate is found:
+   - `application-get-info` for app-level context when the candidate belongs to an existing app
+   - at least one schema-level confirmation call:
+     - `dataforge-get-table-columns`
+     - `dataforge-get-relations`
+     - `get-entity-schema-properties`
+     - `get-entity-schema-column-properties` when a specific column remains ambiguous
+
+Do not use `dataforge-initialize` or `dataforge-update` during planning.
+
+#### Evidence Ladder
+
+Treat `dataforge-find-tables` and `dataforge-find-lookups` as candidate discovery only.
+They are not sufficient evidence for `create`, and they do not by themselves prove `reuse` or `extend`.
+
+For every strong candidate, complete the full ladder before locking the final `Model Decisions` record:
+
+1. Initial candidate discovery:
+   - `dataforge-find-tables`
+   - `dataforge-find-lookups`
+2. Follow-up confirmation:
+   - `dataforge-context` is mandatory
+3. Schema-level confirmation:
+   - at least one of `dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`
+4. Final choice:
+   - only after the first three steps may the plan choose `reuse`, `extend`, or `create`
+
+If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
+Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
+
+#### Reuse-First Choice Rule
+
+Use a reuse-first default after live discovery:
+
+- prefer `reuse` when the candidate already satisfies the approved business role, even if it belongs to a broader platform module or contains extra optional fields
+- prefer `extend` when the candidate needs only additive fields, minor localized behavior, or narrow adaptation
+- do not choose `create` only because the candidate is broader than needed, belongs to a shared platform module, or was not the placeholder schema named in the BA draft
+- do not choose `create` when the only proven gaps are additive or safely extendable, even if the candidate is not a 100% match
+- do not choose `create` just because live discovery arrived after an earlier placeholder choice; this applies even if Agent 2, the BA draft, or an earlier plan preferred create
+- for lookups, exact or near-exact match should default to `reuse`
+- create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior is unacceptable, or separate governance was explicitly confirmed with the user
+
+`reuse-first` means the plan should move toward the existing candidate whenever required capabilities are already covered.
+
+#### Required Model Decisions
+
+The plan must record a `Model Decisions` section for:
+
+- the main entity when there is any plausible existing candidate
+- every additional business entity
+- every new lookup when an existing lookup candidate was considered
+- every non-obvious reference field target
+- every planned schema creation or extension step referenced later in ordered schema sync
+
+Each decision record must include:
+
+- `business-concept`
+- `candidates-considered`
+- `chosen-action`: `reuse` | `extend` | `create`
+- `chosen-schema`
+- `tradeoff-escalation`: `none` | `user-confirmation-required`
+- `rationale`
+- `rejected-candidates`
+- `candidate-fit-summary`
+- `required-capabilities`
+- `mismatch-evidence`
+- `discovery-evidence`
+
+Use these carriers explicitly:
+
+- `candidate-fit-summary`: what the strongest candidate already covers
+- `required-capabilities`: the approved business capabilities the target model must satisfy
+- `mismatch-evidence`: the concrete technical gaps proven by follow-up confirmation or schema-level confirmation
+- `discovery-evidence`: the exact tool path used to discover and confirm or reject the candidate
+- `tradeoff-escalation`: whether the technical choice is already resolved or still needs a short user decision
+
+The plan is incomplete if discovery surfaced a strong candidate and the resulting `reuse` / `extend` / `create` choice is not recorded explicitly.
+The plan is also incomplete when a plausible candidate existed from the business wording but the record does not say `no suitable candidate found` or otherwise explain why `create` was selected.
+The plan is invalid if Ordered Schema Sync references a created or extended schema that does not have a corresponding `Model Decisions` record.
+
+#### Deterministic Choice Rules
+
+- Choose `reuse` when an existing schema already satisfies the required business role without unacceptable coupling cost.
+- Choose `extend` when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
+- Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
+- Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
+- `create` is never allowed as a placeholder choice for "decide later during implementation".
+- If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
+- If a strong candidate needs only additive extension, the plan must resolve to `extend` even if the candidate is not a 100% match.
+- If live discovery shows a strong reusable candidate, do not preserve a stale create decision from Agent 2 or an earlier plan.
+
+For `create` after a strong candidate was found, include an explicit comparison between:
+
+- the approved `required-capabilities`
+- the candidate schema shape and behavior documented in `candidate-fit-summary`
+- the proven mismatch captured in `mismatch-evidence`
+
+For `reuse` or `extend`, document why the candidate is sufficient rather than re-arguing for a new custom schema.
+
+Acceptable reasons for `create`:
+
+- ownership boundary
+- unwanted coupling to a platform schema
+- lifecycle or semantics mismatch
+- the candidate schema is broader than the approved scope
+- required capability cannot be satisfied by reuse or extend
+- unavoidable inherited behavior is unacceptable for the approved business flow
+
+Each acceptable reason above requires technical confirmation from the Evidence Ladder.
+For example, "the candidate schema is broader than the approved scope" is not sufficient on its own unless follow-up confirmation and schema-level confirmation show the specific mismatch.
+
+Unacceptable reasons for `create`:
+
+- the BA plan already mentioned a custom entity
+- the team already intended to create a new schema
+- `Usr*` naming preference without further architectural rationale
+- the candidate belongs to a broader platform module but already covers the required capabilities
+- the lookup is shared and might diverge later without a confirmed governance requirement
+
+#### Escalation Rule For Ambiguous Tradeoffs
+
+When `reuse` or `extend` is technically viable but the remaining choice depends on a genuine product tradeoff, ask the user a short decision question instead of silently defaulting to `create`.
+
+Typical escalation triggers:
+
+- shared lifecycle ownership versus isolated app ownership
+- future domain divergence that is plausible but not yet a confirmed requirement
+- unavoidable inherited behavior whose acceptability is a product decision rather than a technical impossibility
+- cross-team coupling risk that is real but not clearly unacceptable from the approved requirements
+
+When this happens:
+
+- set `tradeoff-escalation: user-confirmation-required`
+- describe the viable options in `rationale`
+- stop the implementation plan gate until the user answer is persisted and the record is resolved back to `tradeoff-escalation: none`
+
+#### Discovery Evidence Rule
+
+- missing discovery evidence is a blocker whenever a reuse candidate was plausible from the business wording, approved model, or app/update context.
+- weak discovery evidence is also a blocker. Generic statements such as "new schema needed", "custom app requested", or "follow implementation defaults" do not satisfy this requirement.
+- outcome-only evidence is a blocker. Writing `greenfield-only` or `no suitable candidate found` without citing at least one attempted read-only tool call does not pass the implementation plan gate. The discovery-evidence field must contain at least one tool name (`dataforge-find-tables`, `dataforge-find-lookups`, `dataforge-context`, `application-get-info`, `application-get-list`, or `get-entity-schema-properties`).
+- when a strong candidate exists, `discovery-evidence` must show at least one initial discovery tool and `dataforge-context`.
+- when a strong candidate exists, either `discovery-evidence` or `mismatch-evidence` must cite at least one schema-level confirmation tool (`dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`).
+- outcome phrases such as `ownership boundary`, `unwanted coupling`, `semantic mismatch`, `lifecycle mismatch`, or `broader than the approved scope` are blockers unless they are backed by follow-up confirmation and schema-level confirmation.
+- if the evidence shows the candidate already covers the required capabilities, the plan must resolve to `reuse` or `extend` unless `tradeoff-escalation: user-confirmation-required` is explicitly recorded.
+- when DataForge tools fail (e.g. HTTP 401, timeout), cite the attempted call and the fallback tool used. For example: `dataforge-find-tables attempted (401 Unauthorized), application-get-info returned no matching app` is valid evidence for a greenfield-only conclusion.
 
 ### Schema Sync Plan
 
 - Resolve whether `create-app` is sufficient for the app shell and which fields still require follow-up DB-first sync.
-- For existing-app work, include explicit discovery through `list-apps` and `get-app-info`.
+- Do not add a separate mandatory `dataforge-*` preflight to the standard new-app branch; standalone Data Forge tools are for explicit inspection or remediation only.
+- For existing-app work, include the current `clio`-owned discovery and inspection flow instead of hard-coding request semantics here.
 - Create lookup entities before entities that reference them.
-- Prefer inline lookup `seed-rows` in `sync-schemas`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
+- Prefer batched lookup seeding inside the current `clio`-owned schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
+- Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
-- Canonical entity flow is `create-app -> sync-schemas -> get-app-info`.
-- Refresh once through `get-app-info` after the sync-schemas batch completes.
+- Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
 
 ### Default Rules
 
-- `schema default` means the backend/entity schema contract sets the value through `create-entity-schema` or `update-entity-schema`.
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler.
-- A requirement such as `UsrStatus defaults to New` is complete only when the plan contains an explicit `schema default` or `ui default` step.
-- Lookup seed rows alone do not satisfy a default requirement.
-- For lookup-backed `schema default`, resolve the seeded row to its GUID and place that GUID in `defaultValue` with `defaultValueSource="Const"`.
+- A requirement such as `UsrStatus defaults to New` is incomplete until the plan names the field, the default value, and the step that applies it.
+- Seed data alone does not satisfy a default requirement.
+- For lookup-backed defaults, the plan must choose an executable mechanism resolved at runtime through the live contract or an explicit page-side handler when the default belongs to page behavior.
+- The chosen mechanism must be included in the sync-pages plan and executed. It must never be deferred as `manualCheckPending`.
 
 ### Page Sync Plan
 
@@ -167,21 +372,7 @@ ListPage defaults:
 - exclude inherited audit/system fields unless explicitly requested
 - exclude long/rich/blob fields unless explicitly requested or required
 
-Required execution sequence for each page:
-
-1. `list-pages`
-2. `get-page`
-3. edit body
-4. `sync-pages`
-5. `get-page` again for verification
-
-Fallback page sequence:
-
-1. `list-pages`
-2. `get-page`
-3. `update-page` with `dry-run: true`
-4. `update-page`
-5. `get-page` again for verification
+Resolve the preferred page execution and verification sequence through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`.
 
 When page sync is required:
 
@@ -192,24 +383,19 @@ When page sync is required:
 ### Validation Rules
 
 - Prefer `sync-schemas` for entity mutations and `sync-pages` for page writes.
-- Resolve executable parameter names, aliases, and required fields from `get-tool-contract` instead of hard-coding them in the plan.
-- Keep `operations` / `update-operations` as native arrays.
-- For fallback `create-data-binding-db`, prefer omitting `binding-name` for default lookup seeding so the binding defaults to `<schema-name>`; include `binding-name` only when a distinct binding artifact is explicitly required. Always pass `rows` as a JSON string of `[{"values": {...}}]`.
-- Pass MCP booleans such as `dry-run`, `is-required`, and `extend-parent` as booleans, not strings.
-- Never add `Name`, `Description`, `UsrName`, `UsrTitle`, or `UsrCaption` as custom lookup columns.
+- Resolve executable parameter names, aliases, defaults, and nested request shapes from `get-tool-contract` instead of hard-coding them in the plan.
+- Never add redundant custom lookup columns that duplicate server-provided display fields.
 - Never treat seeded rows as implementation of a default rule.
-- For `create-lookup`, `create-entity-schema`, and `update-operations` with `action: add`, `title-localizations` must include a non-empty `en-US` value after trim.
-- If a business title is missing, derive a non-empty fallback from the schema/column code and place it in the `en-US` localization entry instead of sending blank text.
-- For `action: modify`, never send blank/whitespace localization values; omit the localization fields to preserve the existing caption.
 
 ## Plan Output
 
-`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, and verification strategy.
+`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, verification strategy, and any planning-time reuse decisions.
 
 `plan.md` should be execution-ready and include:
 
 - app payload
 - branch choice and collision handling
+- `Model Decisions` with explicit `reuse` / `extend` / `create` records for every ambiguous model choice
 - ordered schema sync
 - default implementation strategy
 - page sync contract when required
@@ -221,61 +407,75 @@ When page sync is required:
 
 ## Platform Overview
 
-Creatio is a no-code/low-code platform for process management and CRM using a **composable application** architecture where functionality is delivered as packages.
+Creatio is a no-code/low-code platform for process management and CRM using a composable application architecture where functionality is delivered as packages.
 
 ### Key Concepts
 
 **Composable Applications**
-- Built from self-contained **packages** containing: entity schemas, page schemas, data bindings, business processes, source code
-- Packages can depend on other packages (via `DependsOn` in descriptor.json)
+- Built from self-contained packages containing entity schemas, page schemas, data bindings, business processes, and source code
+- Packages can depend on other packages via `DependsOn` in `descriptor.json`
+
+**MCP-Orchestrated Runtime**
+- This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
+- The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
+- The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
+- `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
+- After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
 
 **MCP Application Creation (DB-first)**
-- Primary generation path is MCP tool `create-app`
-- Discovery path for existing apps is `list-apps`
-- Canonical DB refresh path is `get-app-info`
-- Tool creates application artifacts directly in Creatio DB (PostgreSQL)
-- For new Freedom UI apps, `create-app` also materializes the initial section entity whose schema name normally matches the app code
-- Released schema tools (`create-lookup`, `create-entity-schema`, `update-entity-schema`) execute CREATE TABLE and ALTER TABLE directly
-- Schemas are immediately runtime-accessible — no compilation or deployment step required
-- Tool returns short compact context JSON (`success`, `package-u-id`, `package-name`, `entities`, `error`)
-- Agent persists result artifacts to `output/<AppName>/mcp-application-result.json` and report
-- `mcp-application-result.json` is the canonical mutable workflow context and is overwritten by `create-app` or `get-app-info`
+- Resolve current application creation, discovery, refresh, and main-entity semantics through `get-tool-contract` and the `clio` MCP guidance resources
+- `create-app` is the canonical new-app entrypoint and may return top-level `dataforge` diagnostics produced internally by `clio`
+- Do not add a separate mandatory Data Forge preflight in repo-local orchestration for the standard new-app branch
+- Planning-time read-only discovery is still required when the model is ambiguous or strong existing-schema candidates exist; use that discovery to decide `reuse`, `extend`, or `create` before execution
+- Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
+
+**MCP Section Management**
+- Use `list-app-sections` to list all sections of an installed application
+- Use `delete-app-section` to remove a section from an installed application
+- Canonical section discovery flow: `list-apps` → `get-app-info` → `list-app-sections`
+- Canonical section delete flow: `list-apps` → `get-app-info` → `list-app-sections` → `delete-app-section`
+- `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
+- Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
 
 **Entity Schema Sync (DB-first)**
-- Secondary generation path is MCP `create-entity-schema`, `create-lookup`, `update-entity-schema`
-- These tools mutate entity schemas in Creatio DB and return persisted schema snapshots
-- `update-entity-schema` accepts explicit `operations` entries with `action: add|modify|remove`
-- New lookup entities must be created before entities or updates that reference them
+- Prefer `sync-schemas` for grouped entity work
+- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `sync-schemas`
+- Create lookup entities before entities or updates that reference them
+
+**Schema Cleanup**
+- `delete-schema` removes any workspace schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
+- The schema must belong to one of the packages in the specified local workspace; `delete-schema` resolves ownership before deleting
+- This operation is destructive and cannot be undone; confirm the schema name and workspace path before calling it
 
 **Default Semantics**
-- `schema default` means the entity schema or backend contract stores the initial value
-- `ui default` means the page layer sets the value through `crt.CreateRecordRequest.defaultValues` or a handler
+- Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
+- A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
 - Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
-- For lookup-backed `schema default`, use the seeded row GUID in `defaultValue`
-- `Binary`, `Image`, `File`, and `Blob` columns do not support `defaultValueSource=Const`
+- For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
+- Binary-like columns do not support constant defaults
 
-**Data Binding & Schema Inspection (MCP-assisted)**
-- `get-entity-schema-properties` returns a schema summary object with column entries for deployed schemas; use the returned columns for machine-readable verification and respect each column's `source` (`own` or `inherited`) (requires `environment-name`, `package-name`, `schema-name`)
-- `get-entity-schema-column-properties` returns detailed metadata for a single column (also requires `column-name`)
-- `create-data-binding-db` creates or updates bindings in DB for SysModule, SysModuleEntity, lookup seed data, and other package data rows, then installs data immediately (requires `environment-name`, `package-name`, `schema-name`); accepts optional `rows` for initial seeding in one call
-- `upsert-data-binding-row-db` upserts a single row in an **already existing** data binding — the binding must have been created first via `create-data-binding-db`; calling it without a prior binding will fail with `binding-not-found` (requires `environment-name`, `package-name`, `schema-name`, `values`)
-- For initial lookup seeding prefer `sync-schemas` with inline `seed-rows`; use `create-data-binding-db` with `rows` only as fallback; never use `upsert-data-binding-row-db` for initial seeding
+**Data Binding And Schema Inspection**
+- `get-entity-schema-properties` returns a deployed schema summary with column metadata
+- `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
+- `create-data-binding-db` persists bindings in DB and installs data immediately
+- `upsert-data-binding-row-db` updates rows only in an already existing binding
+- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
 
 **Freedom UI (Angular-based)**
-- Modern UI framework with pages as AMD modules (JavaScript `define()`)
-- UI described via `viewConfigDiff` — array of operations (merge, insert, remove, move)
-- Schema type: `"AngularSchema"`
-- When frontend or page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface rather than relying on root-barrel access to internal exports
+- Modern UI pages are AMD modules
+- UI is described via `viewConfigDiff`
+- Schema type is `"AngularSchema"`
+- When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
 
 **Entity Model**
-- Entities extend a parent (BaseEntity, BaseLookup, etc.)
-- Columns have DataValueType (GUID-based) — ShortText, Lookup, Integer
-- Schemas use DSL diff format for metadata
+- Entities extend a server-defined parent discovered through live contract metadata
+- Columns use server-defined value-type identifiers
+- Schemas use a diff-oriented metadata model
 
-**System Tables for Navigation**
-- **SysModule** — registers a section (visible in navigation)
-- **SysModuleEntity** — binds entity to section
-- **SysModuleEdit** — binds form page to section
+**System Tables For Navigation**
+- `SysModule` registers a section
+- `SysModuleEntity` binds an entity to a section
+- `SysModuleEdit` binds a form page to a section
 
 ---
 
@@ -292,15 +492,15 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 
 ### Casing
 
-- **Entities/Columns**: PascalCase — `UsrTodoTask`, `UsrStatus`
-- **Pages**: PascalCase with underscore — `UsrTodoTask_ListPage`, `UsrTodoTask_FormPage`
-- **Packages**: PascalCase — `UsrTodoListApp`
+- Entities and columns use PascalCase
+- Pages use PascalCase with underscore suffixes such as `UsrTodoTask_ListPage`
+- Packages use PascalCase
 
 ### GUIDs
 
-- Format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` (lowercase, 36 characters)
-- Generate new for: packages, schemas, columns, data binding records
-- **Never reuse** GUIDs from other packages
+- Format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+- Generate new GUIDs for packages, schemas, columns, and data binding records
+- Never reuse GUIDs from other packages
 
 ### Data Binding Naming
 
@@ -313,9 +513,9 @@ Creatio is a no-code/low-code platform for process management and CRM using a **
 
 ## Package Structure
 
-### descriptor.json (Required)
+### descriptor.json
 
-Every package MUST have `descriptor.json` at root:
+Every package must have `descriptor.json` at the root:
 
 ```json
 {
@@ -331,80 +531,43 @@ Every package MUST have `descriptor.json` at root:
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `UId` | ✅ | Unique GUID for package |
-| `PackageVersion` | ✅ | Semantic version (e.g., "1.0.0") |
-| `Name` | ✅ | Package name (PascalCase, Usr prefix) |
-| `ModifiedOnUtc` | ✅ | Timestamp in `/Date(milliseconds)/` format |
-| `Type` | ✅ | Always `1` for custom packages |
-| `Maintainer` | ✅ | `"Customer"` for custom |
-| `DependsOn` | ✅ | Array of dependencies (use `[]` as default) |
+Use empty `DependsOn: []` by default unless the package genuinely requires explicit dependencies.
 
-**⚠️ Dependencies**: Use empty `DependsOn: []` by default. Creatio auto-resolves dependencies. Hardcoding UIds may fail across environments.
+### Typical Directory Layout
 
-### Complete Directory Structure
-
-```
+```text
 packages/<PackageName>/
-├── descriptor.json                    
+├── descriptor.json
 ├── Schemas/
-│   ├── UsrLookup/                     ← lookup entity (3 files)
-│   │   ├── descriptor.json
-│   │   ├── metadata.json
-│   │   └── properties.json
-│   ├── UsrEntity/                     ← main entity (3 files)
-│   ├── UsrEntity_ListPage/            ← list page (4 files)
-│   ├── UsrEntity_FormPage/            ← form page (4 files)
-│   └── UsrEntity_FormPage_Addon/      ← addon (3 files)
+│   ├── UsrLookup/
+│   ├── UsrEntity/
+│   ├── UsrEntity_ListPage/
+│   ├── UsrEntity_FormPage/
+│   └── UsrEntity_FormPage_Addon/
 ├── Data/
-│   ├── SysModule_UsrEntity/           ← register section
-│   ├── SysModuleEntity_UsrEntity/     ← bind entity to section
-│   └── UsrLookup/                     ← seed lookup values (default binding name is schema name)
-└── Files/                             ← optional C# code
+│   ├── SysModule_UsrEntity/
+│   ├── SysModuleEntity_UsrEntity/
+│   └── UsrLookup/
+└── Files/
 ```
 
 ### Generation Order
 
-Executable MCP contract authority:
+For local MCP invocation helpers and result normalization, see `context/mcp-application-tools-reference.md`.
+For executable MCP tool shape and app-modeling semantics, use discovered `clio` MCP tool schema and prompts/resources such as `docs://mcp/guides/app-modeling`.
 
-- `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints.
-- Use `get-tool-contract` through `scripts/mcp_client.py` whenever you need the exact executable contract.
-- Repository docs describe workflow policy and modeling rules only. They must not become a second MCP API specification.
+- `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
+- Use `get-tool-contract` through `scripts/mcp_client.py` whenever you need the exact executable contract
+- When a tool is not present in the default bootstrap contract set, resolve it through explicit `get-tool-contract {"tool-names":[...]}` lookup instead of assuming it is unavailable
+- Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
+- Resolve human-readable MCP flow, fallback, verification, main-entity, localization, and page inspection guidance through `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
+- Treat `editableContext` as a local helper projection, not as the primary MCP response contract.
+- When `dataforge-find-tables`, `dataforge-find-lookups`, or `dataforge-context` surfaces strong model candidates, persist the resulting `reuse` / `extend` / `create` decision in the plan instead of treating the discovery output as advisory only.
 
-Canonical entity flow:
+### Working With MCP Tools
 
-1. `create-app`
-2. `sync-schemas`
-3. `get-app-info`
-
-Canonical page flow:
-
-1. `list-pages`
-2. `get-page`
-3. edit body
-4. `sync-pages`
-5. `get-page`
-
-Fallbacks:
-
-- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `sync-schemas`.
-- Use `update-page` only as an explicit fallback for single-page dry-run or legacy save workflows.
-
-Critical patterns:
-
-- Always call `get-app-info` once after `sync-schemas` completes and verify the schema is immediately queryable.
-- Do not create a second BaseEntity for the same primary records already represented by the template-created section entity. Extend that entity unless requirements define an additional distinct business object.
-- `create-app` stays scalar-only. Localized captions belong to follow-up schema tools.
-
-### Working with MCP Tools
-
-Transport:
-
-- clio stdio via `scripts/mcp_client.py`
-- `scripts/mcp_client.py` resolves executable contract metadata from `get-tool-contract`
-
-Example:
+- Use `scripts/mcp_client.py` for local `clio` stdio transport
+- Use `scripts/mcp_context_adapter.py normalize` for local runtime result normalization
 
 ```python
 from scripts.mcp_client import call_mcp_tool
@@ -413,7 +576,17 @@ contracts = call_mcp_tool("get-tool-contract", {})
 apps = call_mcp_tool("list-apps", {"environment-name": "local"})
 ```
 
-Use `get-component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type and you need its supported properties, parent types, or typical children before editing.
+Use discovered MCP tool schema plus `clio` prompts/resources for:
+- tool parameters and response payloads
+- canonical main-entity selection
+- lookup display-field semantics
+- default semantics and lookup-seed implications
+- current `sync-schemas` and `sync-pages` behavior
+
+Use this repo’s wrapper docs and helper scripts for:
+- local transport invocation patterns
+- normalized result-file handling
+- evidence generation and follow-up apply helpers
 
 ---
 
@@ -424,171 +597,297 @@ Clio is the command-line tool for Creatio deployments.
 ### Environment Setup
 
 ```bash
-# Register environment
 clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
-
-# Set active
 clio reg-web-app -a myenv
-
-# Verify connection
 clio healthcheck myenv
 ```
 
 ```bash
-# Compile configuration
 clio compile-configuration -e myenv
-
-# Restart application
 clio restart-web-app myenv
-
-# Check compilation log
 clio last-compilation-log -e myenv
-```
-
 ```
 
 ### Package Management
 
 ```bash
-# Create new package skeleton
 clio new-pkg UsrMyPackage
-
-# List installed packages
 clio list-packages -e myenv
-
-# Pull package from environment
 clio pull-pkg MyPackage -e myenv
-
-# Delete package
 clio delete-pkg-remote MyPackage -e myenv
-
-# Validate package structure
 clio validation-pkg ./MyPackage
 ```
 
 ### Development Tools
 
 ```bash
-# Execute SQL
 clio execute-sql-script "SELECT Id FROM Contact LIMIT 5" -e myenv
-
-# Clear cache
 clio clear-redis-db myenv
-
-# System settings
 clio set-syssetting MySetting "Value" -e myenv
-
-# Install cliogate (deprecated — entity MCP tools no longer require cliogate)
-# clio install-gate -e myenv
 ```
 
 ---
 
-## MCP Workflow (DB-First)
+## Local MCP Workflow
 
-```
-MCP create-app or get-app-info → initialize canonical context → [optional] sync-schemas or create-lookup/create-entity-schema/update-entity-schema → get-app-info refresh → [optional] get-entity-schema-properties/create-data-binding-db → schemas immediately usable
+```text
+MCP result -> normalize into repo-local context -> run approved helper orchestration -> persist evidence and reports
 ```
 
-**Key Principle:** MCP entity tools work DB-first. Schemas are created directly in PostgreSQL via CREATE TABLE and ALTER TABLE statements. No separate compilation or deployment step is required.
+Local rule:
+- Keep the result file flat and source-backed
+- The normalized runtime document starts from the MCP response and adds local helper state such as `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- Normalization is canonicalization plus strict validation; invalid local helper state must fail before persistence
 
 ---
 
 ## ModifiedOnUtc Format
 
-Use milliseconds since Unix epoch:
-
-```powershell
-# PowerShell
-[Math]::Floor((Get-Date).ToUniversalTime().Subtract([DateTime]'1970-01-01').TotalMilliseconds)
-
-# Result format
-"/Date(1700000000000)/"
-```
+Use milliseconds since Unix epoch in `/Date(milliseconds)/` format.
 
 <!-- FILE: context/schema-reference.md (L7-90) -->
 
-## Parent Entity Types (KNOWN_PARENTS)
+- localized title or description rules
+- lookup display-field behavior
+- default behavior
+- exact data type semantics
+- canonical create or update flows
 
-Every entity **must extend** one of these parents. Parent UId goes to `metadata.json` field `D8` and `descriptor.json` field `Parent.UId`.
-
-| Parent Name | UId | Use Case |
-|-------------|-----|----------|
-| **BaseEntity** | `1bab9dcf-17d5-49f8-9536-8e0064f1dce0` | Standard entity with Id, CreatedOn/By, ModifiedOn/By |
-| **BaseLookup** | `11ab4bcb-9b23-4b6d-9c86-520fae925d75` | Lookup/enum (adds Name + Description) |
-| **BaseCodeLookup** | `2681062b-df59-4e52-89ed-f9b7dc909ab2` | Lookup with Code column |
-| BaseTag | `9e3f203c-e905-4de5-9571-134f14b8c1e3` | Tag entity |
-| BaseFolder | `d602bf96-d029-4b07-9755-63c8f5cb5ed5` | Folder entity |
-| BaseFile | `556c5867-60a7-4456-aae1-a57a122bef70` | File attachment |
-| **BaseProcess** | `e20c0489-122a-4242-999d-c755bc51d76c` | Business process |
-
-### Page Template Parents
-
-| Parent Name | UId | Use Case |
-|-------------|-----|----------|
-| **ListPageV3Template** | `b7b898d0-8c77-4953-c097-23fa6800da02` | List page (section main page) |
-| **PageWithTabsFreedomTemplate** | `3b2e117f-8c6b-4ca5-80a2-7ebb497cddf9` | Form page with tabs |
-| **LightFormPage** | `ec5fd902-66ce-4139-a241-10ebd8addc40` | Light form (mini page) |
-| **MinimalCardTemplate** | `0f8eb896-7b62-4dfa-bd55-a414f50932a7` | Minimal card |
+This repository must not redefine those rules.
 
 ---
 
-## Inherited Columns (BASE_ENTITY_COLS)
+## What This File Covers
 
-**DO NOT add these columns** — automatically inherited from BaseEntity:
+- schema folder layout
+- descriptor and metadata file roles
+- generic diff-format reminders
+- local workflow hints for where structural artifacts usually live
 
-| Column Name | UId | DataValueType |
-|-------------|-----|---------------|
-| Id | `ae0e45ca-c495-4fe7-a39d-3ab7278e1617` | Guid |
-| CreatedOn | `e80190a5-03b2-4095-90f7-a193a960adee` | DateTime |
-| CreatedBy | `ebf6bb93-8aa6-4a01-900d-c6ea67affe21` | Lookup |
-| ModifiedOn | `9928edec-4272-425a-93bb-48743fee4b04` | DateTime |
-| ModifiedBy | `3015559e-cbc6-406a-88af-07f7930be832` | Lookup |
-| ProcessListeners | `3fabd836-6a53-4d8d-9069-6df88d9dae1e` | Integer |
-
-### Additional from BaseLookup
-
-| Column Name | UId | DataValueType |
-|-------------|-----|---------------|
-| Name | `736c30a7-c0ec-4fa9-b034-2552b319b633` | MediumText |
-| Description | `9e53fd7c-dde4-4502-a64c-b9e34148108b` | MediumText |
-
-`Name` and `Description` come from `BaseLookup`. Do not send them as custom columns in `create-lookup` payloads or editable-context diffs. `Name` must remain the lookup `PrimaryDisplayColumn`, otherwise selected lookup values will appear blank in UI controls.
-
-### Display Column Guardrails
-
-- BaseLookup entities must use inherited `Name` as the human-readable display field. Do not add `Name`, `Description`, or duplicate title-like columns as custom lookup columns.
-- The raw BaseEntity inherited column list above does not include template-generated columns. In this MCP flow, `create-app` or `get-app-info` can return section entities that already contain `Name`.
-- Always inspect the current schema snapshot before adding a title field. If `Name` already exists, reuse `Name` in requirements, list pages, form headers, and entity updates. Do not add duplicate title fields such as `UsrName`, `UsrTitle`, or `UsrCaption` unless a separate business field is explicitly required.
-
-A successful MCP `create-lookup` / `create-entity-schema` / `update-entity-schema` call must leave the schema fully materialized: no `Database update required` status in workspace explorer, immediate visibility through `get-app-info`, and usable DB structure for data bindings or inserts. If those conditions are not met, treat it as a core MCP materialization bug rather than a normal transient state.
+For live request payloads, aliases, validators, defaults, output shapes, and error shapes, read the current `clio` MCP contract instead of this file.
 
 ---
 
-## DataValueType → GUID Map (KNOWN_DVT)
+## Typical Schema Layout
 
-Use these GUIDs in entity metadata column definitions (field `S2`):
+```text
+Schemas/<SchemaName>/
+├── descriptor.json
+├── metadata.json
+├── properties.json
+└── <SchemaName>.js   # page/client schemas only
+```
 
-| DataValueType | GUID | Notes |
-|---------------|------|-------|
-| **Guid** | `23018567-a13c-4320-8687-fd6f9e3699bd` | Primary keys, foreign keys |
-| **Lookup** | `b295071f-7ea9-4e62-8d1a-919bf3732ff2` | Reference to another entity |
-| **Boolean** | `90b65bf8-0ffc-4141-8779-2420877af907` | True/False |
-| **Integer** | `6b6b74e2-820d-490e-a017-2b73d4ccf2b0` | Whole numbers |
-| **Float** | `5cc8060d-6d10-4773-89fc-8c12d6f659a6` | Decimal numbers |
-| **Money** | `ff22e049-4d16-46ee-a529-92d8808932dc` | Currency values |
-| **DateTime** | `d21e9ef4-c064-4012-b286-fa1a8171da44` | Date + Time |
-| **Date** | `603d4960-a1a2-45e9-b232-206a54421b01` | Date only |
-| **Time** | `04cc757b-8f06-482c-8a1a-0c0e171d2410` | Time only |
-| **ShortText** | `ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd` | Up to 250 characters |
-| **MediumText** | `325a73b8-0f47-44a0-8412-7606f78003ac` | Up to 500 characters |
-| **LongText** | `c0f04627-4620-4bc0-84e5-9419dc8516b1` | Up to 1000+ characters |
-| **MaxSizeText** | `5ca35f10-a101-4c67-a96a-383da6afacfc` | Unlimited text |
-| **LargeText** | `79bccffa-8c8b-4863-b376-a69d2244182b` | Rich text/HTML |
-| **LocalizableString** | `8b3f29bb-ea14-4ce5-a5c5-293a929b6ba2` | Localizable |
-| **SecureText** | `3509b9dd-2c90-4540-b82e-8f6ae85d8248` | Encrypted |
-| **Image** | `fa6e6e49-b996-475e-a77e-73904e4c5a88` | Image (binary) |
-| **ImageLookup** | `b039feb0-ee7c-4884-8aa6-d6d45d84316f` | Image reference |
-| **Color** | `dafb71f9-ee9f-4e0b-a4d7-37aa15987155` | Color value |
+Not every schema uses every file. Entity-oriented schemas usually use descriptor, metadata, and properties. Client/page schemas also include the JavaScript body.
 
-### DataValueType Numeric IDs
+---
+
+## Descriptor Role
+
+`descriptor.json` identifies the schema, its manager, caption, parent linkage, and package metadata.
+
+Typical fields you will see:
+- schema name
+- schema GUID
+- parent schema reference
+- manager name
+- caption
+- dependency list
+
+Treat exact parent choices and caption semantics as `clio`-owned contract details.
+
+---
+
+## Metadata Role
+
+`metadata.json` stores the schema body in Creatio's diff-oriented metadata format.
+
+Common patterns:
+- `=` updates a value
+- `+` adds a node
+- `-` removes a node
+- `~` reorders nodes
+
+Use repository templates and existing package examples for file-shape familiarity only. Do not treat local examples as the normative MCP write contract.
+
+---
+
+## Properties Role
+
+`properties.json` stores schema-level flags and creation metadata such as:
+- creation version
+- availability flags
+- tracking flags
+- virtualization or editing flags
+
+These values are structural context, not a substitute for MCP contract discovery.
+
+---
+
+## Page Schema Notes
+
+Page or client schemas commonly include:
+- `descriptor.json`
+- `metadata.json`
+- `properties.json`
+- `<SchemaName>.js`
+
+<!-- FILE: context/model-discovery-evidence.md (full) -->
+
+# Model Discovery Evidence
+
+Use this guide when Agent 3 must decide whether to `reuse`, `extend`, or `create`.
+It is a policy reference for evidence quality, not an executable tool contract.
+
+## Strong Candidate Signals
+
+Treat a candidate as strong when any of the following is true:
+
+- `dataforge-find-tables` returns a platform or existing custom schema with the same or adjacent business noun
+- `dataforge-find-lookups` returns a lookup whose values or title align with the approved lifecycle or taxonomy
+- the approved business wording maps naturally to a known platform concept such as activity, case, article, contact, account, request, knowledge, or comment
+- an existing `Usr*` schema or app already appears relevant
+- the current run is an existing-app update and a nearby entity already exists in the app
+
+Strong candidate means "keep inspecting", not "reuse automatically".
+Strong candidate also means the default end-state is `reuse` or `extend` unless the Evidence Ladder proves a real capability failure.
+Do not treat "not a 100% match" as a reason to create something new when the remaining gap is additive or safely extendable.
+Do not let Agent 2, the BA draft, or an earlier plan lock in `create` once live DataForge discovery has surfaced a strong reusable candidate.
+
+## Plan amendment after discovery
+
+Agent 2 and the BA draft keep business intent stable, but they do not freeze the final technical schema or lookup choice.
+Live discovery may amend the technical plan.
+
+If the BA draft named `Usr*` placeholder schemas or custom lookups, and discovery shows a viable existing candidate, Agent 3 should rewrite the technical plan toward `reuse` or `extend`.
+`Model Decisions` become the source of truth for execution.
+This rewrite is mandatory even if the earlier plan already leaned toward `create`.
+
+## Evidence Ladder
+
+Use the full ladder for every strong candidate:
+
+1. Initial discovery
+   - `dataforge-find-tables`
+   - `dataforge-find-lookups`
+2. Follow-up confirmation
+   - `dataforge-context`
+3. Schema-level confirmation
+   - `dataforge-get-table-columns`
+   - `dataforge-get-relations`
+   - `get-entity-schema-properties`
+   - `get-entity-schema-column-properties`
+4. Final decision
+   - only after the previous steps may the plan lock `reuse`, `extend`, or `create`
+
+## What To Compare
+
+When rejecting a strong candidate, compare the candidate against the approved model explicitly:
+
+- semantic similarity: does the candidate represent the same business thing or only a nearby platform concept
+- field or column shape: are the required fields already present or safely extendable
+- lifecycle or status model: do the candidate states and transitions fit the approved workflow
+- relation shape: do the candidate links, ownership model, and parent-child semantics fit the approved business object
+
+## When broader is still reusable
+
+A broader platform entity or shared lookup can still be reusable.
+The following do not block reuse on their own:
+
+- extra optional columns
+- broader module membership
+- existing unrelated optional fields
+- a platform-owned lookup with the exact lifecycle values already present
+
+Default to `reuse` when the required capabilities are already covered.
+Default to `extend` when only additive fields or narrow adaptation are needed.
+Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior is unacceptable.
+Apply this rule even if the candidate is not a 100% match. A strong candidate with only additive gaps still belongs in `reuse` or `extend`, not `create`.
+
+## Required Model Decision Carriers
+
+Every ambiguous `Model Decisions` record should tell the full story:
+
+- `candidates-considered`
+- `candidate-fit-summary`
+- `required-capabilities`
+- `mismatch-evidence`
+- `discovery-evidence`
+
+`candidate-fit-summary` should say what the best candidate already provides.
+`required-capabilities` should restate the approved business needs in technical comparison form.
+`mismatch-evidence` should name the proven gaps, not just the conclusion.
+
+## Good decision evidence
+
+Good `create` evidence:
+
+- `candidate-fit-summary: Activity covers owner, due date, and completion semantics`
+- `required-capabilities: app-owned event task lifecycle, event linkage, lightweight task completion flow`
+- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader interaction flow; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
+- `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
+
+Good `reuse` evidence:
+
+- `candidate-fit-summary: Contact already provides the required person identity and communication fields`
+- `required-capabilities: reusable person record with standard communication semantics`
+- `mismatch-evidence: Account was rejected because it models organizations rather than individual people`
+- `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
+
+Additional good `reuse` examples:
+
+- exact lookup match -> `reuse`
+- broader entity with all required capabilities covered -> `reuse`
+
+Good `extend` evidence:
+
+- `candidate-fit-summary: existing custom case schema already carries the core support workflow`
+- `required-capabilities: approved extra diagnostics and escalation fields`
+- `mismatch-evidence: get-entity-schema-properties showed only approved supplemental fields are missing`
+- `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
+
+Additional good `extend` example:
+
+- candidate needs a few additive fields -> `extend`
+
+Good `create` evidence:
+
+- only when required capabilities cannot fit or unavoidable inherited behavior is unacceptable
+
+## Bad decision evidence
+
+Bad reasoning patterns:
+
+- `broader platform object`
+- `ownership boundary`
+- `semantic mismatch`
+- `custom app requested`
+- `we will create our own`
+- `the business plan already named Usr...`
+- `shared platform lookup may diverge later`
+- `candidate is broader than needed`
+
+These are conclusions, not evidence.
+They fail when they are not tied to `dataforge-context` plus at least one schema-level confirmation call.
+
+## When to ask instead of deciding
+
+Ask the user instead of silently picking `create` when both technical paths are viable and the remaining difference is a product tradeoff.
+
+Typical triggers:
+
+- shared lifecycle ownership versus isolated app ownership
+- future domain divergence that is plausible but not yet confirmed
+- unavoidable inherited behavior whose acceptability is a product decision
+- cross-team coupling risk that is real but not clearly unacceptable
+
+## Greenfield Exception
+
+If the business object is truly greenfield-only:
+
+- still run initial discovery
+- record the attempted tools
+- say `no suitable candidate found` only after the attempted calls are captured
+
+Greenfield is the exception path.
+It must not be used to skip discovery for objects that merely sound custom or already have a planned `Usr*` name.
