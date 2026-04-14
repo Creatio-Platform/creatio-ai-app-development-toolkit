@@ -113,8 +113,20 @@ GENERIC_CREATE_JUSTIFICATION_RE = re.compile(
     r"(broader platform object|broader than.{0,30}needed|shared lookup|shared platform lookup|module coupling|platform module|ownership boundary|marketing-specific|custom app requested|might diverge later|shared and could change)",
     re.IGNORECASE,
 )
+PARTIAL_MATCH_DISMISSAL_RE = re.compile(
+    r"(not a 100% match|not 100% match|not an exact match|not a perfect match|not exact enough)",
+    re.IGNORECASE,
+)
+PRIOR_PLAN_CREATE_PREFERENCE_RE = re.compile(
+    r"(agent 2|ba draft|earlier plan|previous plan|prior plan).{0,60}(preferred|chose|decided|picked|named).{0,60}(create|custom|new|Usr)",
+    re.IGNORECASE,
+)
 CAPABILITY_COVERAGE_SIGNAL_RE = re.compile(
-    r"(already satisfies|already covers|covers the approved|matches the approved|exactly matches|exact match|near-exact match|already contains.{0,40}(required|approved).{0,20}(values|lifecycle)|all required capabilities covered|only optional extra fields)",
+    r"(already satisfies|already covers|already provides|covers the approved|matches the approved|exactly matches|exact match|near-exact match|already contains.{0,40}(required|approved).{0,20}(values|lifecycle)|all required capabilities covered|only optional extra fields)",
+    re.IGNORECASE,
+)
+EXTENDABLE_GAP_SIGNAL_RE = re.compile(
+    r"(only .{0,40}(additive|additional|supplemental|extra).{0,20}(field|column|lookup|relation)|only .{0,40}would need additive (extension|adaptation)|can be added safely|safely extendable|remaining gaps are additive|missing only .{0,40}(field|column|lookup|relation)|minor localized behavior|narrow adaptation|few additive fields)",
     re.IGNORECASE,
 )
 CAPABILITY_FAILURE_SIGNAL_RE = re.compile(
@@ -506,9 +518,16 @@ def validate_implementation_plan_doc(plan_file):
                 )
             if chosen_action == "create":
                 has_generic_create_only_reason = bool(GENERIC_CREATE_JUSTIFICATION_RE.search(rejection_text))
+                has_partial_match_dismissal = bool(PARTIAL_MATCH_DISMISSAL_RE.search(full_decision_text))
+                has_prior_plan_create_preference = bool(PRIOR_PLAN_CREATE_PREFERENCE_RE.search(full_decision_text))
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
                 candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
+                only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
                 exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
+                if only_additive_or_extendable_gaps and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: strong candidates with only additive or extendable gaps must resolve to reuse or extend, even if the candidate is not a 100% match or an earlier plan preferred create"
+                    )
                 if candidate_already_covers_capabilities and not has_capability_failure:
                     raise WorkflowError(
                         "Implementation plan failed: reuse-first policy requires reuse or extend when the candidate already covers the required capabilities"
@@ -516,6 +535,10 @@ def validate_implementation_plan_doc(plan_file):
                 if exact_lookup_match and not has_capability_failure:
                     raise WorkflowError(
                         "Implementation plan failed: exact or near-exact lookup matches must default to reuse unless explicit missing capability or unacceptable inherited behavior is proven"
+                    )
+                if (has_partial_match_dismissal or has_prior_plan_create_preference) and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: create cannot be justified by 'not a 100% match' reasoning or by an earlier Agent 2 / BA placeholder decision when live discovery still shows a strong reusable candidate"
                     )
                 if has_generic_create_only_reason and not has_capability_failure:
                     raise WorkflowError(

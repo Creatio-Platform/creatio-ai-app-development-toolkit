@@ -37,6 +37,8 @@ class Agent3ReuseDiscoveryContractTests(unittest.TestCase):
         self.assertIn("tradeoff-escalation", content)
         self.assertIn("broader than the approved scope", content)
         self.assertIn("is not sufficient on its own", content)
+        self.assertIn("even if the candidate is not a 100% match", content)
+        self.assertIn("even if Agent 2, the BA draft, or an earlier plan preferred create", content)
         self.assertIn("reuse-first", content)
         self.assertIn("live discovery may amend the technical plan", content)
         self.assertIn("ask the user", content)
@@ -62,6 +64,8 @@ class Agent3ReuseDiscoveryContractTests(unittest.TestCase):
             "tradeoff-escalation",
             "broader than the approved scope",
             "is not sufficient on its own",
+            "even if the candidate is not a 100% match",
+            "even if Agent 2, the BA draft, or an earlier plan preferred create",
             "reuse-first",
             "live discovery may amend the technical plan",
             "ask the user",

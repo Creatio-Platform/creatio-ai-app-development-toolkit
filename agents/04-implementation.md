@@ -95,6 +95,7 @@ Apply this branch only when support mode is on:
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
 - Treat `Model Decisions` as the authoritative final technical plan even when the BA draft or earlier planning text named different `Usr*` schemas or custom lookups.
+- Treat a planning-time strong candidate as already resolved in favor of `reuse` or `extend` unless the plan contains a proven capability failure. Do not honor stale create bias from Agent 2, the BA draft, or an earlier plan.
 - Never "finish the reuse reasoning" during execution. If Agent 3 did not complete the Evidence Ladder, stop with a blocker instead of improvising discovery or inventing a new create path.
 - If a requested schema step is not fully covered by `Model Decisions`, stop with a blocker instead of improvising a new entity or lookup.
 - If a requested schema step depends on rejecting a strong candidate but the plan lacks follow-up evidence or schema-level confirmation, stop with a blocker before any mutation.

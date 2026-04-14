@@ -465,6 +465,29 @@ def build_invalid_plan_doc_create_despite_capability_coverage():
 """
 
 
+def build_invalid_plan_doc_create_despite_strong_candidate_with_only_additive_gaps():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event, earlier Agent 2 placeholder UsrEvent plan
+  chosen-action: create
+  chosen-schema: UsrEvent
+  tradeoff-escalation: none
+  rationale: Keep the custom schema from the earlier plan because the platform candidate is not a 100% match
+  rejected-candidates: field mismatch with the earlier Agent 2 custom-schema choice
+  candidate-fit-summary: Event already provides Name, Status, StartDate, EndDate, and ownership semantics needed for the approved flow; only a dedicated Description field and a narrow task detail relation would need additive extension
+  required-capabilities: reusable event record with name, status, dates, owner, description, and event-task relation
+  mismatch-evidence: dataforge-context confirmed the platform Event schema is viable; get-entity-schema-properties showed the remaining gaps are additive fields that can be added safely, but the previous plan had already decided to create UsrEvent
+  discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- create UsrEvent schema for the approved event model.
+"""
+
+
 def build_valid_plan_doc_reuse_existing_lookup_despite_ba_custom_name():
     return """# Implementation Plan
 
@@ -744,6 +767,14 @@ class WorkflowCliTests(unittest.TestCase):
             result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("reuse-first", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_create_when_strong_candidate_needs_only_additive_extension_even_if_earlier_plan_preferred_create(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_create_despite_strong_candidate_with_only_additive_gaps())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("only additive or extendable gaps", result.stderr)
 
     def test_validate_implementation_plan_doc_accepts_reuse_when_live_discovery_amends_ba_custom_lookup_assumption(self):
         with temp_workflow_root() as workflow_root:

@@ -14,6 +14,9 @@ Treat a candidate as strong when any of the following is true:
 - the current run is an existing-app update and a nearby entity already exists in the app
 
 Strong candidate means "keep inspecting", not "reuse automatically".
+Strong candidate also means the default end-state is `reuse` or `extend` unless the Evidence Ladder proves a real capability failure.
+Do not treat "not a 100% match" as a reason to create something new when the remaining gap is additive or safely extendable.
+Do not let Agent 2, the BA draft, or an earlier plan lock in `create` once live DataForge discovery has surfaced a strong reusable candidate.
 
 ## Plan amendment after discovery
 
@@ -22,6 +25,7 @@ Live discovery may amend the technical plan.
 
 If the BA draft named `Usr*` placeholder schemas or custom lookups, and discovery shows a viable existing candidate, Agent 3 should rewrite the technical plan toward `reuse` or `extend`.
 `Model Decisions` become the source of truth for execution.
+This rewrite is mandatory even if the earlier plan already leaned toward `create`.
 
 ## Evidence Ladder
 
@@ -62,6 +66,7 @@ The following do not block reuse on their own:
 Default to `reuse` when the required capabilities are already covered.
 Default to `extend` when only additive fields or narrow adaptation are needed.
 Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior is unacceptable.
+Apply this rule even if the candidate is not a 100% match. A strong candidate with only additive gaps still belongs in `reuse` or `extend`, not `create`.
 
 ## Required Model Decision Carriers
 

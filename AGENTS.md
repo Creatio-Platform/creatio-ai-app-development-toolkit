@@ -303,6 +303,8 @@ Agent 3 is the Technical Annex / execution-plan step. Run it only when implement
 In `planning-first` mode, the developer providing runtime credentials or Creatio URL after Gate R counts as an explicit implementation request and triggers Agent 3.
 Before implementation, Agent 3 must record explicit `Model Decisions` for every planned business object, supporting object, planned lookup, and every non-obvious reference target so reuse, extension, or new creation is intentional rather than inferred during execution.
 If any schema creation or extension would still depend on Agent 4 "figuring out" whether to reuse an existing model, the implementation plan is invalid and must be regenerated before execution.
+If live DataForge discovery surfaces a strong candidate, that discovery overrides any earlier placeholder `Usr*` naming or create-first bias from Agent 2, the BA draft, or an earlier plan.
+Strong candidates must default to `reuse` or `extend` after the Evidence Ladder unless a concrete capability failure is proven. This remains true even if the candidate is not a 100% match.
 
 ## Agent Responsibilities
 

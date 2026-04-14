@@ -145,6 +145,7 @@ Live discovery may amend the technical plan after Gate R.
 If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, `technical-annex.md`, and ordered schema sync to reflect the stronger technical choice.
 `Model Decisions` are authoritative for execution.
 Earlier business wording is not a blocker to `reuse` or `extend` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
+This override still applies even if Agent 2, the BA draft, or an earlier plan preferred `create`.
 
 ### Model Discovery Gate
 
@@ -214,6 +215,8 @@ Use a reuse-first default after live discovery:
 - prefer `reuse` when the candidate already satisfies the approved business role, even if it belongs to a broader platform module or contains extra optional fields
 - prefer `extend` when the candidate needs only additive fields, minor localized behavior, or narrow adaptation
 - do not choose `create` only because the candidate is broader than needed, belongs to a shared platform module, or was not the placeholder schema named in the BA draft
+- do not choose `create` when the only proven gaps are additive or safely extendable, even if the candidate is not a 100% match
+- do not choose `create` just because live discovery arrived after an earlier placeholder choice; this applies even if Agent 2, the BA draft, or an earlier plan preferred create
 - for lookups, exact or near-exact match should default to `reuse`
 - create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior is unacceptable, or separate governance was explicitly confirmed with the user
 
@@ -263,6 +266,8 @@ The plan is invalid if Ordered Schema Sync references a created or extended sche
 - Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
 - `create` is never allowed as a placeholder choice for "decide later during implementation".
 - If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
+- If a strong candidate needs only additive extension, the plan must resolve to `extend` even if the candidate is not a 100% match.
+- If live discovery shows a strong reusable candidate, do not preserve a stale create decision from Agent 2 or an earlier plan.
 
 For `create` after a strong candidate was found, include an explicit comparison between:
 
