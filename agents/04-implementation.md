@@ -28,11 +28,13 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 ## Preconditions
 
 - `scripts/check-approval-gate.sh <AppName>` passes
+- `scripts/check-implementation-plan-gate.sh <AppName>` passes
 - `output/<AppName>/.creatio-env.json` exists and is valid
 - when the current run has a request URL, `.creatio-env.json.url` matches it exactly
 - `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
 - Agent 4 runs in the foreground
-- when the plan contains ambiguous entity, lookup, or reference choices, `plan.md` includes explicit `Model Decisions` for those choices
+- `plan.md` includes explicit `Model Decisions` for every business object, supporting object, planned lookup, and non-obvious reference target that Agent 4 could otherwise reinterpret during execution
+- every schema creation or extension step in the plan is already justified by a matching `Model Decisions` record
 
 ## Support-Mode Branch (Diagnostic-First)
 
@@ -88,6 +90,7 @@ Apply this branch only when support mode is on:
 
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
+- If a requested schema step is not fully covered by `Model Decisions`, stop with a blocker instead of improvising a new entity or lookup.
 - Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity
 - Use `create-entity-schema` only for additional business objects with distinct meaning
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
@@ -141,9 +144,10 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 
 ## Steps
 
-### 0. Check Gate R
+### 0. Check Gates
 
 - Run `scripts/check-approval-gate.sh <AppName>`
+- Run `scripts/check-implementation-plan-gate.sh <AppName>`
 - If this fails, stop immediately
 
 ### 1. Parse `plan.md`
@@ -151,6 +155,7 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - Extract the execution branch, resolved business defaults, `Model Decisions`, ordered schema sync steps, and page sync requirements
 - Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
 - Stop with blocker if the plan contains ambiguous entity, lookup, or reference choices but does not define explicit `Model Decisions`
+- Stop with blocker if Ordered Schema Sync would create or extend a schema that is not already covered by `Model Decisions`
 
 ### 2. Verify MCP reachability
 

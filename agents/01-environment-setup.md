@@ -201,7 +201,23 @@ clio healthcheck -e <env_name>
 - **Success** — proceed to Step 6.
 - **Failure** — see Error Handling below.
 
-### 6. Save environment configuration
+### 6. Install cliogate
+
+Install `cliogate` on the resolved environment immediately after a successful health check and before completing Agent 1:
+
+```bash
+clio install-gate -e <env_name>
+```
+
+Why this timing matters:
+
+- the environment has already been registered and proven reachable
+- later stages may need live SysSettings reads or cliogate-backed MCP helpers for DataForge discovery and exact runtime inspection
+- installing `cliogate` here keeps Agent 3 reuse/discovery work from depending on ad-hoc environment fixes
+
+If `clio install-gate` fails, stop the stage and treat that as an environment blocker. Do not continue to downstream planning or implementation with a partially prepared environment.
+
+### 7. Save environment configuration
 
 Create or overwrite the file `output/<AppName>/.creatio-env.json` from the current request URL and the environment resolved in this run:
 
@@ -229,6 +245,7 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 | Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
+| `clio install-gate` fails | Stop before downstream planning. Surface the clio error and ask the developer to fix the environment or installation issue. |
 | Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 | Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
@@ -236,5 +253,6 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
+✅ `clio install-gate -e <env_name>` succeeds  
 ✅ `output/<AppName>/.creatio-env.json` exists with the current request URL, the correct `environment`, and persisted runtime MCP details  
 ✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  

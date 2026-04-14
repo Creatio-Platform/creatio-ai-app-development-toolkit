@@ -136,11 +136,15 @@ Rules:
 
 ### Model Discovery Gate
 
-Run a planning-time model discovery pass whenever there is model uncertainty or a plausible existing schema candidate.
+Run a planning-time reuse assessment for the approved business objects before execution planning begins.
+Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
 
 #### Triggers
 
-Open the conditional discovery branch if any of the following is true:
+Open the discovery branch for any business object, supporting object, lookup, or reference target that could plausibly map to an existing app or schema.
+Treat this as mandatory planning work, not an optional optimization.
+
+This includes, but is not limited to, cases where:
 
 - a business object resembles a standard or already-existing platform concept such as case, request, article, knowledge, activity, comment, account, or contact
 - a secondary managed entity could plausibly reuse an existing platform or custom schema
@@ -150,7 +154,8 @@ Open the conditional discovery branch if any of the following is true:
 - a candidate existing `Usr*` schema already appears relevant
 - the current discovery step or prior evidence surfaces strong schema candidates through Data Forge
 
-If none of these triggers fire, keep the standard new-app flow simple and continue without standalone planning-time Data Forge calls.
+If the approved requirements truly prove a business object is greenfield-only, record that outcome explicitly in `Model Decisions` instead of skipping the assessment silently.
+Never treat "the BA draft already named a `Usr*` schema" as proof that the object is greenfield-only.
 
 #### Canonical Discovery Sequence
 
@@ -168,12 +173,13 @@ Do not use `dataforge-initialize` or `dataforge-update` during planning.
 
 #### Required Model Decisions
 
-After discovery, the plan must record a `Model Decisions` section for:
+The plan must record a `Model Decisions` section for:
 
 - the main entity when there is any plausible existing candidate
 - every additional business entity
 - every new lookup when an existing lookup candidate was considered
 - every non-obvious reference field target
+- every planned schema creation or extension step referenced later in ordered schema sync
 
 Each decision record must include:
 
@@ -183,14 +189,19 @@ Each decision record must include:
 - `chosen-schema`
 - `rationale`
 - `rejected-candidates`
+- `discovery-evidence`
 
 The plan is incomplete if discovery surfaced a strong candidate and the resulting `reuse` / `extend` / `create` choice is not recorded explicitly.
+The plan is also incomplete when a plausible candidate existed from the business wording but the record does not say `no suitable candidate found` or otherwise explain why `create` was selected.
+The plan is invalid if Ordered Schema Sync references a created or extended schema that does not have a corresponding `Model Decisions` record.
 
 #### Deterministic Choice Rules
 
 - Choose `reuse` when an existing schema already satisfies the required business role without unacceptable coupling cost.
 - Choose `extend` when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
 - Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
+- Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
+- `create` is never allowed as a placeholder choice for "decide later during implementation".
 
 Acceptable reasons for `create`:
 
@@ -205,6 +216,13 @@ Unacceptable reasons for `create`:
 - the team already intended to create a new schema
 - `Usr*` naming preference without further architectural rationale
 
+#### Discovery Evidence Rule
+
+- missing discovery evidence is a blocker whenever a reuse candidate was plausible from the business wording, approved model, or app/update context.
+- weak discovery evidence is also a blocker. Generic statements such as "new schema needed", "custom app requested", or "follow implementation defaults" do not satisfy this requirement.
+- outcome-only evidence is a blocker. Writing `greenfield-only` or `no suitable candidate found` without citing at least one attempted read-only tool call does not pass the implementation plan gate. The discovery-evidence field must contain at least one tool name (`dataforge-find-tables`, `dataforge-find-lookups`, `dataforge-context`, `application-get-info`, `application-get-list`, or `get-entity-schema-properties`).
+- when DataForge tools fail (e.g. HTTP 401, timeout), cite the attempted call and the fallback tool used. For example: `dataforge-find-tables attempted (401 Unauthorized), application-get-info returned no matching app` is valid evidence for a greenfield-only conclusion.
+
 ### Schema Sync Plan
 
 - Resolve whether `create-app` is sufficient for the app shell and which fields still require follow-up DB-first sync.
@@ -214,6 +232,7 @@ Unacceptable reasons for `create`:
 - Prefer batched lookup seeding inside the current `clio`-owned schema mutation flow; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
+- Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
 - Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.

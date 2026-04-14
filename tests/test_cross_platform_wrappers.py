@@ -134,6 +134,25 @@ Tasks move through New, Active, and Archived statuses.
 """
 
 
+def build_valid_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, no suitable candidate found
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
 def wrapper_env(workflow_root):
     env = os.environ.copy()
     env["WORKFLOW_ROOT_DIR"] = str(workflow_root)
@@ -251,6 +270,35 @@ class PowerShellWrapperSmokeTests(unittest.TestCase):
             check_result = run_powershell_script("check-approval-gate.ps1", "TodoList", workflow_root=workflow_root)
             self.assertEqual(check_result.returncode, 0, check_result.stderr)
             self.assertIn("GATE_OK TodoList", check_result.stdout)
+
+    def test_implementation_plan_wrappers_work_in_powershell(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir = Path(workflow_root) / "output" / "TodoList"
+            write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            write_file(output_dir / "plan.md", build_valid_plan_doc())
+            planning_result = run_powershell_script(
+                "write-planning-state.ps1",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
+            approval_result = run_powershell_script(
+                "write-approval-state.ps1",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
+            check_result = run_powershell_script("check-implementation-plan-gate.ps1", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(check_result.returncode, 0, check_result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_GATE_OK TodoList", check_result.stdout)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,47 @@ UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNOREC
 USR_CODE_RE = re.compile(r"\bUsr[A-Za-z0-9_]+\b")
 CHECKLIST_SOURCE_RE = re.compile(r"\bconfirmed\b|\bassumed\b|complete=true|source=", re.IGNORECASE)
 HTTP_URL_RE = re.compile(r"^https?://")
+MODEL_DECISIONS_HEADING_RE = re.compile(r"^\s*#{2,6}\s+Model Decisions\s*$", re.MULTILINE)
+MODEL_DECISIONS_SECTION_RE = re.compile(
+    r"^\s*#{2,6}\s+Model Decisions\s*$\n(?P<body>.*?)(?=^\s*#{1,6}\s+\S|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+CHOSEN_ACTION_RE = re.compile(r"chosen-action\s*:\s*(reuse|extend|create)\b", re.IGNORECASE)
+DISCOVERY_EVIDENCE_RE = re.compile(r"discovery-evidence\s*:", re.IGNORECASE)
+DISCOVERY_TOOL_SIGNAL_RE = re.compile(
+    r"(application-get-list|application-get-info|dataforge-find-tables|dataforge-find-lookups|dataforge-context|get-entity-schema-properties)",
+    re.IGNORECASE,
+)
+DISCOVERY_OUTCOME_SIGNAL_RE = re.compile(
+    r"(greenfield-only|no suitable candidate found)",
+    re.IGNORECASE,
+)
+DISCOVERY_SIGNAL_RE = re.compile(
+    r"(application-get-list|application-get-info|dataforge-find-tables|dataforge-find-lookups|dataforge-context|get-entity-schema-properties|greenfield-only|no suitable candidate found)",
+    re.IGNORECASE,
+)
+DECISION_BLOCK_RE = re.compile(
+    r"(^|\n)-\s*business-concept\s*:\s*(?P<business_concept>.+?)(?=\n\s*\n\s*-\s*business-concept\s*:|\n-\s*business-concept\s*:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+DECISION_REQUIRED_FIELDS = (
+    "business-concept",
+    "candidates-considered",
+    "chosen-action",
+    "chosen-schema",
+    "rationale",
+    "rejected-candidates",
+    "discovery-evidence",
+)
+SCHEMA_SYNC_HEADING_RE = re.compile(r"^\s*#{2,6}\s+Ordered Schema Sync\s*$", re.MULTILINE)
+SCHEMA_SYNC_SECTION_RE = re.compile(
+    r"^\s*#{2,6}\s+Ordered Schema Sync\s*$\n(?P<body>.*?)(?=^\s*#{1,6}\s+\S|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+SCHEMA_STEP_RE = re.compile(
+    r"(?P<action>create|extend|reuse|update)[^`\n]*?(?P<schema>Usr[A-Za-z0-9_]+)",
+    re.IGNORECASE,
+)
 
 
 def workflow_root_text():
@@ -303,6 +344,74 @@ def validate_request_spec(request_spec_file):
     return f"REQUEST_SPEC_OK {request_spec_file}"
 
 
+def validate_implementation_plan_doc(plan_file):
+    path = Path(plan_file)
+    if not path.is_file():
+        raise WorkflowError(f"Implementation plan failed: file not found: {plan_file}")
+    text = path.read_text(encoding="utf-8")
+    if not MODEL_DECISIONS_HEADING_RE.search(text):
+        raise WorkflowError("Implementation plan failed: missing required section: Model Decisions")
+    section_match = MODEL_DECISIONS_SECTION_RE.search(text)
+    if not section_match:
+        raise WorkflowError("Implementation plan failed: could not read Model Decisions content")
+    section_text = section_match.group("body")
+    decision_blocks = list(DECISION_BLOCK_RE.finditer(section_text))
+    if not decision_blocks:
+        raise WorkflowError("Implementation plan failed: Model Decisions must include at least one decision record starting with '- business-concept:'")
+    chosen_schemas = set()
+    for block_match in decision_blocks:
+        block_text = block_match.group(0)
+        missing_fields = [field for field in DECISION_REQUIRED_FIELDS if not re.search(rf"{re.escape(field)}\s*:", block_text, re.IGNORECASE)]
+        if missing_fields:
+            raise WorkflowError(
+                "Implementation plan failed: each Model Decisions record must include: "
+                + ", ".join(DECISION_REQUIRED_FIELDS)
+            )
+        chosen_action_match = re.search(r"chosen-action\s*:\s*(reuse|extend|create)\b", block_text, re.IGNORECASE)
+        chosen_schema_match = re.search(r"chosen-schema\s*:\s*([A-Za-z0-9_]+)", block_text, re.IGNORECASE)
+        discovery_evidence_match = re.search(r"discovery-evidence\s*:\s*(.+)", block_text, re.IGNORECASE)
+        rejected_candidates_match = re.search(r"rejected-candidates\s*:\s*(.+)", block_text, re.IGNORECASE)
+        if not chosen_action_match or not chosen_schema_match or not discovery_evidence_match or not rejected_candidates_match:
+            raise WorkflowError("Implementation plan failed: could not parse required Model Decisions fields")
+        chosen_action = chosen_action_match.group(1).lower()
+        chosen_schema = chosen_schema_match.group(1)
+        discovery_evidence = discovery_evidence_match.group(1)
+        rejected_candidates = rejected_candidates_match.group(1)
+        chosen_schemas.add(chosen_schema.lower())
+        if not DISCOVERY_SIGNAL_RE.search(discovery_evidence):
+            raise WorkflowError(
+                "Implementation plan failed: each discovery-evidence field must cite read-only discovery or an explicit greenfield-only / no suitable candidate found outcome"
+            )
+        if not DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
+            raise WorkflowError(
+                "Implementation plan failed: discovery-evidence must cite at least one attempted tool call "
+                "(dataforge-find-tables, dataforge-find-lookups, dataforge-context, application-get-info, "
+                "application-get-list, get-entity-schema-properties). "
+                "Outcome-only evidence (greenfield-only, no suitable candidate found) is not sufficient."
+            )
+        if chosen_action == "create":
+            if not re.search(r"(greenfield-only|no suitable candidate found)", discovery_evidence, re.IGNORECASE):
+                raise WorkflowError(
+                    "Implementation plan failed: chosen-action: create requires explicit greenfield-only or no suitable candidate found evidence"
+                )
+            rejection_keywords_re = r"(no suitable candidate found|ownership.{0,10}boundary|unwanted.{0,10}coupling|lifecycle.{0,20}mismatch|semantic.{0,10}mismatch|broader than.{0,20}scope)"
+            if not re.search(rejection_keywords_re, rejected_candidates, re.IGNORECASE):
+                raise WorkflowError(
+                    "Implementation plan failed: chosen-action: create must state why reuse or extension was rejected"
+                )
+    schema_sync_match = SCHEMA_SYNC_SECTION_RE.search(text)
+    if schema_sync_match:
+        schema_sync_text = schema_sync_match.group("body")
+        for step_match in SCHEMA_STEP_RE.finditer(schema_sync_text):
+            action = step_match.group("action").lower()
+            schema = step_match.group("schema").lower()
+            if action in {"create", "extend", "update"} and schema not in chosen_schemas:
+                raise WorkflowError(
+                    f"Implementation plan failed: Ordered Schema Sync references {step_match.group('schema')} without a matching Model Decisions record"
+                )
+    return f"IMPLEMENTATION_PLAN_OK {plan_file}"
+
+
 def parse_write_planning_values(values):
     if len(values) == 6:
         app_name, approved_by, routing_mode, creatio_url, understanding_text, confirmation_text = values
@@ -461,6 +570,15 @@ def check_approval_gate(app_name):
     return f"GATE_OK {app_name}"
 
 
+def check_implementation_plan_gate(app_name):
+    check_approval_gate(app_name)
+    plan_file_text = output_file_text(app_name, "plan.md")
+    if not Path(plan_file_text).is_file():
+        raise WorkflowError(f"Implementation plan gate failed: plan.md not found: {plan_file_text}")
+    validate_implementation_plan_doc(plan_file_text)
+    return f"IMPLEMENTATION_PLAN_GATE_OK {app_name}"
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="workflow_cli.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -472,12 +590,16 @@ def build_parser():
     validate_request_parser.add_argument("request_spec_file")
     validate_requirements_parser = subparsers.add_parser("validate-requirements-doc")
     validate_requirements_parser.add_argument("requirements_file")
+    validate_implementation_plan_parser = subparsers.add_parser("validate-implementation-plan-doc")
+    validate_implementation_plan_parser.add_argument("plan_file")
     write_approval_parser = subparsers.add_parser("write-approval-state")
     write_approval_parser.add_argument("app_name")
     write_approval_parser.add_argument("approved_by")
     write_approval_parser.add_argument("approval_text")
     check_approval_parser = subparsers.add_parser("check-approval-gate")
     check_approval_parser.add_argument("app_name")
+    check_implementation_plan_parser = subparsers.add_parser("check-implementation-plan-gate")
+    check_implementation_plan_parser.add_argument("app_name")
     return parser
 
 
@@ -490,9 +612,15 @@ def run_command(args):
         return validate_request_spec(args.request_spec_file)
     if args.command == "validate-requirements-doc":
         return validate_requirements_doc(args.requirements_file)
+    if args.command == "validate-implementation-plan-doc":
+        return validate_implementation_plan_doc(args.plan_file)
     if args.command == "write-approval-state":
         return write_approval_state(args.app_name, args.approved_by, args.approval_text)
-    return check_approval_gate(args.app_name)
+    if args.command == "check-approval-gate":
+        return check_approval_gate(args.app_name)
+    if args.command == "check-implementation-plan-gate":
+        return check_implementation_plan_gate(args.app_name)
+    raise ValueError(f"Unknown command: {args.command}")
 
 
 def main(argv=None):

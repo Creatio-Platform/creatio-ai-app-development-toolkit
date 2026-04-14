@@ -133,6 +133,202 @@ Tasks move through New, Active, and Archived statuses.
 """
 
 
+def build_valid_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, no suitable candidate found
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
+def build_invalid_plan_doc_without_reuse_evidence():
+    return """# Implementation Plan
+
+## Ordered Schema Sync
+
+- Create the task schema.
+"""
+
+
+def build_invalid_plan_doc_without_discovery_evidence():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: platform task models do not match the approved scope
+
+## Ordered Schema Sync
+
+- Create the task schema.
+"""
+
+
+def build_invalid_plan_doc_without_create_rejection_reason():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: custom app requested
+  discovery-evidence: application-get-list, dataforge-find-tables, no suitable candidate found
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
+def build_invalid_plan_doc_without_matching_model_decision():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
+  discovery-evidence: application-get-list, dataforge-find-tables, no suitable candidate found
+
+## Ordered Schema Sync
+
+- create UsrTaskComment schema for the approved comment model.
+"""
+
+
+def build_valid_greenfield_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Intake Record
+  candidates-considered: greenfield-only domain review
+  chosen-action: create
+  chosen-schema: UsrIntakeRecord
+  rationale: Approved requirements define a net-new business object with no plausible reuse target
+  rejected-candidates: no suitable candidate found
+  discovery-evidence: dataforge-find-tables attempted (no matches), application-get-list returned no matching app, greenfield-only
+
+## Ordered Schema Sync
+
+- create UsrIntakeRecord schema for the approved intake model.
+"""
+
+
+def build_invalid_plan_doc_outcome_only_evidence():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: no suitable candidate found
+  discovery-evidence: greenfield-only, no suitable candidate found
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
+def build_valid_reuse_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Contact
+  candidates-considered: Contact, Account
+  chosen-action: reuse
+  chosen-schema: Contact
+  rationale: Platform Contact entity already satisfies the business role
+  rejected-candidates: Account does not match the required persona semantics
+  discovery-evidence: dataforge-find-tables, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- reuse Contact schema as-is for the contact role.
+"""
+
+
+def build_valid_extend_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Support Case
+  candidates-considered: Case, UsrSupportCase
+  chosen-action: extend
+  chosen-schema: UsrSupportCase
+  rationale: Existing UsrSupportCase matches but needs additional fields
+  rejected-candidates: platform Case schema has unwanted coupling to service module
+  discovery-evidence: dataforge-find-tables, application-get-info, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- extend UsrSupportCase with additional approved columns.
+"""
+
+
+def build_valid_multi_block_plan_doc():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: existing task-like app models, existing task-like schemas
+  chosen-action: create
+  chosen-schema: UsrTask
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, no suitable candidate found
+
+- business-concept: Task Status
+  candidates-considered: existing status lookups
+  chosen-action: create
+  chosen-schema: UsrTaskStatus
+  rationale: App-specific lifecycle requires dedicated status lookup
+  rejected-candidates: no suitable candidate found
+  discovery-evidence: dataforge-find-lookups, no suitable candidate found
+
+- business-concept: Task Priority
+  candidates-considered: existing priority lookups, ActivityPriority
+  chosen-action: reuse
+  chosen-schema: ActivityPriority
+  rationale: Platform priority lookup matches the required semantics exactly
+  rejected-candidates: none
+  discovery-evidence: dataforge-find-lookups, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- create UsrTaskStatus lookup for task lifecycle.
+- create UsrTask schema for the approved task model.
+"""
+
+
 def run_workflow_cli(*args, workflow_root, stdin_text=None):
     env = os.environ.copy()
     env["WORKFLOW_ROOT_DIR"] = str(workflow_root)
@@ -253,6 +449,115 @@ class WorkflowCliTests(unittest.TestCase):
             check_result = run_workflow_cli("check-approval-gate", "TodoList", workflow_root=workflow_root)
             self.assertEqual(check_result.returncode, 0, check_result.stderr)
             self.assertIn("GATE_OK TodoList", check_result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_model_decisions_with_discovery_evidence(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_rejects_missing_model_decisions(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_without_reuse_evidence())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing required section: Model Decisions", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_missing_discovery_evidence(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_without_discovery_evidence())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("discovery-evidence", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_outcome_only_discovery_evidence(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_outcome_only_evidence())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must cite at least one attempted tool call", result.stderr)
+
+    def test_validate_implementation_plan_doc_accepts_explicit_greenfield_only_outcome(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "IntakeRegistry" / "plan.md"
+            write_file(plan_path, build_valid_greenfield_plan_doc())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_rejects_create_without_explicit_reuse_rejection_reason(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_without_create_rejection_reason())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("chosen-action: create must state why reuse or extension was rejected", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_schema_sync_without_matching_model_decision(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_without_matching_model_decision())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Ordered Schema Sync references UsrTaskComment without a matching Model Decisions record", result.stderr)
+
+    def test_check_implementation_plan_gate_requires_plan_and_approval_gate(self):
+        with temp_workflow_root() as workflow_root:
+            output_dir = Path(workflow_root) / "output" / "TodoList"
+            write_file(output_dir / "requirements.md", build_valid_requirements_doc())
+            write_file(output_dir / "request-spec.json", json.dumps(build_valid_request_spec()))
+            planning_result = run_workflow_cli(
+                "write-planning-state",
+                "TodoList",
+                "tester",
+                "planning-first",
+                "deferred",
+                "Todo app for daily work",
+                "Yes, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(planning_result.returncode, 0, planning_result.stderr)
+            approval_result = run_workflow_cli(
+                "write-approval-state",
+                "TodoList",
+                "tester",
+                "Approved, proceed",
+                workflow_root=workflow_root,
+            )
+            self.assertEqual(approval_result.returncode, 0, approval_result.stderr)
+            write_file(output_dir / "plan.md", build_valid_plan_doc())
+            result = run_workflow_cli("check-implementation-plan-gate", "TodoList", workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_GATE_OK TodoList", result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_reuse_action(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "ContactApp" / "plan.md"
+            write_file(plan_path, build_valid_reuse_plan_doc())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_extend_action(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "SupportApp" / "plan.md"
+            write_file(plan_path, build_valid_extend_plan_doc())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_multiple_decision_blocks(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TaskApp" / "plan.md"
+            write_file(plan_path, build_valid_multi_block_plan_doc())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
 
     def test_write_planning_state_rejects_invalid_routing_mode(self):
         with temp_workflow_root() as workflow_root:
