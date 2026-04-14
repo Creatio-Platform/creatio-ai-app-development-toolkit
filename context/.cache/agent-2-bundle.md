@@ -104,19 +104,22 @@ Stage-specific constraints for this agent:
 Required sections:
 
 - `# <AppName> - Requirements`
-- `## 1. Business context`
-- `## 2. Users, access and ownership`
-- `## 3. Core process and business logic`
-- `## 4. Data model`
-- `## 5. UX assumptions`
-- `## Assumptions used for the draft requirements`
+- `## 1. Business Outcome`
+- `## 2. Core Problem`
+- `## 3. Actors and Roles`
+- `## 4. Domain Model`
+- `## 5. Lifecycle and Statuses`
+- `## 6. Business Logic`
+- `## 7. UX Expectations`
+- `## 8. Edge Cases and Exceptions`
+- `## 9. Acceptance Criteria`
+- `## 10. Access / Personas`
+- `## 11. Assumptions`
 
 ## Document Rendering Contract
 
-`requirements.md` must follow a fixed rendering format.
-
+`requirements.md` must follow the exact BA-style Business Plan structure defined in `AGENTS.md` and `context/business-checklist.md`.
 The agent must not improvise the document shape.
-Use exactly the required top-level sections, required subsection labels, and required table layouts defined below.
 
 `requirements.md` is for business reading and approval.
 `request-spec.json` is the normalized machine-readable persistence artifact.
@@ -131,16 +134,17 @@ Do not expose any of the following in `requirements.md`:
 - internal checklist labels
 - implementation choreography
 
-Use tables only in section 4 unless the developer explicitly asks for a tabular business matrix elsewhere.
-Sections 1, 2, 3, 5, and `Assumptions used for the draft requirements` must use short paragraphs and bullets, not tables.
+Use tables only in `## 4. Domain Model` unless the developer explicitly asks for a tabular business matrix elsewhere.
+Sections `1`, `2`, `3`, `5`, `6`, `7`, `8`, `9`, `10`, and `11` must use short paragraphs and bullets, not tables.
 
 ## Hard Fail Conditions
 
 Do not show the draft to the developer if any of the following is true:
 
-- section 4 does not contain the required field tables
+- a required top-level section is missing, renamed, reordered, or merged
+- `## 4. Domain Model` does not contain the required field tables
 - a main or supporting entity is described only in prose or bullets without its own field table
-- the data model is rendered as prose-only summary instead of the exact section 4 structure
+- the domain model is rendered as prose-only summary instead of the required `## 4. Domain Model` structure
 - a wrapper such as `<proposed_plan>` is being used to justify a shortened, summarized, or freely rewritten body instead of the exact BA-style structure
 
 Rules for the output:
@@ -153,25 +157,18 @@ Rules for the output:
 - Keep the document compact, structured, and business-focused.
 - Use business language rather than technical implementation language.
 - Technical choreography, exact MCP execution steps, and payload mechanics belong to Agent 3, not here.
+- Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery in Agent 3.
+- When the BA draft shows a likely schema code or custom lookup name, treat it as a planning placeholder rather than a binding implementation commitment.
 - If the host environment requires a wrapper such as `<proposed_plan>`, keep the wrapper only as a container. The visible body must still use the BA-style headings defined here.
 - Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
 - Keep each top-level section concise. Prefer 1 short opening paragraph plus compact bullets unless the request genuinely needs more detail.
 
 Use this exact visible skeleton for `requirements.md`:
 
-- `## 1. Business context`
-  - one short opening paragraph
-  - `System value:` followed by 3-5 bullets
-  - `MVP success criteria:` followed by 3-5 bullets
-- `## 2. Users, access and ownership`
-  - `Primary roles:` followed by 2-4 bullets
-  - `Access model:` followed by 3-5 bullets
-- `## 3. Core process and business logic`
-  - `Typical process:` followed by a numbered list
-  - `Lifecycle:` followed by 2-5 bullets
-  - `Key business logic:` followed by 3-6 bullets
-  - `Operational metrics:` followed by 3-5 bullets
-- `## 4. Data model`
+- `## 1. Business Outcome`
+- `## 2. Core Problem`
+- `## 3. Actors and Roles`
+- `## 4. Domain Model`
   - `### 4.1 Main entity: <Business title>`
   - entity metadata block in this exact order:
     - `Title`
@@ -186,12 +183,15 @@ Use this exact visible skeleton for `requirements.md`:
     - each supporting entity must also include the same entity metadata block before its field table
   - `### 4.x Lookups`
   - `### 4.x Relationships`
-- `## 5. UX assumptions`
-  - `What should feel easy in the MVP:` followed by 4-6 bullets
-- `## Assumptions used for the draft requirements`
-  - flat bullet list only
+- `## 5. Lifecycle and Statuses`
+- `## 6. Business Logic`
+- `## 7. UX Expectations`
+- `## 8. Edge Cases and Exceptions`
+- `## 9. Acceptance Criteria`
+- `## 10. Access / Personas`
+- `## 11. Assumptions`
 
-Section 4 must define the core business entities.
+`## 4. Domain Model` must define the core business entities.
 For each entity block, include:
 
 - title
@@ -210,16 +210,16 @@ Field tables in section 4 must use exactly these columns:
 - `Default`
 
 Keep the data model simple. Start with the core business object and add supporting entities only when clearly required.
-Whenever both title and code are shown in section 4, show `Title` first and `Code` second.
+Whenever both title and code are shown in `## 4. Domain Model`, show `Title` first and `Code` second.
 `Title` is mandatory for every custom field.
 `Default` must be rendered compactly as one of:
 
-- `schema default: <value>`
-- `ui default: <value>`
+- `<business default value>`
 - `-`
 
+Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.
 If a lookup entity has no custom columns in MVP, state that explicitly.
-If the domain is recognizable, section 4 must include the baseline profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects, unless they are explicitly out of scope.
+If the domain is recognizable, `## 4. Domain Model` must include the baseline profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects, unless they are explicitly out of scope.
 Do not replace the entity field tables with prose summaries. Every main entity and every supporting entity must have its own explicit field table in the fixed format above.
 
 In the `Lookups` subsection, use a compact bullet list only.
@@ -240,7 +240,7 @@ Each relationship bullet must state:
 - required or optional child-side link status when applicable
 - a short business rationale when the role of the secondary entity is not obvious
 
-Section 5 must surface deterministic UX defaults in a compact business-facing format.
+`## 7. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
 Its bullets must cover:
 
 - default list columns
@@ -249,18 +249,18 @@ Its bullets must cover:
 - default sort for time-based records when they exist
 - visibility of overdue or open work items when they exist
 
-In section 5, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
+In `## 7. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
 
 Before finalizing the BA draft, verify at minimum:
 
-- each required business rule has a visible carrier in the data model, UX assumptions, or an explicit assumption
+- each required business rule has a visible carrier in the domain model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting entity has the necessary parent-link and cross-field constraints described
 - each main and supporting entity includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
-- sections 1, 2, 3, 5, and `Assumptions used for the draft requirements` do not contain markdown tables
-- section 4 contains the field tables, lookup bullets, and relationship bullets required by this contract
+- sections `1`, `2`, `3`, `5`, `6`, `7`, `8`, `9`, `10`, and `11` do not contain markdown tables
+- `## 4. Domain Model` contains the field tables, lookup bullets, and relationship bullets required by this contract
 
 ## Request Spec Contract
 
@@ -269,7 +269,23 @@ Before finalizing the BA draft, verify at minimum:
 - `sourcePrompt`
 - `businessChecklist`
 - `technicalInputs`
+- `planningSignals`
 - `assumptions`
+
+`planningSignals` must include:
+
+- `reuseCheckRequired`
+
+Use `planningSignals.reuseCheckRequired` as the Agent 2 handoff list for Agent 3.
+This list must stay technical-light: it marks business concepts that need live reuse discovery, but it must not pre-decide `reuse`, `extend`, or `create`.
+
+When a business concept is recognizable and could plausibly map to an existing platform or custom schema, add an entry with:
+
+- `businessConcept`
+- `whyAmbiguous`
+- `suspectedCandidates`
+
+If no such concept exists, persist `reuseCheckRequired: []`.
 
 `businessChecklist` must include these groups plus `complete=true`:
 
@@ -308,27 +324,23 @@ Use both acceptance checks before approval artifacts are written:
 - All custom names start with `Usr`.
 - Do not add inherited base columns to requirements.
 - Enum-like fields must be separate lookup entities.
-- BaseLookup already provides `Name` and `Description`; keep `Name` as the display field.
-- If the current or template-created main schema already has `Name`, reuse it as the record title.
-- Do not add `UsrName`, `UsrTitle`, or `UsrCaption` unless the developer explicitly needs a separate business field.
-- For a new app with one primary record type, use the template-created section entity as the canonical main entity.
+- For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
+- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
+- When that ambiguity exists, persist a `planningSignals.reuseCheckRequired` entry in `request-spec.json` so Agent 3 must open the discovery branch for that concept.
 
 ## Default Resolution Rules
 
-Every requirement phrased as "defaults to X" must be classified before handoff:
-
-- `schema default`
-- `ui default`
-
-Lookup seed rows alone do not satisfy a default requirement.
+Every requirement phrased as "defaults to X" must be explicit before handoff.
+State the target field and default value in business language.
+Leave the enforcement mechanism to implementation planning under the current `clio` MCP guidance.
 
 The BA draft is incomplete if any of the following is true:
 
 - an entity does not specify its schema name
 - a custom field is missing a human-readable `Title`
-- a relationship is described in prose but not listed in the `Relationships` subsection of `## 4. Data model`
-- a field table default is not rendered as `schema default: <value>`, `ui default: <value>`, or `-`
+- a relationship is described in prose but not listed in the `Relationships` subsection of `## 4. Domain Model`
+- a field table default is not rendered as an explicit business default value or `-`
 - a pipeline, funnel, or stages are mentioned without clarifying where lifecycle state lives
 - a secondary entity is listed without explaining its business purpose
 - the `businessLogic` group does not cover or explicitly assume minimum create fields, duplicate handling, archive/close posture, and ownership/editing posture
@@ -345,16 +357,21 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 
 | # | Section | Required |
 |---|---------|----------|
-| 1 | Business context | yes |
-| 2 | Users, access and ownership | yes |
-| 3 | Core process and business logic | yes |
-| 4 | Data model | yes |
-| 5 | UX assumptions | yes |
-| 6 | Assumptions used for the draft requirements | yes |
+| 1 | Business Outcome | yes |
+| 2 | Core Problem | yes |
+| 3 | Actors and Roles | yes |
+| 4 | Domain Model | yes |
+| 5 | Lifecycle and Statuses | yes |
+| 6 | Business Logic | yes |
+| 7 | UX Expectations | yes |
+| 8 | Edge Cases and Exceptions | yes |
+| 9 | Acceptance Criteria | yes |
+| 10 | Access / Personas | yes |
+| 11 | Assumptions | yes |
 
-Sections 1–5 and the assumptions block may never be omitted. Edge cases, acceptance criteria, and analytics should be resolved inside sections 1–5 or captured explicitly in assumptions when they do not materially change the business intent.
-
-The plan body shown for Gate R approval must follow this structure exactly. A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
+The checklist groups below are discovery buckets, not an alternate final document structure.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 11-section Business Plan above.
+A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
 ---
 
@@ -389,7 +406,7 @@ If they do not materially change scope, include them as explicit assumptions ins
 
 ## Checklist Items
 
-## 1. Business context
+### Business context
 
 Required:
 - app purpose
@@ -400,7 +417,7 @@ Required:
 
 The first discovery questions should focus here before moving into lower-level detail.
 
-## 2. Users, access and ownership
+### Users, access and ownership
 
 Required:
 - who uses the app
@@ -413,7 +430,7 @@ If restrictions are not essential, explicitly state:
 
 Do not suggest optional restrictions without a business reason.
 
-## 3. Core process and business logic
+### Core process and business logic
 
 Required:
 - current operational pain points
@@ -436,7 +453,7 @@ Required:
 
 If full metric detail is missing, define a practical draft set and mark it as an assumption.
 
-## 4. Data model
+### Data model
 
 Required:
 - main entities
@@ -453,7 +470,7 @@ Resolve these ambiguities explicitly when they appear in the request:
 
 The visible BA draft **must** render each entity in the data model section as a markdown table with columns: `Title`, `Code`, `Description`, `Data type`, `Required`, `Default`. Lookup seed rows must also be rendered as a table. Do not use bullet lists to describe entity fields or seed rows.
 
-## 5. UX assumptions
+### UX assumptions
 
 Default unless critical:
 - list page columns
@@ -468,7 +485,7 @@ If the developer omits exact page fields or gives only a partial list, resolve d
 - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
 - Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
-The BA draft must surface these defaults in the `UX assumptions` section:
+The BA draft must surface these defaults in the `UX Expectations` section:
 - default list columns
 - default sorting
 - default main filters
@@ -476,7 +493,7 @@ The BA draft must surface these defaults in the `UX assumptions` section:
 
 The visible BA draft should render the UX section as a short bullet list, not as a table.
 
-## Assumptions used for the draft requirements
+### Assumptions used for the draft requirements
 
 Default unless critical:
 - required fields
@@ -509,7 +526,7 @@ The pre-analysis must check for:
 - contradictions between business context, process, data model, UX assumptions, and assumptions
 - business logic that is not reflected in the data model or cannot be supported by the described UX
 - required fields in business logic that are not marked as required in the data model
-- defaults that do not identify a concrete `schema default`, `ui default`, or explicit absence of default
+- defaults that do not identify an explicit business default or explicit absence of default
 - sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
 - lookup usage that is inconsistent across entities or too broad for the stated business scope
 - supporting entities whose required parent links or cross-field constraints are not explicitly captured
@@ -517,10 +534,12 @@ The pre-analysis must check for:
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the data model section
 - checklist-source language leaking into the visible BA draft
+- recognizable business concepts that may map to existing schemas but are not marked for Agent 3 in `planningSignals.reuseCheckRequired`
 
 If pre-analysis finds a material issue:
 - ask a targeted follow-up question when the issue changes business intent or acceptance
 - otherwise resolve it as an explicit assumption before showing the draft
+- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, add a `planningSignals.reuseCheckRequired` handoff entry in `request-spec.json`
 
 Do not present the BA draft while known cross-section contradictions or missing carriers still exist.
 
@@ -563,7 +582,5 @@ All other technical values should use deterministic defaults and be documented l
 
 ## Display Field Defaulting
 
-- For `BaseLookup`, default the display field to inherited `Name`.
-- For template-created app section entities, default the record title to `Name` when the schema snapshot already contains it.
-- For a new app with one primary record type, default that record type to the template-created section entity whose schema name matches the app code. Do not invent a second entity name for the same records.
-- Add a separate title-like column such as `UsrTitle` only when the developer explicitly needs a business field that is different from the record name.
+- For canonical main-entity rules, lookup display semantics, and title-field assumptions, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
+- In the BA draft, describe the record title in business language and request a separate title-like field only when the business needs a field that is distinct from the record name.

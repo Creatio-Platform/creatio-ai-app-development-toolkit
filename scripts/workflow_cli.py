@@ -57,6 +57,95 @@ UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNOREC
 USR_CODE_RE = re.compile(r"\bUsr[A-Za-z0-9_]+\b")
 CHECKLIST_SOURCE_RE = re.compile(r"\bconfirmed\b|\bassumed\b|complete=true|source=", re.IGNORECASE)
 HTTP_URL_RE = re.compile(r"^https?://")
+MODEL_DECISIONS_HEADING_RE = re.compile(r"^\s*#{2,6}\s+Model Decisions\s*$", re.MULTILINE)
+MODEL_DECISIONS_SECTION_RE = re.compile(
+    r"^\s*#{2,6}\s+Model Decisions\s*$\n(?P<body>.*?)(?=^\s*#{1,6}\s+\S|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+CHOSEN_ACTION_RE = re.compile(r"chosen-action\s*:\s*(reuse|extend|create)\b", re.IGNORECASE)
+DISCOVERY_EVIDENCE_RE = re.compile(r"discovery-evidence\s*:", re.IGNORECASE)
+DISCOVERY_TOOL_SIGNAL_RE = re.compile(
+    r"(application-get-list|application-get-info|dataforge-find-tables|dataforge-find-lookups|dataforge-context|get-entity-schema-properties)",
+    re.IGNORECASE,
+)
+INITIAL_DISCOVERY_TOOL_SIGNAL_RE = re.compile(
+    r"(dataforge-find-tables|dataforge-find-lookups)",
+    re.IGNORECASE,
+)
+FOLLOW_UP_DISCOVERY_SIGNAL_RE = re.compile(
+    r"(dataforge-context)",
+    re.IGNORECASE,
+)
+SCHEMA_CONFIRMATION_SIGNAL_RE = re.compile(
+    r"(dataforge-get-table-columns|dataforge-get-relations|get-entity-schema-properties|get-entity-schema-column-properties)",
+    re.IGNORECASE,
+)
+DISCOVERY_OUTCOME_SIGNAL_RE = re.compile(
+    r"(greenfield-only|no suitable candidate found)",
+    re.IGNORECASE,
+)
+DISCOVERY_SIGNAL_RE = re.compile(
+    r"(application-get-list|application-get-info|dataforge-find-tables|dataforge-find-lookups|dataforge-context|get-entity-schema-properties|greenfield-only|no suitable candidate found)",
+    re.IGNORECASE,
+)
+DECISION_BLOCK_RE = re.compile(
+    r"(^|\n)-\s*business-concept\s*:\s*(?P<business_concept>.+?)(?=\n\s*\n\s*-\s*business-concept\s*:|\n-\s*business-concept\s*:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+DECISION_REQUIRED_FIELDS = (
+    "business-concept",
+    "candidates-considered",
+    "chosen-action",
+    "chosen-schema",
+    "tradeoff-escalation",
+    "rationale",
+    "rejected-candidates",
+    "candidate-fit-summary",
+    "required-capabilities",
+    "mismatch-evidence",
+    "discovery-evidence",
+)
+CREATE_REJECTION_REASON_RE = re.compile(
+    r"(no suitable candidate found|greenfield-only|ownership.{0,20}boundary|unwanted.{0,20}coupling|lifecycle.{0,30}mismatch|semantic.{0,20}mismatch|broader than.{0,30}scope|field.{0,20}mismatch|column.{0,20}mismatch|relation.{0,20}mismatch|status.{0,20}mismatch|shared lookup|module coupling|marketing-specific|does not match|does not fit)",
+    re.IGNORECASE,
+)
+GENERIC_CREATE_JUSTIFICATION_RE = re.compile(
+    r"(broader platform object|broader than.{0,30}needed|shared lookup|shared platform lookup|module coupling|platform module|ownership boundary|marketing-specific|custom app requested|might diverge later|shared and could change)",
+    re.IGNORECASE,
+)
+PARTIAL_MATCH_DISMISSAL_RE = re.compile(
+    r"(not a 100% match|not 100% match|not an exact match|not a perfect match|not exact enough)",
+    re.IGNORECASE,
+)
+PRIOR_PLAN_CREATE_PREFERENCE_RE = re.compile(
+    r"(agent 2|ba draft|earlier plan|previous plan|prior plan).{0,60}(preferred|chose|decided|picked|named).{0,60}(create|custom|new|Usr)",
+    re.IGNORECASE,
+)
+CAPABILITY_COVERAGE_SIGNAL_RE = re.compile(
+    r"(already satisfies|already covers|already provides|covers the approved|matches the approved|exactly matches|exact match|near-exact match|already contains.{0,40}(required|approved).{0,20}(values|lifecycle)|all required capabilities covered|only optional extra fields)",
+    re.IGNORECASE,
+)
+EXTENDABLE_GAP_SIGNAL_RE = re.compile(
+    r"(only .{0,40}(additive|additional|supplemental|extra).{0,20}(field|column|lookup|relation)|only .{0,40}would need additive (extension|adaptation)|can be added safely|safely extendable|remaining gaps are additive|missing only .{0,40}(field|column|lookup|relation)|minor localized behavior|narrow adaptation|few additive fields)",
+    re.IGNORECASE,
+)
+CAPABILITY_FAILURE_SIGNAL_RE = re.compile(
+    r"(cannot be satisfied|cannot satisfy|required capability.{0,20}(missing|cannot)|missing value|required value.{0,20}missing|forbidden extra semantics|unavoidable inherited behavior|cannot fit|cannot extend safely|not safely extendable|required event linkage.{0,20}cannot be satisfied|required lifecycle.{0,20}cannot be satisfied|inherited behavior is unacceptable|not acceptable for the approved business flow)",
+    re.IGNORECASE,
+)
+LOOKUP_EXACT_MATCH_SIGNAL_RE = re.compile(
+    r"(exact lookup match|exactly matches the approved lifecycle|already contains.{0,40}(in progress|completed|canceled|cancelled)|matches the approved lifecycle|same lifecycle values|same values)",
+    re.IGNORECASE,
+)
+SCHEMA_SYNC_HEADING_RE = re.compile(r"^\s*#{2,6}\s+Ordered Schema Sync\s*$", re.MULTILINE)
+SCHEMA_SYNC_SECTION_RE = re.compile(
+    r"^\s*#{2,6}\s+Ordered Schema Sync\s*$\n(?P<body>.*?)(?=^\s*#{1,6}\s+\S|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+SCHEMA_STEP_RE = re.compile(
+    r"(?P<action>create|extend|reuse|update)[^`\n]*?(?P<schema>Usr[A-Za-z0-9_]+)",
+    re.IGNORECASE,
+)
 
 
 def workflow_root_text():
@@ -122,6 +211,13 @@ def ensure_http_url(value, message):
 
 def compute_sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def extract_decision_field(block_text, field_name):
+    match = re.search(rf"{re.escape(field_name)}\s*:\s*(.+)", block_text, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip()
 
 
 def extract_section(text, start_heading, end_heading=None):
@@ -255,6 +351,32 @@ def validate_request_spec(request_spec_file):
     technical_inputs = payload.get("technicalInputs")
     if not isinstance(technical_inputs, dict):
         raise WorkflowError("Request spec failed: technicalInputs must be an object")
+    planning_signals = payload.get("planningSignals")
+    if not isinstance(planning_signals, dict):
+        raise WorkflowError("Request spec failed: planningSignals must be an object")
+    reuse_check_required = planning_signals.get("reuseCheckRequired")
+    if not isinstance(reuse_check_required, list):
+        raise WorkflowError("Request spec failed: planningSignals.reuseCheckRequired must be an array")
+    for index, signal in enumerate(reuse_check_required):
+        if not isinstance(signal, dict):
+            raise WorkflowError(f"Request spec failed: planningSignals.reuseCheckRequired[{index}] must be an object")
+        business_concept = signal.get("businessConcept")
+        why_ambiguous = signal.get("whyAmbiguous")
+        suspected_candidates = signal.get("suspectedCandidates")
+        if not isinstance(business_concept, str) or len(business_concept) == 0:
+            raise WorkflowError(
+                f"Request spec failed: planningSignals.reuseCheckRequired[{index}].businessConcept must be a non-empty string"
+            )
+        if not isinstance(why_ambiguous, str) or len(why_ambiguous) == 0:
+            raise WorkflowError(
+                f"Request spec failed: planningSignals.reuseCheckRequired[{index}].whyAmbiguous must be a non-empty string"
+            )
+        if not isinstance(suspected_candidates, list) or any(
+            not isinstance(item, str) or len(item) == 0 for item in suspected_candidates
+        ):
+            raise WorkflowError(
+                f"Request spec failed: planningSignals.reuseCheckRequired[{index}].suspectedCandidates must be an array of non-empty strings"
+            )
     assumptions = payload.get("assumptions")
     if not isinstance(assumptions, list):
         raise WorkflowError("Request spec failed: assumptions must be an array")
@@ -301,6 +423,138 @@ def validate_request_spec(request_spec_file):
             "Request spec failed: technicalInputs.creatioUrl must be a valid http(s) URL when environmentMode=site-ready-now; planning-first may defer it"
         )
     return f"REQUEST_SPEC_OK {request_spec_file}"
+
+
+def validate_implementation_plan_doc(plan_file):
+    path = Path(plan_file)
+    if not path.is_file():
+        raise WorkflowError(f"Implementation plan failed: file not found: {plan_file}")
+    text = path.read_text(encoding="utf-8")
+    if not MODEL_DECISIONS_HEADING_RE.search(text):
+        raise WorkflowError("Implementation plan failed: missing required section: Model Decisions")
+    section_match = MODEL_DECISIONS_SECTION_RE.search(text)
+    if not section_match:
+        raise WorkflowError("Implementation plan failed: could not read Model Decisions content")
+    section_text = section_match.group("body")
+    decision_blocks = list(DECISION_BLOCK_RE.finditer(section_text))
+    if not decision_blocks:
+        raise WorkflowError("Implementation plan failed: Model Decisions must include at least one decision record starting with '- business-concept:'")
+    chosen_schemas = set()
+    for block_match in decision_blocks:
+        block_text = block_match.group(0)
+        missing_fields = [field for field in DECISION_REQUIRED_FIELDS if not re.search(rf"{re.escape(field)}\s*:", block_text, re.IGNORECASE)]
+        if missing_fields:
+            raise WorkflowError(
+                "Implementation plan failed: each Model Decisions record must include: "
+                + ", ".join(DECISION_REQUIRED_FIELDS)
+            )
+        chosen_action_match = re.search(r"chosen-action\s*:\s*(reuse|extend|create)\b", block_text, re.IGNORECASE)
+        chosen_schema_match = re.search(r"chosen-schema\s*:\s*([A-Za-z0-9_]+)", block_text, re.IGNORECASE)
+        candidates_considered = extract_decision_field(block_text, "candidates-considered")
+        discovery_evidence = extract_decision_field(block_text, "discovery-evidence")
+        rejected_candidates = extract_decision_field(block_text, "rejected-candidates")
+        mismatch_evidence = extract_decision_field(block_text, "mismatch-evidence")
+        tradeoff_escalation = extract_decision_field(block_text, "tradeoff-escalation")
+        if (
+            not chosen_action_match
+            or not chosen_schema_match
+            or candidates_considered is None
+            or discovery_evidence is None
+            or rejected_candidates is None
+            or mismatch_evidence is None
+            or tradeoff_escalation is None
+        ):
+            raise WorkflowError("Implementation plan failed: could not parse required Model Decisions fields")
+        chosen_action = chosen_action_match.group(1).lower()
+        chosen_schema = chosen_schema_match.group(1)
+        tradeoff_escalation = tradeoff_escalation.lower()
+        chosen_schemas.add(chosen_schema.lower())
+        if tradeoff_escalation not in {"none", "user-confirmation-required"}:
+            raise WorkflowError(
+                "Implementation plan failed: tradeoff-escalation must be `none` or `user-confirmation-required`"
+            )
+        if tradeoff_escalation == "user-confirmation-required":
+            raise WorkflowError(
+                "Implementation plan failed: tradeoff-escalation is user-confirmation-required; persist the user decision before passing the implementation plan gate"
+            )
+        if not DISCOVERY_SIGNAL_RE.search(discovery_evidence):
+            raise WorkflowError(
+                "Implementation plan failed: each discovery-evidence field must cite read-only discovery or an explicit greenfield-only / no suitable candidate found outcome"
+            )
+        if not DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
+            raise WorkflowError(
+                "Implementation plan failed: discovery-evidence must cite at least one attempted tool call "
+                "(dataforge-find-tables, dataforge-find-lookups, dataforge-context, application-get-info, "
+                "application-get-list, get-entity-schema-properties). "
+                "Outcome-only evidence (greenfield-only, no suitable candidate found) is not sufficient."
+            )
+        if not INITIAL_DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
+            raise WorkflowError(
+                "Implementation plan failed: discovery-evidence must cite at least one initial discovery tool "
+                "(dataforge-find-tables or dataforge-find-lookups)"
+            )
+        combined_evidence = f"{discovery_evidence} {mismatch_evidence}"
+        full_decision_text = f"{candidates_considered} {rejected_candidates} {extract_decision_field(block_text, 'candidate-fit-summary') or ''} {extract_decision_field(block_text, 'required-capabilities') or ''} {mismatch_evidence}"
+        is_greenfield_only = bool(
+            re.search(r"greenfield-only", candidates_considered, re.IGNORECASE)
+            or re.search(r"greenfield-only", rejected_candidates, re.IGNORECASE)
+            or re.search(r"greenfield-only", mismatch_evidence, re.IGNORECASE)
+            or re.search(r"greenfield-only", discovery_evidence, re.IGNORECASE)
+        )
+        if chosen_action == "create":
+            rejection_text = f"{rejected_candidates} {mismatch_evidence}"
+            if not CREATE_REJECTION_REASON_RE.search(rejection_text):
+                raise WorkflowError(
+                    "Implementation plan failed: chosen-action: create must state why reuse or extension was rejected"
+                )
+        if not is_greenfield_only:
+            if not FOLLOW_UP_DISCOVERY_SIGNAL_RE.search(combined_evidence):
+                raise WorkflowError(
+                    "Implementation plan failed: strong candidates require follow-up evidence via dataforge-context before locking reuse, extend, or create"
+                )
+            if not SCHEMA_CONFIRMATION_SIGNAL_RE.search(combined_evidence):
+                raise WorkflowError(
+                    "Implementation plan failed: strong candidates require schema-level confirmation before locking reuse, extend, or create"
+                )
+            if chosen_action == "create":
+                has_generic_create_only_reason = bool(GENERIC_CREATE_JUSTIFICATION_RE.search(rejection_text))
+                has_partial_match_dismissal = bool(PARTIAL_MATCH_DISMISSAL_RE.search(full_decision_text))
+                has_prior_plan_create_preference = bool(PRIOR_PLAN_CREATE_PREFERENCE_RE.search(full_decision_text))
+                has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
+                candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
+                only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
+                exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
+                if only_additive_or_extendable_gaps and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: strong candidates with only additive or extendable gaps must resolve to reuse or extend, even if the candidate is not a 100% match or an earlier plan preferred create"
+                    )
+                if candidate_already_covers_capabilities and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: reuse-first policy requires reuse or extend when the candidate already covers the required capabilities"
+                    )
+                if exact_lookup_match and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: exact or near-exact lookup matches must default to reuse unless explicit missing capability or unacceptable inherited behavior is proven"
+                    )
+                if (has_partial_match_dismissal or has_prior_plan_create_preference) and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: create cannot be justified by 'not a 100% match' reasoning or by an earlier Agent 2 / BA placeholder decision when live discovery still shows a strong reusable candidate"
+                    )
+                if has_generic_create_only_reason and not has_capability_failure:
+                    raise WorkflowError(
+                        "Implementation plan failed: create cannot rely only on broader/shared/module-coupling reasoning without a concrete capability failure under the reuse-first policy"
+                    )
+    schema_sync_match = SCHEMA_SYNC_SECTION_RE.search(text)
+    if schema_sync_match:
+        schema_sync_text = schema_sync_match.group("body")
+        for step_match in SCHEMA_STEP_RE.finditer(schema_sync_text):
+            action = step_match.group("action").lower()
+            schema = step_match.group("schema").lower()
+            if action in {"create", "extend", "update"} and schema not in chosen_schemas:
+                raise WorkflowError(
+                    f"Implementation plan failed: Ordered Schema Sync references {step_match.group('schema')} without a matching Model Decisions record"
+                )
+    return f"IMPLEMENTATION_PLAN_OK {plan_file}"
 
 
 def parse_write_planning_values(values):
@@ -461,6 +715,15 @@ def check_approval_gate(app_name):
     return f"GATE_OK {app_name}"
 
 
+def check_implementation_plan_gate(app_name):
+    check_approval_gate(app_name)
+    plan_file_text = output_file_text(app_name, "plan.md")
+    if not Path(plan_file_text).is_file():
+        raise WorkflowError(f"Implementation plan gate failed: plan.md not found: {plan_file_text}")
+    validate_implementation_plan_doc(plan_file_text)
+    return f"IMPLEMENTATION_PLAN_GATE_OK {app_name}"
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="workflow_cli.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -472,12 +735,16 @@ def build_parser():
     validate_request_parser.add_argument("request_spec_file")
     validate_requirements_parser = subparsers.add_parser("validate-requirements-doc")
     validate_requirements_parser.add_argument("requirements_file")
+    validate_implementation_plan_parser = subparsers.add_parser("validate-implementation-plan-doc")
+    validate_implementation_plan_parser.add_argument("plan_file")
     write_approval_parser = subparsers.add_parser("write-approval-state")
     write_approval_parser.add_argument("app_name")
     write_approval_parser.add_argument("approved_by")
     write_approval_parser.add_argument("approval_text")
     check_approval_parser = subparsers.add_parser("check-approval-gate")
     check_approval_parser.add_argument("app_name")
+    check_implementation_plan_parser = subparsers.add_parser("check-implementation-plan-gate")
+    check_implementation_plan_parser.add_argument("app_name")
     return parser
 
 
@@ -490,9 +757,15 @@ def run_command(args):
         return validate_request_spec(args.request_spec_file)
     if args.command == "validate-requirements-doc":
         return validate_requirements_doc(args.requirements_file)
+    if args.command == "validate-implementation-plan-doc":
+        return validate_implementation_plan_doc(args.plan_file)
     if args.command == "write-approval-state":
         return write_approval_state(args.app_name, args.approved_by, args.approval_text)
-    return check_approval_gate(args.app_name)
+    if args.command == "check-approval-gate":
+        return check_approval_gate(args.app_name)
+    if args.command == "check-implementation-plan-gate":
+        return check_implementation_plan_gate(args.app_name)
+    raise ValueError(f"Unknown command: {args.command}")
 
 
 def main(argv=None):
