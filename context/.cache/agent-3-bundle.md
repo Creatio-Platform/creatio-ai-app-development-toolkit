@@ -65,6 +65,9 @@ Fallback (if bundle unavailable or stale):
 - Produce explicit `Model Decisions` for ambiguous `reuse` / `extend` / `create` choices before execution planning begins.
 - Make blocker conditions explicit.
 
+Agent 3 is the authoritative technical rewrite stage for model choice.
+The approved BA draft preserves business intent, but live discovery may amend the technical plan when schema or lookup reuse becomes viable.
+
 ## Validation Before Planning
 
 Validate `request-spec.json` and `workflow-state.json`:
@@ -100,6 +103,7 @@ Before technical planning, derive a draft business-object map from the approved 
 - enum-like lookups
 - external references
 - any stated or implied reuse candidates
+- any `planningSignals.reuseCheckRequired` concepts carried forward from Agent 2
 
 If the approved artifact is wrapped by host tooling such as `<proposed_plan>`, ignore the wrapper and validate the inner document structure only.
 
@@ -141,6 +145,14 @@ Rules:
 - Do not encode executable schema payload field names in the plan. Resolve them at runtime through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Keep the model aligned with the approved BA draft. Do not over-engineer additional entities, statuses, or restrictions that were not requested or clearly implied.
 
+### Plan Amendment Rule
+
+Agent 2 may suggest business concepts, likely schema names, and suspected candidates, but it does not freeze the final technical model.
+Live discovery may amend the technical plan after Gate R.
+If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, `technical-annex.md`, and ordered schema sync to reflect the stronger technical choice.
+`Model Decisions` are authoritative for execution.
+Earlier business wording is not a blocker to `reuse` or `extend` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
+
 ### Model Discovery Gate
 
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
@@ -150,6 +162,7 @@ Do not defer this assessment to Agent 4, MCP execution, application-create side 
 
 Open the discovery branch for any business object, supporting object, lookup, or reference target that could plausibly map to an existing app or schema.
 Treat this as mandatory planning work, not an optional optimization.
+Any concept listed in `request-spec.json -> planningSignals.reuseCheckRequired` is an automatic trigger.
 
 This includes, but is not limited to, cases where:
 
@@ -172,11 +185,46 @@ For the conditional discovery branch, use read-only tools only and resolve candi
 2. `dataforge-find-lookups`
 3. `dataforge-context`
 4. When a strong candidate is found:
-   - `get-app-info` for app-level context when the candidate belongs to an existing app
-   - `get-entity-schema-properties` for candidate schema inspection
-   - `get-entity-schema-column-properties` only when a specific column remains ambiguous
+   - `application-get-info` for app-level context when the candidate belongs to an existing app
+   - at least one schema-level confirmation call:
+     - `dataforge-get-table-columns`
+     - `dataforge-get-relations`
+     - `get-entity-schema-properties`
+     - `get-entity-schema-column-properties` when a specific column remains ambiguous
 
 Do not use `dataforge-initialize` or `dataforge-update` during planning.
+
+#### Evidence Ladder
+
+Treat `dataforge-find-tables` and `dataforge-find-lookups` as candidate discovery only.
+They are not sufficient evidence for `create`, and they do not by themselves prove `reuse` or `extend`.
+
+For every strong candidate, complete the full ladder before locking the final `Model Decisions` record:
+
+1. Initial candidate discovery:
+   - `dataforge-find-tables`
+   - `dataforge-find-lookups`
+2. Follow-up confirmation:
+   - `dataforge-context` is mandatory
+3. Schema-level confirmation:
+   - at least one of `dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`
+4. Final choice:
+   - only after the first three steps may the plan choose `reuse`, `extend`, or `create`
+
+If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
+Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
+
+#### Reuse-First Choice Rule
+
+Use a reuse-first default after live discovery:
+
+- prefer `reuse` when the candidate already satisfies the approved business role, even if it belongs to a broader platform module or contains extra optional fields
+- prefer `extend` when the candidate needs only additive fields, minor localized behavior, or narrow adaptation
+- do not choose `create` only because the candidate is broader than needed, belongs to a shared platform module, or was not the placeholder schema named in the BA draft
+- for lookups, exact or near-exact match should default to `reuse`
+- create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior is unacceptable, or separate governance was explicitly confirmed with the user
+
+`reuse-first` means the plan should move toward the existing candidate whenever required capabilities are already covered.
 
 #### Required Model Decisions
 
@@ -194,9 +242,21 @@ Each decision record must include:
 - `candidates-considered`
 - `chosen-action`: `reuse` | `extend` | `create`
 - `chosen-schema`
+- `tradeoff-escalation`: `none` | `user-confirmation-required`
 - `rationale`
 - `rejected-candidates`
+- `candidate-fit-summary`
+- `required-capabilities`
+- `mismatch-evidence`
 - `discovery-evidence`
+
+Use these carriers explicitly:
+
+- `candidate-fit-summary`: what the strongest candidate already covers
+- `required-capabilities`: the approved business capabilities the target model must satisfy
+- `mismatch-evidence`: the concrete technical gaps proven by follow-up confirmation or schema-level confirmation
+- `discovery-evidence`: the exact tool path used to discover and confirm or reject the candidate
+- `tradeoff-escalation`: whether the technical choice is already resolved or still needs a short user decision
 
 The plan is incomplete if discovery surfaced a strong candidate and the resulting `reuse` / `extend` / `create` choice is not recorded explicitly.
 The plan is also incomplete when a plausible candidate existed from the business wording but the record does not say `no suitable candidate found` or otherwise explain why `create` was selected.
@@ -209,6 +269,15 @@ The plan is invalid if Ordered Schema Sync references a created or extended sche
 - Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
 - Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
 - `create` is never allowed as a placeholder choice for "decide later during implementation".
+- If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
+
+For `create` after a strong candidate was found, include an explicit comparison between:
+
+- the approved `required-capabilities`
+- the candidate schema shape and behavior documented in `candidate-fit-summary`
+- the proven mismatch captured in `mismatch-evidence`
+
+For `reuse` or `extend`, document why the candidate is sufficient rather than re-arguing for a new custom schema.
 
 Acceptable reasons for `create`:
 
@@ -216,18 +285,46 @@ Acceptable reasons for `create`:
 - unwanted coupling to a platform schema
 - lifecycle or semantics mismatch
 - the candidate schema is broader than the approved scope
+- required capability cannot be satisfied by reuse or extend
+- unavoidable inherited behavior is unacceptable for the approved business flow
+
+Each acceptable reason above requires technical confirmation from the Evidence Ladder.
+For example, "the candidate schema is broader than the approved scope" is not sufficient on its own unless follow-up confirmation and schema-level confirmation show the specific mismatch.
 
 Unacceptable reasons for `create`:
 
 - the BA plan already mentioned a custom entity
 - the team already intended to create a new schema
 - `Usr*` naming preference without further architectural rationale
+- the candidate belongs to a broader platform module but already covers the required capabilities
+- the lookup is shared and might diverge later without a confirmed governance requirement
+
+#### Escalation Rule For Ambiguous Tradeoffs
+
+When `reuse` or `extend` is technically viable but the remaining choice depends on a genuine product tradeoff, ask the user a short decision question instead of silently defaulting to `create`.
+
+Typical escalation triggers:
+
+- shared lifecycle ownership versus isolated app ownership
+- future domain divergence that is plausible but not yet a confirmed requirement
+- unavoidable inherited behavior whose acceptability is a product decision rather than a technical impossibility
+- cross-team coupling risk that is real but not clearly unacceptable from the approved requirements
+
+When this happens:
+
+- set `tradeoff-escalation: user-confirmation-required`
+- describe the viable options in `rationale`
+- stop the implementation plan gate until the user answer is persisted and the record is resolved back to `tradeoff-escalation: none`
 
 #### Discovery Evidence Rule
 
 - missing discovery evidence is a blocker whenever a reuse candidate was plausible from the business wording, approved model, or app/update context.
 - weak discovery evidence is also a blocker. Generic statements such as "new schema needed", "custom app requested", or "follow implementation defaults" do not satisfy this requirement.
 - outcome-only evidence is a blocker. Writing `greenfield-only` or `no suitable candidate found` without citing at least one attempted read-only tool call does not pass the implementation plan gate. The discovery-evidence field must contain at least one tool name (`dataforge-find-tables`, `dataforge-find-lookups`, `dataforge-context`, `application-get-info`, `application-get-list`, or `get-entity-schema-properties`).
+- when a strong candidate exists, `discovery-evidence` must show at least one initial discovery tool and `dataforge-context`.
+- when a strong candidate exists, either `discovery-evidence` or `mismatch-evidence` must cite at least one schema-level confirmation tool (`dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`).
+- outcome phrases such as `ownership boundary`, `unwanted coupling`, `semantic mismatch`, `lifecycle mismatch`, or `broader than the approved scope` are blockers unless they are backed by follow-up confirmation and schema-level confirmation.
+- if the evidence shows the candidate already covers the required capabilities, the plan must resolve to `reuse` or `extend` unless `tradeoff-escalation: user-confirmation-required` is explicitly recorded.
 - when DataForge tools fail (e.g. HTTP 401, timeout), cite the attempted call and the fallback tool used. For example: `dataforge-find-tables attempted (401 Unauthorized), application-get-info returned no matching app` is valid evidence for a greenfield-only conclusion.
 
 ### Schema Sync Plan
@@ -629,3 +726,158 @@ Page or client schemas commonly include:
 - `metadata.json`
 - `properties.json`
 - `<SchemaName>.js`
+
+<!-- FILE: context/model-discovery-evidence.md (full) -->
+
+# Model Discovery Evidence
+
+Use this guide when Agent 3 must decide whether to `reuse`, `extend`, or `create`.
+It is a policy reference for evidence quality, not an executable tool contract.
+
+## Strong Candidate Signals
+
+Treat a candidate as strong when any of the following is true:
+
+- `dataforge-find-tables` returns a platform or existing custom schema with the same or adjacent business noun
+- `dataforge-find-lookups` returns a lookup whose values or title align with the approved lifecycle or taxonomy
+- the approved business wording maps naturally to a known platform concept such as activity, case, article, contact, account, request, knowledge, or comment
+- an existing `Usr*` schema or app already appears relevant
+- the current run is an existing-app update and a nearby entity already exists in the app
+
+Strong candidate means "keep inspecting", not "reuse automatically".
+
+## Plan amendment after discovery
+
+Agent 2 and the BA draft keep business intent stable, but they do not freeze the final technical schema or lookup choice.
+Live discovery may amend the technical plan.
+
+If the BA draft named `Usr*` placeholder schemas or custom lookups, and discovery shows a viable existing candidate, Agent 3 should rewrite the technical plan toward `reuse` or `extend`.
+`Model Decisions` become the source of truth for execution.
+
+## Evidence Ladder
+
+Use the full ladder for every strong candidate:
+
+1. Initial discovery
+   - `dataforge-find-tables`
+   - `dataforge-find-lookups`
+2. Follow-up confirmation
+   - `dataforge-context`
+3. Schema-level confirmation
+   - `dataforge-get-table-columns`
+   - `dataforge-get-relations`
+   - `get-entity-schema-properties`
+   - `get-entity-schema-column-properties`
+4. Final decision
+   - only after the previous steps may the plan lock `reuse`, `extend`, or `create`
+
+## What To Compare
+
+When rejecting a strong candidate, compare the candidate against the approved model explicitly:
+
+- semantic similarity: does the candidate represent the same business thing or only a nearby platform concept
+- field or column shape: are the required fields already present or safely extendable
+- lifecycle or status model: do the candidate states and transitions fit the approved workflow
+- relation shape: do the candidate links, ownership model, and parent-child semantics fit the approved business object
+
+## When broader is still reusable
+
+A broader platform entity or shared lookup can still be reusable.
+The following do not block reuse on their own:
+
+- extra optional columns
+- broader module membership
+- existing unrelated optional fields
+- a platform-owned lookup with the exact lifecycle values already present
+
+Default to `reuse` when the required capabilities are already covered.
+Default to `extend` when only additive fields or narrow adaptation are needed.
+Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior is unacceptable.
+
+## Required Model Decision Carriers
+
+Every ambiguous `Model Decisions` record should tell the full story:
+
+- `candidates-considered`
+- `candidate-fit-summary`
+- `required-capabilities`
+- `mismatch-evidence`
+- `discovery-evidence`
+
+`candidate-fit-summary` should say what the best candidate already provides.
+`required-capabilities` should restate the approved business needs in technical comparison form.
+`mismatch-evidence` should name the proven gaps, not just the conclusion.
+
+## Good decision evidence
+
+Good `create` evidence:
+
+- `candidate-fit-summary: Activity covers owner, due date, and completion semantics`
+- `required-capabilities: app-owned event task lifecycle, event linkage, lightweight task completion flow`
+- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader interaction flow; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
+- `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
+
+Good `reuse` evidence:
+
+- `candidate-fit-summary: Contact already provides the required person identity and communication fields`
+- `required-capabilities: reusable person record with standard communication semantics`
+- `mismatch-evidence: Account was rejected because it models organizations rather than individual people`
+- `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
+
+Additional good `reuse` examples:
+
+- exact lookup match -> `reuse`
+- broader entity with all required capabilities covered -> `reuse`
+
+Good `extend` evidence:
+
+- `candidate-fit-summary: existing custom case schema already carries the core support workflow`
+- `required-capabilities: approved extra diagnostics and escalation fields`
+- `mismatch-evidence: get-entity-schema-properties showed only approved supplemental fields are missing`
+- `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
+
+Additional good `extend` example:
+
+- candidate needs a few additive fields -> `extend`
+
+Good `create` evidence:
+
+- only when required capabilities cannot fit or unavoidable inherited behavior is unacceptable
+
+## Bad decision evidence
+
+Bad reasoning patterns:
+
+- `broader platform object`
+- `ownership boundary`
+- `semantic mismatch`
+- `custom app requested`
+- `we will create our own`
+- `the business plan already named Usr...`
+- `shared platform lookup may diverge later`
+- `candidate is broader than needed`
+
+These are conclusions, not evidence.
+They fail when they are not tied to `dataforge-context` plus at least one schema-level confirmation call.
+
+## When to ask instead of deciding
+
+Ask the user instead of silently picking `create` when both technical paths are viable and the remaining difference is a product tradeoff.
+
+Typical triggers:
+
+- shared lifecycle ownership versus isolated app ownership
+- future domain divergence that is plausible but not yet confirmed
+- unavoidable inherited behavior whose acceptability is a product decision
+- cross-team coupling risk that is real but not clearly unacceptable
+
+## Greenfield Exception
+
+If the business object is truly greenfield-only:
+
+- still run initial discovery
+- record the attempted tools
+- say `no suitable candidate found` only after the attempted calls are captured
+
+Greenfield is the exception path.
+It must not be used to skip discovery for objects that merely sound custom or already have a planned `Usr*` name.

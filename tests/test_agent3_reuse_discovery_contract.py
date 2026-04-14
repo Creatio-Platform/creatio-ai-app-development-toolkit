@@ -25,9 +25,21 @@ class Agent3ReuseDiscoveryContractTests(unittest.TestCase):
         content = read_text(ROOT / "agents/03-implementation-plan.md")
         self.assertIn("planning-time reuse assessment", content)
         self.assertIn("Do not defer this assessment to Agent 4", content)
+        self.assertIn("Evidence Ladder", content)
+        self.assertIn("Follow-up confirmation", content)
+        self.assertIn("Schema-level confirmation", content)
         self.assertIn("dataforge-find-tables", content)
         self.assertIn("dataforge-find-lookups", content)
         self.assertIn("dataforge-context", content)
+        self.assertIn("candidate-fit-summary", content)
+        self.assertIn("required-capabilities", content)
+        self.assertIn("mismatch-evidence", content)
+        self.assertIn("tradeoff-escalation", content)
+        self.assertIn("broader than the approved scope", content)
+        self.assertIn("is not sufficient on its own", content)
+        self.assertIn("reuse-first", content)
+        self.assertIn("live discovery may amend the technical plan", content)
+        self.assertIn("ask the user", content)
         self.assertIn("no suitable candidate found", content)
         self.assertIn("missing discovery evidence", content)
         self.assertIn("discovery-evidence", content)
@@ -38,15 +50,35 @@ class Agent3ReuseDiscoveryContractTests(unittest.TestCase):
         for marker in [
             "planning-time reuse assessment",
             "Do not defer this assessment to Agent 4",
+            "Evidence Ladder",
+            "Follow-up confirmation",
+            "Schema-level confirmation",
             "dataforge-find-tables",
             "dataforge-find-lookups",
             "dataforge-context",
+            "candidate-fit-summary",
+            "required-capabilities",
+            "mismatch-evidence",
+            "tradeoff-escalation",
+            "broader than the approved scope",
+            "is not sufficient on its own",
+            "reuse-first",
+            "live discovery may amend the technical plan",
+            "ask the user",
             "no suitable candidate found",
             "missing discovery evidence",
             "discovery-evidence",
             "schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`",
         ]:
             self.assertIn(marker, bundle)
+
+    def test_agent3_bundle_includes_model_discovery_evidence_guide(self):
+        bundle = read_text(ROOT / "context/.cache/agent-3-bundle.md")
+        self.assertIn("Strong Candidate Signals", bundle)
+        self.assertIn("semantic similarity", bundle)
+        self.assertIn("Good decision evidence", bundle)
+        self.assertIn("Plan amendment after discovery", bundle)
+        self.assertIn("When broader is still reusable", bundle)
 
 
 if __name__ == "__main__":

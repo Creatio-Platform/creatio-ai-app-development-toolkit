@@ -61,6 +61,9 @@ def build_valid_request_spec():
             "creatioUrl": "http://localhost:5001",
             "credentialsStatus": "existing_env"
         },
+        "planningSignals": {
+            "reuseCheckRequired": []
+        },
         "assumptions": [
             "Single user scope for MVP"
         ]

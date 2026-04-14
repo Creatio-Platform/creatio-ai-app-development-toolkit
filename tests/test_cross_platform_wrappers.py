@@ -51,6 +51,9 @@ def build_valid_request_spec():
             "environmentMode": "planning-first",
             "credentialsStatus": "deferred",
         },
+        "planningSignals": {
+            "reuseCheckRequired": [],
+        },
         "assumptions": [
             "Single user scope for MVP",
         ],
@@ -140,12 +143,16 @@ def build_valid_plan_doc():
 ## Model Decisions
 
 - business-concept: Task
-  candidates-considered: existing task-like app models, existing task-like schemas
+  candidates-considered: Activity, existing task-like app models, existing task-like schemas
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
-  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
-  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, no suitable candidate found
+  rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
+  candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
+  required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
+  mismatch-evidence: dataforge-context confirmed Activity belongs to a broader interaction model; get-entity-schema-properties showed the required event linkage and app-owned lifecycle cannot be satisfied without unacceptable inherited behavior
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, get-entity-schema-properties
 
 ## Ordered Schema Sync
 

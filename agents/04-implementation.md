@@ -35,6 +35,10 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 - Agent 4 runs in the foreground
 - `plan.md` includes explicit `Model Decisions` for every business object, supporting object, planned lookup, and non-obvious reference target that Agent 4 could otherwise reinterpret during execution
 - every schema creation or extension step in the plan is already justified by a matching `Model Decisions` record
+- when a `Model Decisions` record rejects a strong reuse candidate, the record already contains follow-up evidence (`dataforge-context`) and schema-level confirmation (`dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`)
+- if `chosen-action: create` was selected after discovery, the record already contains `candidate-fit-summary`, `required-capabilities`, and `mismatch-evidence`
+- `Model Decisions` have already resolved any technical rewrite away from BA placeholder schema names or custom lookup assumptions
+- no decision record remains at `tradeoff-escalation: user-confirmation-required`
 
 ## Support-Mode Branch (Diagnostic-First)
 
@@ -90,7 +94,11 @@ Apply this branch only when support mode is on:
 
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
+- Treat `Model Decisions` as the authoritative final technical plan even when the BA draft or earlier planning text named different `Usr*` schemas or custom lookups.
+- Never "finish the reuse reasoning" during execution. If Agent 3 did not complete the Evidence Ladder, stop with a blocker instead of improvising discovery or inventing a new create path.
 - If a requested schema step is not fully covered by `Model Decisions`, stop with a blocker instead of improvising a new entity or lookup.
+- If a requested schema step depends on rejecting a strong candidate but the plan lacks follow-up evidence or schema-level confirmation, stop with a blocker before any mutation.
+- If a requested schema step contradicts a final `reuse` or `extend` decision, stop with a blocker instead of honoring stale BA assumptions.
 - Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity
 - Use `create-entity-schema` only for additional business objects with distinct meaning
 - Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
@@ -156,6 +164,8 @@ Never hand-write `mcp-application-result.json` or `mcp-application-report.md` fr
 - Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
 - Stop with blocker if the plan contains ambiguous entity, lookup, or reference choices but does not define explicit `Model Decisions`
 - Stop with blocker if Ordered Schema Sync would create or extend a schema that is not already covered by `Model Decisions`
+- Stop with blocker if `chosen-action: create` appears for a plausible reuse candidate but the record is missing `candidate-fit-summary`, `required-capabilities`, `mismatch-evidence`, follow-up evidence, or schema-level confirmation
+- Stop with blocker if any decision record remains at `tradeoff-escalation: user-confirmation-required`
 
 ### 2. Verify MCP reachability
 

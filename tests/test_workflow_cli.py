@@ -50,6 +50,9 @@ def build_valid_request_spec():
             "environmentMode": "planning-first",
             "credentialsStatus": "deferred",
         },
+        "planningSignals": {
+            "reuseCheckRequired": [],
+        },
         "assumptions": [
             "Single user scope for MVP",
         ],
@@ -139,12 +142,16 @@ def build_valid_plan_doc():
 ## Model Decisions
 
 - business-concept: Task
-  candidates-considered: existing task-like app models, existing task-like schemas
+  candidates-considered: Activity, existing task-like app models, existing task-like schemas
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
-  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
-  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, no suitable candidate found
+  rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
+  candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
+  required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
+  mismatch-evidence: dataforge-context confirmed Activity belongs to a broader interaction model; get-entity-schema-properties showed the required event linkage and app-owned lifecycle cannot be satisfied without unacceptable inherited behavior
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, get-entity-schema-properties
 
 ## Ordered Schema Sync
 
@@ -170,8 +177,12 @@ def build_invalid_plan_doc_without_discovery_evidence():
   candidates-considered: existing task-like app models, existing task-like schemas
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
   rejected-candidates: platform task models do not match the approved scope
+  candidate-fit-summary: existing task-like app models partially cover the concept
+  required-capabilities: app-owned task lifecycle and dedicated UX
+  mismatch-evidence: follow-up comparison was not captured
 
 ## Ordered Schema Sync
 
@@ -185,12 +196,16 @@ def build_invalid_plan_doc_without_create_rejection_reason():
 ## Model Decisions
 
 - business-concept: Task
-  candidates-considered: existing task-like app models, existing task-like schemas
+  candidates-considered: Activity, existing task-like app models, existing task-like schemas
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
   rejected-candidates: custom app requested
-  discovery-evidence: application-get-list, dataforge-find-tables, no suitable candidate found
+  candidate-fit-summary: Activity appears adjacent to the task concept
+  required-capabilities: app-owned task lifecycle and event-specific linkage
+  mismatch-evidence: custom app requested
+  discovery-evidence: application-get-list, dataforge-find-tables
 
 ## Ordered Schema Sync
 
@@ -204,12 +219,16 @@ def build_invalid_plan_doc_without_matching_model_decision():
 ## Model Decisions
 
 - business-concept: Task
-  candidates-considered: existing task-like app models, existing task-like schemas
+  candidates-considered: Activity, existing task-like app models, existing task-like schemas
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
-  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
-  discovery-evidence: application-get-list, dataforge-find-tables, no suitable candidate found
+  rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle
+  candidate-fit-summary: Activity covers owner and due date semantics
+  required-capabilities: app-owned task lifecycle and simplified UX
+  mismatch-evidence: dataforge-context and get-entity-schema-properties showed lifecycle and ownership mismatch
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-context, get-entity-schema-properties
 
 ## Ordered Schema Sync
 
@@ -226,8 +245,12 @@ def build_valid_greenfield_plan_doc():
   candidates-considered: greenfield-only domain review
   chosen-action: create
   chosen-schema: UsrIntakeRecord
+  tradeoff-escalation: none
   rationale: Approved requirements define a net-new business object with no plausible reuse target
   rejected-candidates: no suitable candidate found
+  candidate-fit-summary: no plausible existing candidate surfaced during planning
+  required-capabilities: net-new intake record, app-owned lifecycle, custom review workflow
+  mismatch-evidence: greenfield-only review after dataforge-find-tables and application-get-list found no viable candidate
   discovery-evidence: dataforge-find-tables attempted (no matches), application-get-list returned no matching app, greenfield-only
 
 ## Ordered Schema Sync
@@ -245,8 +268,12 @@ def build_invalid_plan_doc_outcome_only_evidence():
   candidates-considered: existing task-like app models
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
   rejected-candidates: no suitable candidate found
+  candidate-fit-summary: existing task-like models were considered
+  required-capabilities: app-owned lifecycle and custom workflow
+  mismatch-evidence: no concrete comparison captured
   discovery-evidence: greenfield-only, no suitable candidate found
 
 ## Ordered Schema Sync
@@ -264,9 +291,13 @@ def build_valid_reuse_plan_doc():
   candidates-considered: Contact, Account
   chosen-action: reuse
   chosen-schema: Contact
+  tradeoff-escalation: none
   rationale: Platform Contact entity already satisfies the business role
   rejected-candidates: Account does not match the required persona semantics
-  discovery-evidence: dataforge-find-tables, get-entity-schema-properties
+  candidate-fit-summary: Contact already provides the required identity, communication, and ownership semantics
+  required-capabilities: reusable person record with standard communication fields and existing ownership behavior
+  mismatch-evidence: Account failed the persona comparison because it models organizations rather than individual people
+  discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties
 
 ## Ordered Schema Sync
 
@@ -283,9 +314,13 @@ def build_valid_extend_plan_doc():
   candidates-considered: Case, UsrSupportCase
   chosen-action: extend
   chosen-schema: UsrSupportCase
+  tradeoff-escalation: none
   rationale: Existing UsrSupportCase matches but needs additional fields
   rejected-candidates: platform Case schema has unwanted coupling to service module
-  discovery-evidence: dataforge-find-tables, application-get-info, get-entity-schema-properties
+  candidate-fit-summary: UsrSupportCase already carries the core case identity and service workflow semantics
+  required-capabilities: support record with additional approved diagnostics and escalation fields
+  mismatch-evidence: platform Case was rejected because dataforge-context and get-entity-schema-properties showed service-module coupling beyond the approved app boundary
+  discovery-evidence: dataforge-find-tables, dataforge-context, application-get-info, get-entity-schema-properties
 
 ## Ordered Schema Sync
 
@@ -299,33 +334,203 @@ def build_valid_multi_block_plan_doc():
 ## Model Decisions
 
 - business-concept: Task
-  candidates-considered: existing task-like app models, existing task-like schemas
+  candidates-considered: Activity, existing task-like app models, existing task-like schemas
   chosen-action: create
   chosen-schema: UsrTask
+  tradeoff-escalation: none
   rationale: MVP needs a dedicated task object for this app
-  rejected-candidates: platform task models are broader than the approved scope, no suitable candidate found
-  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, no suitable candidate found
+  rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
+  candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
+  required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
+  mismatch-evidence: dataforge-context confirmed Activity belongs to a broader interaction model; get-entity-schema-properties showed the required event linkage and app-owned lifecycle cannot be satisfied without unacceptable inherited behavior
+  discovery-evidence: application-get-list, dataforge-find-tables, dataforge-find-lookups, dataforge-context, get-entity-schema-properties
 
 - business-concept: Task Status
   candidates-considered: existing status lookups
   chosen-action: create
   chosen-schema: UsrTaskStatus
+  tradeoff-escalation: none
   rationale: App-specific lifecycle requires dedicated status lookup
   rejected-candidates: no suitable candidate found
-  discovery-evidence: dataforge-find-lookups, no suitable candidate found
+  candidate-fit-summary: discovery did not surface a reusable lookup with the approved lifecycle
+  required-capabilities: dedicated task lifecycle values with app-owned governance
+  mismatch-evidence: dataforge-context and get-entity-schema-properties found no lookup schema that matched the approved status model
+  discovery-evidence: dataforge-find-lookups, dataforge-context, get-entity-schema-properties, no suitable candidate found
 
 - business-concept: Task Priority
   candidates-considered: existing priority lookups, ActivityPriority
   chosen-action: reuse
   chosen-schema: ActivityPriority
+  tradeoff-escalation: none
   rationale: Platform priority lookup matches the required semantics exactly
   rejected-candidates: none
-  discovery-evidence: dataforge-find-lookups, get-entity-schema-properties
+  candidate-fit-summary: ActivityPriority already contains the required priority values and display semantics
+  required-capabilities: reusable priority lookup with stable ordering and existing display values
+  mismatch-evidence: no other candidate provided a better match than ActivityPriority
+  discovery-evidence: dataforge-find-lookups, dataforge-context, get-entity-schema-properties
 
 ## Ordered Schema Sync
 
 - create UsrTaskStatus lookup for task lifecycle.
 - create UsrTask schema for the approved task model.
+"""
+
+
+def build_invalid_plan_doc_missing_candidate_comparison_fields():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: Activity, existing task-like app models
+  chosen-action: create
+  chosen-schema: UsrTask
+  tradeoff-escalation: none
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: Activity has unwanted coupling to broader lifecycle semantics
+  discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
+def build_invalid_plan_doc_without_follow_up_evidence():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: Activity, existing task-like app models
+  chosen-action: create
+  chosen-schema: UsrTask
+  tradeoff-escalation: none
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle
+  candidate-fit-summary: Activity looks adjacent to the task concept
+  required-capabilities: app-owned lifecycle and simplified UX
+  mismatch-evidence: broader platform object
+  discovery-evidence: dataforge-find-tables
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
+def build_invalid_plan_doc_outcome_only_rejection_without_schema_confirmation():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Task
+  candidates-considered: Activity, existing task-like app models
+  chosen-action: create
+  chosen-schema: UsrTask
+  tradeoff-escalation: none
+  rationale: MVP needs a dedicated task object for this app
+  rejected-candidates: broader than approved scope
+  candidate-fit-summary: Activity covers several task-like fields
+  required-capabilities: app-owned lifecycle and event-specific linkage
+  mismatch-evidence: broader than approved scope
+  discovery-evidence: dataforge-find-tables, dataforge-context
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model.
+"""
+
+
+def build_invalid_plan_doc_create_despite_capability_coverage():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event Status
+  candidates-considered: EventStatus
+  chosen-action: create
+  chosen-schema: UsrEventStatus
+  tradeoff-escalation: none
+  rationale: Keep the app isolated from the platform lookup
+  rejected-candidates: shared lookup may diverge later
+  candidate-fit-summary: EventStatus already contains In progress, Completed, and Canceled and covers the approved lifecycle exactly
+  required-capabilities: reusable event lifecycle lookup with In progress, Completed, and Canceled values
+  mismatch-evidence: shared platform lookup
+  discovery-evidence: dataforge-find-lookups, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- create UsrEventStatus lookup for event lifecycle.
+"""
+
+
+def build_valid_plan_doc_reuse_existing_lookup_despite_ba_custom_name():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event Status
+  candidates-considered: EventStatus, UsrEventStatus
+  chosen-action: reuse
+  chosen-schema: EventStatus
+  tradeoff-escalation: none
+  rationale: Live discovery showed the platform lookup already satisfies the approved lifecycle
+  rejected-candidates: UsrEventStatus would duplicate an existing lifecycle without adding missing capability
+  candidate-fit-summary: EventStatus already contains In progress, Completed, and Canceled and matches the approved lifecycle
+  required-capabilities: reusable event lifecycle lookup with In progress, Completed, and Canceled values
+  mismatch-evidence: custom lookup is unnecessary because the platform lookup already covers the required lifecycle values
+  discovery-evidence: dataforge-find-lookups, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- reuse EventStatus lookup for the approved event lifecycle.
+"""
+
+
+def build_valid_plan_doc_reuse_broader_candidate():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event
+  chosen-action: reuse
+  chosen-schema: Event
+  tradeoff-escalation: none
+  rationale: The existing Event schema already satisfies the approved event role for this MVP
+  rejected-candidates: none
+  candidate-fit-summary: Event already provides Name, Status, StartDate, EndDate, Owner, and optional descriptive carriers needed for the approved business flow
+  required-capabilities: reusable event record with name, status, start date, end date, owner, and optional descriptive content
+  mismatch-evidence: extra marketing-oriented fields remain optional and do not block the approved workflow
+  discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- reuse Event schema as-is for the approved event model.
+"""
+
+
+def build_invalid_plan_doc_unresolved_tradeoff():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event Status
+  candidates-considered: EventStatus, UsrEventStatus
+  chosen-action: reuse
+  chosen-schema: EventStatus
+  tradeoff-escalation: user-confirmation-required
+  rationale: Reuse is technically viable but the ownership choice is still open
+  rejected-candidates: UsrEventStatus could also work if the user wants full lifecycle isolation
+  candidate-fit-summary: EventStatus already contains In progress, Completed, and Canceled and matches the approved lifecycle
+  required-capabilities: reusable event lifecycle lookup with In progress, Completed, and Canceled values
+  mismatch-evidence: the remaining difference is a product tradeoff about future lifecycle ownership, not a technical blocker
+  discovery-evidence: dataforge-find-lookups, dataforge-context, get-entity-schema-properties
+
+## Ordered Schema Sync
+
+- reuse EventStatus lookup for the approved event lifecycle.
 """
 
 
@@ -351,6 +556,32 @@ class WorkflowCliTests(unittest.TestCase):
             result = run_workflow_cli("validate-request-spec", str(request_spec_path), workflow_root=workflow_root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("REQUEST_SPEC_OK", result.stdout)
+
+    def test_validate_request_spec_rejects_missing_planning_signals(self):
+        with temp_workflow_root() as workflow_root:
+            request_spec_path = Path(workflow_root) / "output" / "TodoList" / "request-spec.json"
+            payload = build_valid_request_spec()
+            payload.pop("planningSignals")
+            write_file(request_spec_path, json.dumps(payload))
+            result = run_workflow_cli("validate-request-spec", str(request_spec_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("planningSignals", result.stderr)
+
+    def test_validate_request_spec_rejects_invalid_reuse_check_signal(self):
+        with temp_workflow_root() as workflow_root:
+            request_spec_path = Path(workflow_root) / "output" / "TodoList" / "request-spec.json"
+            payload = build_valid_request_spec()
+            payload["planningSignals"]["reuseCheckRequired"] = [
+                {
+                    "businessConcept": "Task",
+                    "whyAmbiguous": "",
+                    "suspectedCandidates": ["Activity"],
+                }
+            ]
+            write_file(request_spec_path, json.dumps(payload))
+            result = run_workflow_cli("validate-request-spec", str(request_spec_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("planningSignals.reuseCheckRequired[0].whyAmbiguous", result.stderr)
 
     def test_validate_requirements_doc_accepts_valid_document(self):
         with temp_workflow_root() as workflow_root:
@@ -474,6 +705,14 @@ class WorkflowCliTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("discovery-evidence", result.stderr)
 
+    def test_validate_implementation_plan_doc_rejects_missing_candidate_comparison_fields(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_missing_candidate_comparison_fields())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("candidate-fit-summary", result.stderr)
+
     def test_validate_implementation_plan_doc_rejects_outcome_only_discovery_evidence(self):
         with temp_workflow_root() as workflow_root:
             plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
@@ -481,6 +720,54 @@ class WorkflowCliTests(unittest.TestCase):
             result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("must cite at least one attempted tool call", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_create_without_follow_up_evidence(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_without_follow_up_evidence())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("follow-up evidence", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_outcome_only_rejection_without_schema_confirmation(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "TodoList" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_outcome_only_rejection_without_schema_confirmation())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("schema-level confirmation", result.stderr)
+
+    def test_validate_implementation_plan_doc_rejects_create_when_candidate_already_covers_required_capabilities(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_create_despite_capability_coverage())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("reuse-first", result.stderr)
+
+    def test_validate_implementation_plan_doc_accepts_reuse_when_live_discovery_amends_ba_custom_lookup_assumption(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc_reuse_existing_lookup_despite_ba_custom_name())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_reuse_for_broader_candidate_when_required_capabilities_are_covered(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc_reuse_broader_candidate())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_rejects_unresolved_tradeoff_until_user_confirms_choice(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_unresolved_tradeoff())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("user-confirmation-required", result.stderr)
 
     def test_validate_implementation_plan_doc_accepts_explicit_greenfield_only_outcome(self):
         with temp_workflow_root() as workflow_root:
