@@ -13,8 +13,9 @@ Treat a candidate as strong when any of the following is true:
 - an existing `Usr*` schema or app already appears relevant
 - the current run is an existing-app update and a nearby entity already exists in the app
 
-Strong candidate means "keep inspecting", not "reuse automatically".
-Strong candidate also means the default end-state is `reuse` or `extend` unless the Evidence Ladder proves a real capability failure.
+Strong candidate means "finish the Evidence Ladder, then lock the strongest reusable choice".
+Strong candidates resolve to `reuse` unless the Evidence Ladder proves a real capability failure.
+When several strong candidates exist, choose the most similar candidate from live discovery and reuse that schema.
 Do not treat "not a 100% match" as a reason to create something new when the remaining gap is additive or safely extendable.
 Do not let Agent 2, the BA draft, or an earlier plan lock in `create` once live DataForge discovery has surfaced a strong reusable candidate.
 
@@ -23,7 +24,7 @@ Do not let Agent 2, the BA draft, or an earlier plan lock in `create` once live 
 Agent 2 and the BA draft keep business intent stable, but they do not freeze the final technical schema or lookup choice.
 Live discovery may amend the technical plan.
 
-If the BA draft named `Usr*` placeholder schemas or custom lookups, and discovery shows a viable existing candidate, Agent 3 should rewrite the technical plan toward `reuse` or `extend`.
+If the BA draft named `Usr*` placeholder schemas or custom lookups, and discovery shows a viable existing candidate, Agent 3 should rewrite the technical plan toward `reuse`.
 `Model Decisions` become the source of truth for execution.
 This rewrite is mandatory even if the earlier plan already leaned toward `create`.
 
@@ -43,6 +44,7 @@ Use the full ladder for every strong candidate:
    - `get-entity-schema-column-properties`
 4. Final decision
    - only after the previous steps may the plan lock `reuse`, `extend`, or `create`
+   - if one or more strong candidates remain, pick the most similar candidate and lock `chosen-action: reuse`
 
 ## What To Compare
 
@@ -64,9 +66,10 @@ The following do not block reuse on their own:
 - a platform-owned lookup with the exact lifecycle values already present
 
 Default to `reuse` when the required capabilities are already covered.
-Default to `extend` when only additive fields or narrow adaptation are needed.
+If a strong candidate is the most similar match and only additive fields or narrow adaptation are needed, still keep the final decision at `reuse`.
+Use `extend` only outside the strong-candidate override path, such as expanding the current app-owned custom baseline after stronger reusable candidates were ruled out.
 Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior is unacceptable.
-Apply this rule even if the candidate is not a 100% match. A strong candidate with only additive gaps still belongs in `reuse` or `extend`, not `create`.
+Apply this rule even if the candidate is not a 100% match. A strong candidate with only additive gaps still belongs in `reuse`, not `create`.
 
 ## Required Model Decision Carriers
 
@@ -81,6 +84,7 @@ Every ambiguous `Model Decisions` record should tell the full story:
 `candidate-fit-summary` should say what the best candidate already provides.
 `required-capabilities` should restate the approved business needs in technical comparison form.
 `mismatch-evidence` should name the proven gaps, not just the conclusion.
+When several strong candidates exist, the decision record should say why the chosen schema is the most similar candidate.
 
 ## Good decision evidence
 
@@ -105,14 +109,14 @@ Additional good `reuse` examples:
 
 Good `extend` evidence:
 
-- `candidate-fit-summary: existing custom case schema already carries the core support workflow`
+- `candidate-fit-summary: current app-owned custom schema already carries the approved support workflow baseline after stronger reusable candidates were ruled out`
 - `required-capabilities: approved extra diagnostics and escalation fields`
-- `mismatch-evidence: get-entity-schema-properties showed only approved supplemental fields are missing`
+- `mismatch-evidence: dataforge-context and get-entity-schema-properties showed no stronger reusable schema; only the current app-owned baseline needs approved supplemental fields`
 - `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
 
 Additional good `extend` example:
 
-- candidate needs a few additive fields -> `extend`
+- extend the current app-owned baseline outside the strong-candidate override path
 
 Good `create` evidence:
 

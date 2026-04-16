@@ -201,9 +201,20 @@ clio healthcheck -e <env_name>
 - **Success** — proceed to Step 6.
 - **Failure** — see Error Handling below.
 
-### 6. Install cliogate
+### 6. Verify cliogate presence and version
 
-Install `cliogate` on the resolved environment immediately after a successful health check and before completing Agent 1:
+Immediately after a successful health check, perform a fast `cliogate` verification before deciding whether installation is needed.
+
+Start with a package presence/version check:
+
+```bash
+clio get-pkg-list -e <env_name> --Json true
+```
+
+Use the package list to confirm whether `cliogate` is already installed and whether its package version matches the version required by the current `clio` build.
+
+- **Present and current** — skip installation and proceed to Step 7.
+- **Missing or outdated** — run:
 
 ```bash
 clio install-gate -e <env_name>
@@ -213,9 +224,10 @@ Why this timing matters:
 
 - the environment has already been registered and proven reachable
 - later stages may need live SysSettings reads or cliogate-backed MCP helpers for DataForge discovery and exact runtime inspection
-- installing `cliogate` here keeps Agent 3 reuse/discovery work from depending on ad-hoc environment fixes
+- checking first avoids a slow reinstall when `cliogate` is already usable on the target environment
+- installing only when needed keeps Agent 3 reuse/discovery work from depending on ad-hoc environment fixes while still minimizing setup overhead
 
-If `clio install-gate` fails, stop the stage and treat that as an environment blocker. Do not continue to downstream planning or implementation with a partially prepared environment.
+If the `cliogate` check fails, or if `clio install-gate` fails when remediation is required, stop the stage and treat that as an environment blocker. Do not continue to downstream planning or implementation with a partially prepared environment.
 
 ### 7. Save environment configuration
 
@@ -245,7 +257,8 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 | Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
-| `clio install-gate` fails | Stop before downstream planning. Surface the clio error and ask the developer to fix the environment or installation issue. |
+| `cliogate` presence/version check fails | Stop before downstream planning. Surface the clio error and ask the developer to fix the environment or package inspection issue. |
+| `clio install-gate` fails | Stop before downstream planning when `cliogate` is missing or outdated. Surface the clio error and ask the developer to fix the environment or installation issue. |
 | Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 | Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
@@ -253,6 +266,6 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
-✅ `clio install-gate -e <env_name>` succeeds  
+✅ `cliogate` is verified as present and current on `<env_name>`, or `clio install-gate -e <env_name>` succeeds when remediation is required  
 ✅ `output/<AppName>/.creatio-env.json` exists with the current request URL, the correct `environment`, and persisted runtime MCP details  
 ✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  

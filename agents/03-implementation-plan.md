@@ -144,13 +144,21 @@ Agent 2 may suggest business concepts, likely schema names, and suspected candid
 Live discovery may amend the technical plan after Gate R.
 If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, `technical-annex.md`, and ordered schema sync to reflect the stronger technical choice.
 `Model Decisions` are authoritative for execution.
-Earlier business wording is not a blocker to `reuse` or `extend` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
+Earlier business wording is not a blocker to `reuse` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
 This override still applies even if Agent 2, the BA draft, or an earlier plan preferred `create`.
 
 ### Model Discovery Gate
 
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
 Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
+
+Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
+
+- If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
+- If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
+- In that unavailable mode, record `dataforge-availability: unavailable` in `plan.md` and `technical-annex.md`.
+- When `dataforge-availability: unavailable` is recorded, Agent 3 should not run the reuse/extend/create discovery branch and should not require DataForge-based evidence or fallback proof for the skipped branch.
+- Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
 
 #### Triggers
 
@@ -187,11 +195,12 @@ For the conditional discovery branch, use read-only tools only and resolve candi
      - `get-entity-schema-column-properties` when a specific column remains ambiguous
 
 Do not use `dataforge-initialize` or `dataforge-update` during planning.
+If `dataforge-availability: unavailable` is already recorded for the session, skip this sequence entirely.
 
 #### Evidence Ladder
 
 Treat `dataforge-find-tables` and `dataforge-find-lookups` as candidate discovery only.
-They are not sufficient evidence for `create`, and they do not by themselves prove `reuse` or `extend`.
+They are not sufficient evidence for `create`, and they do not by themselves prove the final `reuse` decision.
 
 For every strong candidate, complete the full ladder before locking the final `Model Decisions` record:
 
@@ -203,7 +212,7 @@ For every strong candidate, complete the full ladder before locking the final `M
 3. Schema-level confirmation:
    - at least one of `dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`
 4. Final choice:
-   - only after the first three steps may the plan choose `reuse`, `extend`, or `create`
+   - only after the first three steps may the plan lock the final `reuse`, `extend`, or `create` outcome
 
 If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
 Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
@@ -213,7 +222,10 @@ Those arguments are valid only when follow-up confirmation and schema-level conf
 Use a reuse-first default after live discovery:
 
 - prefer `reuse` when the candidate already satisfies the approved business role, even if it belongs to a broader platform module or contains extra optional fields
-- prefer `extend` when the candidate needs only additive fields, minor localized behavior, or narrow adaptation
+- if discovery surfaces one or more strong candidates, strong candidates resolve to `reuse`
+- when several strong candidates exist, choose the most similar candidate from the discovery results and record that schema as `chosen-schema`
+- if the most similar strong candidate still needs additive fields, minor localized behavior, or narrow adaptation, keep `chosen-action: reuse` and plan the additive work against that reused schema instead of switching the decision to `extend`
+- use `extend` only outside the strong-candidate override path, such as extending the current app-owned custom or main entity after discovery did not surface a stronger reusable schema
 - do not choose `create` only because the candidate is broader than needed, belongs to a shared platform module, or was not the placeholder schema named in the BA draft
 - do not choose `create` when the only proven gaps are additive or safely extendable, even if the candidate is not a 100% match
 - do not choose `create` just because live discovery arrived after an earlier placeholder choice; this applies even if Agent 2, the BA draft, or an earlier plan preferred create
@@ -253,6 +265,7 @@ Use these carriers explicitly:
 - `mismatch-evidence`: the concrete technical gaps proven by follow-up confirmation or schema-level confirmation
 - `discovery-evidence`: the exact tool path used to discover and confirm or reject the candidate
 - `tradeoff-escalation`: whether the technical choice is already resolved or still needs a short user decision
+- when several strong candidates exist, the rationale or mismatch evidence must show why the chosen schema is the most similar candidate
 
 The plan is incomplete if discovery surfaced a strong candidate and the resulting `reuse` / `extend` / `create` choice is not recorded explicitly.
 The plan is also incomplete when a plausible candidate existed from the business wording but the record does not say `no suitable candidate found` or otherwise explain why `create` was selected.
@@ -261,13 +274,15 @@ The plan is invalid if Ordered Schema Sync references a created or extended sche
 #### Deterministic Choice Rules
 
 - Choose `reuse` when an existing schema already satisfies the required business role without unacceptable coupling cost.
-- Choose `extend` when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
+- If DataForge discovery produced strong candidate(s), choose `reuse` for the most similar candidate and treat that candidate as authoritative for `chosen-schema`.
+- Choose `extend` only outside the strong-candidate override path, when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
 - Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
 - Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
 - `create` is never allowed as a placeholder choice for "decide later during implementation".
 - If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
-- If a strong candidate needs only additive extension, the plan must resolve to `extend` even if the candidate is not a 100% match.
+- If a strong candidate needs only additive extension, the plan must still resolve to `reuse` for the most similar candidate even if the candidate is not a 100% match.
 - If live discovery shows a strong reusable candidate, do not preserve a stale create decision from Agent 2 or an earlier plan.
+- If multiple strong candidates remain after the Evidence Ladder, the plan must select the single most similar candidate instead of leaving several reusable options open.
 
 For `create` after a strong candidate was found, include an explicit comparison between:
 
@@ -276,6 +291,7 @@ For `create` after a strong candidate was found, include an explicit comparison 
 - the proven mismatch captured in `mismatch-evidence`
 
 For `reuse` or `extend`, document why the candidate is sufficient rather than re-arguing for a new custom schema.
+For strong-candidate reuse, document why the chosen schema is the most similar candidate rather than a merely acceptable alternative.
 
 Acceptable reasons for `create`:
 
@@ -322,8 +338,10 @@ When this happens:
 - when a strong candidate exists, `discovery-evidence` must show at least one initial discovery tool and `dataforge-context`.
 - when a strong candidate exists, either `discovery-evidence` or `mismatch-evidence` must cite at least one schema-level confirmation tool (`dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`).
 - outcome phrases such as `ownership boundary`, `unwanted coupling`, `semantic mismatch`, `lifecycle mismatch`, or `broader than the approved scope` are blockers unless they are backed by follow-up confirmation and schema-level confirmation.
-- if the evidence shows the candidate already covers the required capabilities, the plan must resolve to `reuse` or `extend` unless `tradeoff-escalation: user-confirmation-required` is explicitly recorded.
+- if the evidence shows the candidate already covers the required capabilities, the plan must resolve to `reuse` unless `tradeoff-escalation: user-confirmation-required` is explicitly recorded.
+- if the evidence shows several strong candidates, the plan must identify the most similar candidate and reuse it.
 - when DataForge tools fail (e.g. HTTP 401, timeout), cite the attempted call and the fallback tool used. For example: `dataforge-find-tables attempted (401 Unauthorized), application-get-info returned no matching app` is valid evidence for a greenfield-only conclusion.
+- exception: when `dataforge-availability: unavailable` is recorded because `dataforge-status` was not Ready or the call threw, treat the active discovery branch as intentionally bypassed for the session instead of failing for missing DataForge evidence.
 
 ### Schema Sync Plan
 
