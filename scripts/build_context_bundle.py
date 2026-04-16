@@ -31,6 +31,7 @@ AGENT_READS = {
         ("agents/03-implementation-plan.md", None),
         ("context/essentials.md", None),
         ("context/schema-reference.md", [(7, 90)]),
+        ("context/model-discovery-evidence.md", None),
     ],
     4: [
         ("agents/04-implementation.md", None),

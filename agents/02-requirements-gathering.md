@@ -151,6 +151,7 @@ Rules for the output:
 - Use business language rather than technical implementation language.
 - Technical choreography, exact MCP execution steps, and payload mechanics belong to Agent 3, not here.
 - Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery in Agent 3.
+- When the BA draft shows a likely schema code or custom lookup name, treat it as a planning placeholder rather than a binding implementation commitment.
 - If the host environment requires a wrapper such as `<proposed_plan>`, keep the wrapper only as a container. The visible body must still use the BA-style headings defined here.
 - Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
 - Keep each top-level section concise. Prefer 1 short opening paragraph plus compact bullets unless the request genuinely needs more detail.
@@ -261,7 +262,23 @@ Before finalizing the BA draft, verify at minimum:
 - `sourcePrompt`
 - `businessChecklist`
 - `technicalInputs`
+- `planningSignals`
 - `assumptions`
+
+`planningSignals` must include:
+
+- `reuseCheckRequired`
+
+Use `planningSignals.reuseCheckRequired` as the Agent 2 handoff list for Agent 3.
+This list must stay technical-light: it marks business concepts that need live reuse discovery, but it must not pre-decide `reuse`, `extend`, or `create`.
+
+When a business concept is recognizable and could plausibly map to an existing platform or custom schema, add an entry with:
+
+- `businessConcept`
+- `whyAmbiguous`
+- `suspectedCandidates`
+
+If no such concept exists, persist `reuseCheckRequired: []`.
 
 `businessChecklist` must include these groups plus `complete=true`:
 
@@ -303,6 +320,7 @@ Use both acceptance checks before approval artifacts are written:
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
 - If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
+- When that ambiguity exists, persist a `planningSignals.reuseCheckRequired` entry in `request-spec.json` so Agent 3 must open the discovery branch for that concept.
 
 ## Default Resolution Rules
 
