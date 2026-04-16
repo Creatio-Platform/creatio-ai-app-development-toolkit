@@ -3,6 +3,40 @@
 Use this guide when Agent 3 must decide whether to `reuse`, `extend`, or `create`.
 It is a policy reference for evidence quality, not an executable tool contract.
 
+## DataForge Response Field Reference
+
+When iterating `dataforge-find-lookups` results, use the correct field names:
+
+| Field in response | Meaning |
+|-------------------|---------|
+| `similar-lookups[].schema-name` | Lookup entity name (not `"name"`) |
+| `similar-lookups[].value` | Row display value (not `"caption"`) |
+| `similar-lookups[].score` | Relevance score (lower = more relevant in some versions) |
+
+When iterating `dataforge-find-tables` / `dataforge-context` similar-tables:
+
+| Field | Meaning |
+|-------|---------|
+| `similar-tables[].name` | Entity schema name |
+| `similar-tables[].caption` | Human-readable table caption |
+| `similar-tables[].description` | AI-generated semantic description |
+
+## Known Live Candidates — Support / Case Domain
+
+The following are confirmed live on standard Creatio environments with SLM/CrtCaseManagement installed.
+Use these as starting-point hints for `dataforge-context` candidate-terms when the request is case/support-related.
+
+| Business Concept | Confirmed Candidate | Status | Notes |
+|-----------------|---------------------|--------|-------|
+| Support case / Incident | `Case` (pkg: `CrtCaseManagmentObject`) | ⚠️ Conditional reuse | Has Subject, Status(→CaseStatus), Priority(→CasePriority), Category(→CaseCategory), Owner(→Contact), Notes, Solution. Primary display col is `Number` not `Name`. CaseStatus has "New"/"In progress"/"Closed" — if approved lifecycle requires "Completed"/"Canceled" as distinct states, this is a capability failure → `create`. |
+| Case priority | `CasePriority` | ✅ Reuse | Confirmed values: Critical, High, Medium, Low — matches standard priority requirements exactly. |
+| Case status | `CaseStatus` | ⚠️ Check values | Confirmed values: "New", "In progress", "Closed". Missing "Completed" and "Canceled" as distinct states. Platform-owned; cannot be extended safely. |
+| Case category | `CaseCategory` | ⚠️ Check values | Confirmed value: "Service request". Not suitable for custom taxonomy (Technical Issue / Billing / Account etc.). |
+| Knowledge/Solution article | `KnowledgeBase` (pkg: `CrtCoreBase`) | ⚠️ Conditional reuse | Has Name (required), Notes (MaxSizeText), Keywords. Required field `Type` (Lookup→KnowledgeBaseType) adds unavoidable inherited semantics — if article type is not in approved requirements, this is a capability failure → `create`. |
+| Person / Assigned agent | `Contact` | ✅ Reuse | Standard platform identity entity. Confirmed via Case.Owner column reference. No Usr prefix needed. |
+| Knowledge article ↔ Case link | `KnowledgeBaseInCase` | ✅ Available | Junction entity linking KnowledgeBase to Case. Useful if reusing both. |
+
+
 ## Strong Candidate Signals
 
 Treat a candidate as strong when any of the following is true:
@@ -61,15 +95,31 @@ A broader platform entity or shared lookup can still be reusable.
 The following do not block reuse on their own:
 
 - extra optional columns
-- broader module membership
+- extra required fields that already have default values or existing lookup references
+- broader module membership or platform module dependencies
 - existing unrelated optional fields
 - a platform-owned lookup with the exact lifecycle values already present
+- the candidate covering more capabilities than the user explicitly requested
+- the candidate belonging to a module with additional related entities the user did not mention
 
 Default to `reuse` when the required capabilities are already covered.
 If a strong candidate is the most similar match and only additive fields or narrow adaptation are needed, still keep the final decision at `reuse`.
 Use `extend` only outside the strong-candidate override path, such as expanding the current app-owned custom baseline after stronger reusable candidates were ruled out.
-Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior is unacceptable.
+Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior directly contradicts the approved requirements.
 Apply this rule even if the candidate is not a 100% match. A strong candidate with only additive gaps still belongs in `reuse`, not `create`.
+
+### User requirements as a subset
+
+User requirements often describe only a subset of a candidate's capabilities.
+When the majority of approved business requirements match what DataForge discovered, that is sufficient for `reuse` — even if the candidate has additional required fields, broader module scope, or more features than the user explicitly requested.
+
+The candidate having more than what was asked for is a strength, not a mismatch.
+Extra required fields with existing lookup values or defaults are a page-level concern (set a default on the form), not a schema-level capability failure.
+Module dependencies are informational context about the candidate's origin, not functional blockers unless they prevent the approved business flow from working correctly.
+
+Do not treat "the user didn't mention this field" or "the user didn't ask for this functionality" as evidence against reuse.
+Do not treat a required field with existing lookup values as "unavoidable inherited behavior" that blocks reuse.
+Do not treat module membership as "unwanted coupling" when the candidate's core business semantics match the approved requirements.
 
 ## Required Model Decision Carriers
 
@@ -122,6 +172,10 @@ Good `create` evidence:
 
 - only when required capabilities cannot fit or unavoidable inherited behavior is unacceptable
 
+## Discovery Primacy
+
+DataForge discovery evidence confirmed through the Evidence Ladder is the highest-authority input for model decisions. Reasoning from any other source — user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, deployment concerns — is subordinate and cannot override confirmed discovery. If the Evidence Ladder confirms a strong candidate, the model decision is `reuse` regardless of what other reasoning inputs suggest.
+
 ## Bad decision evidence
 
 Bad reasoning patterns:
@@ -134,6 +188,13 @@ Bad reasoning patterns:
 - `the business plan already named Usr...`
 - `shared platform lookup may diverge later`
 - `candidate is broader than needed`
+- `candidate has extra required fields the user didn't mention`
+- `candidate belongs to a module with dependencies`
+- `candidate has more functionality than requested`
+- `user didn't specify all candidate fields`
+- `required field not in user requirements`
+- `module coupling to a broader platform area`
+- any reasoning that overrides confirmed DataForge discovery with a subordinate input such as user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, or simplicity preferences
 
 These are conclusions, not evidence.
 They fail when they are not tied to `dataforge-context` plus at least one schema-level confirmation call.
@@ -148,6 +209,30 @@ Typical triggers:
 - future domain divergence that is plausible but not yet confirmed
 - unavoidable inherited behavior whose acceptability is a product decision
 - cross-team coupling risk that is real but not clearly unacceptable
+
+## DataForge Unavailable
+
+When `dataforge-availability: unavailable` is recorded (because `dataforge-status` was not Ready or threw), the active discovery branch is bypassed for the session. Use these templates directly instead of analyzing the validator.
+
+Good `create` evidence when DataForge is unavailable:
+
+- `candidates-considered: Case, Activity`
+- `candidate-fit-summary: candidates not inspected — DataForge unavailable`
+- `required-capabilities: app-owned support case lifecycle, custom status tracking, priority assignment, agent assignment`
+- `mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)`
+- `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
+- `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`
+
+Good `reuse` evidence when DataForge is unavailable (for known platform entities like Contact, KnowledgeBase):
+
+- `candidates-considered: Contact`
+- `candidate-fit-summary: standard platform identity entity with known person/communication semantics`
+- `required-capabilities: reusable person record for customer and agent reference`
+- `mismatch-evidence: none — reuse accepted based on known platform semantics`
+- `discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema`
+- `rejected-candidates: none`
+
+Key rule: for `create` actions, `rejected-candidates` or `mismatch-evidence` must still contain a rejection phrase such as `no suitable candidate found`, `lifecycle mismatch`, `semantic mismatch`, `does not match`, etc. This check applies regardless of DataForge availability.
 
 ## Greenfield Exception
 

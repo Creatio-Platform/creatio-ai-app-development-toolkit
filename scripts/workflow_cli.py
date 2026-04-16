@@ -137,6 +137,10 @@ CAPABILITY_FAILURE_SIGNAL_RE = re.compile(
     r"(cannot be satisfied|cannot satisfy|required capability.{0,20}(missing|cannot)|missing value|required value.{0,20}missing|forbidden extra semantics|unavoidable inherited behavior|cannot fit|cannot extend safely|not safely extendable|required event linkage.{0,20}cannot be satisfied|required lifecycle.{0,20}cannot be satisfied|inherited behavior is unacceptable|not acceptable for the approved business flow)",
     re.IGNORECASE,
 )
+EXTRA_REQUIRED_FIELD_RELABEL_RE = re.compile(
+    r"(required.{0,40}field.{0,40}(lookup|values|references|default)|extra required field|required.{0,20}(EventType|Type|Category|Kind).{0,40}(lookup|values|marketing|domain)|field.{0,40}existing.{0,20}lookup.{0,20}values|can be defaulted at page)",
+    re.IGNORECASE,
+)
 LOOKUP_EXACT_MATCH_SIGNAL_RE = re.compile(
     r"(exact lookup match|exactly matches the approved lifecycle|already contains.{0,40}(in progress|completed|canceled|cancelled)|matches the approved lifecycle|same lifecycle values|same values)",
     re.IGNORECASE,
@@ -537,10 +541,18 @@ def validate_implementation_plan_doc(plan_file):
                 has_partial_match_dismissal = bool(PARTIAL_MATCH_DISMISSAL_RE.search(full_decision_text))
                 has_prior_plan_create_preference = bool(PRIOR_PLAN_CREATE_PREFERENCE_RE.search(full_decision_text))
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
+                has_extra_required_field_relabel = bool(EXTRA_REQUIRED_FIELD_RELABEL_RE.search(full_decision_text))
                 candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
                 only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
                 exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
                 most_similar_selection = bool(MOST_SIMILAR_SELECTION_SIGNAL_RE.search(full_decision_text))
+                if has_capability_failure and has_extra_required_field_relabel:
+                    raise WorkflowError(
+                        "Implementation plan failed: create decision uses a capability-failure phrase "
+                        "(e.g. 'forbidden extra semantics') but the mismatch describes an extra required "
+                        "field with existing lookup values — extra required fields with existing lookup "
+                        "references are page-level concerns, not capability failures that justify create"
+                    )
                 if only_additive_or_extendable_gaps and not has_capability_failure:
                     raise WorkflowError(
                         "Implementation plan failed: strong candidates with only additive or extendable gaps must resolve to reuse, even if the candidate is not a 100% match or an earlier plan preferred create"

@@ -558,6 +558,29 @@ def build_valid_plan_doc_reuse_broader_candidate():
 """
 
 
+def build_invalid_plan_doc_create_relabeling_extra_required_field_as_forbidden_semantics():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The platform Event is a marketing-specific entity with required EventType classification. Every record must be classified as a marketing event type (webinar, exhibition, seminar, promotion, tutorial), which represents forbidden extra semantics for a generic event tracker app.
+  rejected-candidates: Event — required EventType with marketing-specific values forces semantic mismatch; forbidden extra semantics
+  candidate-fit-summary: Event has Name, StartDate, EndDate, Status (required lookup to EventStatus), Owner (required lookup to Contact), plus required Type (lookup to EventType with marketing-specific values)
+  required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
+  mismatch-evidence: forbidden extra semantics — required EventType field with marketing-specific lookup values forces classification not acceptable for the approved business flow; dataforge-get-table-columns confirmed Type as required lookup to EventType on Event schema
+  discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns including required Type to EventType
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
 def build_invalid_plan_doc_unresolved_tradeoff():
     return """# Implementation Plan
 
@@ -815,6 +838,14 @@ class WorkflowCliTests(unittest.TestCase):
             result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_rejects_create_when_forbidden_semantics_relabels_extra_required_field(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_create_relabeling_extra_required_field_as_forbidden_semantics())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("extra required field", result.stderr.lower())
 
     def test_validate_implementation_plan_doc_rejects_unresolved_tradeoff_until_user_confirms_choice(self):
         with temp_workflow_root() as workflow_root:

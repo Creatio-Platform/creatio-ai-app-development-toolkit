@@ -308,8 +308,23 @@ If `status.status != "Ready"` or the `dataforge-status` call throws, Agent 3 mus
 Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
 If live DataForge discovery surfaces a strong candidate, that discovery overrides any earlier placeholder `Usr*` naming or create-first bias from Agent 2, the BA draft, or an earlier plan.
 Strong candidates resolve to `reuse` after the Evidence Ladder unless a concrete capability failure is proven. This remains true even if the candidate is not a 100% match.
+When the majority of approved business requirements match the candidate, that is sufficient for `reuse` — even if the candidate has additional required fields, broader module scope, or more features than the user explicitly requested.
+User requirements may describe only a subset of the candidate's capabilities; the candidate having more than requested is a strength, not a mismatch.
+Extra required fields with existing lookup values or defaults are page-level concerns (set a default on the form), not schema-level capability failures that justify `create`.
+Do not relabel an extra required field with existing lookup values as "forbidden extra semantics"; a required field referencing a domain-specific lookup (e.g., EventType with marketing values) remains an extra-required-field scenario handleable at page/UI level — "forbidden extra semantics" applies only when the entity's core domain purpose or lifecycle makes the approved business flow impossible.
+Module dependencies are informational context about the candidate's origin, not functional blockers unless they prevent the approved business flow.
 When several strong candidates exist, Agent 3 must select the most similar candidate from discovery and record that schema as the reused `chosen-schema`.
 `extend` remains valid only outside that strong-candidate override path.
+
+### Discovery Authority Hierarchy
+
+DataForge discovery evidence confirmed through the Evidence Ladder is the binding source of truth for model decisions. It outranks all other reasoning inputs — including user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, and deployment concerns. No reasoning from a subordinate source may override a discovery-confirmed model decision.
+
+User-prompt phrasing (e.g. "simple app", "new app", "standalone", "lightweight", "custom") describes desired functionality, not schema-isolation intent. It does not override discovery evidence unless the user explicitly required technical isolation, custom ownership, or separate governance.
+
+The choice of MCP tools and call sequence is an execution detail that implements the discovery-confirmed model decision. If the originally planned execution path does not support the confirmed decision, the execution path changes — the model decision does not.
+
+Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase — execution planning, tool selection, page planning, user-prompt reinterpretation — may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report, not a license to silently change the decision.
 
 ## Agent Responsibilities
 
@@ -373,6 +388,7 @@ Approval-ready vs execution-ready rule:
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
 - Implementation success does not excuse format non-compliance. Even if the app is successfully created, the assistant must still provide the required planning artifacts in the exact prescribed format.
+- Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`scripts/workflow_cli.py`, `scripts/validate-requirements-doc.sh`, etc.) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 
 ## Orchestration Checklist
 

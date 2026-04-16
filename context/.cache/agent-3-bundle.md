@@ -124,6 +124,8 @@ Resolve:
 Rules:
 
 - Resolve exact executable parameter names, aliases, defaults, and validation rules from `get-tool-contract`.
+  Use `tool-names` (array, plural) to target only the tools you need, e.g. `{"tool-names": ["create-app"], "environment-name": "..."}`.
+  Omitting `tool-names` returns all 80+ tools (~300 KB) and requires a secondary extraction step.
 - Treat `create-app` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
@@ -167,6 +169,66 @@ Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*`
 - When `dataforge-availability: unavailable` is recorded, Agent 3 should not run the reuse/extend/create discovery branch and should not require DataForge-based evidence or fallback proof for the skipped branch.
 - Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
 
+#### DataForge Unavailable — Fast Path
+
+When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
+Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+
+**Checks that are SKIPPED when DataForge is unavailable:**
+
+- `discovery-evidence` does not need to cite any tool names (`dataforge-*`, `application-get-*`, `get-entity-schema-*` are not required)
+- no follow-up discovery (`dataforge-context`) required
+- no schema-level confirmation required
+- no strong-candidate reuse-first policy checks
+- no Evidence Ladder steps
+
+**Checks that STILL APPLY when DataForge is unavailable:**
+
+- all 11 required fields must be present in each decision record
+- `tradeoff-escalation` must be `none`
+- if `chosen-action: create`, then `rejected-candidates` or `mismatch-evidence` must contain at least one rejection-reason phrase from this list: `no suitable candidate found`, `greenfield-only`, `ownership boundary`, `unwanted coupling`, `lifecycle mismatch`, `semantic mismatch`, `broader than scope`, `field mismatch`, `column mismatch`, `relation mismatch`, `status mismatch`, `shared lookup`, `module coupling`, `does not match`, `does not fit`
+- every schema referenced in Ordered Schema Sync with `create`, `extend`, or `update` action must have a matching Model Decisions record
+
+**Template — `create` decision when DataForge is unavailable:**
+
+```
+- business-concept: <business name>
+  candidates-considered: <known platform candidates, e.g. "Case, Activity">
+  chosen-action: create
+  chosen-schema: <UsrXxx>
+  tradeoff-escalation: none
+  rationale: <why create is appropriate given unavailable discovery>
+  rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility
+  candidate-fit-summary: candidates not inspected — DataForge unavailable
+  required-capabilities: <list from approved requirements>
+  mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)
+  discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session
+```
+
+**Template — `reuse` decision for a known platform entity when DataForge is unavailable:**
+
+```
+- business-concept: <business name>
+  candidates-considered: <schema name>
+  chosen-action: reuse
+  chosen-schema: <ExistingSchema>
+  tradeoff-escalation: none
+  rationale: <why reuse — e.g., standard platform entity with known semantics>
+  rejected-candidates: none
+  candidate-fit-summary: <known capabilities of the platform entity>
+  required-capabilities: <from approved requirements>
+  mismatch-evidence: none — reuse accepted based on known platform semantics
+  discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema
+```
+
+After recording `dataforge-availability: unavailable`, proceed immediately to writing the Model Decisions using these templates and then continue to Schema Sync Plan. Do not spend time analyzing what the validator checks.
+
+#### Discovery Gate
+
+The sections **Triggers**, **Canonical Discovery Sequence**, **Evidence Ladder**, **Deterministic Choice Rules**, and **Discovery Evidence Rule** below apply **only when DataForge is available**.
+
+When `dataforge-availability: unavailable` is recorded, **skip all five sections** and proceed directly to **Schema Sync Plan**.
+
 #### Triggers
 
 Open the discovery branch for any business object, supporting object, lookup, or reference target that could plausibly map to an existing app or schema.
@@ -190,36 +252,55 @@ Never treat "the BA draft already named a `Usr*` schema" as proof that the objec
 
 For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
 
-1. `dataforge-find-tables`
-2. `dataforge-find-lookups`
-3. `dataforge-context`
-4. When a strong candidate is found:
+1. **Batched initial discovery — prefer a single `dataforge-context` call** that combines candidate-tables, lookups, and relations in one network round-trip:
+   ```
+   dataforge-context({
+     "environment-name": "<env>",
+     "candidate-terms": ["<main concept>", "<supporting concept>"],
+     "lookup-hints": ["<status phrase>", "<priority phrase>", "<category phrase>"],
+     "requirement-summary": "<brief business description>"
+   })
+   ```
+   Use `candidate-terms` for entity candidates, `lookup-hints` for lookup candidates.
+   Do **not** pass `schema-name` — that parameter does not exist on this tool.
+   Skip the separate `dataforge-find-tables` and `dataforge-find-lookups` calls when you pass both arrays above; `dataforge-context` already aggregates both results.
+   Fall back to `dataforge-find-tables` and `dataforge-find-lookups` individually only when you need to widen or narrow the search after reviewing the batched result.
+
+2. When a strong candidate is found:
    - `application-get-info` for app-level context when the candidate belongs to an existing app
-   - at least one schema-level confirmation call:
+   - Resolve `package-name` before calling `get-entity-schema-properties`:
+     1. `find-entity-schema(schema-name)` → read `package-name` from the entry where `parent-schema-name` is `BaseEntity` or `BaseCase` (the root definition)
+     2. `get-entity-schema-properties(schema-name, package-name)` using that resolved package
+   - At least one additional schema-level confirmation call:
      - `dataforge-get-table-columns`
      - `dataforge-get-relations`
-     - `get-entity-schema-properties`
      - `get-entity-schema-column-properties` when a specific column remains ambiguous
+
+**`dataforge-find-lookups` response field names** (use these when iterating results):
+- `similar-lookups[].schema-name` — the lookup entity name (not `"name"`)
+- `similar-lookups[].value` — the row display value (not `"caption"`)
+- `similar-lookups[].score` — relevance score
+
+**Large response handling:** `dataforge-context` may return 50–80 KB saved to a temp file. Always parse it with Python via `call_mcp_tool` from `scripts/mcp_client.py` rather than PowerShell `ConvertFrom-Json`, which fails on multi-root or header-prefixed output.
 
 Do not use `dataforge-initialize` or `dataforge-update` during planning.
 If `dataforge-availability: unavailable` is already recorded for the session, skip this sequence entirely.
 
 #### Evidence Ladder
 
-Treat `dataforge-find-tables` and `dataforge-find-lookups` as candidate discovery only.
-They are not sufficient evidence for `create`, and they do not by themselves prove the final `reuse` decision.
+Candidate discovery signals (`dataforge-context` similar-tables/lookups, `dataforge-find-tables`, `dataforge-find-lookups`) are not sufficient evidence for `create`, and they do not by themselves prove the final `reuse` decision.
 
 For every strong candidate, complete the full ladder before locking the final `Model Decisions` record:
 
-1. Initial candidate discovery:
-   - `dataforge-find-tables`
-   - `dataforge-find-lookups`
+1. Initial candidate discovery (satisfied by the batched `dataforge-context` call above, or by `dataforge-find-tables` + `dataforge-find-lookups` individually)
 2. Follow-up confirmation:
-   - `dataforge-context` is mandatory
+   - `dataforge-context` is mandatory (already satisfied when the batched call is used in step 1)
 3. Schema-level confirmation:
    - at least one of `dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`
+   - when using `get-entity-schema-properties`, resolve `package-name` first via `find-entity-schema`
 4. Final choice:
    - only after the first three steps may the plan lock the final `reuse`, `extend`, or `create` outcome
+   - **begin writing `plan.md` immediately after Evidence Ladder is complete** — do not defer to re-read validator source or workflow scripts before committing to disk
 
 If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
 Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
@@ -236,10 +317,20 @@ Use a reuse-first default after live discovery:
 - do not choose `create` only because the candidate is broader than needed, belongs to a shared platform module, or was not the placeholder schema named in the BA draft
 - do not choose `create` when the only proven gaps are additive or safely extendable, even if the candidate is not a 100% match
 - do not choose `create` just because live discovery arrived after an earlier placeholder choice; this applies even if Agent 2, the BA draft, or an earlier plan preferred create
+- do not choose `create` because the candidate has extra required fields with existing lookup references or default values; those fields are handleable at page/UI level and are not schema-level capability failures
+- do not choose `create` because the candidate has more functionality than the user explicitly requested; user requirements may describe only a subset of the candidate's capabilities, and this is normal
+- do not choose `create` because the candidate belongs to a platform module with additional related entities the user did not mention; module dependencies are informational context, not functional blockers unless they prevent the approved business flow
+- do not relabel an extra required field with existing lookup values as "forbidden extra semantics" to justify `create`; a required field that references a domain-specific lookup (e.g., EventType with marketing values) is an extra required field with existing lookup references — it can be defaulted at page/UI level and is not a schema-level capability failure; "forbidden extra semantics" applies only when the entity's core domain purpose or lifecycle makes the approved business flow impossible, not when a single required field has domain-flavored lookup values that can be set to a default
 - for lookups, exact or near-exact match should default to `reuse`
-- create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior is unacceptable, or separate governance was explicitly confirmed with the user
+- create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior directly contradicts approved requirements, or separate governance was explicitly confirmed with the user
 
-`reuse-first` means the plan should move toward the existing candidate whenever required capabilities are already covered.
+`reuse-first` means the plan should move toward the existing candidate whenever the majority of approved business requirements match the candidate's capabilities, even if the candidate covers more than what was explicitly requested.
+
+#### Model Decision Finality
+
+DataForge discovery evidence confirmed through the Evidence Ladder is the binding source of truth for model decisions (see AGENTS.md – Discovery Authority Hierarchy). No other reasoning input — user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, or deployment concerns — may override a discovery-confirmed model decision.
+
+Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report — not a license to silently switch to `create`.
 
 #### Required Model Decisions
 
@@ -302,15 +393,16 @@ For strong-candidate reuse, document why the chosen schema is the most similar c
 
 Acceptable reasons for `create`:
 
-- ownership boundary
-- unwanted coupling to a platform schema
-- lifecycle or semantics mismatch
-- the candidate schema is broader than the approved scope
+- ownership boundary — proven by evidence that shared ownership would break the approved business flow
+- unwanted coupling to a platform schema — coupling must provably break the approved business flow or prevent required behavior, not merely exist
+- lifecycle or semantics mismatch — the candidate's lifecycle or core semantics directly contradict the approved requirements
 - required capability cannot be satisfied by reuse or extend
-- unavoidable inherited behavior is unacceptable for the approved business flow
+- unavoidable inherited behavior that directly contradicts the approved requirements — inherited behavior is unacceptable only when it makes the approved business flow impossible, not when it was merely unmentioned by the user
 
 Each acceptable reason above requires technical confirmation from the Evidence Ladder.
 For example, "the candidate schema is broader than the approved scope" is not sufficient on its own unless follow-up confirmation and schema-level confirmation show the specific mismatch.
+"Unwanted coupling" requires evidence that the coupling prevents the approved business flow, not just that the candidate belongs to a broader platform module.
+"Unavoidable inherited behavior" requires evidence that the behavior contradicts the approved requirements, not just that the user did not mention it.
 
 Unacceptable reasons for `create`:
 
@@ -319,6 +411,13 @@ Unacceptable reasons for `create`:
 - `Usr*` naming preference without further architectural rationale
 - the candidate belongs to a broader platform module but already covers the required capabilities
 - the lookup is shared and might diverge later without a confirmed governance requirement
+- the candidate has extra required fields with existing default values or lookup references that the user did not mention
+- the user's requirements describe a subset of the candidate's capabilities and the candidate covers more than what was explicitly requested
+- module dependency exists but does not restrict the approved business flow
+- the candidate has more functionality than the user described — broader scope is not a mismatch when the required capabilities are covered
+- a required field was not listed in the user's requirements but has existing lookup values or defaults that can be set at page/UI level
+- relabeling an extra required field with existing lookup references as "forbidden extra semantics" — when the reported mismatch is that a required field references a domain-specific lookup (e.g., EventType with marketing values), that is an extra required field scenario handleable at page/UI level, not a genuine "forbidden extra semantics" capability failure
+- any reasoning that subordinates DataForge discovery evidence to another input — the Evidence Ladder outcome is the binding source of truth for model decisions and outranks user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, and deployment concerns
 
 #### Escalation Rule For Ambiguous Tradeoffs
 
@@ -360,6 +459,7 @@ When this happens:
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
+- When a `Model Decisions` record resolves to `reuse`, the Schema Sync Plan must select the execution path that implements reuse (e.g. `create-app-section` with the existing entity, or existing-app flow). The choice of MCP tools adapts to the model decision — the model decision is not negotiable at execution-planning time.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
 - Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
@@ -757,6 +857,40 @@ Page or client schemas commonly include:
 Use this guide when Agent 3 must decide whether to `reuse`, `extend`, or `create`.
 It is a policy reference for evidence quality, not an executable tool contract.
 
+## DataForge Response Field Reference
+
+When iterating `dataforge-find-lookups` results, use the correct field names:
+
+| Field in response | Meaning |
+|-------------------|---------|
+| `similar-lookups[].schema-name` | Lookup entity name (not `"name"`) |
+| `similar-lookups[].value` | Row display value (not `"caption"`) |
+| `similar-lookups[].score` | Relevance score (lower = more relevant in some versions) |
+
+When iterating `dataforge-find-tables` / `dataforge-context` similar-tables:
+
+| Field | Meaning |
+|-------|---------|
+| `similar-tables[].name` | Entity schema name |
+| `similar-tables[].caption` | Human-readable table caption |
+| `similar-tables[].description` | AI-generated semantic description |
+
+## Known Live Candidates — Support / Case Domain
+
+The following are confirmed live on standard Creatio environments with SLM/CrtCaseManagement installed.
+Use these as starting-point hints for `dataforge-context` candidate-terms when the request is case/support-related.
+
+| Business Concept | Confirmed Candidate | Status | Notes |
+|-----------------|---------------------|--------|-------|
+| Support case / Incident | `Case` (pkg: `CrtCaseManagmentObject`) | ⚠️ Conditional reuse | Has Subject, Status(→CaseStatus), Priority(→CasePriority), Category(→CaseCategory), Owner(→Contact), Notes, Solution. Primary display col is `Number` not `Name`. CaseStatus has "New"/"In progress"/"Closed" — if approved lifecycle requires "Completed"/"Canceled" as distinct states, this is a capability failure → `create`. |
+| Case priority | `CasePriority` | ✅ Reuse | Confirmed values: Critical, High, Medium, Low — matches standard priority requirements exactly. |
+| Case status | `CaseStatus` | ⚠️ Check values | Confirmed values: "New", "In progress", "Closed". Missing "Completed" and "Canceled" as distinct states. Platform-owned; cannot be extended safely. |
+| Case category | `CaseCategory` | ⚠️ Check values | Confirmed value: "Service request". Not suitable for custom taxonomy (Technical Issue / Billing / Account etc.). |
+| Knowledge/Solution article | `KnowledgeBase` (pkg: `CrtCoreBase`) | ⚠️ Conditional reuse | Has Name (required), Notes (MaxSizeText), Keywords. Required field `Type` (Lookup→KnowledgeBaseType) adds unavoidable inherited semantics — if article type is not in approved requirements, this is a capability failure → `create`. |
+| Person / Assigned agent | `Contact` | ✅ Reuse | Standard platform identity entity. Confirmed via Case.Owner column reference. No Usr prefix needed. |
+| Knowledge article ↔ Case link | `KnowledgeBaseInCase` | ✅ Available | Junction entity linking KnowledgeBase to Case. Useful if reusing both. |
+
+
 ## Strong Candidate Signals
 
 Treat a candidate as strong when any of the following is true:
@@ -815,15 +949,31 @@ A broader platform entity or shared lookup can still be reusable.
 The following do not block reuse on their own:
 
 - extra optional columns
-- broader module membership
+- extra required fields that already have default values or existing lookup references
+- broader module membership or platform module dependencies
 - existing unrelated optional fields
 - a platform-owned lookup with the exact lifecycle values already present
+- the candidate covering more capabilities than the user explicitly requested
+- the candidate belonging to a module with additional related entities the user did not mention
 
 Default to `reuse` when the required capabilities are already covered.
 If a strong candidate is the most similar match and only additive fields or narrow adaptation are needed, still keep the final decision at `reuse`.
 Use `extend` only outside the strong-candidate override path, such as expanding the current app-owned custom baseline after stronger reusable candidates were ruled out.
-Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior is unacceptable.
+Choose `create` only when the required capabilities cannot fit or unavoidable inherited behavior directly contradicts the approved requirements.
 Apply this rule even if the candidate is not a 100% match. A strong candidate with only additive gaps still belongs in `reuse`, not `create`.
+
+### User requirements as a subset
+
+User requirements often describe only a subset of a candidate's capabilities.
+When the majority of approved business requirements match what DataForge discovered, that is sufficient for `reuse` — even if the candidate has additional required fields, broader module scope, or more features than the user explicitly requested.
+
+The candidate having more than what was asked for is a strength, not a mismatch.
+Extra required fields with existing lookup values or defaults are a page-level concern (set a default on the form), not a schema-level capability failure.
+Module dependencies are informational context about the candidate's origin, not functional blockers unless they prevent the approved business flow from working correctly.
+
+Do not treat "the user didn't mention this field" or "the user didn't ask for this functionality" as evidence against reuse.
+Do not treat a required field with existing lookup values as "unavoidable inherited behavior" that blocks reuse.
+Do not treat module membership as "unwanted coupling" when the candidate's core business semantics match the approved requirements.
 
 ## Required Model Decision Carriers
 
@@ -876,6 +1026,10 @@ Good `create` evidence:
 
 - only when required capabilities cannot fit or unavoidable inherited behavior is unacceptable
 
+## Discovery Primacy
+
+DataForge discovery evidence confirmed through the Evidence Ladder is the highest-authority input for model decisions. Reasoning from any other source — user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, deployment concerns — is subordinate and cannot override confirmed discovery. If the Evidence Ladder confirms a strong candidate, the model decision is `reuse` regardless of what other reasoning inputs suggest.
+
 ## Bad decision evidence
 
 Bad reasoning patterns:
@@ -888,6 +1042,13 @@ Bad reasoning patterns:
 - `the business plan already named Usr...`
 - `shared platform lookup may diverge later`
 - `candidate is broader than needed`
+- `candidate has extra required fields the user didn't mention`
+- `candidate belongs to a module with dependencies`
+- `candidate has more functionality than requested`
+- `user didn't specify all candidate fields`
+- `required field not in user requirements`
+- `module coupling to a broader platform area`
+- any reasoning that overrides confirmed DataForge discovery with a subordinate input such as user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, or simplicity preferences
 
 These are conclusions, not evidence.
 They fail when they are not tied to `dataforge-context` plus at least one schema-level confirmation call.
@@ -902,6 +1063,30 @@ Typical triggers:
 - future domain divergence that is plausible but not yet confirmed
 - unavoidable inherited behavior whose acceptability is a product decision
 - cross-team coupling risk that is real but not clearly unacceptable
+
+## DataForge Unavailable
+
+When `dataforge-availability: unavailable` is recorded (because `dataforge-status` was not Ready or threw), the active discovery branch is bypassed for the session. Use these templates directly instead of analyzing the validator.
+
+Good `create` evidence when DataForge is unavailable:
+
+- `candidates-considered: Case, Activity`
+- `candidate-fit-summary: candidates not inspected — DataForge unavailable`
+- `required-capabilities: app-owned support case lifecycle, custom status tracking, priority assignment, agent assignment`
+- `mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)`
+- `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
+- `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`
+
+Good `reuse` evidence when DataForge is unavailable (for known platform entities like Contact, KnowledgeBase):
+
+- `candidates-considered: Contact`
+- `candidate-fit-summary: standard platform identity entity with known person/communication semantics`
+- `required-capabilities: reusable person record for customer and agent reference`
+- `mismatch-evidence: none — reuse accepted based on known platform semantics`
+- `discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema`
+- `rejected-candidates: none`
+
+Key rule: for `create` actions, `rejected-candidates` or `mismatch-evidence` must still contain a rejection phrase such as `no suitable candidate found`, `lifecycle mismatch`, `semantic mismatch`, `does not match`, etc. This check applies regardless of DataForge availability.
 
 ## Greenfield Exception
 
