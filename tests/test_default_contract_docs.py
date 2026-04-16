@@ -4,7 +4,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-AUTHORITY_DOCS = [
+
+def existing(paths):
+    return [path for path in paths if path.exists()]
+
+AUTHORITY_DOCS = existing([
     ROOT / "AGENTS.md",
     ROOT / "README.md",
     ROOT / "context/essentials.md",
@@ -17,19 +21,17 @@ AUTHORITY_DOCS = [
     ROOT / "skills/entity-creation/SKILL.md",
     ROOT / "skills/data-bindings-creation/SKILL.md",
     ROOT / "skills/page-schema-editing/SKILL.md",
-    ROOT / ".github/copilot-instructions.md",
-]
+])
 
-WORKFLOW_ONLY_SCHEMA_DOCS = [
+WORKFLOW_ONLY_SCHEMA_DOCS = existing([
     ROOT / "context/INDEX.md",
     ROOT / "context/essentials.md",
     ROOT / "context/schema-reference.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / ".github/copilot-instructions.md",
-]
+])
 
-ACTIVE_CONTRACT_SURFACE_DOCS = [
+ACTIVE_CONTRACT_SURFACE_DOCS = existing([
     ROOT / "README.md",
     ROOT / "context/INDEX.md",
     ROOT / "context/essentials.md",
@@ -40,8 +42,7 @@ ACTIVE_CONTRACT_SURFACE_DOCS = [
     ROOT / "skills/entity-creation/SKILL.md",
     ROOT / "skills/data-bindings-creation/SKILL.md",
     ROOT / "skills/page-schema-editing/SKILL.md",
-    ROOT / ".github/copilot-instructions.md",
-]
+])
 
 HISTORICAL_OPTIMIZATION_DOCS = sorted((ROOT / "docs/optimization").glob("*.md"))
 
@@ -105,15 +106,14 @@ DOMAIN_EXPERTISE_DOCS = [
     ROOT / "context/business-checklist.md",
 ]
 
-STDIO_ONLY_DOCS = [
+STDIO_ONLY_DOCS = existing([
     ROOT / "AGENTS.md",
     ROOT / "agents/01-environment-setup.md",
     ROOT / "agents/02-requirements-gathering.md",
     ROOT / "context/mcp-application-tools-reference.md",
-    ROOT / ".github/copilot-instructions.md",
     ROOT / "README.md",
     ROOT / "skills/README.md",
-]
+])
 
 DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "AGENTS.md",
@@ -249,18 +249,20 @@ class DefaultContractDocsTests(unittest.TestCase):
         agent_doc = read_text(ROOT / "agents/02-requirements-gathering.md")
         self.assertIn("Document Rendering Contract", agent_doc)
         self.assertIn("Hard Fail Conditions", agent_doc)
-        self.assertTrue(contains_all(agent_doc, ["Use tables only", "## 4. Domain Model"]))
+        self.assertTrue(contains_all(agent_doc, ["Use tables only", "## 3. Object Model"]))
         self.assertTrue(contains_all(agent_doc, ["entity field tables", "prose summaries"]))
         self.assertIn("entity metadata block", agent_doc)
         self.assertTrue(contains_all(agent_doc, ["child-side link status", "when applicable"]))
         self.assertIn("## 1. Business Outcome", agent_doc)
-        self.assertIn("## 7. UX Expectations", agent_doc)
+        self.assertIn("## 2. Roles and Permitions", agent_doc)
+        self.assertIn("## 3. Object Model", agent_doc)
+        self.assertIn("## 6. UX Expectations", agent_doc)
         self.assertTrue(contains_all(agent_doc, ["`schema default`", "`ui default`", "visible BA draft"]))
         self.assertNotIn("## 6. Implementation-shaping decisions and assumptions", agent_doc)
 
         checklist_doc = read_text(ROOT / "context/business-checklist.md").lower()
         self.assertIn("business logic quality bar", checklist_doc)
-        self.assertIn("markdown tables outside the data model section", checklist_doc)
+        self.assertIn("markdown tables outside the object model section", checklist_doc)
 
     def test_docs_keep_persistence_and_internal_mechanics_out_of_ba_dialogue(self):
         agents_doc = read_text(ROOT / "AGENTS.md").lower()
@@ -325,11 +327,17 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_repo_preserves_policy_surfaces(self):
         agents_doc = read_text(ROOT / "AGENTS.md")
         self.assertTrue("Business context" in agents_doc or "Business Outcome" in agents_doc)
-        self.assertTrue("Users, access and ownership" in agents_doc or "Access / Personas" in agents_doc)
+        self.assertTrue(
+            "Users, access and ownership" in agents_doc
+            or "Roles and Permitions" in agents_doc
+        )
+        self.assertIn("Targeted changes", agents_doc)
+        self.assertIn("do **not** generate a BA Business Plan", agents_doc)
         self.assertIn("orchestration", agents_doc.lower())
         self.assertIn("approvals", agents_doc.lower())
         self.assertIn("business invariants", agents_doc.lower())
         readme = read_text(ROOT / "README.md")
+        self.assertIn("targeted change", readme.lower())
         self.assertIn("machineChecked", readme)
         self.assertIn("manualCheckPending", readme)
         ui_reference = read_text(ROOT / "context/ui-reference.md").lower()

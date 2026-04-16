@@ -9,20 +9,22 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | # | Section | Required |
 |---|---------|----------|
 | 1 | Business Outcome | yes |
-| 2 | Core Problem | yes |
-| 3 | Actors and Roles | yes |
-| 4 | Domain Model | yes |
-| 5 | Lifecycle and Statuses | yes |
-| 6 | Business Logic | yes |
-| 7 | UX Expectations | yes |
-| 8 | Edge Cases and Exceptions | yes |
-| 9 | Acceptance Criteria | yes |
-| 10 | Access / Personas | yes |
-| 11 | Assumptions | yes |
+| 2 | Roles and Permitions | yes |
+| 3 | Object Model | yes |
+| 4 | Lifecycle and Statuses | yes |
+| 5 | Business Logic | yes |
+| 6 | UX Expectations | yes |
+| 7 | Edge Cases and Exceptions | yes |
 
 The checklist groups below are discovery buckets, not an alternate final document structure.
-The plan body shown for Gate R approval must map the checklist outcome into the canonical 11-section Business Plan above.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 7-section Business Plan above.
 A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
+
+Section mapping rules:
+
+- `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
+- `Roles and Permitions` must include actors, responsibilities, personas, and access posture.
+- `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
 
 ---
 
@@ -64,6 +66,7 @@ Required:
 - business goal
 - core problem / pain point
 - expected result, KPI, or success signal
+- explicit assumptions that materially shape the first draft
 - MVP scope boundaries when they materially affect the first release
 
 The first discovery questions should focus here before moving into lower-level detail.
@@ -119,7 +122,7 @@ Resolve these ambiguities explicitly when they appear in the request:
 - if a secondary entity is proposed, state why it is a distinct business object instead of additional fields on the main entity
 - if contact-like records are present, state whether they are subordinate to one parent record or may exist independently
 
-The visible BA draft **must** render each entity in the data model section as a markdown table with columns: `Title`, `Code`, `Description`, `Data type`, `Required`, `Default`. Lookup seed rows must also be rendered as a table. Do not use bullet lists to describe entity fields or seed rows.
+The visible BA draft **must** render each entity in the object model section as a markdown table with columns: `Title`, `Code`, `Description`, `Data type`, `Required`, `Default`. Lookup seed rows must also be rendered as a table. Do not use bullet lists to describe entity fields or seed rows.
 
 ### UX assumptions
 
@@ -157,6 +160,7 @@ Default unless critical:
 - ownership/editing posture
 
 If a requirement changes compliance, ownership, or acceptance outcome, treat it as required clarification instead of a default.
+When an assumption remains in the final draft, render it inside `Business Outcome` rather than as a standalone top-level section.
 
 ## Business Logic Quality Bar
 
@@ -183,7 +187,7 @@ The pre-analysis must check for:
 - supporting entities whose required parent links or cross-field constraints are not explicitly captured
 - assumptions that contradict confirmed answers
 - visible BA draft formatting that violates the fixed document contract
-- markdown tables outside the data model section
+- markdown tables outside the object model section
 - checklist-source language leaking into the visible BA draft
 - recognizable business concepts that may map to existing schemas but are not marked for Agent 3 in `planningSignals.reuseCheckRequired`
 
@@ -207,7 +211,7 @@ For each checklist group, persist:
 - `assumption: "<text>"` when `source="assumed"`
 
 Do not mark a checklist group complete without `source`.
-If a group is assumed, the same assumption text must be listed in the top-level `assumptions` array before approval is written.
+If a group is assumed, the same assumption text must be listed in the top-level `assumptions` array before approval is written, even though the visible BA draft now folds assumptions into `Business Outcome`.
 
 If not complete, continue clarification and do not proceed to implementation planning.
 

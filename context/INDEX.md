@@ -18,6 +18,8 @@ Start with `AGENTS.md`, then follow the current stage runbook in `agents/`.
 ### B. Targeted changes
 
 Apply a focused change to an existing app or runtime page.
+If the request is concrete and implementation-ready, do not run Gate P, Gate R, Agent 2, or Agent 3.
+Do not generate a BA Business Plan for targeted changes.
 
 | Task | Skill | Read Next | Canonical MCP Guidance |
 |------|-------|-----------|------------------------|
@@ -42,9 +44,10 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 
 1. Read `AGENTS.md` for orchestration rules.
 2. Determine whether the task is full app generation or a targeted change.
-3. Load only the stage runbook or skill that matches the task.
-4. Read only the supporting context files needed for that stage.
-5. Resolve executable MCP details through `get-tool-contract` instead of searching docs for payload syntax.
+3. For targeted changes, skip full-app gates and planning stages.
+4. Load only the stage runbook or skill that matches the task.
+5. Read only the supporting context files needed for that stage.
+6. Resolve executable MCP details through `get-tool-contract` instead of searching docs for payload syntax.
 
 ## Full App Generation Reads
 

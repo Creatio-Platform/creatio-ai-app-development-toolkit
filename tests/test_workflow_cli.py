@@ -33,17 +33,13 @@ def build_valid_request_spec():
     return {
         "sourcePrompt": "Generate a Todo app",
         "businessChecklist": {
-            "businessOutcome": {"complete": True, "value": "Track daily work", "source": "confirmed"},
-            "coreProblem": {"complete": True, "value": "Work is scattered across notes and chat", "source": "confirmed"},
-            "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks", "source": "confirmed"},
-            "domainModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
+            "businessOutcome": {"complete": True, "value": "Track daily work, fix scattered process, and assume a single MVP workflow", "source": "confirmed"},
+            "rolesAndPermitions": {"complete": True, "value": "Employees manage own tasks; team leads review progress; no special restrictions for MVP", "source": "confirmed"},
+            "objectModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
             "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
             "businessLogic": {"complete": True, "value": "Title is required; duplicates are handled manually; tasks can be archived; editing is shared", "source": "confirmed"},
             "uxExpectations": {"complete": True, "value": "List and form pages are required", "source": "confirmed"},
             "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp", "source": "confirmed"},
-            "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks", "source": "confirmed"},
-            "analytics": {"complete": True, "value": "Track tasks created and completed by period", "source": "confirmed"},
-            "accessRestrictions": {"complete": True, "value": "No specific access restrictions are required by default.", "source": "confirmed"},
             "complete": True,
         },
         "technicalInputs": {
@@ -66,18 +62,19 @@ def build_valid_requirements_doc(app_name="TodoList"):
 
 Give the team one place to capture and manage daily tasks.
 
-## 2. Core Problem
+- Core problem: tasks are spread across notes and chat.
+- Success signal: the team tracks daily work in one shared registry.
+- Assumptions: MVP uses a single workflow.
 
-Tasks are spread across notes and chat, which makes status and ownership unclear.
-
-## 3. Actors and Roles
+## 2. Roles and Permitions
 
 - Team member: creates and updates tasks
 - Team lead: reviews progress and priorities
+- No special access restrictions for MVP.
 
-## 4. Domain Model
+## 3. Object Model
 
-### 4.1 Main entity: Task
+### 3.1 Main entity: Task
 
 Title: Task
 Code: `UsrTask`
@@ -95,44 +92,32 @@ Minimum to create:
 - Name
 - Status
 
-### 4.2 Lookups
+### 3.2 Lookups
 
 - Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
 
-### 4.3 Relationships
+### 3.3 Relationships
 
 - Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
 
-## 5. Lifecycle and Statuses
+## 4. Lifecycle and Statuses
 
 Tasks move through New, Active, and Archived statuses.
 
-## 6. Business Logic
+## 5. Business Logic
 
 - Title and Status are required to create a task.
 - Duplicate handling is advisory only.
 
-## 7. UX Expectations
+## 6. UX Expectations
 
 - default list columns: Name, Status
 - default filters: Status
 - main form groups: Main information
 
-## 8. Edge Cases and Exceptions
+## 7. Edge Cases and Exceptions
 
 - Archived tasks are excluded from default active lists.
-
-## 9. Acceptance Criteria
-
-- User can create, view, and update tasks.
-
-## 10. Access / Personas
-
-- Shared team workspace with one owner field on each task.
-
-## 11. Assumptions
-
-- MVP uses a single workflow.
 """
 
 

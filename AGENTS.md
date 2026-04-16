@@ -13,33 +13,28 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 The required top-level sections of every BA-style Business Plan are, in order:
 
 1. Business Outcome
-2. Core Problem
-3. Actors and Roles
-4. Domain Model
-5. Lifecycle and Statuses
-6. Business Logic
-7. UX Expectations
-8. Edge Cases and Exceptions
-9. Acceptance Criteria
-10. Access / Personas
-11. Assumptions
+2. Roles and Permitions
+3. Object Model
+4. Lifecycle and Statuses
+5. Business Logic
+6. UX Expectations
+7. Edge Cases and Exceptions
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
+
+`Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
+`Roles and Permitions` must carry both actor responsibilities and any access/persona constraints.
 
 Required BA-style Business Plan template:
 
 ```md
 ## 1. Business Outcome
-## 2. Core Problem
-## 3. Actors and Roles
-## 4. Domain Model
-## 5. Lifecycle and Statuses
-## 6. Business Logic
-## 7. UX Expectations
-## 8. Edge Cases and Exceptions
-## 9. Acceptance Criteria
-## 10. Access / Personas
-## 11. Assumptions
+## 2. Roles and Permitions
+## 3. Object Model
+## 4. Lifecycle and Statuses
+## 5. Business Logic
+## 6. UX Expectations
+## 7. Edge Cases and Exceptions
 ```
 
 ## Format Compliance Rule
@@ -89,6 +84,39 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 - Do not ask the developer to provide `APPROVE_*` tokens.
 - Treat natural-language confirmation as the approval source and persist it through the provided scripts.
 - Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
+
+## Task Classification
+
+Classify each request before choosing the workflow.
+
+Two task classes are supported:
+
+1. Full app generation or business-shaped feature work
+2. Targeted changes
+
+Use full app generation or business-shaped feature work when the request is:
+
+- creating a new app
+- adding business logic or business flow that is not yet concretely specified
+- asking for a new feature where actors, statuses, object model, validations, or UX still need clarification
+- broad enough that implementation depends on business discovery
+
+Use targeted changes when the request is concrete and implementation-ready, for example:
+
+- add an object
+- add a column
+- modify a specific field
+- edit a page element
+- add or update a handler
+- seed a lookup or binding
+
+Targeted-change rule:
+
+- if the user gives a precise, implementation-ready task, do **not** generate a BA Business Plan
+- do **not** run Gate P or Gate R
+- do **not** route through Agent 2 or Agent 3
+- execute the requested focused change directly using the relevant targeted-change guidance from `context/INDEX.md`
+- ask questions only when the requested change is still ambiguous or blocked by missing execution-critical inputs
 
 ## Support Mode (Troubleshooting)
 
@@ -264,12 +292,15 @@ Business discovery must follow a Business Analyst style:
 - keep the discovery set within 3-7 questions
 - prioritize: business goal, core problem, key users/roles, MVP scope, success criteria
 - avoid minor implementation questions during approval of the business plan
-- make reasonable assumptions for non-critical gaps and label them explicitly
+- make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
 
 ## Workflow Routing
 
 Run Gate P once at the start of each app workflow.
+
+This routing block applies only to full app generation or business-shaped feature work.
+Do not apply `site-ready-now` / `planning-first`, Gate P, or Gate R to targeted changes.
 
 - First ask whether the developer wants `site-ready-now` or `planning-first`.
 - On the first turn, this routing question may be asked via structured input when the host mode supports it.
@@ -299,6 +330,9 @@ Execution order is conditional:
 - `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3 -> Agent 4
 - `planning-first`: Agent 2 -> initialize draft docs after Gate R -> wait for runtime inputs -> Agent 1 -> Agent 3 -> Agent 4
 
+Targeted changes do not use this agent chain.
+For targeted changes, skip Agent 2 and Agent 3 entirely and execute the focused mutation path directly.
+
 Agent 3 is the Technical Annex / execution-plan step. Run it only when implementation or technical execution detail is explicitly requested.
 In `planning-first` mode, the developer providing runtime credentials or Creatio URL after Gate R counts as an explicit implementation request and triggers Agent 3.
 Before implementation, Agent 3 must record explicit `Model Decisions` for every planned business object, supporting object, planned lookup, and every non-obvious reference target so reuse, extension, or new creation is intentional rather than inferred during execution.
@@ -318,6 +352,7 @@ Strong candidates must default to `reuse` or `extend` after the Evidence Ladder 
    Output: `output/<AppName>/mcp-application-result.json`, `output/<AppName>/mcp-application-report.md`, `output/<AppName>/docs/**`
 
 Agent 2 is interactive and must not be delegated. Agent 4 runs synchronously.
+Agent 2 and Agent 3 are for full app generation or business-shaped feature work only. They must not be invoked for targeted changes.
 
 ## Gate Rules
 
@@ -332,9 +367,16 @@ Gate R:
 - Each checklist group must persist `source="confirmed"` or `source="assumed"`.
 - Requires the developer to see the full Business Plan before approval.
 - The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
+- The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Persist approval with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
 - Use `scripts/check-approval-gate.sh <AppName>` before Agents 3 and 4.
+
+Gate bypass rule for targeted changes:
+
+- targeted changes do not require Gate P
+- targeted changes do not require Gate R
+- targeted changes must not create a synthetic BA plan just to satisfy the full-app workflow
 
 Approval-ready vs execution-ready rule:
 - The BA draft shown to the developer must remain business-readable.
@@ -382,6 +424,15 @@ Approval-ready vs execution-ready rule:
 9. Run Agent 4 synchronously.
 10. Before moving to the next stage, verify expected artifacts for that stage exist and are non-empty.
 11. On failure, either retry with a justified fix or stop with a blocker.
+
+For targeted changes, use this reduced checklist instead:
+
+1. Confirm the request is precise and implementation-ready.
+2. Load only the targeted-change references from `context/INDEX.md`.
+3. Ask questions only for missing blockers.
+4. Execute the focused change directly.
+5. Verify the changed artifact or runtime behavior.
+6. Return evidence-based status without generating a BA plan.
 
 Optimization rule:
 - Do not repeat the same gate check unnecessarily within the same uninterrupted stage transition.

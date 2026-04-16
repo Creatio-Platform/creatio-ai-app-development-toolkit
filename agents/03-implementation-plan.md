@@ -79,15 +79,11 @@ If any of these checks fail, stop and report the blocker.
 
 Parse the approved requirements with these business sections as primary inputs:
 
-- business goal
-- core problem
-- desired outcomes and success criteria
-- personas and business use cases
-- access restrictions posture
-- analytics
+- business outcome, including problem framing, success signal, and explicit assumptions
+- roles and permissions, including personas and access posture
 - business workflow summary
-- data model
-- explicit assumptions
+- object model
+- edge cases and operational constraints
 
 Before technical planning, derive a draft business-object map from the approved requirements:
 
