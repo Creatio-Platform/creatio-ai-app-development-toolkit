@@ -154,7 +154,19 @@ def find_max_row_index(view_config_diff, parent_name):
     return max_row, max_index
 
 
+def _derive_attr_key(field):
+    explicit = field.get("attrKey")
+    if explicit:
+        return explicit
+    path = field.get("path", "")
+    parts = path.split(".", 1) if path else []
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return f"{parts[0]}_{parts[1]}"
+    return field["name"]
+
+
 def build_form_field_insert(field, row, index, parent_name):
+    attr_key = _derive_attr_key(field)
     values = {
         "layoutConfig": {
             "column": 1,
@@ -163,11 +175,11 @@ def build_form_field_insert(field, row, index, parent_name):
             "rowSpan": 1,
         },
         "type": field["type"],
-        "label": field.get("label") or f"$Resources.Strings.{field['name']}",
+        "label": field.get("label") or f"$Resources.Strings.{attr_key}",
         "labelPosition": "auto",
     }
     binding_prop = "value" if field["type"] == "crt.ImageInput" else "control"
-    values[binding_prop] = f"${field['name']}"
+    values[binding_prop] = f"${attr_key}"
     if field["type"] == "crt.DateTimePicker":
         values["pickerType"] = field.get("pickerType", "date")
     if field["type"] == "crt.Input" and field.get("multiline"):
@@ -176,7 +188,7 @@ def build_form_field_insert(field, row, index, parent_name):
         values["format"] = {"decimalPrecision": field["decimalPrecision"]}
     return {
         "operation": "insert",
-        "name": field["name"],
+        "name": attr_key,
         "values": values,
         "parentName": field.get("parentName") or parent_name,
         "propertyName": "items",
@@ -204,7 +216,8 @@ def add_form_fields(body, fields):
     max_row, max_index = find_max_row_index(view_config, parent)
     existing_names = {item.get("name") for item in view_config if isinstance(item, dict)}
     for field in fields:
-        if field["name"] in existing_names:
+        attr_key = _derive_attr_key(field)
+        if attr_key in existing_names:
             continue
         max_row += 1
         max_index += 1
@@ -217,8 +230,9 @@ def add_form_fields(body, fields):
             vm_data = {"attributes": {}}
         attrs = vm_data.setdefault("attributes", {})
         for field in fields:
-            if field["name"] not in attrs:
-                attrs[field["name"]] = {"modelConfig": {"path": field["path"]}}
+            attr_key = _derive_attr_key(field)
+            if attr_key not in attrs:
+                attrs[attr_key] = {"modelConfig": {"path": field["path"]}}
         body = replace_marker_content(body, vm_marker,
                                       serialize_json_indented(vm_data, base_indent=2))
     else:
@@ -232,8 +246,9 @@ def add_form_fields(body, fields):
             vm_data.append(merge_op)
         values = merge_op.setdefault("values", {})
         for field in fields:
-            if field["name"] not in values:
-                values[field["name"]] = {"modelConfig": {"path": field["path"]}}
+            attr_key = _derive_attr_key(field)
+            if attr_key not in values:
+                values[attr_key] = {"modelConfig": {"path": field["path"]}}
         body = replace_marker_content(body, vm_marker,
                                       serialize_json_indented(vm_data, base_indent=2))
     return body

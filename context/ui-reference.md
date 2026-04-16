@@ -491,6 +491,7 @@ Rules:
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
 - **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `sync-pages` `resources` param.
   **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `sync-pages`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
+  **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`. A mismatched label key renders blank silently — no error is surfaced by the validator.
 
 ### Runtime Lookup Special Case
 

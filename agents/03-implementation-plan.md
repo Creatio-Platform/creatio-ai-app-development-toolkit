@@ -355,6 +355,13 @@ FormPage defaults:
 - keep `Name` as header/title when present
 - include all approved required non-inherited business fields
 - fill in missing explicit requirements with deterministic defaults
+- when the entity uses a custom `UsrName` column as its primary display field (not the
+  inherited platform `Name`), pass it as `{"name": "UsrName", "path": "PDS.UsrName",
+  "type": "crt.Input"}` in `formFields`; the page-body script derives attr_key
+  `PDS_UsrName` automatically, producing consistent `control` and `label` bindings
+- include the title field in the form-page `resources` dict alongside all other
+  custom fields: `"PDS_UsrName": "<human-readable caption>"`; omitting it causes the
+  field to render without a label in the designer even when the page saves successfully
 
 ListPage defaults:
 
