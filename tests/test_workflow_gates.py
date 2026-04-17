@@ -43,17 +43,13 @@ def build_valid_request_spec():
     return {
         "sourcePrompt": "Generate a Todo app",
         "businessChecklist": {
-            "businessOutcome": {"complete": True, "value": "Track daily work", "source": "confirmed"},
-            "coreProblem": {"complete": True, "value": "Work is scattered across notes and chat", "source": "confirmed"},
-            "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks", "source": "confirmed"},
-            "domainModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
+            "businessOutcome": {"complete": True, "value": "Track daily work, fix scattered process, and assume a single MVP workflow", "source": "confirmed"},
+            "rolesAndPermissions": {"complete": True, "value": "Employees manage own tasks; no special restrictions for MVP", "source": "confirmed"},
+            "objectModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
             "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
             "businessLogic": {"complete": True, "value": "Title is required; duplicates are handled manually; tasks can be archived; editing is shared", "source": "confirmed"},
             "uxExpectations": {"complete": True, "value": "List and form pages are required", "source": "confirmed"},
             "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp", "source": "confirmed"},
-            "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks", "source": "confirmed"},
-            "analytics": {"complete": True, "value": "Track tasks created and completed by period", "source": "confirmed"},
-            "accessRestrictions": {"complete": True, "value": "No specific access restrictions are required by default.", "source": "confirmed"},
             "complete": True
         },
         "technicalInputs": {
@@ -77,18 +73,19 @@ def build_valid_requirements_doc(app_name="TodoList"):
 
 Give the team a shared registry for tasks and follow-up actions.
 
-## 2. Core Problem
+- Core problem: tasks are spread across notes and chat, so visibility and control are weak.
+- Success signal: the team manages tasks and follow-up actions in one place.
+- Assumptions: MVP uses a single workflow.
 
-Tasks are spread across notes and chat, so visibility and control are weak.
-
-## 3. Actors and Roles
+## 2. Roles and Permissions
 
 - Team member: creates and updates tasks
 - Team lead: reviews status and priorities
+- Shared team workspace with no special restrictions for MVP.
 
-## 4. Domain Model
+## 3. Object Model
 
-### 4.1 Main entity: Task
+### 3.1 Main entity: Task
 
 Title: Task
 Code: `UsrTask`
@@ -106,7 +103,7 @@ Minimum to create:
 - Name
 - Status
 
-### 4.2 Supporting entity: Follow-up Task
+### 3.2 Supporting entity: Follow-up Task
 
 Title: Follow-up Task
 Code: `UsrFollowUpTask`
@@ -121,45 +118,33 @@ Purpose: Next action tied to the main record.
 | Parent task | `UsrParentTask` | Main record link | Lookup | Yes | - |
 | Due date | `UsrDueDate` | Task deadline | Date/Time | No | - |
 
-### 4.3 Lookups
+### 3.3 Lookups
 
 - Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
 
-### 4.4 Relationships
+### 3.4 Relationships
 
 - Source entity: Task; Target entity: Follow-up Task; Cardinality: 1:N; Required child-side link: required; Business rationale: follow-up actions are tracked separately from the main record.
 
-## 5. Lifecycle and Statuses
+## 4. Lifecycle and Statuses
 
 Tasks move through New, Active, and Archived. Follow-up tasks move through Planned and Completed.
 
-## 6. Business Logic
+## 5. Business Logic
 
 - Task title and status are required.
 - Follow-up actions must stay linked to a parent task.
 
-## 7. UX Expectations
+## 6. UX Expectations
 
 - default list columns: Name, Status
 - default filters: Status
 - main form groups: Main information, Follow-up actions
 - default sort: Updated date descending
 
-## 8. Edge Cases and Exceptions
+## 7. Edge Cases and Exceptions
 
 - Archived tasks are excluded from the default active view.
-
-## 9. Acceptance Criteria
-
-- User can create tasks, update statuses, and manage follow-up actions.
-
-## 10. Access / Personas
-
-- Shared team workspace with no special restrictions for MVP.
-
-## 11. Assumptions
-
-- MVP uses a single workflow.
 """
 
 
@@ -205,17 +190,17 @@ class WorkflowGateTests(unittest.TestCase):
 
 Give the team one shared task registry.
 
-## 2. Core Problem
+- Core problem: tasks are scattered across notes and chat.
+- Success signal: the team tracks work in one place.
+- Assumptions: MVP uses a single workflow.
 
-Tasks are scattered across notes and chat.
-
-## 3. Actors and Roles
+## 2. Roles and Permissions
 
 - Team member: creates and updates tasks
 
-## 4. Domain Model
+## 3. Object Model
 
-### 4.1 Main entity: Task
+### 3.1 Main entity: Task
 Title: Task
 Code: `UsrTask`
 Entity role: `main`
@@ -228,43 +213,31 @@ This entity stores the main work item and its status.
 Minimum to create:
 - Name
 
-### 4.2 Lookups
+### 3.2 Lookups
 
 - Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
 
-### 4.3 Relationships
+### 3.3 Relationships
 
 - Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
 
-## 5. Lifecycle and Statuses
+## 4. Lifecycle and Statuses
 
 Tasks move through New, Active, and Archived.
 
-## 6. Business Logic
+## 5. Business Logic
 
 - Task title is required.
 
-## 7. UX Expectations
+## 6. UX Expectations
 
 - default list columns: Name, Status
 - default filters: Status
 - main form groups: Main information
 
-## 8. Edge Cases and Exceptions
+## 7. Edge Cases and Exceptions
 
 - Archived tasks remain visible in history views.
-
-## 9. Acceptance Criteria
-
-- User can create and update tasks.
-
-## 10. Access / Personas
-
-- Shared team workspace.
-
-## 11. Assumptions
-
-- MVP uses a single workflow.
 """,
             )
             result = run_script("validate-requirements-doc.sh", str(app_dir / "requirements.md"), workflow_root=str(workflow_root))

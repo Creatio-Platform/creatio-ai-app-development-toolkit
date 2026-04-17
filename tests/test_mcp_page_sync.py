@@ -183,7 +183,7 @@ class FakePageClient:
                 if isinstance(payload_resources, str):
                     page_result["resources-registered"] = len(json.loads(payload_resources))
             if error is None and self.include_verified_body:
-                page_result["verified-body"] = page_payload["body"]
+                page_result["verified-body-file"] = f".clio-pages/{page_payload['schema-name']}/body.js"
             if error is not None:
                 page_result["error"] = error
             results.append(page_result)

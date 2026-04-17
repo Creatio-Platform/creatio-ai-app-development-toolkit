@@ -24,8 +24,8 @@ Precondition for data-backed details:
 - Absence of a tab, detail, or grid on the page does not mean the backing entity is missing.
 
 1. `list-pages`
-2. `get-page`
-3. edit `raw.body`
+2. `get-page` — writes `body.js`, `bundle.json`, `meta.json` to `.clio-pages/{schema-name}/`
+3. read `files.bodyFile`, edit body
 4. `sync-pages`
 5. `get-page` verification
 
@@ -42,10 +42,10 @@ Read before executing:
 
 ## Working Rules
 
-- Use `raw.body` from `get-page` as the editable source of truth.
-- Treat the `page` block from `get-page` as metadata only.
+- `get-page` writes three files to `.clio-pages/{schema-name}/`: `body.js` (editable body), `bundle.json` (merged hierarchy), `meta.json` (page metadata). Read the body from `files.bodyFile` — do not use inline `raw.body`.
+- Treat `files.metaFile` / the `page` block from `get-page` as metadata only.
 - For detail/grid requests, treat the current object model as the source of truth for the backing schema. Do not infer a new schema name from a business caption when runtime context already exposes an existing technical code.
-- If `bundle.viewConfig` contains an unfamiliar `crt.*` component type, inspect it with `get-component-info` as part of the clio-guided page workflow before editing nested configuration.
+- If `bundle.json` (at `files.bundleFile`) contains an unfamiliar `crt.*` component type, inspect it with `get-component-info` as part of the clio-guided page workflow before editing nested configuration.
 - If the edited body introduces new localizable captions, persist them through the live page write contract resolved at runtime.
 - Keep repository docs for workflow and page-editing policy only. Do not copy MCP parameter tables into plans or prompts.
 
@@ -157,7 +157,7 @@ After save:
 ```text
 1. Discover the target page through `list-pages`
 2. Read the live page through `get-page`
-3. edit raw.body with marker-safe utilities
+3. read `files.bodyFile`, edit with marker-safe utilities
 4. Persist through `sync-pages`
 5. Re-read through `get-page` when helper-level verification still needs the live body
 ```

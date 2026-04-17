@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.page_body_edit import (
+    _derive_attr_key,
     add_form_fields,
     add_list_columns,
     detect_vm_marker,
@@ -224,7 +225,7 @@ class TestAddFormFieldsDynamicContainer(unittest.TestCase):
         ]
         result = add_form_fields(body_with_custom, fields)
         view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
-        new_insert = next(op for op in view_config if op.get("name") == "UsrNew")
+        new_insert = next(op for op in view_config if op.get("name") == "PDS_UsrNew")
         self.assertEqual(new_insert["parentName"], "CustomFormContainer")
 
     def test_explicit_parent_overrides_discovery(self):
@@ -233,7 +234,7 @@ class TestAddFormFieldsDynamicContainer(unittest.TestCase):
         ]
         result = add_form_fields(FORM_PAGE_BODY, fields)
         view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
-        new_insert = next(op for op in view_config if op.get("name") == "UsrNew")
+        new_insert = next(op for op in view_config if op.get("name") == "PDS_UsrNew")
         self.assertEqual(new_insert["parentName"], "MyExplicitContainer")
 
     def test_missing_path_raises_error(self):
@@ -255,14 +256,14 @@ class TestAddFormFields(unittest.TestCase):
         self.assertTrue(validation["valid"], f"Validation errors: {validation['errors']}")
         view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
         insert_names = [op["name"] for op in view_config if op.get("operation") == "insert"]
-        self.assertIn("UsrStatus", insert_names)
-        self.assertIn("UsrDueDate", insert_names)
-        status_insert = next(op for op in view_config if op.get("name") == "UsrStatus")
+        self.assertIn("PDS_UsrStatus", insert_names)
+        self.assertIn("PDS_UsrDueDate", insert_names)
+        status_insert = next(op for op in view_config if op.get("name") == "PDS_UsrStatus")
         self.assertEqual(status_insert["values"]["type"], "crt.ComboBox")
-        self.assertEqual(status_insert["values"]["control"], "$UsrStatus")
+        self.assertEqual(status_insert["values"]["control"], "$PDS_UsrStatus")
         self.assertEqual(status_insert["parentName"], "SideAreaProfileContainer")
         self.assertEqual(status_insert["values"]["layoutConfig"]["row"], 2)
-        due_insert = next(op for op in view_config if op.get("name") == "UsrDueDate")
+        due_insert = next(op for op in view_config if op.get("name") == "PDS_UsrDueDate")
         self.assertEqual(due_insert["values"]["type"], "crt.DateTimePicker")
         self.assertEqual(due_insert["values"]["pickerType"], "date")
         self.assertEqual(due_insert["values"]["layoutConfig"]["row"], 3)
@@ -273,19 +274,19 @@ class TestAddFormFields(unittest.TestCase):
         ]
         result = add_form_fields(FORM_PAGE_BODY, fields)
         attr_paths = extract_attribute_paths(result)
-        self.assertEqual(attr_paths["UsrStatus"], "PDS.UsrStatus")
+        self.assertEqual(attr_paths["PDS_UsrStatus"], "PDS.UsrStatus")
         self.assertEqual(attr_paths["Name"], "PDS.Name")
 
     def test_skips_existing_fields(self):
         fields = [
-            {"name": "Name", "type": "crt.Input", "path": "PDS.Name"},
+            {"name": "Name", "type": "crt.Input", "path": "PDS.Name", "attrKey": "Name"},
             {"name": "UsrNew", "type": "crt.Input", "path": "PDS.UsrNew"},
         ]
         result = add_form_fields(FORM_PAGE_BODY, fields)
         view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
         name_inserts = [op for op in view_config if op.get("name") == "Name" and op.get("operation") == "insert"]
         self.assertEqual(len(name_inserts), 1)
-        usr_inserts = [op for op in view_config if op.get("name") == "UsrNew"]
+        usr_inserts = [op for op in view_config if op.get("name") == "PDS_UsrNew"]
         self.assertEqual(len(usr_inserts), 1)
 
     def test_multiline_input_field(self):
@@ -294,7 +295,7 @@ class TestAddFormFields(unittest.TestCase):
         ]
         result = add_form_fields(FORM_PAGE_BODY, fields)
         view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
-        desc_insert = next(op for op in view_config if op.get("name") == "UsrDescription")
+        desc_insert = next(op for op in view_config if op.get("name") == "PDS_UsrDescription")
         self.assertTrue(desc_insert["values"]["multiline"])
 
     def test_preserves_non_insert_operations(self):
@@ -306,6 +307,39 @@ class TestAddFormFields(unittest.TestCase):
         feed_ops = [op for op in view_config if op.get("name") == "Feed"]
         self.assertEqual(len(feed_ops), 1)
         self.assertEqual(feed_ops[0]["operation"], "merge")
+
+
+class TestDeriveAttrKey(unittest.TestCase):
+    def test_pds_path_produces_pds_prefixed_key(self):
+        self.assertEqual(_derive_attr_key({"name": "UsrName", "path": "PDS.UsrName"}), "PDS_UsrName")
+
+    def test_explicit_attrKey_overrides_path(self):
+        self.assertEqual(_derive_attr_key({"name": "Name", "path": "PDS.Name", "attrKey": "Name"}), "Name")
+
+    def test_no_path_falls_back_to_name(self):
+        self.assertEqual(_derive_attr_key({"name": "UsrFoo"}), "UsrFoo")
+
+    def test_single_segment_path_falls_back_to_name(self):
+        self.assertEqual(_derive_attr_key({"name": "UsrFoo", "path": "UsrFoo"}), "UsrFoo")
+
+
+class TestTitleFieldPdsBinding(unittest.TestCase):
+    def test_usr_name_field_generates_pds_prefixed_control_and_label(self):
+        fields = [{"name": "UsrName", "type": "crt.Input", "path": "PDS.UsrName"}]
+        result = add_form_fields(FORM_PAGE_BODY, fields)
+        view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
+        insert = next(op for op in view_config if op.get("name") == "PDS_UsrName")
+        self.assertEqual(insert["values"]["control"], "$PDS_UsrName")
+        self.assertEqual(insert["values"]["label"], "$Resources.Strings.PDS_UsrName")
+        attr_paths = extract_attribute_paths(result)
+        self.assertEqual(attr_paths["PDS_UsrName"], "PDS.UsrName")
+
+    def test_standard_name_field_with_attrKey_preserves_bare_binding(self):
+        fields = [{"name": "Name", "type": "crt.Input", "path": "PDS.Name", "attrKey": "Name"}]
+        result = add_form_fields(FORM_PAGE_BODY, fields)
+        view_config = parse_marker_json(result, "SCHEMA_VIEW_CONFIG_DIFF")
+        name_inserts = [op for op in view_config if op.get("name") == "Name" and op.get("operation") == "insert"]
+        self.assertEqual(len(name_inserts), 1)
 
 
 class TestAddListColumns(unittest.TestCase):
@@ -394,7 +428,7 @@ class TestLiveFixture(unittest.TestCase):
         validation = validate_body_structure(result)
         self.assertTrue(validation["valid"], f"Validation errors: {validation['errors']}")
         attr_paths = extract_attribute_paths(result)
-        self.assertEqual(attr_paths["UsrNewField"], "PDS.UsrNewField")
+        self.assertEqual(attr_paths["PDS_UsrNewField"], "PDS.UsrNewField")
         self.assertEqual(attr_paths["Name"], "PDS.Name")
 
 

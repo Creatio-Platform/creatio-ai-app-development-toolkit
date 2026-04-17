@@ -33,17 +33,13 @@ def build_valid_request_spec():
     return {
         "sourcePrompt": "Generate a Todo app",
         "businessChecklist": {
-            "businessOutcome": {"complete": True, "value": "Track daily work", "source": "confirmed"},
-            "coreProblem": {"complete": True, "value": "Work is scattered across notes and chat", "source": "confirmed"},
-            "actorsAndRoles": {"complete": True, "value": "Employees manage own tasks", "source": "confirmed"},
-            "domainModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
+            "businessOutcome": {"complete": True, "value": "Track daily work, fix scattered process, and assume a single MVP workflow", "source": "confirmed"},
+            "rolesAndPermissions": {"complete": True, "value": "Employees manage own tasks; team leads review progress; no special restrictions for MVP", "source": "confirmed"},
+            "objectModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
             "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
             "businessLogic": {"complete": True, "value": "Title is required; duplicates are handled manually; tasks can be archived; editing is shared", "source": "confirmed"},
             "uxExpectations": {"complete": True, "value": "List and form pages are required", "source": "confirmed"},
             "edgeCases": {"complete": True, "value": "Completed tasks keep completion timestamp", "source": "confirmed"},
-            "acceptanceCriteria": {"complete": True, "value": "User can create, view, update tasks", "source": "confirmed"},
-            "analytics": {"complete": True, "value": "Track tasks created and completed by period", "source": "confirmed"},
-            "accessRestrictions": {"complete": True, "value": "No specific access restrictions are required by default.", "source": "confirmed"},
             "complete": True,
         },
         "technicalInputs": {
@@ -66,18 +62,19 @@ def build_valid_requirements_doc(app_name="TodoList"):
 
 Give the team one place to capture and manage daily tasks.
 
-## 2. Core Problem
+- Core problem: tasks are spread across notes and chat.
+- Success signal: the team tracks daily work in one shared registry.
+- Assumptions: MVP uses a single workflow.
 
-Tasks are spread across notes and chat, which makes status and ownership unclear.
-
-## 3. Actors and Roles
+## 2. Roles and Permissions
 
 - Team member: creates and updates tasks
 - Team lead: reviews progress and priorities
+- No special access restrictions for MVP.
 
-## 4. Domain Model
+## 3. Object Model
 
-### 4.1 Main entity: Task
+### 3.1 Main entity: Task
 
 Title: Task
 Code: `UsrTask`
@@ -95,44 +92,32 @@ Minimum to create:
 - Name
 - Status
 
-### 4.2 Lookups
+### 3.2 Lookups
 
 - Title: Status; Code: `UsrTodoStatus`; Allowed values: New, Active, Archived
 
-### 4.3 Relationships
+### 3.3 Relationships
 
 - Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
 
-## 5. Lifecycle and Statuses
+## 4. Lifecycle and Statuses
 
 Tasks move through New, Active, and Archived statuses.
 
-## 6. Business Logic
+## 5. Business Logic
 
 - Title and Status are required to create a task.
 - Duplicate handling is advisory only.
 
-## 7. UX Expectations
+## 6. UX Expectations
 
 - default list columns: Name, Status
 - default filters: Status
 - main form groups: Main information
 
-## 8. Edge Cases and Exceptions
+## 7. Edge Cases and Exceptions
 
 - Archived tasks are excluded from default active lists.
-
-## 9. Acceptance Criteria
-
-- User can create, view, and update tasks.
-
-## 10. Access / Personas
-
-- Shared team workspace with one owner field on each task.
-
-## 11. Assumptions
-
-- MVP uses a single workflow.
 """
 
 
@@ -146,7 +131,7 @@ def build_valid_plan_doc():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse after reviewing the candidate comparison.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
   candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
   required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
@@ -247,7 +232,7 @@ def build_invalid_plan_doc_without_matching_model_decision():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle
   candidate-fit-summary: Activity covers owner and due date semantics
   required-capabilities: app-owned task lifecycle and simplified UX
@@ -362,7 +347,7 @@ def build_valid_multi_block_plan_doc():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse after reviewing the candidate comparison.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
   candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
   required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
@@ -574,6 +559,52 @@ def build_invalid_plan_doc_create_relabeling_extra_required_field_as_forbidden_s
   required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
   mismatch-evidence: forbidden extra semantics — required EventType field with marketing-specific lookup values forces classification not acceptable for the approved business flow; dataforge-get-table-columns confirmed Type as required lookup to EventType on Event schema
   discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns including required Type to EventType
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
+def build_invalid_plan_doc_create_against_strong_candidate_without_user_confirmation():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The platform Event has an unavoidable inherited behavior that directly contradicts the approved requirements — the required Type field forces marketing classification on every record, which cannot be satisfied by the approved lightweight event tracker flow.
+  rejected-candidates: Event — lifecycle mismatch; inherited behavior is unacceptable for the approved business flow
+  candidate-fit-summary: Event has Name, StartDate, EndDate, Status, Owner covering the approved fields
+  required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
+  mismatch-evidence: inherited behavior is unacceptable — the candidate forces marketing classification via required Type field which cannot be satisfied by the approved business flow
+  discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
+def build_valid_plan_doc_create_against_strong_candidate_with_user_confirmation():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The platform Event has an unavoidable inherited behavior that directly contradicts the approved requirements — the required Type field forces marketing classification. User confirmed create over reuse after reviewing both options.
+  rejected-candidates: Event — lifecycle mismatch; inherited behavior is unacceptable for the approved business flow
+  candidate-fit-summary: Event has Name, StartDate, EndDate, Status, Owner covering the approved fields
+  required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
+  mismatch-evidence: inherited behavior is unacceptable — the candidate forces marketing classification via required Type field which cannot be satisfied by the approved business flow
+  discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns
 
 ## Ordered Schema Sync
 
@@ -846,6 +877,22 @@ class WorkflowCliTests(unittest.TestCase):
             result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("extra required field", result.stderr.lower())
+
+    def test_validate_implementation_plan_doc_rejects_create_against_strong_candidate_without_user_confirmation(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_create_against_strong_candidate_without_user_confirmation())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("user confirmation", result.stderr.lower())
+
+    def test_validate_implementation_plan_doc_accepts_create_against_strong_candidate_with_user_confirmation(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc_create_against_strong_candidate_with_user_confirmation())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
 
     def test_validate_implementation_plan_doc_rejects_unresolved_tradeoff_until_user_confirms_choice(self):
         with temp_workflow_root() as workflow_root:

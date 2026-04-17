@@ -26,15 +26,17 @@ Primary workflow is natural language:
 
 1. Developer sends one free-form prompt.
 2. Agent returns a short "What I understood".
-3. On the first turn, the agent responds directly from the prompt instead of doing a long repo preflight.
-4. Agent asks a routing question first: `site-ready-now` or `planning-first`.
-5. Agent runs a compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
-6. The routing question and the main discovery questions appear in that same first user-facing response.
-7. Agent persists a fresh Gate P for the current request after natural-language confirmation; `planning-first` may defer runtime endpoints until implementation.
-8. Agent asks minimal technical questions only for blockers.
-9. After Gate R, the agent initializes `output/<AppName>/docs/**` as a draft skeleton before implementation starts.
-10. Agent runs the remaining pipeline and returns final artifacts/results.
-11. Internal gate tokens, old workflow-state details, and scripts stay hidden from developer-facing dialogue unless they are real blockers.
+3. Agent classifies the task as either full app generation / business-shaped feature work or a targeted change.
+4. On the first turn, the agent responds directly from the prompt instead of doing a long repo preflight.
+5. For full app generation or business-shaped feature work, the agent asks a routing question first: `site-ready-now` or `planning-first`.
+6. For full app generation or business-shaped feature work, the agent runs a compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
+7. For full app generation or business-shaped feature work, the routing question and the main discovery questions appear in that same first user-facing response.
+8. For full app generation or business-shaped feature work, the agent persists a fresh Gate P for the current request after natural-language confirmation; `planning-first` may defer runtime endpoints until implementation.
+9. For targeted changes, the agent skips BA planning and executes the focused change directly, asking questions only for missing blockers.
+10. Agent asks minimal technical questions only for blockers.
+11. After Gate R in full-app flow, the agent initializes `output/<AppName>/docs/**` as a draft skeleton before implementation starts.
+12. Agent runs the remaining pipeline and returns final artifacts/results.
+13. Internal gate tokens, old workflow-state details, and scripts stay hidden from developer-facing dialogue unless they are real blockers.
 
 Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
 
@@ -210,6 +212,14 @@ Orchestrator flow:
 5. Implementation runs synchronously, resolves executable contract metadata through `get-tool-contract`, initializes canonical context in `mcp-application-result.json`, and executes the current `clio`-owned entity and page flows referenced by `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 6. Existing-app branching remains explicit in the workflow, but the canonical discover/inspect/mutate path and fallback tool guidance are owned by `clio` rather than this repository.
 
+Targeted-change flow:
+
+1. Confirm that the task is precise and implementation-ready.
+2. Skip Gate P, Gate R, Agent 2, and Agent 3.
+3. Load only the relevant targeted-change guidance from `context/INDEX.md`.
+4. Execute the focused mutation path directly.
+5. Verify the result and return evidence-based status.
+
 All generated artifacts are under `output/<AppName>/`.
 
 ## Runtime Scripts
@@ -269,7 +279,6 @@ Orchestrator (AGENTS.md)
 
 ```text
 AGENTS.md
-.github/copilot-instructions.md
 agents/
   01-environment-setup.md
   02-requirements-gathering.md

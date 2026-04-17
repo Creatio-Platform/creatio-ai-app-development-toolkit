@@ -15,16 +15,12 @@ class WorkflowError(Exception):
 
 REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 1. Business Outcome",
-    "## 2. Core Problem",
-    "## 3. Actors and Roles",
-    "## 4. Domain Model",
-    "## 5. Lifecycle and Statuses",
-    "## 6. Business Logic",
-    "## 7. UX Expectations",
-    "## 8. Edge Cases and Exceptions",
-    "## 9. Acceptance Criteria",
-    "## 10. Access / Personas",
-    "## 11. Assumptions",
+    "## 2. Roles and Permissions",
+    "## 3. Object Model",
+    "## 4. Lifecycle and Statuses",
+    "## 5. Business Logic",
+    "## 6. UX Expectations",
+    "## 7. Edge Cases and Exceptions",
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
     "Minimum to create:",
@@ -34,21 +30,17 @@ REQUIRED_REQUIREMENTS_MARKERS = [
 ]
 REQUEST_SPEC_SECTIONS = [
     "businessOutcome",
-    "coreProblem",
-    "actorsAndRoles",
-    "domainModel",
+    "rolesAndPermissions",
+    "objectModel",
     "lifecycleAndStatuses",
     "businessLogic",
     "uxExpectations",
     "edgeCases",
-    "acceptanceCriteria",
-    "analytics",
-    "accessRestrictions",
 ]
-ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+4\.\d+\s+(Main|Supporting) entity:", re.MULTILINE)
-LOOKUPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+4\.\d+\s+Lookups\s*$", re.MULTILINE)
-RELATIONSHIPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+4\.\d+\s+Relationships\s*$", re.MULTILINE)
-MAIN_ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+4\.\d+\s+Main entity:", re.MULTILINE)
+ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Main|Supporting) entity:", re.MULTILINE)
+LOOKUPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Lookups\s*$", re.MULTILINE)
+RELATIONSHIPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Relationships\s*$", re.MULTILINE)
+MAIN_ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Main entity:", re.MULTILINE)
 TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*(Title|Назва)\s*\|\s*(Code|Код)\s*\|\s*(Description|Опис)\s*\|\s*(Data type|Тип)\s*\|\s*(Required|Обов’язкове)\s*\|\s*Default\s*\|",
     re.IGNORECASE,
@@ -139,6 +131,10 @@ CAPABILITY_FAILURE_SIGNAL_RE = re.compile(
 )
 EXTRA_REQUIRED_FIELD_RELABEL_RE = re.compile(
     r"(required.{0,40}field.{0,40}(lookup|values|references|default)|extra required field|required.{0,20}(EventType|Type|Category|Kind).{0,40}(lookup|values|marketing|domain)|field.{0,40}existing.{0,20}lookup.{0,20}values|can be defaulted at page)",
+    re.IGNORECASE,
+)
+USER_CONFIRMED_CREATE_RE = re.compile(
+    r"(user confirmed create|user chose create|developer confirmed create|user explicitly (chose|confirmed|requested|approved) create|user approved create|user rejected reuse|create confirmed by (user|developer))",
     re.IGNORECASE,
 )
 LOOKUP_EXACT_MATCH_SIGNAL_RE = re.compile(
@@ -271,31 +267,27 @@ def validate_requirements_doc(requirements_file):
         if marker not in text:
             raise WorkflowError(f"Requirements doc failed: missing required marker: {marker}")
     if not MAIN_ENTITY_HEADING_RE.search(text):
-        raise WorkflowError("Requirements doc failed: missing 'Main entity' subsection in section 4")
+        raise WorkflowError("Requirements doc failed: missing 'Main entity' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
-        raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 4")
+        raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
     if not RELATIONSHIPS_HEADING_RE.search(text):
-        raise WorkflowError("Requirements doc failed: missing Relationships subsection in section 4")
-    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Core Problem")
-    section2_text = extract_section(text, "## 2. Core Problem", "## 3. Actors and Roles")
-    section3_text = extract_section(text, "## 3. Actors and Roles", "## 4. Domain Model")
-    section4_text = extract_section(text, "## 4. Domain Model", "## 5. Lifecycle and Statuses")
-    section5_text = extract_section(text, "## 5. Lifecycle and Statuses", "## 6. Business Logic")
-    section6_text = extract_section(text, "## 6. Business Logic", "## 7. UX Expectations")
-    section7_text = extract_section(text, "## 7. UX Expectations", "## 8. Edge Cases and Exceptions")
-    section8_text = extract_section(text, "## 8. Edge Cases and Exceptions", "## 9. Acceptance Criteria")
-    section9_text = extract_section(text, "## 9. Acceptance Criteria", "## 10. Access / Personas")
-    section10_text = extract_section(text, "## 10. Access / Personas", "## 11. Assumptions")
-    section11_text = extract_section(text, "## 11. Assumptions")
-    for section_text in (section1_text, section2_text, section3_text, section5_text, section6_text, section7_text, section8_text, section9_text, section10_text, section11_text):
+        raise WorkflowError("Requirements doc failed: missing Relationships subsection in section 3")
+    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Roles and Permissions")
+    section2_text = extract_section(text, "## 2. Roles and Permissions", "## 3. Object Model")
+    section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
+    section4_text = extract_section(text, "## 4. Lifecycle and Statuses", "## 5. Business Logic")
+    section5_text = extract_section(text, "## 5. Business Logic", "## 6. UX Expectations")
+    section6_text = extract_section(text, "## 6. UX Expectations", "## 7. Edge Cases and Exceptions")
+    section7_text = extract_section(text, "## 7. Edge Cases and Exceptions")
+    for section_text in (section1_text, section2_text, section4_text, section5_text, section6_text, section7_text):
         if re.search(r"^[ \t]*\|", section_text, re.MULTILINE):
-            raise WorkflowError("Requirements doc failed: markdown tables are allowed only in section 4 domain model")
-    if not re.search(r"^[ \t]*\|[ \t]*(Title|Назва)[ \t]*\|[ \t]*(Code|Код)[ \t]*\|[ \t]*(Description|Опис)[ \t]*\|", section4_text, re.IGNORECASE | re.MULTILINE):
-        raise WorkflowError("Requirements doc failed: section 4 must include a field table with the required columns")
-    lines = section4_text.splitlines()
+            raise WorkflowError("Requirements doc failed: markdown tables are allowed only in section 3 object model")
+    if not re.search(r"^[ \t]*\|[ \t]*(Title|Назва)[ \t]*\|[ \t]*(Code|Код)[ \t]*\|[ \t]*(Description|Опис)[ \t]*\|", section3_text, re.IGNORECASE | re.MULTILINE):
+        raise WorkflowError("Requirements doc failed: section 3 must include a field table with the required columns")
+    lines = section3_text.splitlines()
     entity_indices = [index for index, line in enumerate(lines) if ENTITY_HEADING_RE.search(line)]
     if not entity_indices:
-        raise WorkflowError("Requirements doc failed: section 4 must contain at least one main or supporting entity heading")
+        raise WorkflowError("Requirements doc failed: section 3 must contain at least one main or supporting entity heading")
     table_count = 0
     for line in lines:
         if TABLE_HEADER_RE.search(line):
@@ -315,20 +307,20 @@ def validate_requirements_doc(requirements_file):
             )
     if table_count < len(entity_indices):
         raise WorkflowError("Requirements doc failed: every main and supporting entity must have a dedicated field table")
-    if USR_CODE_RE.search(section7_text):
-        raise WorkflowError("Requirements doc failed: section 7 must use business titles instead of Usr* codes")
+    if USR_CODE_RE.search(section6_text):
+        raise WorkflowError("Requirements doc failed: section 6 must use business titles instead of Usr* codes")
     if CHECKLIST_SOURCE_RE.search(text):
         raise WorkflowError("Requirements doc failed: business plan must not expose checklist-source or validation markers")
-    section4_text_lower = section4_text.lower()
-    for line in section7_text.splitlines():
+    section3_text_lower = section3_text.lower()
+    for line in section6_text.splitlines():
         if not UX_CARRIER_RE.search(line):
             continue
         values = normalize_title_list(re.sub(r"^[\s-]*default [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
         for title in values:
             if title == "Name":
                 continue
-            if title.lower() not in section4_text_lower:
-                raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 4 data model")
+            if title.lower() not in section3_text_lower:
+                raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
     return f"REQUIREMENTS_DOC_OK {requirements_file}"
 
 
@@ -520,6 +512,8 @@ def validate_implementation_plan_doc(plan_file):
             or re.search(r"greenfield-only", rejected_candidates, re.IGNORECASE)
             or re.search(r"greenfield-only", mismatch_evidence, re.IGNORECASE)
             or re.search(r"greenfield-only", discovery_evidence, re.IGNORECASE)
+            or re.search(r"no suitable candidate found", rejected_candidates, re.IGNORECASE)
+            or re.search(r"no suitable candidate found", discovery_evidence, re.IGNORECASE)
         )
         if chosen_action == "create":
             rejection_text = f"{rejected_candidates} {mismatch_evidence}"
@@ -537,11 +531,14 @@ def validate_implementation_plan_doc(plan_file):
                     "Implementation plan failed: strong candidates require schema-level confirmation before locking reuse, extend, or create"
                 )
             if chosen_action == "create":
+                rationale = extract_decision_field(block_text, "rationale") or ""
+                full_decision_text_with_rationale = f"{full_decision_text} {rationale}"
                 has_generic_create_only_reason = bool(GENERIC_CREATE_JUSTIFICATION_RE.search(rejection_text))
                 has_partial_match_dismissal = bool(PARTIAL_MATCH_DISMISSAL_RE.search(full_decision_text))
                 has_prior_plan_create_preference = bool(PRIOR_PLAN_CREATE_PREFERENCE_RE.search(full_decision_text))
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
                 has_extra_required_field_relabel = bool(EXTRA_REQUIRED_FIELD_RELABEL_RE.search(full_decision_text))
+                has_user_confirmed_create = bool(USER_CONFIRMED_CREATE_RE.search(full_decision_text_with_rationale))
                 candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
                 only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
                 exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
@@ -572,6 +569,13 @@ def validate_implementation_plan_doc(plan_file):
                 if has_generic_create_only_reason and not has_capability_failure:
                     raise WorkflowError(
                         "Implementation plan failed: create cannot rely only on broader/shared/module-coupling reasoning without a concrete capability failure under the reuse-first policy"
+                    )
+                if not has_user_confirmed_create:
+                    raise WorkflowError(
+                        "Implementation plan failed: create against a discovered strong candidate "
+                        "requires explicit user confirmation — the agent must present both options "
+                        "(reuse vs create) to the user and record the confirmation in the rationale "
+                        "field (e.g. 'user confirmed create over reuse')"
                     )
             if chosen_action == "extend":
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))

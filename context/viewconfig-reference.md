@@ -43,11 +43,18 @@ Use `get-page` to inspect the current page structure and identify available cont
 
 ### Deep Container Discovery
 
-`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `get-page`.
+`body.js` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `bundle.json` written by `get-page`.
 
-**Step 1 — Build a container map from `bundle.viewConfig`:**
+**Step 1 — Build a container map from `bundle.json`:**
 
 ```python
+import json
+
+r = call_mcp_tool('get-page', {'schema-name': '<PageName>', 'environment-name': '<env>'})
+bundle_file = r['data']['files']['bundleFile']
+with open(bundle_file) as f:
+    bundle = json.load(f)
+
 def map_containers(node, parent='(root)', depth=0):
     if isinstance(node, list):
         for item in node:
@@ -66,8 +73,7 @@ def map_containers(node, parent='(root)', depth=0):
         if isinstance(v, (list, dict)):
             map_containers(v, child_parent, depth + (1 if name and is_container else 0))
 
-r = call_mcp_tool('get-page', {'schema-name': '<PageName>', 'environment-name': '<env>'})
-map_containers(r['data']['bundle']['viewConfig'])
+map_containers(bundle['viewConfig'])
 ```
 
 This reveals the full inherited hierarchy: side areas, center areas, tab panels, tab containers, grid containers — regardless of page type.
@@ -76,7 +82,7 @@ This reveals the full inherited hierarchy: side areas, center areas, tab panels,
 
 Some page templates expose a minimal bundle tree. In that case, use these fallback heuristics:
 
-1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
+1. Collect all unique `parentName` values from `body.js` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
 3. Follow the clio guidance and use `get-component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
@@ -143,6 +149,7 @@ The `label` value depends on whether a custom "Title on page" is set:
 
 - **No custom title** — `label` = `$Resources.Strings.` + the attribute name from `control` (strip the leading `$`). Example: `control: "$PDS_UsrCode_ab12cd3"` → `label: "$Resources.Strings.PDS_UsrCode_ab12cd3"`.
   **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `sync-pages`, you MUST also pass the resource values explicitly via the `resources` param as a flat JSON map string: `{"PDS_UsrCode_ab12cd3": "Code"}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
+  **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`. A mismatched label key renders blank silently — no error is surfaced by the validator.
 - **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `sync-pages` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": "My Title"}`.
 
 ### Generic Runtime Field Insert Example
