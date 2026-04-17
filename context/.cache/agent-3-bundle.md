@@ -371,6 +371,7 @@ The plan is invalid if Ordered Schema Sync references a created or extended sche
 - If DataForge discovery produced strong candidate(s), choose `reuse` for the most similar candidate and treat that candidate as authoritative for `chosen-schema`.
 - Choose `extend` only outside the strong-candidate override path, when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
 - Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
+- When `create` is considered against a discovered strong candidate, the agent must escalate to the user before locking the decision (see Mandatory User Escalation below).
 - Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
 - `create` is never allowed as a placeholder choice for "decide later during implementation".
 - If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
@@ -431,6 +432,22 @@ When this happens:
 - set `tradeoff-escalation: user-confirmation-required`
 - describe the viable options in `rationale`
 - stop the implementation plan gate until the user answer is persisted and the record is resolved back to `tradeoff-escalation: none`
+
+#### Mandatory User Escalation For Create Against Strong Candidates
+
+When DataForge discovery found a strong candidate and the agent's Evidence Ladder assessment leads to create against a strong candidate, the agent MUST escalate to the user before locking the decision. This is a hard gate — no silent create-over-reuse against a discovered strong candidate is allowed.
+
+Required steps:
+
+1. Present the user with both options: reuse the discovered candidate or create a new entity.
+2. Include a brief evidence summary: what the candidate covers, what the proven mismatch is.
+3. Wait for explicit user confirmation.
+4. Record the confirmation signal in the `rationale` field using one of these phrases: "user confirmed create over reuse", "developer confirmed create", "user explicitly chose create", "user approved create over reuse", or "user rejected reuse".
+5. Only after recording the confirmation signal may the agent lock `chosen-action: create`.
+
+Exception: `greenfield-only` decisions (no strong candidate was found by discovery) proceed to `create` without user confirmation.
+
+This rule applies to entities and lookups alike. If discovery found a strong reusable lookup but the agent believes a new lookup is needed, the same escalation applies.
 
 #### Discovery Evidence Rule
 

@@ -321,6 +321,16 @@ DataForge discovery evidence confirmed through the Evidence Ladder is the bindin
 
 Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report — not a license to silently switch to `create`.
 
+#### Execution Feasibility Check
+
+After the Evidence Ladder locks a `chosen-action`, verify tool-path feasibility — sequentially, not interleaved with the model decision.
+
+1. Call `get-tool-contract` for the relevant tools. If the contract confirms a viable path, proceed to Schema Sync Plan.
+2. If not, make one probe call. If the probe succeeds, proceed.
+3. If both fail, escalate to the user: state the Evidence Ladder result, the tool-path constraint, and two concrete options.
+
+Cap: two tool calls total (contract + probe). Do not speculate about alternative sequences — check the contract first. Do not reopen the model decision; if `reuse` is locked but infeasible, the user decides the fallback. Apply AGENTS.md – Decision Convergence throughout.
+
 #### Required Model Decisions
 
 The plan must record a `Model Decisions` section for:
@@ -364,6 +374,7 @@ The plan is invalid if Ordered Schema Sync references a created or extended sche
 - If DataForge discovery produced strong candidate(s), choose `reuse` for the most similar candidate and treat that candidate as authoritative for `chosen-schema`.
 - Choose `extend` only outside the strong-candidate override path, when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
 - Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
+- When `create` is considered against a discovered strong candidate, the agent must escalate to the user before locking the decision (see Mandatory User Escalation below).
 - Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
 - `create` is never allowed as a placeholder choice for "decide later during implementation".
 - If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
@@ -425,6 +436,22 @@ When this happens:
 - describe the viable options in `rationale`
 - stop the implementation plan gate until the user answer is persisted and the record is resolved back to `tradeoff-escalation: none`
 
+#### Mandatory User Escalation For Create Against Strong Candidates
+
+When DataForge discovery found a strong candidate and the agent's Evidence Ladder assessment leads to create against a strong candidate, the agent MUST escalate to the user before locking the decision. This is a hard gate — no silent create-over-reuse against a discovered strong candidate is allowed.
+
+Required steps:
+
+1. Present the user with both options: reuse the discovered candidate or create a new entity.
+2. Include a brief evidence summary: what the candidate covers, what the proven mismatch is.
+3. Wait for explicit user confirmation.
+4. Record the confirmation signal in the `rationale` field using one of these phrases: "user confirmed create over reuse", "developer confirmed create", "user explicitly chose create", "user approved create over reuse", or "user rejected reuse".
+5. Only after recording the confirmation signal may the agent lock `chosen-action: create`.
+
+Exception: `greenfield-only` decisions (no strong candidate was found by discovery) proceed to `create` without user confirmation.
+
+This rule applies to entities and lookups alike. If discovery found a strong reusable lookup but the agent believes a new lookup is needed, the same escalation applies.
+
 #### Discovery Evidence Rule
 
 - missing discovery evidence is a blocker whenever a reuse candidate was plausible from the business wording, approved model, or app/update context.
@@ -449,6 +476,7 @@ When this happens:
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
 - When a `Model Decisions` record resolves to `reuse`, the Schema Sync Plan must select the execution path that implements reuse (e.g. `create-app-section` with the existing entity, or existing-app flow). The choice of MCP tools adapts to the model decision — the model decision is not negotiable at execution-planning time.
+- When `chosen-action: reuse`, do not plan `create-entity`, `create-lookup`, or `update-entity` steps that duplicate the reused schema's fields into a new entity. The reused schema already exists and is ready — plan only wiring (section registration, page configuration). If the wiring tool fails (e.g., `InsertQuery failed` for a platform entity), do not fall back to creating a new entity with the same fields. Report the existing entity and its capabilities to the user and let them decide the next step.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
 - Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.

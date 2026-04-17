@@ -94,6 +94,7 @@ Apply this branch only when support mode is on:
 
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
+- When executing a `reuse` decision and the wiring step fails (e.g., `create-app-section` returns `InsertQuery failed`), do not create a substitute entity that duplicates the reused schema's fields. The reused entity already exists — report it as available with its capabilities and let the user decide whether to use it as-is or switch to a new entity with separate data storage.
 - Treat `Model Decisions` as the authoritative final technical plan even when the BA draft or earlier planning text named different `Usr*` schemas or custom lookups.
 - Treat a planning-time strong candidate as already resolved in favor of `reuse` for the most similar candidate unless the plan contains a proven capability failure. Do not honor stale create bias from Agent 2, the BA draft, or an earlier plan.
 - Never "finish the reuse reasoning" during execution. If Agent 3 did not complete the Evidence Ladder, stop with a blocker instead of improvising discovery or inventing a new create path.

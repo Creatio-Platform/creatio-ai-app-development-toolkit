@@ -210,6 +210,13 @@ Typical triggers:
 - unavoidable inherited behavior whose acceptability is a product decision
 - cross-team coupling risk that is real but not clearly unacceptable
 
+## Tool Feasibility vs Policy Deliberation
+
+- Tool feasibility does not change the Evidence Ladder's model decision. If the ladder confirmed `reuse`, the decision stays `reuse` regardless of tool limitations.
+- Do not speculate about tool behavior — call `get-tool-contract` or make a probe call. Max one reasoning block of uncertainty, then act.
+- Sequence: lock model decision → `get-tool-contract` → one probe if needed → escalate to user if infeasible. Total reasoning budget: one block.
+- Platform limitations (e.g., `InsertQuery failed`) are tool-path constraints, not evidence against the model decision. Report as execution blockers; let the user decide the fallback.
+
 ## DataForge Unavailable
 
 When `dataforge-availability: unavailable` is recorded (because `dataforge-status` was not Ready or threw), the active discovery branch is bypassed for the session. Use these templates directly instead of analyzing the validator.

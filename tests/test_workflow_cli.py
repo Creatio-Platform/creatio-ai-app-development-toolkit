@@ -131,7 +131,7 @@ def build_valid_plan_doc():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse after reviewing the candidate comparison.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
   candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
   required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
@@ -232,7 +232,7 @@ def build_invalid_plan_doc_without_matching_model_decision():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle
   candidate-fit-summary: Activity covers owner and due date semantics
   required-capabilities: app-owned task lifecycle and simplified UX
@@ -347,7 +347,7 @@ def build_valid_multi_block_plan_doc():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse after reviewing the candidate comparison.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
   candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
   required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow
@@ -559,6 +559,52 @@ def build_invalid_plan_doc_create_relabeling_extra_required_field_as_forbidden_s
   required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
   mismatch-evidence: forbidden extra semantics — required EventType field with marketing-specific lookup values forces classification not acceptable for the approved business flow; dataforge-get-table-columns confirmed Type as required lookup to EventType on Event schema
   discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns including required Type to EventType
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
+def build_invalid_plan_doc_create_against_strong_candidate_without_user_confirmation():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The platform Event has an unavoidable inherited behavior that directly contradicts the approved requirements — the required Type field forces marketing classification on every record, which cannot be satisfied by the approved lightweight event tracker flow.
+  rejected-candidates: Event — lifecycle mismatch; inherited behavior is unacceptable for the approved business flow
+  candidate-fit-summary: Event has Name, StartDate, EndDate, Status, Owner covering the approved fields
+  required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
+  mismatch-evidence: inherited behavior is unacceptable — the candidate forces marketing classification via required Type field which cannot be satisfied by the approved business flow
+  discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
+def build_valid_plan_doc_create_against_strong_candidate_with_user_confirmation():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The platform Event has an unavoidable inherited behavior that directly contradicts the approved requirements — the required Type field forces marketing classification. User confirmed create over reuse after reviewing both options.
+  rejected-candidates: Event — lifecycle mismatch; inherited behavior is unacceptable for the approved business flow
+  candidate-fit-summary: Event has Name, StartDate, EndDate, Status, Owner covering the approved fields
+  required-capabilities: Name (required text), StartDate (required date), EndDate (optional date), Status (required lookup), Owner (optional lookup to Contact)
+  mismatch-evidence: inherited behavior is unacceptable — the candidate forces marketing classification via required Type field which cannot be satisfied by the approved business flow
+  discovery-evidence: dataforge-context (aggregating dataforge-find-tables and dataforge-find-lookups) returned Event as similar-table; dataforge-get-table-columns confirmed Event columns
 
 ## Ordered Schema Sync
 
@@ -831,6 +877,22 @@ class WorkflowCliTests(unittest.TestCase):
             result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("extra required field", result.stderr.lower())
+
+    def test_validate_implementation_plan_doc_rejects_create_against_strong_candidate_without_user_confirmation(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_invalid_plan_doc_create_against_strong_candidate_without_user_confirmation())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("user confirmation", result.stderr.lower())
+
+    def test_validate_implementation_plan_doc_accepts_create_against_strong_candidate_with_user_confirmation(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc_create_against_strong_candidate_with_user_confirmation())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
 
     def test_validate_implementation_plan_doc_rejects_unresolved_tradeoff_until_user_confirms_choice(self):
         with temp_workflow_root() as workflow_root:

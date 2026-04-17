@@ -346,6 +346,7 @@ When the majority of approved business requirements match the candidate, that is
 User requirements may describe only a subset of the candidate's capabilities; the candidate having more than requested is a strength, not a mismatch.
 Extra required fields with existing lookup values or defaults are page-level concerns (set a default on the form), not schema-level capability failures that justify `create`.
 Do not relabel an extra required field with existing lookup values as "forbidden extra semantics"; a required field referencing a domain-specific lookup (e.g., EventType with marketing values) remains an extra-required-field scenario handleable at page/UI level — "forbidden extra semantics" applies only when the entity's core domain purpose or lifecycle makes the approved business flow impossible.
+When Agent 3 considers `create` for a business concept where DataForge discovery found a strong candidate, the agent must present both options (reuse vs create) to the user and record explicit user confirmation before locking the create decision. No silent `create` against a discovered strong candidate is allowed.
 Module dependencies are informational context about the candidate's origin, not functional blockers unless they prevent the approved business flow.
 When several strong candidates exist, Agent 3 must select the most similar candidate from discovery and record that schema as the reused `chosen-schema`.
 `extend` remains valid only outside that strong-candidate override path.
@@ -359,6 +360,13 @@ User-prompt phrasing (e.g. "simple app", "new app", "standalone", "lightweight",
 The choice of MCP tools and call sequence is an execution detail that implements the discovery-confirmed model decision. If the originally planned execution path does not support the confirmed decision, the execution path changes — the model decision does not.
 
 Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase — execution planning, tool selection, page planning, user-prompt reinterpretation — may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report, not a license to silently change the decision.
+
+### Decision Convergence
+
+- Max two deliberation passes on the same `reuse` / `extend` / `create` choice per business concept. On the third pass, commit or escalate to the user.
+- When uncertain about tool behavior or API shape, call `get-tool-contract` or make a probe call — do not spend more than one reasoning block speculating. Conflicting repo memories about MCP API are resolved by `get-tool-contract`, not by guessing.
+- Model decisions and execution feasibility are sequential: lock the Evidence Ladder decision first, then verify tool support. If infeasible after one contract check + one probe, escalate — do not reopen the model decision.
+- If reasoning revisits the same constraint or option from a prior block in the same turn, stop and act (tool call) or escalate (ask user).
 
 ## Agent Responsibilities
 

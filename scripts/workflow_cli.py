@@ -133,6 +133,10 @@ EXTRA_REQUIRED_FIELD_RELABEL_RE = re.compile(
     r"(required.{0,40}field.{0,40}(lookup|values|references|default)|extra required field|required.{0,20}(EventType|Type|Category|Kind).{0,40}(lookup|values|marketing|domain)|field.{0,40}existing.{0,20}lookup.{0,20}values|can be defaulted at page)",
     re.IGNORECASE,
 )
+USER_CONFIRMED_CREATE_RE = re.compile(
+    r"(user confirmed create|user chose create|developer confirmed create|user explicitly (chose|confirmed|requested|approved) create|user approved create|user rejected reuse|create confirmed by (user|developer))",
+    re.IGNORECASE,
+)
 LOOKUP_EXACT_MATCH_SIGNAL_RE = re.compile(
     r"(exact lookup match|exactly matches the approved lifecycle|already contains.{0,40}(in progress|completed|canceled|cancelled)|matches the approved lifecycle|same lifecycle values|same values)",
     re.IGNORECASE,
@@ -508,6 +512,8 @@ def validate_implementation_plan_doc(plan_file):
             or re.search(r"greenfield-only", rejected_candidates, re.IGNORECASE)
             or re.search(r"greenfield-only", mismatch_evidence, re.IGNORECASE)
             or re.search(r"greenfield-only", discovery_evidence, re.IGNORECASE)
+            or re.search(r"no suitable candidate found", rejected_candidates, re.IGNORECASE)
+            or re.search(r"no suitable candidate found", discovery_evidence, re.IGNORECASE)
         )
         if chosen_action == "create":
             rejection_text = f"{rejected_candidates} {mismatch_evidence}"
@@ -525,11 +531,14 @@ def validate_implementation_plan_doc(plan_file):
                     "Implementation plan failed: strong candidates require schema-level confirmation before locking reuse, extend, or create"
                 )
             if chosen_action == "create":
+                rationale = extract_decision_field(block_text, "rationale") or ""
+                full_decision_text_with_rationale = f"{full_decision_text} {rationale}"
                 has_generic_create_only_reason = bool(GENERIC_CREATE_JUSTIFICATION_RE.search(rejection_text))
                 has_partial_match_dismissal = bool(PARTIAL_MATCH_DISMISSAL_RE.search(full_decision_text))
                 has_prior_plan_create_preference = bool(PRIOR_PLAN_CREATE_PREFERENCE_RE.search(full_decision_text))
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
                 has_extra_required_field_relabel = bool(EXTRA_REQUIRED_FIELD_RELABEL_RE.search(full_decision_text))
+                has_user_confirmed_create = bool(USER_CONFIRMED_CREATE_RE.search(full_decision_text_with_rationale))
                 candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
                 only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
                 exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
@@ -560,6 +569,13 @@ def validate_implementation_plan_doc(plan_file):
                 if has_generic_create_only_reason and not has_capability_failure:
                     raise WorkflowError(
                         "Implementation plan failed: create cannot rely only on broader/shared/module-coupling reasoning without a concrete capability failure under the reuse-first policy"
+                    )
+                if not has_user_confirmed_create:
+                    raise WorkflowError(
+                        "Implementation plan failed: create against a discovered strong candidate "
+                        "requires explicit user confirmation — the agent must present both options "
+                        "(reuse vs create) to the user and record the confirmation in the rationale "
+                        "field (e.g. 'user confirmed create over reuse')"
                     )
             if chosen_action == "extend":
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
