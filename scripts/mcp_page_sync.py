@@ -253,10 +253,8 @@ def build_page_verification(page_result):
     success = bool(page_result.get("success")) if isinstance(page_result, dict) else False
     verified_body = None
     if isinstance(page_result, dict):
-        if isinstance(page_result.get("verified-body"), str) and page_result.get("verified-body"):
-            verified_body = page_result["verified-body"]
-        elif isinstance(page_result.get("verifiedBody"), str) and page_result.get("verifiedBody"):
-            verified_body = page_result["verifiedBody"]
+        if isinstance(page_result.get("verified-body-file"), str) and page_result.get("verified-body-file"):
+            verified_body = page_result["verified-body-file"]
     return {
         "implemented": success,
         "machineChecked": success and bool(verified_body),
