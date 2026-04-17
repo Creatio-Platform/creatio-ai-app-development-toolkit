@@ -327,6 +327,13 @@ The choice of MCP tools and call sequence is an execution detail that implements
 
 Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase — execution planning, tool selection, page planning, user-prompt reinterpretation — may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report, not a license to silently change the decision.
 
+### Decision Convergence
+
+- Max two deliberation passes on the same `reuse` / `extend` / `create` choice per business concept. On the third pass, commit or escalate to the user.
+- When uncertain about tool behavior or API shape, call `get-tool-contract` or make a probe call — do not spend more than one reasoning block speculating. Conflicting repo memories about MCP API are resolved by `get-tool-contract`, not by guessing.
+- Model decisions and execution feasibility are sequential: lock the Evidence Ladder decision first, then verify tool support. If infeasible after one contract check + one probe, escalate — do not reopen the model decision.
+- If reasoning revisits the same constraint or option from a prior block in the same turn, stop and act (tool call) or escalate (ask user).
+
 ## Agent Responsibilities
 
 1. Environment Setup

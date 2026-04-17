@@ -325,6 +325,16 @@ DataForge discovery evidence confirmed through the Evidence Ladder is the bindin
 
 Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report — not a license to silently switch to `create`.
 
+#### Execution Feasibility Check
+
+After the Evidence Ladder locks a `chosen-action`, verify tool-path feasibility — sequentially, not interleaved with the model decision.
+
+1. Call `get-tool-contract` for the relevant tools. If the contract confirms a viable path, proceed to Schema Sync Plan.
+2. If not, make one probe call. If the probe succeeds, proceed.
+3. If both fail, escalate to the user: state the Evidence Ladder result, the tool-path constraint, and two concrete options.
+
+Cap: two tool calls total (contract + probe). Do not speculate about alternative sequences — check the contract first. Do not reopen the model decision; if `reuse` is locked but infeasible, the user decides the fallback. Apply AGENTS.md – Decision Convergence throughout.
+
 #### Required Model Decisions
 
 The plan must record a `Model Decisions` section for:
@@ -470,6 +480,7 @@ This rule applies to entities and lookups alike. If discovery found a strong reu
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
 - When a `Model Decisions` record resolves to `reuse`, the Schema Sync Plan must select the execution path that implements reuse (e.g. `create-app-section` with the existing entity, or existing-app flow). The choice of MCP tools adapts to the model decision — the model decision is not negotiable at execution-planning time.
+- When `chosen-action: reuse`, do not plan `create-entity`, `create-lookup`, or `update-entity` steps that duplicate the reused schema's fields into a new entity. The reused schema already exists and is ready — plan only wiring (section registration, page configuration). If the wiring tool fails (e.g., `InsertQuery failed` for a platform entity), do not fall back to creating a new entity with the same fields. Report the existing entity and its capabilities to the user and let them decide the next step.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
 - Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
