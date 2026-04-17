@@ -254,7 +254,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("entity metadata block", agent_doc)
         self.assertTrue(contains_all(agent_doc, ["child-side link status", "when applicable"]))
         self.assertIn("## 1. Business Outcome", agent_doc)
-        self.assertIn("## 2. Roles and Permitions", agent_doc)
+        self.assertIn("## 2. Roles and Permissions", agent_doc)
         self.assertIn("## 3. Object Model", agent_doc)
         self.assertIn("## 6. UX Expectations", agent_doc)
         self.assertTrue(contains_all(agent_doc, ["`schema default`", "`ui default`", "visible BA draft"]))
@@ -329,7 +329,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertTrue("Business context" in agents_doc or "Business Outcome" in agents_doc)
         self.assertTrue(
             "Users, access and ownership" in agents_doc
-            or "Roles and Permitions" in agents_doc
+            or "Roles and Permissions" in agents_doc
         )
         self.assertIn("Targeted changes", agents_doc)
         self.assertIn("do **not** generate a BA Business Plan", agents_doc)

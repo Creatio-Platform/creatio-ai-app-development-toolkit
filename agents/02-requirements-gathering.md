@@ -101,7 +101,7 @@ Required sections:
 
 - `# <AppName> - Requirements`
 - `## 1. Business Outcome`
-- `## 2. Roles and Permitions`
+- `## 2. Roles and Permissions`
 - `## 3. Object Model`
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
@@ -158,7 +158,7 @@ Rules for the output:
 Use this exact visible skeleton for `requirements.md`:
 
 - `## 1. Business Outcome`
-- `## 2. Roles and Permitions`
+- `## 2. Roles and Permissions`
 - `## 3. Object Model`
   - `### 3.1 Main entity: <Business title>`
   - entity metadata block in this exact order:
@@ -186,7 +186,7 @@ Use this exact visible skeleton for `requirements.md`:
 - success signal or expected result
 - explicit assumptions that remain in scope
 
-`## 2. Roles and Permitions` must include:
+`## 2. Roles and Permissions` must include:
 
 - actors and responsibilities
 - access posture or ownership limits
@@ -291,7 +291,7 @@ If no such concept exists, persist `reuseCheckRequired: []`.
 `businessChecklist` must include these groups plus `complete=true`:
 
 - `businessOutcome`
-- `rolesAndPermitions`
+- `rolesAndPermissions`
 - `objectModel`
 - `lifecycleAndStatuses`
 - `businessLogic`

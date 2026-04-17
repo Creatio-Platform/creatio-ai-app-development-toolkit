@@ -9,7 +9,7 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | # | Section | Required |
 |---|---------|----------|
 | 1 | Business Outcome | yes |
-| 2 | Roles and Permitions | yes |
+| 2 | Roles and Permissions | yes |
 | 3 | Object Model | yes |
 | 4 | Lifecycle and Statuses | yes |
 | 5 | Business Logic | yes |
@@ -23,7 +23,7 @@ A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body insi
 Section mapping rules:
 
 - `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
-- `Roles and Permitions` must include actors, responsibilities, personas, and access posture.
+- `Roles and Permissions` must include actors, responsibilities, personas, and access posture.
 - `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
 
 ---

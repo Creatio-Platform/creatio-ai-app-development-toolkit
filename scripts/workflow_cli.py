@@ -15,7 +15,7 @@ class WorkflowError(Exception):
 
 REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 1. Business Outcome",
-    "## 2. Roles and Permitions",
+    "## 2. Roles and Permissions",
     "## 3. Object Model",
     "## 4. Lifecycle and Statuses",
     "## 5. Business Logic",
@@ -30,7 +30,7 @@ REQUIRED_REQUIREMENTS_MARKERS = [
 ]
 REQUEST_SPEC_SECTIONS = [
     "businessOutcome",
-    "rolesAndPermitions",
+    "rolesAndPermissions",
     "objectModel",
     "lifecycleAndStatuses",
     "businessLogic",
@@ -272,8 +272,8 @@ def validate_requirements_doc(requirements_file):
         raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
     if not RELATIONSHIPS_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing Relationships subsection in section 3")
-    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Roles and Permitions")
-    section2_text = extract_section(text, "## 2. Roles and Permitions", "## 3. Object Model")
+    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Roles and Permissions")
+    section2_text = extract_section(text, "## 2. Roles and Permissions", "## 3. Object Model")
     section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
     section4_text = extract_section(text, "## 4. Lifecycle and Statuses", "## 5. Business Logic")
     section5_text = extract_section(text, "## 5. Business Logic", "## 6. UX Expectations")

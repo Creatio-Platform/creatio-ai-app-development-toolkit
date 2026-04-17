@@ -13,7 +13,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 The required top-level sections of every BA-style Business Plan are, in order:
 
 1. Business Outcome
-2. Roles and Permitions
+2. Roles and Permissions
 3. Object Model
 4. Lifecycle and Statuses
 5. Business Logic
@@ -23,13 +23,13 @@ The required top-level sections of every BA-style Business Plan are, in order:
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
-`Roles and Permitions` must carry both actor responsibilities and any access/persona constraints.
+`Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
 
 Required BA-style Business Plan template:
 
 ```md
 ## 1. Business Outcome
-## 2. Roles and Permitions
+## 2. Roles and Permissions
 ## 3. Object Model
 ## 4. Lifecycle and Statuses
 ## 5. Business Logic

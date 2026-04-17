@@ -34,7 +34,7 @@ def build_valid_request_spec():
         "sourcePrompt": "Generate a Todo app",
         "businessChecklist": {
             "businessOutcome": {"complete": True, "value": "Track daily work, fix scattered process, and assume a single MVP workflow", "source": "confirmed"},
-            "rolesAndPermitions": {"complete": True, "value": "Employees manage own tasks; team leads review progress; no special restrictions for MVP", "source": "confirmed"},
+            "rolesAndPermissions": {"complete": True, "value": "Employees manage own tasks; team leads review progress; no special restrictions for MVP", "source": "confirmed"},
             "objectModel": {"complete": True, "value": "Task, status, priority", "source": "confirmed"},
             "lifecycleAndStatuses": {"complete": True, "value": "Not Started, In Progress, Completed", "source": "confirmed"},
             "businessLogic": {"complete": True, "value": "Title is required; duplicates are handled manually; tasks can be archived; editing is shared", "source": "confirmed"},
@@ -66,7 +66,7 @@ Give the team one place to capture and manage daily tasks.
 - Success signal: the team tracks daily work in one shared registry.
 - Assumptions: MVP uses a single workflow.
 
-## 2. Roles and Permitions
+## 2. Roles and Permissions
 
 - Team member: creates and updates tasks
 - Team lead: reviews progress and priorities
