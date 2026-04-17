@@ -113,6 +113,8 @@ Resolve:
 Rules:
 
 - Resolve exact executable parameter names, aliases, defaults, and validation rules from `get-tool-contract`.
+  Use `tool-names` (array, plural) to target only the tools you need, e.g. `{"tool-names": ["create-app"], "environment-name": "..."}`.
+  Omitting `tool-names` returns all 80+ tools (~300 KB) and requires a secondary extraction step.
 - Treat `create-app` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
 - `code` must start with `Usr`.
 - Default the template choice to the standard Freedom UI app shell when the business draft does not override it.
@@ -140,13 +142,81 @@ Agent 2 may suggest business concepts, likely schema names, and suspected candid
 Live discovery may amend the technical plan after Gate R.
 If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, `technical-annex.md`, and ordered schema sync to reflect the stronger technical choice.
 `Model Decisions` are authoritative for execution.
-Earlier business wording is not a blocker to `reuse` or `extend` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
+Earlier business wording is not a blocker to `reuse` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
 This override still applies even if Agent 2, the BA draft, or an earlier plan preferred `create`.
 
 ### Model Discovery Gate
 
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
 Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
+
+Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
+
+- If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
+- If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
+- In that unavailable mode, record `dataforge-availability: unavailable` in `plan.md` and `technical-annex.md`.
+- When `dataforge-availability: unavailable` is recorded, Agent 3 should not run the reuse/extend/create discovery branch and should not require DataForge-based evidence or fallback proof for the skipped branch.
+- Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
+
+#### DataForge Unavailable — Fast Path
+
+When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
+Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+
+**Checks that are SKIPPED when DataForge is unavailable:**
+
+- `discovery-evidence` does not need to cite any tool names (`dataforge-*`, `application-get-*`, `get-entity-schema-*` are not required)
+- no follow-up discovery (`dataforge-context`) required
+- no schema-level confirmation required
+- no strong-candidate reuse-first policy checks
+- no Evidence Ladder steps
+
+**Checks that STILL APPLY when DataForge is unavailable:**
+
+- all 11 required fields must be present in each decision record
+- `tradeoff-escalation` must be `none`
+- if `chosen-action: create`, then `rejected-candidates` or `mismatch-evidence` must contain at least one rejection-reason phrase from this list: `no suitable candidate found`, `greenfield-only`, `ownership boundary`, `unwanted coupling`, `lifecycle mismatch`, `semantic mismatch`, `broader than scope`, `field mismatch`, `column mismatch`, `relation mismatch`, `status mismatch`, `shared lookup`, `module coupling`, `does not match`, `does not fit`
+- every schema referenced in Ordered Schema Sync with `create`, `extend`, or `update` action must have a matching Model Decisions record
+
+**Template — `create` decision when DataForge is unavailable:**
+
+```
+- business-concept: <business name>
+  candidates-considered: <known platform candidates, e.g. "Case, Activity">
+  chosen-action: create
+  chosen-schema: <UsrXxx>
+  tradeoff-escalation: none
+  rationale: <why create is appropriate given unavailable discovery>
+  rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility
+  candidate-fit-summary: candidates not inspected — DataForge unavailable
+  required-capabilities: <list from approved requirements>
+  mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)
+  discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session
+```
+
+**Template — `reuse` decision for a known platform entity when DataForge is unavailable:**
+
+```
+- business-concept: <business name>
+  candidates-considered: <schema name>
+  chosen-action: reuse
+  chosen-schema: <ExistingSchema>
+  tradeoff-escalation: none
+  rationale: <why reuse — e.g., standard platform entity with known semantics>
+  rejected-candidates: none
+  candidate-fit-summary: <known capabilities of the platform entity>
+  required-capabilities: <from approved requirements>
+  mismatch-evidence: none — reuse accepted based on known platform semantics
+  discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema
+```
+
+After recording `dataforge-availability: unavailable`, proceed immediately to writing the Model Decisions using these templates and then continue to Schema Sync Plan. Do not spend time analyzing what the validator checks.
+
+#### Discovery Gate
+
+The sections **Triggers**, **Canonical Discovery Sequence**, **Evidence Ladder**, **Deterministic Choice Rules**, and **Discovery Evidence Rule** below apply **only when DataForge is available**.
+
+When `dataforge-availability: unavailable` is recorded, **skip all five sections** and proceed directly to **Schema Sync Plan**.
 
 #### Triggers
 
@@ -171,35 +241,55 @@ Never treat "the BA draft already named a `Usr*` schema" as proof that the objec
 
 For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
 
-1. `dataforge-find-tables`
-2. `dataforge-find-lookups`
-3. `dataforge-context`
-4. When a strong candidate is found:
+1. **Batched initial discovery — prefer a single `dataforge-context` call** that combines candidate-tables, lookups, and relations in one network round-trip:
+   ```
+   dataforge-context({
+     "environment-name": "<env>",
+     "candidate-terms": ["<main concept>", "<supporting concept>"],
+     "lookup-hints": ["<status phrase>", "<priority phrase>", "<category phrase>"],
+     "requirement-summary": "<brief business description>"
+   })
+   ```
+   Use `candidate-terms` for entity candidates, `lookup-hints` for lookup candidates.
+   Do **not** pass `schema-name` — that parameter does not exist on this tool.
+   Skip the separate `dataforge-find-tables` and `dataforge-find-lookups` calls when you pass both arrays above; `dataforge-context` already aggregates both results.
+   Fall back to `dataforge-find-tables` and `dataforge-find-lookups` individually only when you need to widen or narrow the search after reviewing the batched result.
+
+2. When a strong candidate is found:
    - `application-get-info` for app-level context when the candidate belongs to an existing app
-   - at least one schema-level confirmation call:
+   - Resolve `package-name` before calling `get-entity-schema-properties`:
+     1. `find-entity-schema(schema-name)` → read `package-name` from the entry where `parent-schema-name` is `BaseEntity` or `BaseCase` (the root definition)
+     2. `get-entity-schema-properties(schema-name, package-name)` using that resolved package
+   - At least one additional schema-level confirmation call:
      - `dataforge-get-table-columns`
      - `dataforge-get-relations`
-     - `get-entity-schema-properties`
      - `get-entity-schema-column-properties` when a specific column remains ambiguous
 
+**`dataforge-find-lookups` response field names** (use these when iterating results):
+- `similar-lookups[].schema-name` — the lookup entity name (not `"name"`)
+- `similar-lookups[].value` — the row display value (not `"caption"`)
+- `similar-lookups[].score` — relevance score
+
+**Large response handling:** `dataforge-context` may return 50–80 KB saved to a temp file. Always parse it with Python via `call_mcp_tool` from `scripts/mcp_client.py` rather than PowerShell `ConvertFrom-Json`, which fails on multi-root or header-prefixed output.
+
 Do not use `dataforge-initialize` or `dataforge-update` during planning.
+If `dataforge-availability: unavailable` is already recorded for the session, skip this sequence entirely.
 
 #### Evidence Ladder
 
-Treat `dataforge-find-tables` and `dataforge-find-lookups` as candidate discovery only.
-They are not sufficient evidence for `create`, and they do not by themselves prove `reuse` or `extend`.
+Candidate discovery signals (`dataforge-context` similar-tables/lookups, `dataforge-find-tables`, `dataforge-find-lookups`) are not sufficient evidence for `create`, and they do not by themselves prove the final `reuse` decision.
 
 For every strong candidate, complete the full ladder before locking the final `Model Decisions` record:
 
-1. Initial candidate discovery:
-   - `dataforge-find-tables`
-   - `dataforge-find-lookups`
+1. Initial candidate discovery (satisfied by the batched `dataforge-context` call above, or by `dataforge-find-tables` + `dataforge-find-lookups` individually)
 2. Follow-up confirmation:
-   - `dataforge-context` is mandatory
+   - `dataforge-context` is mandatory (already satisfied when the batched call is used in step 1)
 3. Schema-level confirmation:
    - at least one of `dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`
+   - when using `get-entity-schema-properties`, resolve `package-name` first via `find-entity-schema`
 4. Final choice:
-   - only after the first three steps may the plan choose `reuse`, `extend`, or `create`
+   - only after the first three steps may the plan lock the final `reuse`, `extend`, or `create` outcome
+   - **begin writing `plan.md` immediately after Evidence Ladder is complete** — do not defer to re-read validator source or workflow scripts before committing to disk
 
 If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
 Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
@@ -209,14 +299,27 @@ Those arguments are valid only when follow-up confirmation and schema-level conf
 Use a reuse-first default after live discovery:
 
 - prefer `reuse` when the candidate already satisfies the approved business role, even if it belongs to a broader platform module or contains extra optional fields
-- prefer `extend` when the candidate needs only additive fields, minor localized behavior, or narrow adaptation
+- if discovery surfaces one or more strong candidates, strong candidates resolve to `reuse`
+- when several strong candidates exist, choose the most similar candidate from the discovery results and record that schema as `chosen-schema`
+- if the most similar strong candidate still needs additive fields, minor localized behavior, or narrow adaptation, keep `chosen-action: reuse` and plan the additive work against that reused schema instead of switching the decision to `extend`
+- use `extend` only outside the strong-candidate override path, such as extending the current app-owned custom or main entity after discovery did not surface a stronger reusable schema
 - do not choose `create` only because the candidate is broader than needed, belongs to a shared platform module, or was not the placeholder schema named in the BA draft
 - do not choose `create` when the only proven gaps are additive or safely extendable, even if the candidate is not a 100% match
 - do not choose `create` just because live discovery arrived after an earlier placeholder choice; this applies even if Agent 2, the BA draft, or an earlier plan preferred create
+- do not choose `create` because the candidate has extra required fields with existing lookup references or default values; those fields are handleable at page/UI level and are not schema-level capability failures
+- do not choose `create` because the candidate has more functionality than the user explicitly requested; user requirements may describe only a subset of the candidate's capabilities, and this is normal
+- do not choose `create` because the candidate belongs to a platform module with additional related entities the user did not mention; module dependencies are informational context, not functional blockers unless they prevent the approved business flow
+- do not relabel an extra required field with existing lookup values as "forbidden extra semantics" to justify `create`; a required field that references a domain-specific lookup (e.g., EventType with marketing values) is an extra required field with existing lookup references — it can be defaulted at page/UI level and is not a schema-level capability failure; "forbidden extra semantics" applies only when the entity's core domain purpose or lifecycle makes the approved business flow impossible, not when a single required field has domain-flavored lookup values that can be set to a default
 - for lookups, exact or near-exact match should default to `reuse`
-- create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior is unacceptable, or separate governance was explicitly confirmed with the user
+- create a new lookup only when a required value is missing, forbidden extra semantics cannot be tolerated, unavoidable inherited behavior directly contradicts approved requirements, or separate governance was explicitly confirmed with the user
 
-`reuse-first` means the plan should move toward the existing candidate whenever required capabilities are already covered.
+`reuse-first` means the plan should move toward the existing candidate whenever the majority of approved business requirements match the candidate's capabilities, even if the candidate covers more than what was explicitly requested.
+
+#### Model Decision Finality
+
+DataForge discovery evidence confirmed through the Evidence Ladder is the binding source of truth for model decisions (see AGENTS.md – Discovery Authority Hierarchy). No other reasoning input — user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, or deployment concerns — may override a discovery-confirmed model decision.
+
+Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report — not a license to silently switch to `create`.
 
 #### Required Model Decisions
 
@@ -249,6 +352,7 @@ Use these carriers explicitly:
 - `mismatch-evidence`: the concrete technical gaps proven by follow-up confirmation or schema-level confirmation
 - `discovery-evidence`: the exact tool path used to discover and confirm or reject the candidate
 - `tradeoff-escalation`: whether the technical choice is already resolved or still needs a short user decision
+- when several strong candidates exist, the rationale or mismatch evidence must show why the chosen schema is the most similar candidate
 
 The plan is incomplete if discovery surfaced a strong candidate and the resulting `reuse` / `extend` / `create` choice is not recorded explicitly.
 The plan is also incomplete when a plausible candidate existed from the business wording but the record does not say `no suitable candidate found` or otherwise explain why `create` was selected.
@@ -257,13 +361,15 @@ The plan is invalid if Ordered Schema Sync references a created or extended sche
 #### Deterministic Choice Rules
 
 - Choose `reuse` when an existing schema already satisfies the required business role without unacceptable coupling cost.
-- Choose `extend` when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
+- If DataForge discovery produced strong candidate(s), choose `reuse` for the most similar candidate and treat that candidate as authoritative for `chosen-schema`.
+- Choose `extend` only outside the strong-candidate override path, when the business role matches an existing custom or main entity and only additional fields or localized behavior are missing.
 - Choose `create` only when no suitable candidate exists, or when an explicit architectural reason rules out reuse.
 - Record `no suitable candidate found` explicitly when discovery ran and the result still leads to `create`.
 - `create` is never allowed as a placeholder choice for "decide later during implementation".
 - If `reuse` or `extend` is technically viable and covers the required capabilities, amend the plan accordingly even when the BA draft named a custom `Usr*` schema or custom lookup.
-- If a strong candidate needs only additive extension, the plan must resolve to `extend` even if the candidate is not a 100% match.
+- If a strong candidate needs only additive extension, the plan must still resolve to `reuse` for the most similar candidate even if the candidate is not a 100% match.
 - If live discovery shows a strong reusable candidate, do not preserve a stale create decision from Agent 2 or an earlier plan.
+- If multiple strong candidates remain after the Evidence Ladder, the plan must select the single most similar candidate instead of leaving several reusable options open.
 
 For `create` after a strong candidate was found, include an explicit comparison between:
 
@@ -272,18 +378,20 @@ For `create` after a strong candidate was found, include an explicit comparison 
 - the proven mismatch captured in `mismatch-evidence`
 
 For `reuse` or `extend`, document why the candidate is sufficient rather than re-arguing for a new custom schema.
+For strong-candidate reuse, document why the chosen schema is the most similar candidate rather than a merely acceptable alternative.
 
 Acceptable reasons for `create`:
 
-- ownership boundary
-- unwanted coupling to a platform schema
-- lifecycle or semantics mismatch
-- the candidate schema is broader than the approved scope
+- ownership boundary — proven by evidence that shared ownership would break the approved business flow
+- unwanted coupling to a platform schema — coupling must provably break the approved business flow or prevent required behavior, not merely exist
+- lifecycle or semantics mismatch — the candidate's lifecycle or core semantics directly contradict the approved requirements
 - required capability cannot be satisfied by reuse or extend
-- unavoidable inherited behavior is unacceptable for the approved business flow
+- unavoidable inherited behavior that directly contradicts the approved requirements — inherited behavior is unacceptable only when it makes the approved business flow impossible, not when it was merely unmentioned by the user
 
 Each acceptable reason above requires technical confirmation from the Evidence Ladder.
 For example, "the candidate schema is broader than the approved scope" is not sufficient on its own unless follow-up confirmation and schema-level confirmation show the specific mismatch.
+"Unwanted coupling" requires evidence that the coupling prevents the approved business flow, not just that the candidate belongs to a broader platform module.
+"Unavoidable inherited behavior" requires evidence that the behavior contradicts the approved requirements, not just that the user did not mention it.
 
 Unacceptable reasons for `create`:
 
@@ -292,6 +400,13 @@ Unacceptable reasons for `create`:
 - `Usr*` naming preference without further architectural rationale
 - the candidate belongs to a broader platform module but already covers the required capabilities
 - the lookup is shared and might diverge later without a confirmed governance requirement
+- the candidate has extra required fields with existing default values or lookup references that the user did not mention
+- the user's requirements describe a subset of the candidate's capabilities and the candidate covers more than what was explicitly requested
+- module dependency exists but does not restrict the approved business flow
+- the candidate has more functionality than the user described — broader scope is not a mismatch when the required capabilities are covered
+- a required field was not listed in the user's requirements but has existing lookup values or defaults that can be set at page/UI level
+- relabeling an extra required field with existing lookup references as "forbidden extra semantics" — when the reported mismatch is that a required field references a domain-specific lookup (e.g., EventType with marketing values), that is an extra required field scenario handleable at page/UI level, not a genuine "forbidden extra semantics" capability failure
+- any reasoning that subordinates DataForge discovery evidence to another input — the Evidence Ladder outcome is the binding source of truth for model decisions and outranks user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, and deployment concerns
 
 #### Escalation Rule For Ambiguous Tradeoffs
 
@@ -318,8 +433,10 @@ When this happens:
 - when a strong candidate exists, `discovery-evidence` must show at least one initial discovery tool and `dataforge-context`.
 - when a strong candidate exists, either `discovery-evidence` or `mismatch-evidence` must cite at least one schema-level confirmation tool (`dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`).
 - outcome phrases such as `ownership boundary`, `unwanted coupling`, `semantic mismatch`, `lifecycle mismatch`, or `broader than the approved scope` are blockers unless they are backed by follow-up confirmation and schema-level confirmation.
-- if the evidence shows the candidate already covers the required capabilities, the plan must resolve to `reuse` or `extend` unless `tradeoff-escalation: user-confirmation-required` is explicitly recorded.
+- if the evidence shows the candidate already covers the required capabilities, the plan must resolve to `reuse` unless `tradeoff-escalation: user-confirmation-required` is explicitly recorded.
+- if the evidence shows several strong candidates, the plan must identify the most similar candidate and reuse it.
 - when DataForge tools fail (e.g. HTTP 401, timeout), cite the attempted call and the fallback tool used. For example: `dataforge-find-tables attempted (401 Unauthorized), application-get-info returned no matching app` is valid evidence for a greenfield-only conclusion.
+- exception: when `dataforge-availability: unavailable` is recorded because `dataforge-status` was not Ready or the call threw, treat the active discovery branch as intentionally bypassed for the session instead of failing for missing DataForge evidence.
 
 ### Schema Sync Plan
 
@@ -331,6 +448,7 @@ When this happens:
 - Extend the template-created main entity via `update-entity-schema`.
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
+- When a `Model Decisions` record resolves to `reuse`, the Schema Sync Plan must select the execution path that implements reuse (e.g. `create-app-section` with the existing entity, or existing-app flow). The choice of MCP tools adapts to the model decision — the model decision is not negotiable at execution-planning time.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
 - Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.

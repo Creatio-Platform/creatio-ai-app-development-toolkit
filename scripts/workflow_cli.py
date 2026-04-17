@@ -54,6 +54,10 @@ MODEL_DECISIONS_SECTION_RE = re.compile(
     r"^\s*#{2,6}\s+Model Decisions\s*$\n(?P<body>.*?)(?=^\s*#{1,6}\s+\S|\Z)",
     re.MULTILINE | re.DOTALL,
 )
+DATAFORGE_AVAILABILITY_RE = re.compile(
+    r"^\s*dataforge-availability\s*:\s*(ready|unavailable)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 CHOSEN_ACTION_RE = re.compile(r"chosen-action\s*:\s*(reuse|extend|create)\b", re.IGNORECASE)
 DISCOVERY_EVIDENCE_RE = re.compile(r"discovery-evidence\s*:", re.IGNORECASE)
 DISCOVERY_TOOL_SIGNAL_RE = re.compile(
@@ -125,8 +129,20 @@ CAPABILITY_FAILURE_SIGNAL_RE = re.compile(
     r"(cannot be satisfied|cannot satisfy|required capability.{0,20}(missing|cannot)|missing value|required value.{0,20}missing|forbidden extra semantics|unavoidable inherited behavior|cannot fit|cannot extend safely|not safely extendable|required event linkage.{0,20}cannot be satisfied|required lifecycle.{0,20}cannot be satisfied|inherited behavior is unacceptable|not acceptable for the approved business flow)",
     re.IGNORECASE,
 )
+EXTRA_REQUIRED_FIELD_RELABEL_RE = re.compile(
+    r"(required.{0,40}field.{0,40}(lookup|values|references|default)|extra required field|required.{0,20}(EventType|Type|Category|Kind).{0,40}(lookup|values|marketing|domain)|field.{0,40}existing.{0,20}lookup.{0,20}values|can be defaulted at page)",
+    re.IGNORECASE,
+)
 LOOKUP_EXACT_MATCH_SIGNAL_RE = re.compile(
     r"(exact lookup match|exactly matches the approved lifecycle|already contains.{0,40}(in progress|completed|canceled|cancelled)|matches the approved lifecycle|same lifecycle values|same values)",
+    re.IGNORECASE,
+)
+MOST_SIMILAR_SELECTION_SIGNAL_RE = re.compile(
+    r"(most similar candidate|best match from live DataForge discovery|best match among discovered candidates|strongest semantic match|strongest match from discovery|no other candidate provided a better match than)",
+    re.IGNORECASE,
+)
+REJECTED_MOST_SIMILAR_CANDIDATE_RE = re.compile(
+    r"(?P<candidate>[A-Za-z0-9_]+)\s+(?:was|is)\s+the\s+(?:most similar candidate|best match(?: from live DataForge discovery)?|strongest semantic match(?: from discovery)?)",
     re.IGNORECASE,
 )
 SCHEMA_SYNC_HEADING_RE = re.compile(r"^\s*#{2,6}\s+Ordered Schema Sync\s*$", re.MULTILINE)
@@ -418,6 +434,9 @@ def validate_implementation_plan_doc(plan_file):
     if not path.is_file():
         raise WorkflowError(f"Implementation plan failed: file not found: {plan_file}")
     text = path.read_text(encoding="utf-8")
+    dataforge_availability_match = DATAFORGE_AVAILABILITY_RE.search(text)
+    dataforge_availability = dataforge_availability_match.group(1).lower() if dataforge_availability_match else None
+    dataforge_unavailable = dataforge_availability == "unavailable"
     if not MODEL_DECISIONS_HEADING_RE.search(text):
         raise WorkflowError("Implementation plan failed: missing required section: Model Decisions")
     section_match = MODEL_DECISIONS_SECTION_RE.search(text)
@@ -465,22 +484,23 @@ def validate_implementation_plan_doc(plan_file):
             raise WorkflowError(
                 "Implementation plan failed: tradeoff-escalation is user-confirmation-required; persist the user decision before passing the implementation plan gate"
             )
-        if not DISCOVERY_SIGNAL_RE.search(discovery_evidence):
-            raise WorkflowError(
-                "Implementation plan failed: each discovery-evidence field must cite read-only discovery or an explicit greenfield-only / no suitable candidate found outcome"
-            )
-        if not DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
-            raise WorkflowError(
-                "Implementation plan failed: discovery-evidence must cite at least one attempted tool call "
-                "(dataforge-find-tables, dataforge-find-lookups, dataforge-context, application-get-info, "
-                "application-get-list, get-entity-schema-properties). "
-                "Outcome-only evidence (greenfield-only, no suitable candidate found) is not sufficient."
-            )
-        if not INITIAL_DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
-            raise WorkflowError(
-                "Implementation plan failed: discovery-evidence must cite at least one initial discovery tool "
-                "(dataforge-find-tables or dataforge-find-lookups)"
-            )
+        if not dataforge_unavailable:
+            if not DISCOVERY_SIGNAL_RE.search(discovery_evidence):
+                raise WorkflowError(
+                    "Implementation plan failed: each discovery-evidence field must cite read-only discovery or an explicit greenfield-only / no suitable candidate found outcome"
+                )
+            if not DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
+                raise WorkflowError(
+                    "Implementation plan failed: discovery-evidence must cite at least one attempted tool call "
+                    "(dataforge-find-tables, dataforge-find-lookups, dataforge-context, application-get-info, "
+                    "application-get-list, get-entity-schema-properties). "
+                    "Outcome-only evidence (greenfield-only, no suitable candidate found) is not sufficient."
+                )
+            if not INITIAL_DISCOVERY_TOOL_SIGNAL_RE.search(discovery_evidence):
+                raise WorkflowError(
+                    "Implementation plan failed: discovery-evidence must cite at least one initial discovery tool "
+                    "(dataforge-find-tables or dataforge-find-lookups)"
+                )
         combined_evidence = f"{discovery_evidence} {mismatch_evidence}"
         full_decision_text = f"{candidates_considered} {rejected_candidates} {extract_decision_field(block_text, 'candidate-fit-summary') or ''} {extract_decision_field(block_text, 'required-capabilities') or ''} {mismatch_evidence}"
         is_greenfield_only = bool(
@@ -495,7 +515,7 @@ def validate_implementation_plan_doc(plan_file):
                 raise WorkflowError(
                     "Implementation plan failed: chosen-action: create must state why reuse or extension was rejected"
                 )
-        if not is_greenfield_only:
+        if not is_greenfield_only and not dataforge_unavailable:
             if not FOLLOW_UP_DISCOVERY_SIGNAL_RE.search(combined_evidence):
                 raise WorkflowError(
                     "Implementation plan failed: strong candidates require follow-up evidence via dataforge-context before locking reuse, extend, or create"
@@ -509,16 +529,25 @@ def validate_implementation_plan_doc(plan_file):
                 has_partial_match_dismissal = bool(PARTIAL_MATCH_DISMISSAL_RE.search(full_decision_text))
                 has_prior_plan_create_preference = bool(PRIOR_PLAN_CREATE_PREFERENCE_RE.search(full_decision_text))
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
+                has_extra_required_field_relabel = bool(EXTRA_REQUIRED_FIELD_RELABEL_RE.search(full_decision_text))
                 candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
                 only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
                 exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
+                most_similar_selection = bool(MOST_SIMILAR_SELECTION_SIGNAL_RE.search(full_decision_text))
+                if has_capability_failure and has_extra_required_field_relabel:
+                    raise WorkflowError(
+                        "Implementation plan failed: create decision uses a capability-failure phrase "
+                        "(e.g. 'forbidden extra semantics') but the mismatch describes an extra required "
+                        "field with existing lookup values — extra required fields with existing lookup "
+                        "references are page-level concerns, not capability failures that justify create"
+                    )
                 if only_additive_or_extendable_gaps and not has_capability_failure:
                     raise WorkflowError(
-                        "Implementation plan failed: strong candidates with only additive or extendable gaps must resolve to reuse or extend, even if the candidate is not a 100% match or an earlier plan preferred create"
+                        "Implementation plan failed: strong candidates with only additive or extendable gaps must resolve to reuse, even if the candidate is not a 100% match or an earlier plan preferred create"
                     )
                 if candidate_already_covers_capabilities and not has_capability_failure:
                     raise WorkflowError(
-                        "Implementation plan failed: reuse-first policy requires reuse or extend when the candidate already covers the required capabilities"
+                        "Implementation plan failed: reuse-first policy requires reuse when the candidate already covers the required capabilities"
                     )
                 if exact_lookup_match and not has_capability_failure:
                     raise WorkflowError(
@@ -531,6 +560,30 @@ def validate_implementation_plan_doc(plan_file):
                 if has_generic_create_only_reason and not has_capability_failure:
                     raise WorkflowError(
                         "Implementation plan failed: create cannot rely only on broader/shared/module-coupling reasoning without a concrete capability failure under the reuse-first policy"
+                    )
+            if chosen_action == "extend":
+                has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))
+                candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
+                only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
+                exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
+                most_similar_selection = bool(MOST_SIMILAR_SELECTION_SIGNAL_RE.search(full_decision_text))
+                if (
+                    not has_capability_failure
+                    and (
+                        candidate_already_covers_capabilities
+                        or only_additive_or_extendable_gaps
+                        or exact_lookup_match
+                        or most_similar_selection
+                    )
+                ):
+                    raise WorkflowError(
+                        "Implementation plan failed: strong candidates resolved by live DataForge discovery must resolve to reuse; extend is not allowed once the most similar candidate is confirmed"
+                    )
+            if chosen_action == "reuse":
+                rejected_most_similar_match = REJECTED_MOST_SIMILAR_CANDIDATE_RE.search(rejected_candidates)
+                if rejected_most_similar_match and rejected_most_similar_match.group("candidate").lower() != chosen_schema.lower():
+                    raise WorkflowError(
+                        "Implementation plan failed: when multiple strong candidates exist, the plan must reuse the most similar candidate surfaced by discovery"
                     )
     schema_sync_match = SCHEMA_SYNC_SECTION_RE.search(text)
     if schema_sync_match:
