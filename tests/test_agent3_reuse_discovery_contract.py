@@ -27,6 +27,7 @@ AGENT3_REUSE_DISCOVERY_MARKERS = [
     "missing discovery evidence",
     "discovery-evidence",
     "do not relabel an extra required field with existing lookup values",
+    "create against a strong candidate",
 ]
 MODEL_DISCOVERY_GUIDE_MARKERS = [
     "Strong Candidate Signals",

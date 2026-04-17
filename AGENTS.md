@@ -312,6 +312,7 @@ When the majority of approved business requirements match the candidate, that is
 User requirements may describe only a subset of the candidate's capabilities; the candidate having more than requested is a strength, not a mismatch.
 Extra required fields with existing lookup values or defaults are page-level concerns (set a default on the form), not schema-level capability failures that justify `create`.
 Do not relabel an extra required field with existing lookup values as "forbidden extra semantics"; a required field referencing a domain-specific lookup (e.g., EventType with marketing values) remains an extra-required-field scenario handleable at page/UI level — "forbidden extra semantics" applies only when the entity's core domain purpose or lifecycle makes the approved business flow impossible.
+When Agent 3 considers `create` for a business concept where DataForge discovery found a strong candidate, the agent must present both options (reuse vs create) to the user and record explicit user confirmation before locking the create decision. No silent `create` against a discovered strong candidate is allowed.
 Module dependencies are informational context about the candidate's origin, not functional blockers unless they prevent the approved business flow.
 When several strong candidates exist, Agent 3 must select the most similar candidate from discovery and record that schema as the reused `chosen-schema`.
 `extend` remains valid only outside that strong-candidate override path.
