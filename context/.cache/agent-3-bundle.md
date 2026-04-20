@@ -157,7 +157,35 @@ This override still applies even if Agent 2, the BA draft, or an earlier plan pr
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
 Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
 
+#### `mcp_client.py` invocation cheat-sheet
+
+All `dataforge-*` calls are made through `scripts/mcp_client.py`. Use this exact shape — do not invent argparse flags.
+
+```powershell
+'{"environment-name":"<env>"}' | py -3 scripts\mcp_client.py <tool-name> --args-stdin --timeout 60
+```
+
+There is **no `--args-json` flag**. Argument sources are: legacy positional `<args-json>`, `--args-file <path>`, or `--args-stdin` with piped JSON. Resolve `<env>` from `output/<AppName>/.creatio-env.json`.
+
+#### DataForge first-call recipe (5 steps)
+
+1. Build `candidate-terms` from the main + supporting business objects in the approved BA draft.
+2. Build `lookup-hints` from approved enum-like values (status, priority, category, type).
+3. Call `dataforge-context` **once** with both arrays. Do not call `find-tables` or `find-lookups` first.
+4. Parse the response with Python via `call_mcp_tool` from `scripts/mcp_client.py` — never PowerShell `ConvertFrom-Json` (multi-root / header-prefixed output breaks it).
+5. For each strong candidate, do at most one schema-level confirmation call (`dataforge-get-table-columns` or `dataforge-get-relations`) before locking the Model Decision.
+
+Hard cap: **3 active `dataforge-*` calls per business concept** during planning. Exceeding the budget means commit a Model Decision or escalate to the user.
+
 Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
+
+`dataforge-status` itself requires `environment-name`. Example payload:
+
+```json
+{"environment-name": "<env from .creatio-env.json>"}
+```
+
+An empty body `{}` returns `invalid-request` ("Missing required connection parameters").
 
 - If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
 - If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
@@ -169,6 +197,8 @@ Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*`
 
 When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
 Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+
+This rule applies to **all** `validate-implementation-plan-doc` failures. Fix the artifact based on the error string returned by the script; canonical templates already live in this bundle and in `context/model-discovery-evidence.md`.
 
 **Checks that are SKIPPED when DataForge is unavailable:**
 
@@ -248,7 +278,7 @@ Never treat "the BA draft already named a `Usr*` schema" as proof that the objec
 
 For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
 
-1. **Batched initial discovery — prefer a single `dataforge-context` call** that combines candidate-tables, lookups, and relations in one network round-trip:
+1. **Default initial discovery is a single `dataforge-context` call** — not a "prefer". This is the required first call:
    ```
    dataforge-context({
      "environment-name": "<env>",
@@ -259,8 +289,11 @@ For the conditional discovery branch, use read-only tools only and resolve candi
    ```
    Use `candidate-terms` for entity candidates, `lookup-hints` for lookup candidates.
    Do **not** pass `schema-name` — that parameter does not exist on this tool.
-   Skip the separate `dataforge-find-tables` and `dataforge-find-lookups` calls when you pass both arrays above; `dataforge-context` already aggregates both results.
-   Fall back to `dataforge-find-tables` and `dataforge-find-lookups` individually only when you need to widen or narrow the search after reviewing the batched result.
+   Use `dataforge-find-tables` / `dataforge-find-lookups` individually **only as a widen-the-search fallback** after reviewing the batched result.
+
+   **Anti-pattern:** 2× `find-tables` + 3× `find-lookups` + 2× `get-table-columns` instead of one `dataforge-context`. This burns minutes on parameter-name retries (`term` vs `query`, `lookup-name` vs `schema-name`, empty-`query` rejections). Do not repeat it.
+
+   **Call budget:** at most 3 active `dataforge-*` calls per business concept during planning.
 
 2. When a strong candidate is found:
    - `application-get-info` for app-level context when the candidate belongs to an existing app
@@ -888,22 +921,6 @@ When iterating `dataforge-find-tables` / `dataforge-context` similar-tables:
 | `similar-tables[].caption` | Human-readable table caption |
 | `similar-tables[].description` | AI-generated semantic description |
 
-## Known Live Candidates — Support / Case Domain
-
-The following are confirmed live on standard Creatio environments with SLM/CrtCaseManagement installed.
-Use these as starting-point hints for `dataforge-context` candidate-terms when the request is case/support-related.
-
-| Business Concept | Confirmed Candidate | Status | Notes |
-|-----------------|---------------------|--------|-------|
-| Support case / Incident | `Case` (pkg: `CrtCaseManagmentObject`) | ⚠️ Conditional reuse | Has Subject, Status(→CaseStatus), Priority(→CasePriority), Category(→CaseCategory), Owner(→Contact), Notes, Solution. Primary display col is `Number` not `Name`. CaseStatus has "New"/"In progress"/"Closed" — if approved lifecycle requires "Completed"/"Canceled" as distinct states, this is a capability failure → `create`. |
-| Case priority | `CasePriority` | ✅ Reuse | Confirmed values: Critical, High, Medium, Low — matches standard priority requirements exactly. |
-| Case status | `CaseStatus` | ⚠️ Check values | Confirmed values: "New", "In progress", "Closed". Missing "Completed" and "Canceled" as distinct states. Platform-owned; cannot be extended safely. |
-| Case category | `CaseCategory` | ⚠️ Check values | Confirmed value: "Service request". Not suitable for custom taxonomy (Technical Issue / Billing / Account etc.). |
-| Knowledge/Solution article | `KnowledgeBase` (pkg: `CrtCoreBase`) | ⚠️ Conditional reuse | Has Name (required), Notes (MaxSizeText), Keywords. Required field `Type` (Lookup→KnowledgeBaseType) adds unavoidable inherited semantics — if article type is not in approved requirements, this is a capability failure → `create`. |
-| Person / Assigned agent | `Contact` | ✅ Reuse | Standard platform identity entity. Confirmed via Case.Owner column reference. No Usr prefix needed. |
-| Knowledge article ↔ Case link | `KnowledgeBaseInCase` | ✅ Available | Junction entity linking KnowledgeBase to Case. Useful if reusing both. |
-
-
 ## Strong Candidate Signals
 
 Treat a candidate as strong when any of the following is true:
@@ -1090,11 +1107,11 @@ Good `create` evidence when DataForge is unavailable:
 - `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
 - `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`
 
-Good `reuse` evidence when DataForge is unavailable (for known platform entities like Contact, KnowledgeBase):
+Good `reuse` evidence when DataForge is unavailable (for a known platform entity that the approved business model maps to):
 
-- `candidates-considered: Contact`
-- `candidate-fit-summary: standard platform identity entity with known person/communication semantics`
-- `required-capabilities: reusable person record for customer and agent reference`
+- `candidates-considered: <PlatformEntity>`
+- `candidate-fit-summary: standard platform entity with known semantics matching the approved business concept`
+- `required-capabilities: <from approved requirements>`
 - `mismatch-evidence: none — reuse accepted based on known platform semantics`
 - `discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema`
 - `rejected-candidates: none`

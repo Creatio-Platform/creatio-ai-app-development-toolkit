@@ -3,6 +3,31 @@
 Use this guide when Agent 3 must decide whether to `reuse`, `extend`, or `create`.
 It is a policy reference for evidence quality, not an executable tool contract.
 
+## DataForge Tool Parameter Contract
+
+Use this table when invoking `dataforge-*` tools through `scripts/mcp_client.py`.
+Parameter names are exact — past sessions burned several minutes on `term` vs `query` and `lookup-name` vs `schema-name` retries.
+
+| Tool | Required params | Optional params | Notes |
+|------|-----------------|-----------------|-------|
+| `dataforge-status` | `environment-name` | — | Empty body `{}` returns `invalid-request`. Returns `status.status == "Ready"` when usable. |
+| `dataforge-context` | `environment-name`, `candidate-terms` (array) | `lookup-hints` (array), `requirement-summary` (string) | **Default first discovery call.** Do **not** pass `schema-name`. Response top-level keys: `similar-tables`, `similar-lookups`. May return 50–80 KB; parse with Python via `call_mcp_tool`, never PowerShell `ConvertFrom-Json`. |
+| `dataforge-find-tables` | `environment-name`, `query` (non-empty string) | — | `query` (not `term`, not `name`). Empty string is rejected. Response: `similar-tables[]`. Fallback only — use `dataforge-context` first. |
+| `dataforge-find-lookups` | `environment-name`, `query` (non-empty string) | `schema-name` (filter by lookup) | `schema-name` (not `lookup-name`). `query` is required and must be non-empty (use a single letter such as `"a"` if you only want to scope by `schema-name`). Response: `similar-lookups[]`. |
+| `dataforge-get-table-columns` | `environment-name`, `table-name` | — | Schema-level confirmation. Response: `columns[]` with `name`, `caption`. |
+| `dataforge-get-relations` | `environment-name`, `table-name` | — | Schema-level confirmation. Response: relation list. |
+
+### Anti-pattern: `find-lookups` is not a "list rows of a known lookup" tool
+
+`dataforge-find-lookups` searches **lookup display values across the catalog** for a query string.
+It is **not** the right tool to enumerate the rows of a single lookup whose schema name you already know:
+passing `{schema-name: "<UsrSomeLookup>", query: "a"}` returns matches against lookup *values* containing "a", not the full row set.
+
+To verify or list the rows of a known lookup, do one of:
+- include the lookup name in `lookup-hints` of the next `dataforge-context` call;
+- call `dataforge-get-table-columns` on the lookup table to confirm structure, then trust seeded values;
+- query the lookup rows directly via the schema-level tools after locking the Model Decision.
+
 ## DataForge Response Field Reference
 
 When iterating `dataforge-find-lookups` results, use the correct field names:
@@ -21,20 +46,6 @@ When iterating `dataforge-find-tables` / `dataforge-context` similar-tables:
 | `similar-tables[].caption` | Human-readable table caption |
 | `similar-tables[].description` | AI-generated semantic description |
 
-## Known Live Candidates — Support / Case Domain
-
-The following are confirmed live on standard Creatio environments with SLM/CrtCaseManagement installed.
-Use these as starting-point hints for `dataforge-context` candidate-terms when the request is case/support-related.
-
-| Business Concept | Confirmed Candidate | Status | Notes |
-|-----------------|---------------------|--------|-------|
-| Support case / Incident | `Case` (pkg: `CrtCaseManagmentObject`) | ⚠️ Conditional reuse | Has Subject, Status(→CaseStatus), Priority(→CasePriority), Category(→CaseCategory), Owner(→Contact), Notes, Solution. Primary display col is `Number` not `Name`. CaseStatus has "New"/"In progress"/"Closed" — if approved lifecycle requires "Completed"/"Canceled" as distinct states, this is a capability failure → `create`. |
-| Case priority | `CasePriority` | ✅ Reuse | Confirmed values: Critical, High, Medium, Low — matches standard priority requirements exactly. |
-| Case status | `CaseStatus` | ⚠️ Check values | Confirmed values: "New", "In progress", "Closed". Missing "Completed" and "Canceled" as distinct states. Platform-owned; cannot be extended safely. |
-| Case category | `CaseCategory` | ⚠️ Check values | Confirmed value: "Service request". Not suitable for custom taxonomy (Technical Issue / Billing / Account etc.). |
-| Knowledge/Solution article | `KnowledgeBase` (pkg: `CrtCoreBase`) | ⚠️ Conditional reuse | Has Name (required), Notes (MaxSizeText), Keywords. Required field `Type` (Lookup→KnowledgeBaseType) adds unavoidable inherited semantics — if article type is not in approved requirements, this is a capability failure → `create`. |
-| Person / Assigned agent | `Contact` | ✅ Reuse | Standard platform identity entity. Confirmed via Case.Owner column reference. No Usr prefix needed. |
-| Knowledge article ↔ Case link | `KnowledgeBaseInCase` | ✅ Available | Junction entity linking KnowledgeBase to Case. Useful if reusing both. |
 
 
 ## Strong Candidate Signals
@@ -230,11 +241,11 @@ Good `create` evidence when DataForge is unavailable:
 - `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
 - `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`
 
-Good `reuse` evidence when DataForge is unavailable (for known platform entities like Contact, KnowledgeBase):
+Good `reuse` evidence when DataForge is unavailable (for a known platform entity that the approved business model maps to):
 
-- `candidates-considered: Contact`
-- `candidate-fit-summary: standard platform identity entity with known person/communication semantics`
-- `required-capabilities: reusable person record for customer and agent reference`
+- `candidates-considered: <PlatformEntity>`
+- `candidate-fit-summary: standard platform entity with known semantics matching the approved business concept`
+- `required-capabilities: <from approved requirements>`
 - `mismatch-evidence: none — reuse accepted based on known platform semantics`
 - `discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema`
 - `rejected-candidates: none`
