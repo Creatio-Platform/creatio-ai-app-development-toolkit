@@ -36,6 +36,7 @@ FORM_PAGE_BODY = """define("UsrTest_FormPage", /**SCHEMA_DEPS*/[]/**SCHEMA_DEPS*
 \t\t\t\t\t\t"rowSpan": 1
 \t\t\t\t\t},
 \t\t\t\t\t"type": "crt.Input",
+\t\t\t\t\t"label": "$Resources.Strings.Name",
 \t\t\t\t\t"control": "$Name"
 \t\t\t\t},
 \t\t\t\t"parentName": "SideAreaProfileContainer",

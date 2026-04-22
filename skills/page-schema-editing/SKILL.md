@@ -143,6 +143,9 @@ Before save:
 - Every modified marker section re-parses successfully.
 - All delimiters remain balanced.
 - Every inserted UI field has a matching binding.
+- Every inserted field `label` is `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"`. Hardcoded plain strings like `"label": "Status"` must be rejected.
+- For every `"$Resources.Strings.<key>"`, the `<key>` equals the attribute key from `control` (strip the leading `$`). Mismatched keys render blank silently.
+- Every newly used `$Resources.Strings.<key>` is included in the `resources` param passed to `sync-pages` (flat JSON map, e.g. `{"PDS_UsrStatus": "Status"}`). Entity column captions are not auto-registered during `sync-pages`.
 - The discovered primary field container is used for FormPage inserts.
 - ListPage column changes preserve existing columns and order unless requirements say otherwise.
 

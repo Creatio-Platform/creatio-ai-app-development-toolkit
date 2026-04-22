@@ -46,6 +46,7 @@ def build_form_body(include_status=True, include_lookup_action=False):
         "name": "ComboBox_status123",
         "values": {
           "type": "crt.ComboBox",
+          "label": "$Resources.Strings.PDS_UsrStatus_status123",
           "control": "$PDS_UsrStatus_status123"
         },
         "parentName": "SideAreaProfileContainer",
@@ -83,6 +84,7 @@ def build_form_body(include_status=True, include_lookup_action=False):
         "name": "Input_name123",
         "values": {{
           "type": "crt.Input",
+          "label": "$Resources.Strings.Name",
           "control": "$Name"
         }},
         "parentName": "SideAreaProfileContainer",

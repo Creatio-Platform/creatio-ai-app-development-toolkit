@@ -127,7 +127,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `sync-pages` or the fallback `update-page` path to register the localizableString.
+- `caption` — always `#ResourceString(<key>)#`; never a hardcoded plain string. For DataGrid columns bound to an entity column, use the **data-source-resolved** form `#ResourceString(PDS_<Column>)#` (e.g. `#ResourceString(PDS_UsrStatus)#`) — the platform pulls the caption from the entity column automatically, no `resources` param needed. This is a DIFFERENT case from custom non-field UI elements (tabs, buttons, standalone `crt.Label`), which use `#ResourceString(<itemName>_caption)#` and DO require a matching `resources` entry — see "Non-Field Element Captions" in `context/viewconfig-reference.md`.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -286,7 +286,7 @@ Use this pattern when the live page body already materializes a sibling sorting 
 - Do not reuse FormPage lookup `*_List` sorting examples as the recipe for ListPage DataGrid row sorting.
 - Do not assume sorting by a lookup column guarantees business lifecycle order.
 - Do not change `Items.modelConfig.path` or paging config unless the task explicitly requires a data-source change.
-- Do not put attribute keys such as `PDS_UsrDueDate_ab12cd3` into `columnName`; use the entity column name `UsrDueDate`.
+- Do not put attribute keys such as `PDS_UsrDueDate` into `columnName`; use the entity column name `UsrDueDate`.
 - Do not treat a manually added DataGrid `sorting` property as the primary source of truth when the collection metadata already defines sorting.
 
 #### Limitations
@@ -323,8 +323,8 @@ Binds page attributes to data source:
 		"path": ["attributes"],
 		"values": {
 			"Name": {"modelConfig": {"path": "PDS.Name"}},
-			"PDS_UsrStatus_ab12cd3": {"modelConfig": {"path": "PDS.UsrStatus"}},
-			"PDS_UsrDueDate_ab12cd3": {"modelConfig": {"path": "PDS.UsrDueDate"}}
+			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
+			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
 	}
 ]
@@ -455,7 +455,7 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 ```json
 {
 	"operation": "insert",
-	"name": "Input_ab12cd3",
+	"name": "PDS_UsrCode",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -464,8 +464,8 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
-		"control": "$PDS_UsrCode_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrCode",
+		"control": "$PDS_UsrCode",
 		"placeholder": "",
 		"tooltip": "",
 		"readonly": false,
@@ -489,20 +489,23 @@ Rules:
 - Keep `Name` as the header/title when it already exists and do not duplicate it.
 - Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
-- **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `sync-pages` `resources` param.
-  **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `sync-pages`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
-  **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`. A mismatched label key renders blank silently — no error is surfaced by the validator.
+- **Never hardcode a plain label string.** `"label": "Status"` is a bug — the field renders an English literal and will not localize. Only `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"` are valid.
+- **Label key MUST equal the attribute key from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus"` → `"label": "$Resources.Strings.PDS_UsrStatus"`. Mismatched key renders a blank "Title on page" with no validator error.
+- **Default pattern for new entity-field inserts:** attribute key `PDS_<Column>`, label `$Resources.Strings.PDS_<Column>`. No random suffix. Do not invent `_ab12cd3`-style tails for field attribute keys — binding happens in `viewModelConfigDiff.<key>.modelConfig.path`, not in the name.
+- **`sync-pages resources` param is mandatory for every new `$Resources.Strings.<key>`.** The platform does not auto-register page resource strings during `sync-pages`; the designer only registers them when the field is first opened in its right panel. Always pass `resources` as a flat JSON map alongside new field inserts: `{"PDS_UsrStatus": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
+- **Preserve existing live bindings.** If the live page already has `Name` bound as `control: "$Name"` with `label: "$Resources.Strings.Name"` (section-wizard output), keep it exactly. Only newly inserted fields follow the `PDS_<Column>` default above.
+- **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`.
 
 ### Runtime Lookup Special Case
 
 ```json
 {
 	"operation": "insert",
-	"name": "ComboBox_ab12cd3",
+	"name": "PDS_UsrStatus",
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 10, "rowSpan": 1},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrStatus",
 		"ariaLabel": "",
 		"isAddAllowed": true,
 		"showValueAsLink": true,
@@ -510,7 +513,7 @@ Rules:
 		"controlActions": [],
 		"listActions": [],
 		"tooltip": "",
-		"control": "$PDS_UsrStatus_ab12cd3"
+		"control": "$PDS_UsrStatus"
 	},
 	"parentName": "<primary-field-container>",
 	"propertyName": "items",
@@ -521,18 +524,18 @@ Rules:
 ```json
 {
 	"operation": "insert",
-	"name": "addRecord_ab12cd3",
+	"name": "addRecord_6jika7x",
 	"values": {
 		"code": "addRecord",
 		"type": "crt.ComboboxSearchTextAction",
 		"icon": "combobox-add-new",
-		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"caption": "#ResourceString(addRecord6jika7x_caption)#",
 		"clicked": {
 			"request": "crt.CreateRecordFromLookupRequest",
 			"params": {}
 		}
 	},
-	"parentName": "ComboBox_ab12cd3",
+	"parentName": "PDS_UsrStatus",
 	"propertyName": "listActions",
 	"index": 0
 }
