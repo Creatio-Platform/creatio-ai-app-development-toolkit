@@ -134,7 +134,7 @@ EXTRA_REQUIRED_FIELD_RELABEL_RE = re.compile(
     re.IGNORECASE,
 )
 USER_CONFIRMED_CREATE_RE = re.compile(
-    r"(user confirmed create|user chose create|developer confirmed create|user explicitly (chose|confirmed|requested|approved) create|user approved create|user rejected reuse|create confirmed by (user|developer))",
+    r"(user confirmed create|user chose create|developer confirmed create|user explicitly (chose|confirmed|requested|approved) create|user approved create|user rejected reuse|create confirmed by (user|developer)|user explicitly required.{0,60}(separate|custom|app-owned|dedicated))",
     re.IGNORECASE,
 )
 LOOKUP_EXACT_MATCH_SIGNAL_RE = re.compile(
@@ -550,23 +550,23 @@ def validate_implementation_plan_doc(plan_file):
                         "field with existing lookup values — extra required fields with existing lookup "
                         "references are page-level concerns, not capability failures that justify create"
                     )
-                if only_additive_or_extendable_gaps and not has_capability_failure:
+                if only_additive_or_extendable_gaps and not has_capability_failure and not has_user_confirmed_create:
                     raise WorkflowError(
                         "Implementation plan failed: strong candidates with only additive or extendable gaps must resolve to reuse, even if the candidate is not a 100% match or an earlier plan preferred create"
                     )
-                if candidate_already_covers_capabilities and not has_capability_failure:
+                if candidate_already_covers_capabilities and not has_capability_failure and not has_user_confirmed_create:
                     raise WorkflowError(
                         "Implementation plan failed: reuse-first policy requires reuse when the candidate already covers the required capabilities"
                     )
-                if exact_lookup_match and not has_capability_failure:
+                if exact_lookup_match and not has_capability_failure and not has_user_confirmed_create:
                     raise WorkflowError(
                         "Implementation plan failed: exact or near-exact lookup matches must default to reuse unless explicit missing capability or unacceptable inherited behavior is proven"
                     )
-                if (has_partial_match_dismissal or has_prior_plan_create_preference) and not has_capability_failure:
+                if (has_partial_match_dismissal or has_prior_plan_create_preference) and not has_capability_failure and not has_user_confirmed_create:
                     raise WorkflowError(
                         "Implementation plan failed: create cannot be justified by 'not a 100% match' reasoning or by an earlier Agent 2 / BA placeholder decision when live discovery still shows a strong reusable candidate"
                     )
-                if has_generic_create_only_reason and not has_capability_failure:
+                if has_generic_create_only_reason and not has_capability_failure and not has_user_confirmed_create:
                     raise WorkflowError(
                         "Implementation plan failed: create cannot rely only on broader/shared/module-coupling reasoning without a concrete capability failure under the reuse-first policy"
                     )

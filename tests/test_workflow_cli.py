@@ -612,6 +612,52 @@ def build_valid_plan_doc_create_against_strong_candidate_with_user_confirmation(
 """
 
 
+def build_valid_plan_doc_create_confirmed_by_user_no_capability_failure():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The built-in Event schema is technically viable, but the user explicitly confirmed create over reuse after reviewing both options — a separate app-owned Event registry is required for this workflow.
+  rejected-candidates: Event — does not fit the approved data separation model; the user chose a dedicated app-owned Event record after reviewing the reuse option
+  candidate-fit-summary: Event already provides Name, StartDate, EndDate, Status, Owner for marketing-event scenarios
+  required-capabilities: separate app-owned event record with name, event date, location, and related activity list
+  mismatch-evidence: dataforge-context identified Event as a shared marketing-event schema; dataforge-get-table-columns confirmed additional shared marketing carriers; user confirmed a dedicated app-owned Event registry after reviewing both options
+  discovery-evidence: dataforge-find-tables, dataforge-context returned Event as similar-table; dataforge-get-table-columns confirmed Event columns; user selected custom Event over built-in Event
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
+def build_valid_plan_doc_create_user_required_ownership_separation():
+    return """# Implementation Plan
+
+## Model Decisions
+
+- business-concept: Event
+  candidates-considered: Event (Marketing module entity)
+  chosen-action: create
+  chosen-schema: UsrEvents
+  tradeoff-escalation: none
+  rationale: The built-in Event schema is technically viable, but the user explicitly required a separate app-owned Event registry for this workflow instead of reusing the shared built-in model.
+  rejected-candidates: Event — does not fit the approved data separation model; separate ownership required by user decision
+  candidate-fit-summary: Event already provides Name, StartDate, EndDate, Status, Owner for marketing-event scenarios
+  required-capabilities: separate app-owned event record with name, event date, location, and related activity list
+  mismatch-evidence: dataforge-context identified Event as a shared marketing-event schema; dataforge-get-table-columns confirmed additional shared marketing carriers; user confirmed a dedicated app-owned Event registry
+  discovery-evidence: dataforge-find-tables, dataforge-context returned Event as similar-table; dataforge-get-table-columns confirmed Event columns
+
+## Ordered Schema Sync
+
+- create UsrEvents schema for the approved event model.
+"""
+
+
 def build_invalid_plan_doc_unresolved_tradeoff():
     return """# Implementation Plan
 
@@ -890,6 +936,22 @@ class WorkflowCliTests(unittest.TestCase):
         with temp_workflow_root() as workflow_root:
             plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
             write_file(plan_path, build_valid_plan_doc_create_against_strong_candidate_with_user_confirmation())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_create_confirmed_by_user_when_candidate_covers_capabilities_but_no_capability_failure(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc_create_confirmed_by_user_no_capability_failure())
+            result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
+
+    def test_validate_implementation_plan_doc_accepts_create_when_user_explicitly_required_separate_ownership(self):
+        with temp_workflow_root() as workflow_root:
+            plan_path = Path(workflow_root) / "output" / "EventsApp" / "plan.md"
+            write_file(plan_path, build_valid_plan_doc_create_user_required_ownership_separation())
             result = run_workflow_cli("validate-implementation-plan-doc", str(plan_path), workflow_root=workflow_root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("IMPLEMENTATION_PLAN_OK", result.stdout)
