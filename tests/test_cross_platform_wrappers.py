@@ -132,7 +132,7 @@ def build_valid_plan_doc():
   chosen-action: create
   chosen-schema: UsrTask
   tradeoff-escalation: none
-  rationale: MVP needs a dedicated task object for this app
+  rationale: MVP needs a dedicated task object for this app. User confirmed create over reuse after reviewing discovery evidence.
   rejected-candidates: Activity has unwanted coupling to a broader interaction lifecycle and does not fit the approved app-owned task boundary
   candidate-fit-summary: Activity covers assignee, due date, and completion semantics that are adjacent to the requested task concept
   required-capabilities: app-owned task lifecycle, event-specific linkage, dedicated lightweight completion flow

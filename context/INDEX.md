@@ -25,6 +25,9 @@ Do not generate a BA Business Plan for targeted changes.
 |------|-------|-----------|------------------------|
 | Add or update entity columns | `skills/entity-creation/SKILL.md` | `context/essentials.md`, `context/schema-reference.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/app-modeling` |
 | Edit a Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/viewconfig-reference.md`, `context/handlers-reference.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance` |
+| Create a new Freedom UI page | `skills/page-schema-editing/SKILL.md` | `context/ui-reference.md`, `context/essentials.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/page-creation` |
+| Create or edit C# source code | — | `context/essentials.md` | Resolve through `get-tool-contract` |
+| Create or edit SQL scripts | — | `context/essentials.md` | Resolve through `get-tool-contract` |
 | Seed lookup data or bindings | `skills/data-bindings-creation/SKILL.md` | `context/data-bindings-reference.md`, `context/schema-reference.md` | Resolve preferred vs fallback path through `clio` MCP guidance |
 | Generate package descriptor | `skills/package-descriptor-creation/SKILL.md` | template and descriptor references only | no MCP write path required |
 | Manage app sections (list, delete) | — | `context/essentials.md` | Resolve through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance` |
@@ -68,7 +71,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Platform basics and canonical flows | `context/essentials.md` | high-level workflow only |
 | Entity parents, DVTs, schema formats | `context/schema-reference.md` | structural reference |
 | Reuse-evidence ladder and candidate comparison | `context/model-discovery-evidence.md` | strong-candidate discovery and rejection standards |
-| Freedom UI structure and runtime page patterns | `context/ui-reference.md` | form/list runtime policy |
+| Freedom UI structure and runtime page patterns | `context/ui-reference.md` | form/list runtime policy, page creation and editing workflows |
 | `viewConfigDiff` recipes | `context/viewconfig-reference.md` | container discovery and field recipes |
 | Handler patterns and request types | `context/handlers-reference.md` | page-body handler policy |
 | Safe SDK usage in page bodies | `context/devkit-common-reference.md` | page-body runtime API guidance |
@@ -83,6 +86,8 @@ Resolve canonical execution paths, fallback-only compatibility tools, and verify
 - `get-tool-contract`
 - `docs://mcp/guides/app-modeling`
 - `docs://mcp/guides/existing-app-maintenance`
+- `docs://mcp/guides/page-creation`
+- `docs://mcp/guides/page-modification`
 
 ## Skill Notes
 

@@ -9,10 +9,21 @@ metadata:
 
 # Page Schema Editing
 
-Use this skill when the task is to change a deployed Freedom UI page body.
+Use this skill when the task is to change a deployed Freedom UI page body or create a new Freedom UI page.
 
 This skill is not an MCP API reference.
 Resolve exact tool names, parameters, aliases, defaults, response shapes, and errors through `get-tool-contract`.
+
+## Page Creation Flow
+
+When creating a new standalone Freedom UI page (not via `create-app-section`):
+
+1. `list-page-templates` — discover valid templates
+2. `create-page` — create page from template, binding entity if needed
+3. `get-page` — verify creation and retrieve initial body
+4. edit body and persist through `sync-pages` or `update-page`
+
+Resolve the full page creation contract through `docs://mcp/guides/page-creation`.
 
 ## Runtime Flow Used By This Repo
 
@@ -30,6 +41,16 @@ Precondition for data-backed details:
 5. `get-page` verification
 
 This repo follows the clio-advertised canonical page flow above and keeps `update-page` only as an explicit fallback for single-page dry-run or legacy save workflows.
+
+## Targeted Edits
+
+- `update-page` with `mode: "append"` merges incoming body into existing schema body — use for additive edits without clobbering existing customizations
+- `add-form-fields` adds fields to an existing FormPage body without full body replacement
+- `add-list-columns` adds columns to an existing ListPage DataTable without full body replacement
+- `validate-page` validates a page body client-side without saving — use before `sync-pages` or `update-page` for pre-save checks
+
+Resolve detailed tool parameters through `get-tool-contract`.
+Resolve page modification patterns through `docs://mcp/guides/page-modification`.
 
 ## Required Context
 

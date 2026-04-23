@@ -644,9 +644,14 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. Th
 | Tool | Description |
 |------|-------------|
 | `list-pages` | Discover page schemas by package or name pattern |
-| `get-page` | Read a page schema's metadata and raw JS body |
+| `get-page` | Read a page schema's hierarchy-aware body (`body.js` — editable own-body of the replacing schema in the design package) and merged view (`bundle.json`). Writes files to `.clio-pages/{schema-name}/` |
 | `sync-pages` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
-| `update-page` | Fallback single-page dry-run or legacy save path |
+| `update-page` | Single-page save with `mode` (replace/append), `body-file`, `target-package-uid`, `target-schema-uid`, `skip-sampling`, `verify`, `optional-properties`. Append mode merges incoming body fragment with existing schema body. Fallback or targeted use only |
+| `create-page` | Create a new Freedom UI page schema from a template. Use `list-page-templates` to discover valid templates first |
+| `list-page-templates` | Discover valid Freedom UI page templates available on the target environment |
+| `validate-page` | Client-side page body validation (markers, JS syntax, JSON content, field bindings, column bindings) without saving to Creatio |
+| `add-form-fields` | Add form fields to an existing FormPage body — reads current body, inserts fields, and saves |
+| `add-list-columns` | Add columns to an existing ListPage body — reads current body, inserts columns into the DataTable, and saves |
 | `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -659,6 +664,28 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `get-component-info` and `component-type: "..."`
 5. call `sync-pages` with the edited page body and verify the saved page; keep `update-page` only as an explicit fallback
 ```
+
+### Page Creation Workflow
+
+When creating a new standalone Freedom UI page (not via `create-app-section`):
+```
+1. call `list-page-templates` to discover valid templates
+2. call `create-page` with the chosen template, target package, and optional entity binding
+3. call `get-page` to verify creation and retrieve the initial body
+4. edit the body and persist through `sync-pages` or `update-page`
+```
+
+Resolve the full page creation contract through `docs://mcp/guides/page-creation`.
+
+### Targeted Edits Without Full Body Replacement
+
+- `update-page` with `mode: "append"` merges incoming viewConfigDiff entries and handlers into the existing schema body — use for additive edits without clobbering existing customizations
+- `add-form-fields` inserts fields into an existing FormPage body directly
+- `add-list-columns` inserts columns into an existing ListPage DataTable directly
+- `validate-page` validates a page body client-side before saving
+
+Resolve detailed tool parameters through `get-tool-contract`.
+Resolve page modification patterns through `docs://mcp/guides/page-modification`.
 
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `get-page`.
 

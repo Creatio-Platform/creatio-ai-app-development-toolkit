@@ -1,7 +1,10 @@
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow.
+Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow, though `update-page` with `mode: "append"` is available for additive edits that merge into existing customizations.
+
+For targeted field additions, `add-form-fields` and `add-list-columns` insert entries directly without full body replacement.
+Use `validate-page` to check page body correctness (markers, JS syntax, field bindings) before saving.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 

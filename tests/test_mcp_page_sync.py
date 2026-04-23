@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.mcp_context_adapter import normalize_result_document
-from scripts.mcp_page_sync import WorkflowError, apply_page_sync_plan, parse_embedded_page_sync_plan, run_build_plan
+from scripts.mcp_page_sync import WorkflowError, apply_page_sync_plan, extract_page_body, parse_embedded_page_sync_plan, run_build_plan
 
 
 @contextlib.contextmanager
@@ -591,6 +591,36 @@ class McpPageSyncTests(unittest.TestCase):
                 result_path
             )
         self.assertEqual([call[0] for call in fake_client.calls].count("sync-pages"), 1)
+
+
+class ExtractPageBodyTests(unittest.TestCase):
+    def test_extracts_from_body_file(self):
+        with temp_workdir() as workdir:
+            body_file = workdir / "body.js"
+            body_file.write_text("define(() => {})", encoding="utf-8")
+            response = {"files": {"bodyFile": str(body_file)}}
+            self.assertEqual(extract_page_body(response), "define(() => {})")
+
+    def test_extracts_from_raw_dict(self):
+        response = {"raw": {"body": "define(() => {})"}}
+        self.assertEqual(extract_page_body(response), "define(() => {})")
+
+    def test_extracts_from_raw_json_string(self):
+        inner = json.dumps({"raw": {"body": "define(() => {})"}})
+        response = {"raw": inner}
+        self.assertEqual(extract_page_body(response), "define(() => {})")
+
+    def test_extracts_from_top_level_body(self):
+        response = {"body": "define(() => {})"}
+        self.assertEqual(extract_page_body(response), "define(() => {})")
+
+    def test_raises_when_no_body_found(self):
+        with self.assertRaises(WorkflowError):
+            extract_page_body({"files": {}, "raw": {}})
+
+    def test_raises_for_non_dict(self):
+        with self.assertRaises(WorkflowError):
+            extract_page_body("not a dict")
 
 
 if __name__ == "__main__":

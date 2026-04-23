@@ -20,3 +20,4 @@ output/
 .tmp-tests/
 context/.cache/
 .serena/
+.clio-pages/

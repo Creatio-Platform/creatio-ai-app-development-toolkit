@@ -46,6 +46,7 @@ Prefer `sync-schemas` for grouped entity work. Use individual entity tools only 
 15. Do not create a new supporting or link entity when refreshed app context already exposes a schema in the target package with the same business purpose and the same relation pair; reuse the existing schema instead.
 16. A business caption is not authority to mint a new technical schema code. If refreshed runtime context already maps the caption or title to an existing schema code, use that code.
 17. Creating a synonym supporting or link schema in the same package is a blocker-level planning error, not a harmless fallback.
+18. `delete-schema` supports `remote: true` mode to delete by schema name directly from the environment without requiring a workspace.
 
 ## Planning Inputs
 

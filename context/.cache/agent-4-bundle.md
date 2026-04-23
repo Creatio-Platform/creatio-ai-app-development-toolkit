@@ -36,6 +36,7 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 - `scripts/check-approval-gate.sh <AppName>` passes
 - `scripts/check-implementation-plan-gate.sh <AppName>` passes
+- `output/<AppName>/requirements.md` passes `scripts/validate-requirements-doc.sh <AppName>` — reject stale or malformed requirements as a blocker
 - `output/<AppName>/.creatio-env.json` exists and is valid
 - when the current run has a request URL, `.creatio-env.json.url` matches it exactly
 - `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
@@ -138,6 +139,20 @@ The machine-readable page sync contract may also be materialized as `page-sync-p
 
 Resolve page inspection, fallback, and verification guidance through `docs://mcp/guides/existing-app-maintenance`.
 
+Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
+
+All FormPage field bindings must use `$PDS_<Column>` control format. `$UsrColumn` without the PDS prefix is invalid.
+
+When the plan requires standalone page creation (not through `create-app-section`):
+- Use `list-page-templates` → `create-page` → `get-page` verification
+- Resolve the full creation contract through `docs://mcp/guides/page-creation`
+
+For additive page edits that should not overwrite existing customizations, use `update-page` with `mode: "append"`.
+
+For targeted field additions without full body replacement, use `add-form-fields` or `add-list-columns`.
+
+Use `validate-page` for client-side validation before persisting page bodies.
+
 ## Evidence Rules
 
 Use `scripts/mcp_result_evidence.py` and the normalized result document as the source for:
@@ -160,6 +175,7 @@ If `create-app` returns a top-level `dataforge` block:
 - do not treat degraded coverage or warnings as a blocker when the app shell itself was created successfully
 
 Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
+Use `scripts/mcp_result_evidence.py` for all mutations to the result document. If the initial result must be persisted before MCP response, use `ensure_result_document()` with the MCP response payload — never a manually constructed JSON object.
 
 ## Steps
 
@@ -390,7 +406,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `sync-pages` or the fallback `update-page` path to register the localizableString.
+- `caption` — always `#ResourceString(<key>)#`; never a hardcoded plain string. For DataGrid columns bound to an entity column, use the **data-source-resolved** form `#ResourceString(PDS_<Column>)#` (e.g. `#ResourceString(PDS_UsrStatus)#`) — the platform pulls the caption from the entity column automatically, no `resources` param needed. This is a DIFFERENT case from custom non-field UI elements (tabs, buttons, standalone `crt.Label`), which use `#ResourceString(<itemName>_caption)#` and DO require a matching `resources` entry — see "Non-Field Element Captions" in `context/viewconfig-reference.md`.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -549,7 +565,7 @@ Use this pattern when the live page body already materializes a sibling sorting 
 - Do not reuse FormPage lookup `*_List` sorting examples as the recipe for ListPage DataGrid row sorting.
 - Do not assume sorting by a lookup column guarantees business lifecycle order.
 - Do not change `Items.modelConfig.path` or paging config unless the task explicitly requires a data-source change.
-- Do not put attribute keys such as `PDS_UsrDueDate_ab12cd3` into `columnName`; use the entity column name `UsrDueDate`.
+- Do not put attribute keys such as `PDS_UsrDueDate` into `columnName`; use the entity column name `UsrDueDate`.
 - Do not treat a manually added DataGrid `sorting` property as the primary source of truth when the collection metadata already defines sorting.
 
 #### Limitations
@@ -586,8 +602,8 @@ Binds page attributes to data source:
 		"path": ["attributes"],
 		"values": {
 			"Name": {"modelConfig": {"path": "PDS.Name"}},
-			"PDS_UsrStatus_ab12cd3": {"modelConfig": {"path": "PDS.UsrStatus"}},
-			"PDS_UsrDueDate_ab12cd3": {"modelConfig": {"path": "PDS.UsrDueDate"}}
+			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
+			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
 	}
 ]
@@ -718,7 +734,7 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 ```json
 {
 	"operation": "insert",
-	"name": "Input_ab12cd3",
+	"name": "PDS_UsrCode",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -727,8 +743,8 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
-		"control": "$PDS_UsrCode_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrCode",
+		"control": "$PDS_UsrCode",
 		"placeholder": "",
 		"tooltip": "",
 		"readonly": false,
@@ -752,20 +768,23 @@ Rules:
 - Keep `Name` as the header/title when it already exists and do not duplicate it.
 - Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
-- **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `sync-pages` `resources` param.
-  **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `sync-pages`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
-  **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`. A mismatched label key renders blank silently — no error is surfaced by the validator.
+- **Never hardcode a plain label string.** `"label": "Status"` is a bug — the field renders an English literal and will not localize. Only `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"` are valid.
+- **Label key MUST equal the attribute key from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus"` → `"label": "$Resources.Strings.PDS_UsrStatus"`. Mismatched key renders a blank "Title on page" with no validator error.
+- **Default pattern for new entity-field inserts:** attribute key `PDS_<Column>`, label `$Resources.Strings.PDS_<Column>`. No random suffix. Do not invent `_ab12cd3`-style tails for field attribute keys — binding happens in `viewModelConfigDiff.<key>.modelConfig.path`, not in the name.
+- **`sync-pages resources` param is mandatory for every new `$Resources.Strings.<key>`.** The platform does not auto-register page resource strings during `sync-pages`; the designer only registers them when the field is first opened in its right panel. Always pass `resources` as a flat JSON map alongside new field inserts: `{"PDS_UsrStatus": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
+- **Preserve existing live bindings.** If the live page already has `Name` bound as `control: "$Name"` with `label: "$Resources.Strings.Name"` (section-wizard output), keep it exactly. Only newly inserted fields follow the `PDS_<Column>` default above.
+- **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`.
 
 ### Runtime Lookup Special Case
 
 ```json
 {
 	"operation": "insert",
-	"name": "ComboBox_ab12cd3",
+	"name": "PDS_UsrStatus",
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 10, "rowSpan": 1},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrStatus",
 		"ariaLabel": "",
 		"isAddAllowed": true,
 		"showValueAsLink": true,
@@ -773,7 +792,7 @@ Rules:
 		"controlActions": [],
 		"listActions": [],
 		"tooltip": "",
-		"control": "$PDS_UsrStatus_ab12cd3"
+		"control": "$PDS_UsrStatus"
 	},
 	"parentName": "<primary-field-container>",
 	"propertyName": "items",
@@ -784,18 +803,18 @@ Rules:
 ```json
 {
 	"operation": "insert",
-	"name": "addRecord_ab12cd3",
+	"name": "addRecord_6jika7x",
 	"values": {
 		"code": "addRecord",
 		"type": "crt.ComboboxSearchTextAction",
 		"icon": "combobox-add-new",
-		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"caption": "#ResourceString(addRecord6jika7x_caption)#",
 		"clicked": {
 			"request": "crt.CreateRecordFromLookupRequest",
 			"params": {}
 		}
 	},
-	"parentName": "ComboBox_ab12cd3",
+	"parentName": "PDS_UsrStatus",
 	"propertyName": "listActions",
 	"index": 0
 }
@@ -904,9 +923,14 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. Th
 | Tool | Description |
 |------|-------------|
 | `list-pages` | Discover page schemas by package or name pattern |
-| `get-page` | Read a page schema's metadata and raw JS body |
+| `get-page` | Read a page schema's hierarchy-aware body (`body.js` — editable own-body of the replacing schema in the design package) and merged view (`bundle.json`). Writes files to `.clio-pages/{schema-name}/` |
 | `sync-pages` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
-| `update-page` | Fallback single-page dry-run or legacy save path |
+| `update-page` | Single-page save with `mode` (replace/append), `body-file`, `target-package-uid`, `target-schema-uid`, `skip-sampling`, `verify`, `optional-properties`. Append mode merges incoming body fragment with existing schema body. Fallback or targeted use only |
+| `create-page` | Create a new Freedom UI page schema from a template. Use `list-page-templates` to discover valid templates first |
+| `list-page-templates` | Discover valid Freedom UI page templates available on the target environment |
+| `validate-page` | Client-side page body validation (markers, JS syntax, JSON content, field bindings, column bindings) without saving to Creatio |
+| `add-form-fields` | Add form fields to an existing FormPage body — reads current body, inserts fields, and saves |
+| `add-list-columns` | Add columns to an existing ListPage body — reads current body, inserts columns into the DataTable, and saves |
 | `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -920,6 +944,28 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 5. call `sync-pages` with the edited page body and verify the saved page; keep `update-page` only as an explicit fallback
 ```
 
+### Page Creation Workflow
+
+When creating a new standalone Freedom UI page (not via `create-app-section`):
+```
+1. call `list-page-templates` to discover valid templates
+2. call `create-page` with the chosen template, target package, and optional entity binding
+3. call `get-page` to verify creation and retrieve the initial body
+4. edit the body and persist through `sync-pages` or `update-page`
+```
+
+Resolve the full page creation contract through `docs://mcp/guides/page-creation`.
+
+### Targeted Edits Without Full Body Replacement
+
+- `update-page` with `mode: "append"` merges incoming viewConfigDiff entries and handlers into the existing schema body — use for additive edits without clobbering existing customizations
+- `add-form-fields` inserts fields into an existing FormPage body directly
+- `add-list-columns` inserts columns into an existing ListPage DataTable directly
+- `validate-page` validates a page body client-side before saving
+
+Resolve detailed tool parameters through `get-tool-contract`.
+Resolve page modification patterns through `docs://mcp/guides/page-modification`.
+
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `get-page`.
 
 ---
@@ -932,7 +978,10 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow.
+Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow, though `update-page` with `mode: "append"` is available for additive edits that merge into existing customizations.
+
+For targeted field additions, `add-form-fields` and `add-list-columns` insert entries directly without full body replacement.
+Use `validate-page` to check page body correctness (markers, JS syntax, field bindings) before saving.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -951,15 +1000,16 @@ For ListPage DataGrid sorting, use the canonical contract in `context/ui-referen
 
 ## Element Naming Convention
 
-New elements use the pattern: `{Type}_{randomId}`
+Rules by element kind:
 
-- `Button_6jika7x`
-- `Input_a3bc9d2`
-- `GridContainer_3ucdpjq`
-- `FlexContainer_w2py4t8`
-- `ExpansionPanel_umrgng3`
+- **Entity-field inserts on FormPage (Input, ComboBox, DateTimePicker, NumberInput, Checkbox, ...)** — use `name = PDS_<Column>` and `control = "$PDS_<Column>"`. No random suffix. This mirrors what `create-app-section` and the live designer produce for entity-bound fields and keeps the attribute key aligned with the data-source column. The `Name` field is a live-page special case: preserve whatever binding the existing page already uses (`$Name` with `label: "$Resources.Strings.Name"` on section-wizard output) instead of rewriting it to `$PDS_Name`.
+- **Non-field generic elements (Button, GridContainer, FlexContainer, ExpansionPanel, Tab, custom widgets)** — use `{Type}_{randomId}` with a random 7-character alphanumeric suffix to guarantee uniqueness:
+  - `Button_6jika7x`
+  - `GridContainer_3ucdpjq`
+  - `FlexContainer_w2py4t8`
+  - `ExpansionPanel_umrgng3`
 
-Generate a random 7-character alphanumeric suffix for each new element.
+Do NOT invent a random `_ab12cd3`-style suffix for entity-field attribute keys. Attribute-to-column binding lives in `viewModelConfigDiff.<key>.modelConfig.path`, not in the attribute name itself, so a bare `PDS_<Column>` key is enough.
 
 ---
 
@@ -1076,12 +1126,34 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 
 ### Field Label Pattern Rule
 
-The `label` value depends on whether a custom "Title on page" is set:
+Hard invariants — violate any of these and the label renders blank or untranslatable:
 
-- **No custom title** — `label` = `$Resources.Strings.` + the attribute name from `control` (strip the leading `$`). Example: `control: "$PDS_UsrCode_ab12cd3"` → `label: "$Resources.Strings.PDS_UsrCode_ab12cd3"`.
-  **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` resolves from the page schema's registered resource strings. The platform does NOT auto-register entity column captions on sync — it does so only when the page is first opened in the designer. Therefore, when adding fields via `sync-pages`, you MUST also pass the resource values explicitly via the `resources` param as a flat JSON map string: `{"PDS_UsrCode_ab12cd3": "Code"}`. Without this, the label renders blank after sync (and appears only after the user opens the field in the right panel for the first time).
-  **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`. A mismatched label key renders blank silently — no error is surfaced by the validator.
-- **Custom title specified** — the designer overwrites `label` to `#ResourceString(key)#` and registers the key in page resource strings via `sync-pages` `resources` param. Key formula: `<itemName without dashes/dots>_label`. Example: item `crtInput_ab12cd3` → key `crtInputab12cd3_label`. Full config: `"label": "#ResourceString(crtInputab12cd3_label)#"` with `resources: {"crtInputab12cd3_label": "My Title"}`.
+1. **Never write a hardcoded plain string as a field `label`.** `"label": "Status"` is a bug. The only legal forms are `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"`.
+2. **Label key MUST equal the attribute key from `control`** (strip the leading `$`). Mismatched key → blank label, no validator error.
+3. **Every new `$Resources.Strings.<key>` MUST be registered via the `sync-pages` `resources` param** — the platform does not auto-register page resource strings during `sync-pages`; the designer only registers them when the field is first opened in its right panel.
+
+Patterns by "Title on page" state:
+
+- **No custom title (default for new entity-field inserts)** —
+  - `control`: `"$PDS_<Column>"`
+  - `label`: `"$Resources.Strings.PDS_<Column>"`
+  - `sync-pages resources` param: `{"PDS_<Column>": "<Entity column caption>"}`
+  - Example: `control: "$PDS_UsrCode"` → `label: "$Resources.Strings.PDS_UsrCode"` + `resources: {"PDS_UsrCode": "Code"}`.
+- **Custom title specified** — the designer overwrites `label` to `#ResourceString(<key>)#` and registers the key via `sync-pages resources`. Key formula: `<itemName with dashes/dots stripped, underscores kept>_label`. Example: item `Input_ab12cd3` → key `Input_ab12cd3_label`. Full config: `"label": "#ResourceString(Input_ab12cd3_label)#"` with `resources: {"Input_ab12cd3_label": "My Title"}`.
+- **Existing live bindings** — do not rewrite an already-working binding. If the live page was produced by `create-app-section` and `Name` is bound as `control: "$Name"` with `label: "$Resources.Strings.Name"`, keep it exactly. Only new fields follow the `PDS_<Column>` pattern above.
+
+### Non-Field Element Captions (Label, Button, Tab, custom widgets)
+
+Non-field generic elements (`crt.Label`, `crt.Button`, tabs, any standalone widget that is not bound to an entity column) use **`caption`** instead of `label`, and the only valid form is `#ResourceString(<key>)#`.
+
+- **Key formula:** `<itemName with dashes/dots stripped, underscores kept>_caption`. The designer produces this automatically when a user drops a new element onto the canvas.
+  - Example: standalone `crt.Label` named `Label_twddy0z` → `caption: "#ResourceString(Label_twddy0z_caption)#"`, plus `resources: {"Label_twddy0z_caption": "My text"}` passed to `sync-pages`.
+  - Example: `crt.Button` named `Button_6jika7x` → `caption: "#ResourceString(Button_6jika7x_caption)#"`, plus `resources: {"Button_6jika7x_caption": "Save"}`.
+- **Never use a bare `$Resources.Strings.<key>` for non-field elements' `caption`** — that form is for field `label` bindings and is resolved against a different resource namespace.
+- **Never hardcode a plain string in `caption`** for user-facing text. `caption: "Save"` is a bug — it will not localize.
+- **DataTable column captions** are a separate data-source-resolved case: `caption: "#ResourceString(PDS_<Column>)#"` pulls the caption directly from the entity column, no `resources` registration needed. See the DataTable Configuration section in `context/ui-reference.md`.
+
+**Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`.
 
 ### Generic Runtime Field Insert Example
 
@@ -1090,7 +1162,7 @@ The `label` value depends on whether a custom "Title on page" is set:
 ```json
 {
 	"operation": "insert",
-	"name": "Input_ab12cd3",
+	"name": "PDS_UsrCode",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -1099,8 +1171,8 @@ The `label` value depends on whether a custom "Title on page" is set:
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
-		"control": "$PDS_UsrCode_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrCode",
+		"control": "$PDS_UsrCode",
 		"placeholder": "",
 		"tooltip": "",
 		"readonly": false,
@@ -1118,7 +1190,7 @@ The `label` value depends on whether a custom "Title on page" is set:
 ```json
 {
 	"operation": "insert",
-	"name": "ComboBox_ab12cd3",
+	"name": "PDS_UsrStatus",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -1127,7 +1199,7 @@ The `label` value depends on whether a custom "Title on page" is set:
 			"rowSpan": 1
 		},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrStatus",
 		"ariaLabel": "",
 		"isAddAllowed": true,
 		"showValueAsLink": true,
@@ -1135,7 +1207,7 @@ The `label` value depends on whether a custom "Title on page" is set:
 		"controlActions": [],
 		"listActions": [],
 		"tooltip": "",
-		"control": "$PDS_UsrStatus_ab12cd3"
+		"control": "$PDS_UsrStatus"
 	},
 	"parentName": "<primary-field-container>",
 	"propertyName": "items",
@@ -1146,18 +1218,18 @@ The `label` value depends on whether a custom "Title on page" is set:
 ```json
 {
 	"operation": "insert",
-	"name": "addRecord_ab12cd3",
+	"name": "addRecord_6jika7x",
 	"values": {
 		"code": "addRecord",
 		"type": "crt.ComboboxSearchTextAction",
 		"icon": "combobox-add-new",
-		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"caption": "#ResourceString(addRecord6jika7x_caption)#",
 		"clicked": {
 			"request": "crt.CreateRecordFromLookupRequest",
 			"params": {}
 		}
 	},
-	"parentName": "ComboBox_ab12cd3",
+	"parentName": "PDS_UsrStatus",
 	"propertyName": "listActions",
 	"index": 0
 }
@@ -1170,7 +1242,7 @@ If you omit `listActions` and keep `isAddAllowed: true`, the frontend can genera
 ```json
 {
 	"operation": "insert",
-	"name": "ImageInput_ab12cd3",
+	"name": "PDS_UsrPhoto",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -1179,8 +1251,8 @@ If you omit `listActions` and keep `isAddAllowed: true`, the frontend can genera
 			"rowSpan": 1
 		},
 		"type": "crt.ImageInput",
-		"label": "$Resources.Strings.PDS_UsrPhoto_ab12cd3",
-		"value": "$PDS_UsrPhoto_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrPhoto",
+		"value": "$PDS_UsrPhoto",
 		"readonly": false,
 		"placeholder": "",
 		"labelPosition": "auto",
@@ -3408,6 +3480,14 @@ def validate_body_structure(body):
         except (PageBodyError, json.JSONDecodeError) as e:
             errors.append(f"Marker {marker}: invalid JSON — {e}")
 
+    label_check = validate_field_labels(body)
+    if not label_check["valid"]:
+        errors.extend(label_check["errors"])
+
+    binding_check = validate_bindings(body)
+    if not binding_check["valid"]:
+        errors.extend(binding_check["errors"])
+
     return {"valid": len(errors) == 0, "errors": errors}
 
 
@@ -3419,7 +3499,105 @@ FIELD_CONTROL_TYPES = {
 }
 
 
-def discover_form_container(view_config_diff):
+_RESOURCE_STRING_LABEL_RE = re.compile(r"^\$Resources\.Strings\.(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
+_RESOURCE_LITERAL_LABEL_RE = re.compile(r"^#ResourceString\((?P<key>[A-Za-z_][A-Za-z0-9_]*)\)#$")
+_CONTROL_BINDING_RE = re.compile(r"^\$(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def validate_field_labels(body):
+    """Validate FormPage field-insert label/control invariants.
+
+    Rules enforced:
+      1. Every field insert must provide a ``label`` using ``$Resources.Strings.<key>``
+         or ``#ResourceString(<key>)#``. Plain hardcoded strings are rejected.
+      2. When ``label`` is ``$Resources.Strings.<key>``, ``<key>`` must equal the
+         attribute key from ``control`` (strip the leading ``$``) or, for
+         ``crt.ImageInput``, from ``value``.
+    """
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        label = values.get("label")
+        if label is None:
+            errors.append(f"{name}: missing `label`")
+            continue
+        if not isinstance(label, str):
+            errors.append(f"{name}: `label` must be a string, got {type(label).__name__}")
+            continue
+        res_match = _RESOURCE_STRING_LABEL_RE.match(label)
+        literal_match = _RESOURCE_LITERAL_LABEL_RE.match(label)
+        if not (res_match or literal_match):
+            errors.append(
+                f"{name}: hardcoded label `{label}` — must be `$Resources.Strings.<key>` "
+                f"or `#ResourceString(<key>)#`"
+            )
+            continue
+        if res_match:
+            label_key = res_match.group("key")
+            binding = values.get("value") if ctrl_type == "crt.ImageInput" else values.get("control")
+            if not isinstance(binding, str):
+                errors.append(f"{name}: missing binding (`control` or `value`)")
+                continue
+            bind_match = _CONTROL_BINDING_RE.match(binding)
+            if not bind_match:
+                errors.append(f"{name}: binding `{binding}` is not a simple `$<key>` form")
+                continue
+            attr_key = bind_match.group("key")
+            if attr_key != label_key:
+                errors.append(
+                    f"{name}: label key `{label_key}` does not match attribute key "
+                    f"`{attr_key}` — label will render blank"
+                )
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+_PDS_BINDING_RE = re.compile(r"^\$PDS_[A-Za-z_][A-Za-z0-9_]*$")
+_BARE_USR_BINDING_RE = re.compile(r"^\$Usr[A-Za-z0-9_]*$")
+
+
+def validate_bindings(body):
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        binding_prop = "value" if ctrl_type == "crt.ImageInput" else "control"
+        binding = values.get(binding_prop)
+        if not isinstance(binding, str):
+            continue
+        if _BARE_USR_BINDING_RE.match(binding) and not _PDS_BINDING_RE.match(binding):
+            errors.append(
+                f"{name}: binding `{binding}` uses bare $Usr prefix — "
+                f"must use `$PDS_<Column>` format (e.g. `$PDS_{binding[1:]}`)"
+            )
+    return {"valid": len(errors) == 0, "errors": errors}
     counts = {}
     for item in view_config_diff:
         if not isinstance(item, dict):

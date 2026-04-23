@@ -20,9 +20,69 @@ Configure clio CLI and establish connection to the target Creatio runtime for th
 
 Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
 
+## Support-Mode Branch (Diagnostic-First)
+
+Apply this branch only when support mode is on:
+
+- Keep execution in the main thread/session; do not start delegated/background actions.
+- If no main-thread equivalent exists, allow one unavoidable support-mode exception record:
+  - `attempted_action`
+  - `no_main_thread_equivalent_reason`
+  - `main_thread_evidence_captured`
+- When an unavoidable non-main-thread action completes, surface its result in the main-thread support output before proceeding or stopping.
+- For any stage-critical failure in this agent's current active stage, create a canonical failure record immediately.
+- Allow at most one confirmation probe, and only with the same tool + same contract path.
+- In support mode, `clio_mcp_issue` remains the critical-by-default target defect category, while `environment_issue` and `orchestration_tool_failure` are non-critical by default in this stage and should use bounded recovery first.
+- For transient reachability errors (DNS resolution failures, connect timeouts, temporary host-unreachable), retry the same registration/healthcheck path up to 3 additional attempts with 15-second delays before fail-fast classification.
+- For critical `clio_mcp_issue` failures, do not switch to alternate workaround branches, fallback strategy changes, or different mutation paths.
+- For non-critical failures in this stage, bounded same-path recovery is allowed within retry budgets.
+- Escalate to fail-fast only when the failure remains unresolvable and blocks trustworthy CLIO MCP diagnosis/evidence.
+- After bounded recovery (and optional same-path confirmation probe where applicable), stop the stage and emit:
+  - `exit_decision=fail_fast`
+  - `blocked_stage=<current_active_stage_label>`
+  - `why_continue_is_unsafe=<reason>`
+
 ---
 
 ## Steps
+
+### 0. Execution preflight
+
+Before any `dotnet`, `clio`, Python, Node, or MCP-related command, validate the command executor through the same execution path that will be used for the real work.
+
+Preflight contract:
+
+- detect the current operating system and active command executor
+- determine the executor required by the next command syntax
+- run one trivial shell-health command through that exact executor path
+- continue only if shell-health succeeds
+
+Platform-specific rules:
+
+- if the next commands use Windows PowerShell syntax or require a PowerShell-backed executor, validate that executor first; a `cmd.exe`-only environment is not an acceptable substitute
+- if the next commands use Windows `cmd.exe` syntax, validate `cmd.exe` first
+- if the next commands use macOS or Linux POSIX shell syntax, validate the active POSIX shell first; use the current `environment_context.shell` when available unless a later step explicitly requires a different shell
+- if a later step requires a different executor than the current shell, validate that executor before the first dependent command
+
+Recommended shell-health checks:
+
+- Windows PowerShell-backed flow: `Get-Location` or `Write-Host ok`
+- Windows `cmd.exe` flow: `cd` or `echo ok`
+- macOS/Linux POSIX flow: `pwd` or `printf ok`
+
+Fail-fast rules:
+
+- if the shell-health command fails with executor-level errors such as `File not found`, `shell not found`, startup failure, or equivalent boot errors, stop immediately with a blocker
+- do not continue to `dotnet`, `clio`, Python, Node, or MCP bootstrap commands
+- do not retry the same stage in alternate syntax variants such as `New-Item`, `mkdir`, `cmd /c`, `python -c`, `node -e`, or alternate shell IDs before executor health is confirmed
+- do not diagnose path, permission, project-root, or directory-creation problems until the executor has been proven healthy
+
+User-facing blocker message:
+
+- state which executor was expected
+- state which executor was actually available or failing
+- state that implementation execution did not start because execution preflight failed
+- ask only for the minimum environment correction needed to continue
 
 ### 1. Verify prerequisites
 
@@ -53,20 +113,27 @@ Then wait for confirmation and retry.
 **Scenario 2 — clio installed globally (standard):**
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
+python3 scripts/mcp_client.py --check-clio-version
 ```
-Note the version and proceed. No additional configuration needed.
+The released version must be `8.0.2.50` or newer.
+If the check fails, stop immediately and ask the developer to upgrade:
+```bash
+dotnet tool update clio -g
+```
 
 **Scenario 3 — user provided a custom clio path:**
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
 dotnet /full/path/to/clio.dll ver
+python3 scripts/mcp_client.py --check-clio-version
 ```
 `scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
 
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
+py -3 .\scripts\mcp_client.py --check-clio-version
 py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
@@ -76,15 +143,36 @@ py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --time
 The `environmentName` must be a registered clio environment name from `clio list-environments`.
 Always register through `clio reg-web-app` if the environment does not exist.
 
+### Ambiguous Match Guardrail
+
+If `clio list-environments` returns multiple registered environments whose normalized URL matches the current request URL:
+
+1. Treat the environment choice as ambiguous.
+2. Ask the developer to choose the exact `environmentName`.
+3. Do not auto-select based on prior runs, `output/<AppName>/.creatio-env.json`, active-environment status, or an internal plan that mentions one of the matching aliases.
+4. Skip the question only when the current conversation explicitly names the environment key to use for the current URL.
+
+### Existing Output Guard
+
+If `output/<AppName>/.creatio-env.json` already exists:
+
+1. Read it only to detect staleness.
+2. Compare its `url` with the current request URL.
+3. If the URLs differ, do not reuse its `environment` value and do not trust any runtime artifacts under `output/<AppName>/`.
+4. Resolve the environment again from `clio list-environments` using the current request URL and overwrite `.creatio-env.json`.
+5. Reuse is allowed only when the existing `.creatio-env.json` points to the exact same URL as the current request.
+
 ### 2. List existing environments
 
 ```bash
 clio list-environments
 ```
 
-Display the list to the developer. Check if an environment for the target URL already exists.
+Display the list to the developer. Check if an environment for the current request URL already exists.
 
-- **If it exists** — use that environment name and skip to Step 5.
+- Ignore `output/<AppName>/.creatio-env.json` as the runtime source of truth for a new run.
+- **If exactly one environment for the current request URL exists** — use that environment name and skip to Step 5.
+- **If two or more environments for the current request URL exist** — stop and ask the developer which environment name to use. Do not guess.
 - **If it does not exist** — proceed to Step 3.
 
 ### 3. Register the environment
@@ -99,24 +187,17 @@ If the developer did **not** provide login and/or password — **ask for them**.
 
 The `<env_name>` should be a short, descriptive name derived from the URL (e.g., `dev-crm`, `prod-sales`).
 
-### 4. Detect IsNetCore
+### 4. Auto-detect runtime during registration
 
-Creatio instances can be .NET Core or .NET Framework. Detect this automatically:
+Creatio instances can be `.NET Core / NET8` or `.NET Framework`.
+Do not detect this in ADAC. Let `clio reg-web-app` resolve it and persist the correct `IsNetCore` value:
 
-1. **Try .NET Core first** (most common for modern Creatio):
-   ```bash
-   clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i true
-   clio healthcheck -e <env_name>
-   ```
-2. If healthcheck **succeeds** — use `isNetCore: true`.
-3. If healthcheck **fails** — fall back to .NET Framework:
-   ```bash
-   clio reg-web-app <env_name> -u <url> -l <login> -p <password> -i false
-   clio healthcheck -e <env_name>
-   ```
-4. Save the detected `isNetCore` value (`true` or `false`) for the env file.
+```bash
+clio reg-web-app <env_name> -u <url> -l <login> -p <password>
+```
 
-**Critical:** Getting `isNetCore` wrong causes get-page/update-page MCP tools to fail with 404 or HTML responses. When in doubt, try **both** settings and use the one where healthcheck passes.
+If `clio reg-web-app` cannot determine the runtime automatically, treat that as a blocker and stop before app creation.
+Do not retry the same registration with speculative `-i true` / `-i false` toggles unless the developer explicitly asks for a manual override.
 
 ### 5. Verify the connection
 
@@ -127,9 +208,37 @@ clio healthcheck -e <env_name>
 - **Success** — proceed to Step 6.
 - **Failure** — see Error Handling below.
 
-### 6. Save environment configuration
+### 6. Verify cliogate presence and version
 
-Create the file `output/<AppName>/.creatio-env.json`:
+Immediately after a successful health check, perform a fast `cliogate` verification before deciding whether installation is needed.
+
+Start with a package presence/version check:
+
+```bash
+clio get-pkg-list -e <env_name> --Json true
+```
+
+Use the package list to confirm whether `cliogate` is already installed and whether its package version matches the version required by the current `clio` build.
+
+- **Present and current** — skip installation and proceed to Step 7.
+- **Missing or outdated** — run:
+
+```bash
+clio install-gate -e <env_name>
+```
+
+Why this timing matters:
+
+- the environment has already been registered and proven reachable
+- later stages may need live SysSettings reads or cliogate-backed MCP helpers for DataForge discovery and exact runtime inspection
+- checking first avoids a slow reinstall when `cliogate` is already usable on the target environment
+- installing only when needed keeps Agent 3 reuse/discovery work from depending on ad-hoc environment fixes while still minimizing setup overhead
+
+If the `cliogate` check fails, or if `clio install-gate` fails when remediation is required, stop the stage and treat that as an environment blocker. Do not continue to downstream planning or implementation with a partially prepared environment.
+
+### 7. Save environment configuration
+
+Create or overwrite the file `output/<AppName>/.creatio-env.json` from the current request URL and the environment resolved in this run:
 
 ```json
 {
@@ -140,6 +249,7 @@ Create the file `output/<AppName>/.creatio-env.json`:
 ```
 
 Replace `true` with `false` if .NET Framework was detected in Step 4.
+Read the resolved value from clio settings after registration. Do not infer it inside ADAC.
 
 If the user provided a custom clio path at startup, add `"mcpCommand": "<custom clio command>"` to `.creatio-env.json`.
 For the standard global install, omit `mcpCommand` and let the runtime resolve `clio` from PATH.
@@ -150,17 +260,30 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 |-------|--------|
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
+| `clio` version is older than `8.0.2.50` | Stop. Tell developer to upgrade clio: `dotnet tool update clio -g` |
+| Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
+| `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
+| `cliogate` presence/version check fails | Stop before downstream planning. Surface the clio error and ask the developer to fix the environment or package inspection issue. |
+| `clio install-gate` fails | Stop before downstream planning when `cliogate` is missing or outdated. Surface the clio error and ask the developer to fix the environment or installation issue. |
 | Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
+| Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
 
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
-✅ `output/<AppName>/.creatio-env.json` exists with correct `environment` and persisted runtime MCP details  
+✅ `cliogate` is verified as present and current on `<env_name>`, or `clio install-gate -e <env_name>` succeeds when remediation is required  
+✅ `output/<AppName>/.creatio-env.json` exists with the current request URL, the correct `environment`, and persisted runtime MCP details  
+✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  
 
 <!-- FILE: context/essentials.md (L230-277) -->
 
+clio new-pkg UsrMyPackage
+clio list-packages -e myenv
+clio pull-pkg MyPackage -e myenv
+clio delete-pkg-remote MyPackage -e myenv
+clio validation-pkg ./MyPackage
 ```
 
 ### Development Tools
@@ -176,12 +299,13 @@ clio set-syssetting MySetting "Value" -e myenv
 ## Local MCP Workflow
 
 ```text
-MCP create-app or get-app-info -> initialize canonical context -> optional sync-schemas or fallback entity tools -> get-app-info refresh -> optional get-entity-schema-properties or create-data-binding-db -> schemas immediately usable
+MCP result -> normalize into repo-local context -> run approved helper orchestration -> persist evidence and reports
 ```
 
 Local rule:
 - Keep the result file flat and source-backed
-- The normalized runtime document starts from the MCP response and adds local helper state such as `contractType`, `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- The normalized runtime document starts from the MCP response and adds local helper state such as `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
+- Normalization is canonicalization plus strict validation; invalid local helper state must fail before persistence
 
 ---
 

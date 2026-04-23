@@ -15,6 +15,7 @@ from scripts.page_body_edit import (
     discover_form_container,
     find_max_row_index,
     replace_marker_content,
+    validate_bindings,
     validate_body_structure,
 )
 from scripts.page_body_tools import extract_attribute_paths, parse_marker_json
@@ -435,3 +436,26 @@ class TestLiveFixture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestValidateBindings(unittest.TestCase):
+    def test_accepts_pds_prefixed_bindings(self):
+        body = FORM_PAGE_BODY.replace('"control": "$Name"', '"control": "$PDS_UsrName"')
+        result = validate_bindings(body)
+        self.assertTrue(result["valid"], f"Unexpected errors: {result['errors']}")
+
+    def test_rejects_bare_usr_binding(self):
+        body = FORM_PAGE_BODY.replace('"control": "$Name"', '"control": "$UsrName"')
+        result = validate_bindings(body)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("$UsrName" in e for e in result["errors"]))
+
+    def test_accepts_non_usr_bare_binding(self):
+        result = validate_bindings(FORM_PAGE_BODY)
+        self.assertTrue(result["valid"], f"Unexpected errors: {result['errors']}")
+
+    def test_validate_body_structure_includes_binding_check(self):
+        body = FORM_PAGE_BODY.replace('"control": "$Name"', '"control": "$UsrStatus"')
+        result = validate_body_structure(body)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("$UsrStatus" in e for e in result["errors"]))

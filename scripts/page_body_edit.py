@@ -106,6 +106,10 @@ def validate_body_structure(body):
     if not label_check["valid"]:
         errors.extend(label_check["errors"])
 
+    binding_check = validate_bindings(body)
+    if not binding_check["valid"]:
+        errors.extend(binding_check["errors"])
+
     return {"valid": len(errors) == 0, "errors": errors}
 
 
@@ -181,6 +185,40 @@ def validate_field_labels(body):
                     f"{name}: label key `{label_key}` does not match attribute key "
                     f"`{attr_key}` — label will render blank"
                 )
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+_PDS_BINDING_RE = re.compile(r"^\$PDS_[A-Za-z_][A-Za-z0-9_]*$")
+_BARE_USR_BINDING_RE = re.compile(r"^\$Usr[A-Za-z0-9_]*$")
+
+
+def validate_bindings(body):
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        binding_prop = "value" if ctrl_type == "crt.ImageInput" else "control"
+        binding = values.get(binding_prop)
+        if not isinstance(binding, str):
+            continue
+        if _BARE_USR_BINDING_RE.match(binding) and not _PDS_BINDING_RE.match(binding):
+            errors.append(
+                f"{name}: binding `{binding}` uses bare $Usr prefix — "
+                f"must use `$PDS_<Column>` format (e.g. `$PDS_{binding[1:]}`)"
+            )
     return {"valid": len(errors) == 0, "errors": errors}
 
 

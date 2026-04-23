@@ -41,6 +41,8 @@ Fallback (if bundle unavailable or stale):
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
+When the plan includes standalone page creation (not through `create-app-section`), resolve the page creation flow through `docs://mcp/guides/page-creation`.
+
 ## Preconditions
 
 - Implementation or technical execution detail was explicitly requested.
