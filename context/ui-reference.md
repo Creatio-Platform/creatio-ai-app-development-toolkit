@@ -650,8 +650,6 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. Th
 | `create-page` | Create a new Freedom UI page schema from a template. Use `list-page-templates` to discover valid templates first |
 | `list-page-templates` | Discover valid Freedom UI page templates available on the target environment |
 | `validate-page` | Client-side page body validation (markers, JS syntax, JSON content, field bindings, column bindings) without saving to Creatio |
-| `add-form-fields` | Add form fields to an existing FormPage body — reads current body, inserts fields, and saves |
-| `add-list-columns` | Add columns to an existing ListPage body — reads current body, inserts columns into the DataTable, and saves |
 | `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -680,8 +678,7 @@ Resolve the full page creation contract through `docs://mcp/guides/page-creation
 ### Targeted Edits Without Full Body Replacement
 
 - `update-page` with `mode: "append"` merges incoming viewConfigDiff entries and handlers into the existing schema body — use for additive edits without clobbering existing customizations
-- `add-form-fields` inserts fields into an existing FormPage body directly
-- `add-list-columns` inserts columns into an existing ListPage DataTable directly
+- Add fields and list columns by editing the `body.js` returned by `get-page` directly
 - `validate-page` validates a page body client-side before saving
 
 Resolve detailed tool parameters through `get-tool-contract`.

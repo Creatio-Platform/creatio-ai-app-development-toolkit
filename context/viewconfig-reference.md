@@ -3,7 +3,7 @@
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
 Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow, though `update-page` with `mode: "append"` is available for additive edits that merge into existing customizations.
 
-For targeted field additions, `add-form-fields` and `add-list-columns` insert entries directly without full body replacement.
+For targeted field additions, edit the `body.js` returned by `get-page` directly without replacing unrelated marker sections.
 Use `validate-page` to check page body correctness (markers, JS syntax, field bindings) before saving.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
@@ -423,7 +423,7 @@ See `context/handlers-reference.md` for the full request type reference.
 
 ## Editing Safety Contract
 
-When editing page bodies for the runtime sync-pages flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
+When editing page bodies for the runtime sync-pages flow, always use marker-based section extraction and structured JSON modification. Use `scripts/page_body_tools.py` for marker-safe inspection and verification helpers.
 
 ### Correct: FormPage field insertion via parsed JSON
 

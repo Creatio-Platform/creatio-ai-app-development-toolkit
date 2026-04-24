@@ -45,8 +45,7 @@ This repo follows the clio-advertised canonical page flow above and keeps `updat
 ## Targeted Edits
 
 - `update-page` with `mode: "append"` merges incoming body into existing schema body — use for additive edits without clobbering existing customizations
-- `add-form-fields` adds fields to an existing FormPage body without full body replacement
-- `add-list-columns` adds columns to an existing ListPage DataTable without full body replacement
+- Add fields or list columns by editing the `body.js` returned by `get-page` directly; do not use shortcut field/column tools.
 - `validate-page` validates a page body client-side without saving — use before `sync-pages` or `update-page` for pre-save checks
 
 Resolve detailed tool parameters through `get-tool-contract`.
@@ -99,7 +98,7 @@ Preserve all marker pairs and the outer module structure.
 6. Replace only the marker content.
 7. Re-parse every modified section before saving.
 
-Use `scripts/page_body_edit.py` or `scripts/page_body_tools.py` for marker-safe manipulation.
+Use `scripts/page_body_tools.py` for marker-safe inspection and verification while editing page bodies directly.
 Do not splice raw strings into page bodies.
 
 ## FormPage Field Sync

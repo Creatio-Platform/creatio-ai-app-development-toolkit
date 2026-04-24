@@ -142,7 +142,7 @@ When the plan requires standalone page creation (not through `create-app-section
 
 For additive page edits that should not overwrite existing customizations, use `update-page` with `mode: "append"`.
 
-For targeted field additions without full body replacement, use `add-form-fields` or `add-list-columns`.
+For targeted field or column additions, edit the `body.js` returned by `get-page` directly and validate it before saving.
 
 Use `validate-page` for client-side validation before persisting page bodies.
 

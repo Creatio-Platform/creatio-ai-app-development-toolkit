@@ -9,13 +9,11 @@ try:
     from scripts.mcp_result_document import append_operation, attach_page_evidence, ensure_result_document
     from scripts.mcp_result_evidence import build_report_markdown
     from scripts.mcp_schema_sync import WorkflowError, load_mcp_client
-    from scripts.page_body_edit import add_form_fields, add_list_columns, validate_body_structure
     from scripts.page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 except ImportError:
     from mcp_result_document import append_operation, attach_page_evidence, ensure_result_document
     from mcp_result_evidence import build_report_markdown
     from mcp_schema_sync import WorkflowError, load_mcp_client
-    from page_body_edit import add_form_fields, add_list_columns, validate_body_structure
     from page_body_tools import build_page_update_arguments, verify_form_page_sync, verify_list_page_sync
 
 PAGE_SYNC_PLAN_START = "<!-- PAGE_SYNC_PLAN_JSON_START -->"
@@ -130,34 +128,6 @@ def normalize_resources(resources, schema_name):
     raise WorkflowError(f"Page {schema_name} resources must be a JSON object string or object")
 
 
-def normalize_edit_spec(items, field_name, page_name):
-    if items is None:
-        return None
-    if not isinstance(items, list) or not items:
-        raise WorkflowError(f"Page {page_name} requires non-empty {field_name} when provided")
-    for item in items:
-        if not isinstance(item, dict):
-            raise WorkflowError(f"Page {page_name} contains invalid {field_name} item")
-    return copy.deepcopy(items)
-
-
-def materialize_page_body(page_kind, schema_name, body, form_fields, list_columns):
-    updated_body = body
-    structured_edit_applied = False
-    if page_kind == "form" and form_fields:
-        updated_body = add_form_fields(updated_body, form_fields)
-        structured_edit_applied = True
-    if page_kind == "list" and list_columns:
-        updated_body = add_list_columns(updated_body, list_columns)
-        structured_edit_applied = True
-    if not structured_edit_applied:
-        return updated_body
-    validation = validate_body_structure(updated_body)
-    if not validation.get("valid"):
-        raise WorkflowError(f"Structured page edits produced invalid body for {schema_name}: {'; '.join(validation['errors'])}")
-    return updated_body
-
-
 def normalize_page_entry(page):
     if not isinstance(page, dict):
         raise WorkflowError("Page sync plan pages must be objects")
@@ -173,30 +143,23 @@ def normalize_page_entry(page):
         body = load_text(body_path)
     if not isinstance(body, str) or not body:
         raise WorkflowError(f"Page {schema_name} requires body text or bodyPath")
-    form_fields = normalize_edit_spec(page.get("formFields"), "formFields", schema_name)
-    list_columns = normalize_edit_spec(page.get("listColumns"), "listColumns", schema_name)
+    if page.get("formFields") is not None or page.get("listColumns") is not None:
+        raise WorkflowError(
+            f"Page {schema_name} must provide an already edited body or bodyPath; formFields/listColumns shortcuts are no longer supported")
     normalized = {
         "schemaName": schema_name,
         "kind": page_kind,
-        "body": materialize_page_body(page_kind, schema_name, body, form_fields, list_columns)
+        "body": body
     }
     resources = normalize_resources(page.get("resources"), schema_name)
     if resources is not None:
         normalized["resources"] = resources
-    if form_fields:
-        normalized["formFields"] = form_fields
-    if list_columns:
-        normalized["listColumns"] = list_columns
     if page_kind == "form":
         required_model_paths = page.get("requiredModelPaths")
-        if required_model_paths is None and form_fields:
-            required_model_paths = [field.get("path") for field in form_fields if isinstance(field.get("path"), str) and field.get("path")]
         if required_model_paths is not None:
             normalized["requiredModelPaths"] = normalize_string_list(required_model_paths, "requiredModelPaths", schema_name)
     if page_kind == "list":
         required_codes = page.get("requiredCodes")
-        if required_codes is None and list_columns:
-            required_codes = [column.get("code") for column in list_columns if isinstance(column.get("code"), str) and column.get("code")]
         if required_codes is not None:
             normalized["requiredCodes"] = normalize_string_list(required_codes, "requiredCodes", schema_name)
     return normalized
