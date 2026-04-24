@@ -512,10 +512,3 @@ Canonical repository references:
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
 Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
-
-Project-local shared skills:
-
-- `.agents/skills/analyze-adac-logs/` is the canonical skill for ADAC or Copilot session-log analysis in this repository.
-- When the task is session stats, timeline reconstruction, incident analysis, or CLIO-first remediation planning, open `.agents/skills/analyze-adac-logs/SKILL.md`.
-- Use `.agents/skills/analyze-adac-logs/scripts/analyze_session_log.py` before manual interpretation so counts and timeline extraction come from one deterministic baseline.
-- For this repository, prefer the repo-local skill copy over any home-directory compatibility copy.
