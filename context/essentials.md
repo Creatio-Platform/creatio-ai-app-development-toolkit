@@ -38,9 +38,9 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Create lookup entities before entities or updates that reference them
 
 **Schema Cleanup**
-- `delete-schema` removes any workspace schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
-- The schema must belong to one of the packages in the specified local workspace; `delete-schema` resolves ownership before deleting
-- This operation is destructive and cannot be undone; confirm the schema name and workspace path before calling it
+- `delete-schema` removes any schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
+- Two modes: workspace mode (default) requires the schema to belong to a workspace package; remote mode (`remote: true`) deletes by schema name directly from the environment without a workspace
+- This operation is destructive and cannot be undone; confirm the schema name before calling it
 
 **Default Semantics**
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
@@ -61,6 +61,27 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - UI is described via `viewConfigDiff`
 - Schema type is `"AngularSchema"`
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
+- `add-form-fields` and `add-list-columns` add fields or columns to an existing page body without replacing the whole body
+- `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
+- `validate-page` validates a page body client-side without saving to Creatio
+
+**Page Creation (DB-first)**
+- `list-page-templates` discovers valid Freedom UI page templates per environment
+- `create-page` creates a new page from a template, assigning it to a package and optionally binding an entity schema
+- After creation, use `get-page` to verify and retrieve the initial body for further editing
+- Resolve the full page creation workflow through `docs://mcp/guides/page-creation`
+
+**C# Source-Code Schemas**
+- `create-schema`, `get-schema`, `update-schema` manage C# source-code schemas directly on a remote Creatio environment
+- Use for server-side business logic classes without local workspace file generation
+
+**JS ClientUnit Schemas**
+- `create-client-unit-schema`, `get-client-unit-schema`, `update-client-unit-schema` manage JavaScript schemas on a remote environment
+- Use for utility/helper JS modules — not for Freedom UI pages (use `create-page` for those)
+
+**SQL Script Schemas**
+- `create-sql-schema`, `get-sql-schema`, `update-sql-schema` manage SQL script schemas on a remote environment
+- `install-sql-schema` executes a SQL script schema directly on the database — irreversible
 
 **Entity Model**
 - Entities extend a server-defined parent discovered through live contract metadata

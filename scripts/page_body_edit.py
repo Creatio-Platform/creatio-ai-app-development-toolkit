@@ -102,6 +102,14 @@ def validate_body_structure(body):
         except (PageBodyError, json.JSONDecodeError) as e:
             errors.append(f"Marker {marker}: invalid JSON — {e}")
 
+    label_check = validate_field_labels(body)
+    if not label_check["valid"]:
+        errors.extend(label_check["errors"])
+
+    binding_check = validate_bindings(body)
+    if not binding_check["valid"]:
+        errors.extend(binding_check["errors"])
+
     return {"valid": len(errors) == 0, "errors": errors}
 
 
@@ -111,6 +119,107 @@ FIELD_CONTROL_TYPES = {
     "crt.WebInput", "crt.ColorPicker", "crt.ImageInput", "crt.FileInput",
     "crt.EncryptedInput", "crt.Slider",
 }
+
+
+_RESOURCE_STRING_LABEL_RE = re.compile(r"^\$Resources\.Strings\.(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
+_RESOURCE_LITERAL_LABEL_RE = re.compile(r"^#ResourceString\((?P<key>[A-Za-z_][A-Za-z0-9_]*)\)#$")
+_CONTROL_BINDING_RE = re.compile(r"^\$(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def validate_field_labels(body):
+    """Validate FormPage field-insert label/control invariants.
+
+    Rules enforced:
+      1. Every field insert must provide a ``label`` using ``$Resources.Strings.<key>``
+         or ``#ResourceString(<key>)#``. Plain hardcoded strings are rejected.
+      2. When ``label`` is ``$Resources.Strings.<key>``, ``<key>`` must equal the
+         attribute key from ``control`` (strip the leading ``$``) or, for
+         ``crt.ImageInput``, from ``value``.
+    """
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        label = values.get("label")
+        if label is None:
+            errors.append(f"{name}: missing `label`")
+            continue
+        if not isinstance(label, str):
+            errors.append(f"{name}: `label` must be a string, got {type(label).__name__}")
+            continue
+        res_match = _RESOURCE_STRING_LABEL_RE.match(label)
+        literal_match = _RESOURCE_LITERAL_LABEL_RE.match(label)
+        if not (res_match or literal_match):
+            errors.append(
+                f"{name}: hardcoded label `{label}` — must be `$Resources.Strings.<key>` "
+                f"or `#ResourceString(<key>)#`"
+            )
+            continue
+        if res_match:
+            label_key = res_match.group("key")
+            binding = values.get("value") if ctrl_type == "crt.ImageInput" else values.get("control")
+            if not isinstance(binding, str):
+                errors.append(f"{name}: missing binding (`control` or `value`)")
+                continue
+            bind_match = _CONTROL_BINDING_RE.match(binding)
+            if not bind_match:
+                errors.append(f"{name}: binding `{binding}` is not a simple `$<key>` form")
+                continue
+            attr_key = bind_match.group("key")
+            if attr_key != label_key:
+                errors.append(
+                    f"{name}: label key `{label_key}` does not match attribute key "
+                    f"`{attr_key}` — label will render blank"
+                )
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+_PDS_BINDING_RE = re.compile(r"^\$PDS_[A-Za-z_][A-Za-z0-9_]*$")
+_BARE_USR_BINDING_RE = re.compile(r"^\$Usr[A-Za-z0-9_]*$")
+
+
+def validate_bindings(body):
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        binding_prop = "value" if ctrl_type == "crt.ImageInput" else "control"
+        binding = values.get(binding_prop)
+        if not isinstance(binding, str):
+            continue
+        if _BARE_USR_BINDING_RE.match(binding) and not _PDS_BINDING_RE.match(binding):
+            errors.append(
+                f"{name}: binding `{binding}` uses bare $Usr prefix — "
+                f"must use `$PDS_<Column>` format (e.g. `$PDS_{binding[1:]}`)"
+            )
+    return {"valid": len(errors) == 0, "errors": errors}
 
 
 def discover_form_container(view_config_diff):

@@ -494,7 +494,7 @@ Authority model:
 - Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `get-tool-contract`.
 - Repository docs must not define an independent MCP API contract.
 - Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
-- Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
+- Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`, `docs://mcp/guides/page-creation`, and `docs://mcp/guides/page-modification`.
 
 Canonical repository references:
 

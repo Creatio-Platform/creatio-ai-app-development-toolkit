@@ -48,6 +48,8 @@ Fallback (if bundle unavailable or stale):
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
+When the plan includes standalone page creation (not through `create-app-section`), resolve the page creation flow through `docs://mcp/guides/page-creation`.
+
 ## Preconditions
 
 - Implementation or technical execution detail was explicitly requested.
@@ -157,7 +159,34 @@ This override still applies even if Agent 2, the BA draft, or an earlier plan pr
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
 Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
 
+#### `mcp_client.py` invocation cheat-sheet
+
+All `dataforge-*` calls below are made through `scripts/mcp_client.py`.
+Use this exact invocation shape — do not invent argparse flags.
+
+```powershell
+# PowerShell — pipe JSON via stdin (preferred)
+'{"environment-name":"<env>"}' | py -3 scripts\mcp_client.py <tool-name> --args-stdin --timeout 60
+```
+
+```bash
+# bash — same pattern
+echo '{"environment-name":"<env>"}' | py -3 scripts/mcp_client.py <tool-name> --args-stdin --timeout 60
+```
+
+There is **no `--args-json` flag**. The only argument sources are:
+`<args-json>` (legacy positional, single JSON string), `--args-file <path>`, or `--args-stdin` with piped JSON.
+Resolve `<env>` from `output/<AppName>/.creatio-env.json`.
+
 Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
+
+`dataforge-status` itself requires `environment-name`. Example payload:
+
+```json
+{"environment-name": "<env from .creatio-env.json>"}
+```
+
+An empty body `{}` returns `invalid-request` ("Missing required connection parameters").
 
 - If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
 - If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
@@ -169,6 +198,9 @@ Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*`
 
 When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
 Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+
+This rule applies to **all** `validate-implementation-plan-doc` failures, not only the unavailable fast path.
+On a validator failure, fix the artifact based on the error string returned by the script. The canonical templates already live in this runbook (the `Model Decisions` section below) and in `context/model-discovery-evidence.md` — opening `scripts/workflow_cli.py` to reverse-engineer regexes is wasted work and forbidden.
 
 **Checks that are SKIPPED when DataForge is unavailable:**
 
@@ -248,7 +280,7 @@ Never treat "the BA draft already named a `Usr*` schema" as proof that the objec
 
 For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
 
-1. **Batched initial discovery — prefer a single `dataforge-context` call** that combines candidate-tables, lookups, and relations in one network round-trip:
+1. **Default initial discovery is a single `dataforge-context` call** that aggregates candidate tables, lookups, and relations in one round-trip. This is not a "prefer" — it is the required first call:
    ```
    dataforge-context({
      "environment-name": "<env>",
@@ -259,8 +291,11 @@ For the conditional discovery branch, use read-only tools only and resolve candi
    ```
    Use `candidate-terms` for entity candidates, `lookup-hints` for lookup candidates.
    Do **not** pass `schema-name` — that parameter does not exist on this tool.
-   Skip the separate `dataforge-find-tables` and `dataforge-find-lookups` calls when you pass both arrays above; `dataforge-context` already aggregates both results.
-   Fall back to `dataforge-find-tables` and `dataforge-find-lookups` individually only when you need to widen or narrow the search after reviewing the batched result.
+   Use `dataforge-find-tables` or `dataforge-find-lookups` individually **only as a widen-the-search fallback** after reviewing the batched result; never as the first call.
+
+   **Anti-pattern observed in past runs:** 2× `dataforge-find-tables` + 3× `dataforge-find-lookups` + 2× `dataforge-get-table-columns` instead of one `dataforge-context`. This multiplies network round-trips, surfaces inconsistent evidence, and burns several minutes on parameter-name retries (`term` vs `query`, `lookup-name` vs `schema-name`, empty-`query` rejections). Do not repeat it.
+
+   **DataForge call budget per business concept:** at most **3 active `dataforge-*` calls** during planning — one `dataforge-context`, one schema-level confirmation (`dataforge-get-table-columns` or `dataforge-get-relations`), and one optional `find-*` widen-the-search. Exceeding this budget is a signal to commit a `Model Decision` or escalate to the user, not to keep probing.
 
 2. When a strong candidate is found:
    - `application-get-info` for app-level context when the candidate belongs to an existing app
@@ -327,6 +362,16 @@ Use a reuse-first default after live discovery:
 DataForge discovery evidence confirmed through the Evidence Ladder is the binding source of truth for model decisions (see AGENTS.md – Discovery Authority Hierarchy). No other reasoning input — user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, or deployment concerns — may override a discovery-confirmed model decision.
 
 Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report — not a license to silently switch to `create`.
+
+#### Execution Feasibility Check
+
+After the Evidence Ladder locks a `chosen-action`, verify tool-path feasibility — sequentially, not interleaved with the model decision.
+
+1. Call `get-tool-contract` for the relevant tools. If the contract confirms a viable path, proceed to Schema Sync Plan.
+2. If not, make one probe call. If the probe succeeds, proceed.
+3. If both fail, escalate to the user: state the Evidence Ladder result, the tool-path constraint, and two concrete options.
+
+Cap: two tool calls total (contract + probe). Do not speculate about alternative sequences — check the contract first. Do not reopen the model decision; if `reuse` is locked but infeasible, the user decides the fallback. Apply AGENTS.md – Decision Convergence throughout.
 
 #### Required Model Decisions
 
@@ -473,6 +518,7 @@ This rule applies to entities and lookups alike. If discovery found a strong reu
 - Use `create-entity-schema` only for genuinely additional business objects.
 - Do not emit a schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`.
 - When a `Model Decisions` record resolves to `reuse`, the Schema Sync Plan must select the execution path that implements reuse (e.g. `create-app-section` with the existing entity, or existing-app flow). The choice of MCP tools adapts to the model decision — the model decision is not negotiable at execution-planning time.
+- When `chosen-action: reuse`, do not plan `create-entity`, `create-lookup`, or `update-entity` steps that duplicate the reused schema's fields into a new entity. The reused schema already exists and is ready — plan only wiring (section registration, page configuration). If the wiring tool fails (e.g., `InsertQuery failed` for a platform entity), do not fall back to creating a new entity with the same fields. Report the existing entity and its capabilities to the user and let them decide the next step.
 - Treat omission as non-deletion. For `update-entity-schema`, plan explicit operations only.
 - Resolve the preferred post-mutation refresh step through `get-tool-contract` and `docs://mcp/guides/app-modeling`.
 - Treat success as valid only when refreshed metadata is available and the schema is not left in `Database update required`.
@@ -493,6 +539,13 @@ FormPage defaults:
 - keep `Name` as header/title when present
 - include all approved required non-inherited business fields
 - fill in missing explicit requirements with deterministic defaults
+- when the entity uses a custom `UsrName` column as its primary display field (not the
+  inherited platform `Name`), pass it as `{"name": "UsrName", "path": "PDS.UsrName",
+  "type": "crt.Input"}` in `formFields`; the page-body script derives attr_key
+  `PDS_UsrName` automatically, producing consistent `control` and `label` bindings
+- include the title field in the form-page `resources` dict alongside all other
+  custom fields: `"PDS_UsrName": "<human-readable caption>"`; omitting it causes the
+  field to render without a label in the designer even when the page saves successfully
 
 ListPage defaults:
 
@@ -574,9 +627,9 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Create lookup entities before entities or updates that reference them
 
 **Schema Cleanup**
-- `delete-schema` removes any workspace schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
-- The schema must belong to one of the packages in the specified local workspace; `delete-schema` resolves ownership before deleting
-- This operation is destructive and cannot be undone; confirm the schema name and workspace path before calling it
+- `delete-schema` removes any schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
+- Two modes: workspace mode (default) requires the schema to belong to a workspace package; remote mode (`remote: true`) deletes by schema name directly from the environment without a workspace
+- This operation is destructive and cannot be undone; confirm the schema name before calling it
 
 **Default Semantics**
 - Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
@@ -597,6 +650,27 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - UI is described via `viewConfigDiff`
 - Schema type is `"AngularSchema"`
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
+- `add-form-fields` and `add-list-columns` add fields or columns to an existing page body without replacing the whole body
+- `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
+- `validate-page` validates a page body client-side without saving to Creatio
+
+**Page Creation (DB-first)**
+- `list-page-templates` discovers valid Freedom UI page templates per environment
+- `create-page` creates a new page from a template, assigning it to a package and optionally binding an entity schema
+- After creation, use `get-page` to verify and retrieve the initial body for further editing
+- Resolve the full page creation workflow through `docs://mcp/guides/page-creation`
+
+**C# Source-Code Schemas**
+- `create-schema`, `get-schema`, `update-schema` manage C# source-code schemas directly on a remote Creatio environment
+- Use for server-side business logic classes without local workspace file generation
+
+**JS ClientUnit Schemas**
+- `create-client-unit-schema`, `get-client-unit-schema`, `update-client-unit-schema` manage JavaScript schemas on a remote environment
+- Use for utility/helper JS modules — not for Freedom UI pages (use `create-page` for those)
+
+**SQL Script Schemas**
+- `create-sql-schema`, `get-sql-schema`, `update-sql-schema` manage SQL script schemas on a remote environment
+- `install-sql-schema` executes a SQL script schema directly on the database — irreversible
 
 **Entity Model**
 - Entities extend a server-defined parent discovered through live contract metadata
@@ -870,6 +944,31 @@ Page or client schemas commonly include:
 Use this guide when Agent 3 must decide whether to `reuse`, `extend`, or `create`.
 It is a policy reference for evidence quality, not an executable tool contract.
 
+## DataForge Tool Parameter Contract
+
+Use this table when invoking `dataforge-*` tools through `scripts/mcp_client.py`.
+Parameter names are exact — past sessions burned several minutes on `term` vs `query` and `lookup-name` vs `schema-name` retries.
+
+| Tool | Required params | Optional params | Notes |
+|------|-----------------|-----------------|-------|
+| `dataforge-status` | `environment-name` | — | Empty body `{}` returns `invalid-request`. Returns `status.status == "Ready"` when usable. |
+| `dataforge-context` | `environment-name`, `candidate-terms` (array) | `lookup-hints` (array), `requirement-summary` (string) | **Default first discovery call.** Do **not** pass `schema-name`. Response top-level keys: `similar-tables`, `similar-lookups`. May return 50–80 KB; parse with Python via `call_mcp_tool`, never PowerShell `ConvertFrom-Json`. |
+| `dataforge-find-tables` | `environment-name`, `query` (non-empty string) | — | `query` (not `term`, not `name`). Empty string is rejected. Response: `similar-tables[]`. Fallback only — use `dataforge-context` first. |
+| `dataforge-find-lookups` | `environment-name`, `query` (non-empty string) | `schema-name` (filter by lookup) | `schema-name` (not `lookup-name`). `query` is required and must be non-empty (use a single letter such as `"a"` if you only want to scope by `schema-name`). Response: `similar-lookups[]`. |
+| `dataforge-get-table-columns` | `environment-name`, `table-name` | — | Schema-level confirmation. Response: `columns[]` with `name`, `caption`. |
+| `dataforge-get-relations` | `environment-name`, `table-name` | — | Schema-level confirmation. Response: relation list. |
+
+### Anti-pattern: `find-lookups` is not a "list rows of a known lookup" tool
+
+`dataforge-find-lookups` searches **lookup display values across the catalog** for a query string.
+It is **not** the right tool to enumerate the rows of a single lookup whose schema name you already know:
+passing `{schema-name: "<UsrSomeLookup>", query: "a"}` returns matches against lookup *values* containing "a", not the full row set.
+
+To verify or list the rows of a known lookup, do one of:
+- include the lookup name in `lookup-hints` of the next `dataforge-context` call;
+- call `dataforge-get-table-columns` on the lookup table to confirm structure, then trust seeded values;
+- query the lookup rows directly via the schema-level tools after locking the Model Decision.
+
 ## DataForge Response Field Reference
 
 When iterating `dataforge-find-lookups` results, use the correct field names:
@@ -888,20 +987,6 @@ When iterating `dataforge-find-tables` / `dataforge-context` similar-tables:
 | `similar-tables[].caption` | Human-readable table caption |
 | `similar-tables[].description` | AI-generated semantic description |
 
-## Known Live Candidates — Support / Case Domain
-
-The following are confirmed live on standard Creatio environments with SLM/CrtCaseManagement installed.
-Use these as starting-point hints for `dataforge-context` candidate-terms when the request is case/support-related.
-
-| Business Concept | Confirmed Candidate | Status | Notes |
-|-----------------|---------------------|--------|-------|
-| Support case / Incident | `Case` (pkg: `CrtCaseManagmentObject`) | ⚠️ Conditional reuse | Has Subject, Status(→CaseStatus), Priority(→CasePriority), Category(→CaseCategory), Owner(→Contact), Notes, Solution. Primary display col is `Number` not `Name`. CaseStatus has "New"/"In progress"/"Closed" — if approved lifecycle requires "Completed"/"Canceled" as distinct states, this is a capability failure → `create`. |
-| Case priority | `CasePriority` | ✅ Reuse | Confirmed values: Critical, High, Medium, Low — matches standard priority requirements exactly. |
-| Case status | `CaseStatus` | ⚠️ Check values | Confirmed values: "New", "In progress", "Closed". Missing "Completed" and "Canceled" as distinct states. Platform-owned; cannot be extended safely. |
-| Case category | `CaseCategory` | ⚠️ Check values | Confirmed value: "Service request". Not suitable for custom taxonomy (Technical Issue / Billing / Account etc.). |
-| Knowledge/Solution article | `KnowledgeBase` (pkg: `CrtCoreBase`) | ⚠️ Conditional reuse | Has Name (required), Notes (MaxSizeText), Keywords. Required field `Type` (Lookup→KnowledgeBaseType) adds unavoidable inherited semantics — if article type is not in approved requirements, this is a capability failure → `create`. |
-| Person / Assigned agent | `Contact` | ✅ Reuse | Standard platform identity entity. Confirmed via Case.Owner column reference. No Usr prefix needed. |
-| Knowledge article ↔ Case link | `KnowledgeBaseInCase` | ✅ Available | Junction entity linking KnowledgeBase to Case. Useful if reusing both. |
 
 
 ## Strong Candidate Signals
@@ -1077,6 +1162,13 @@ Typical triggers:
 - unavoidable inherited behavior whose acceptability is a product decision
 - cross-team coupling risk that is real but not clearly unacceptable
 
+## Tool Feasibility vs Policy Deliberation
+
+- Tool feasibility does not change the Evidence Ladder's model decision. If the ladder confirmed `reuse`, the decision stays `reuse` regardless of tool limitations.
+- Do not speculate about tool behavior — call `get-tool-contract` or make a probe call. Max one reasoning block of uncertainty, then act.
+- Sequence: lock model decision → `get-tool-contract` → one probe if needed → escalate to user if infeasible. Total reasoning budget: one block.
+- Platform limitations (e.g., `InsertQuery failed`) are tool-path constraints, not evidence against the model decision. Report as execution blockers; let the user decide the fallback.
+
 ## DataForge Unavailable
 
 When `dataforge-availability: unavailable` is recorded (because `dataforge-status` was not Ready or threw), the active discovery branch is bypassed for the session. Use these templates directly instead of analyzing the validator.
@@ -1090,11 +1182,11 @@ Good `create` evidence when DataForge is unavailable:
 - `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
 - `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`
 
-Good `reuse` evidence when DataForge is unavailable (for known platform entities like Contact, KnowledgeBase):
+Good `reuse` evidence when DataForge is unavailable (for a known platform entity that the approved business model maps to):
 
-- `candidates-considered: Contact`
-- `candidate-fit-summary: standard platform identity entity with known person/communication semantics`
-- `required-capabilities: reusable person record for customer and agent reference`
+- `candidates-considered: <PlatformEntity>`
+- `candidate-fit-summary: standard platform entity with known semantics matching the approved business concept`
+- `required-capabilities: <from approved requirements>`
 - `mismatch-evidence: none — reuse accepted based on known platform semantics`
 - `discovery-evidence: dataforge-status returned unavailable; reuse based on known platform schema`
 - `rejected-candidates: none`

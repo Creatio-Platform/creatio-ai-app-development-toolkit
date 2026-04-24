@@ -11,6 +11,8 @@ from scripts.mcp_result_document import (
     append_operation,
     attach_page_evidence,
     ensure_result_document,
+    normalize_column,
+    normalize_columns,
     refresh_result_document,
     validate_result_document,
 )
@@ -109,6 +111,39 @@ class McpResultDocumentTests(unittest.TestCase):
         self.assertIn("UsrTodoList_FormPage", refreshed["pageEvidence"])
         entity_columns = refreshed["editableContext"]["packages"][0]["entities"][0]["columns"]
         self.assertEqual(entity_columns[1]["name"], "UsrStatus")
+
+
+class CoercionTests(unittest.TestCase):
+    def test_detect_runtime_shape_coerces_string_true_to_bool(self):
+        doc = build_runtime_result()
+        doc["success"] = "true"
+        result = ensure_result_document(doc)
+        self.assertIs(result["success"], True)
+
+    def test_detect_runtime_shape_coerces_string_false_to_bool(self):
+        doc = {
+            "success": "false",
+            "error": {"message": "test error", "code": "TEST"}
+        }
+        result = ensure_result_document(doc)
+        self.assertIs(result["success"], False)
+
+    def test_detect_runtime_shape_rejects_non_bool_string(self):
+        doc = build_runtime_result()
+        doc["success"] = "maybe"
+        with self.assertRaises(ContextError):
+            ensure_result_document(doc)
+
+    def test_normalize_column_handles_string(self):
+        result = normalize_column("UsrName")
+        self.assertEqual(result["name"], "UsrName")
+        self.assertEqual(result["caption"], "UsrName")
+
+    def test_normalize_columns_handles_string_array(self):
+        result = normalize_columns(["UsrName", "UsrStatus"])
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["name"], "UsrName")
+        self.assertEqual(result[1]["name"], "UsrStatus")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 - `scripts/check-approval-gate.sh <AppName>` passes
 - `scripts/check-implementation-plan-gate.sh <AppName>` passes
+- `output/<AppName>/requirements.md` passes `scripts/validate-requirements-doc.sh <AppName>` — reject stale or malformed requirements as a blocker
 - `output/<AppName>/.creatio-env.json` exists and is valid
 - when the current run has a request URL, `.creatio-env.json.url` matches it exactly
 - `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
@@ -95,6 +96,7 @@ Apply this branch only when support mode is on:
 - Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
 - When executing a `reuse` decision and the wiring step fails (e.g., `create-app-section` returns `InsertQuery failed`), do not create a substitute entity that duplicates the reused schema's fields. The reused entity already exists — report it as available with its capabilities and let the user decide whether to use it as-is or switch to a new entity with separate data storage.
+- When `create-app-section` returns `success: false` due to a metadata readback timeout (not `InsertQuery failed`) and `list-app-sections` confirms the section was actually created, proceed with the recovery path but first verify the auto-generated greenfield entity from `create-app`: call `get-entity-schema-properties` on the app entity (e.g., `UsrTaskManagementApp`); if it still inherits from `BaseEntity` with only the auto-generated `UsrName` column and the section's `entity-schema-name` is a different entity, delete the orphaned entity using `delete-schema` before proceeding to page sync; if `delete-schema` fails, log a warning with the entity name and failure reason and continue to page sync; record this cleanup attempt as a recovery action in the implementation evidence.
 - Treat `Model Decisions` as the authoritative final technical plan even when the BA draft or earlier planning text named different `Usr*` schemas or custom lookups.
 - Treat a planning-time strong candidate as already resolved in favor of `reuse` for the most similar candidate unless the plan contains a proven capability failure. Do not honor stale create bias from Agent 2, the BA draft, or an earlier plan.
 - Never "finish the reuse reasoning" during execution. If Agent 3 did not complete the Evidence Ladder, stop with a blocker instead of improvising discovery or inventing a new create path.
@@ -130,6 +132,20 @@ The machine-readable page sync contract may also be materialized as `page-sync-p
 
 Resolve page inspection, fallback, and verification guidance through `docs://mcp/guides/existing-app-maintenance`.
 
+Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
+
+All FormPage field bindings must use `$PDS_<Column>` control format. `$UsrColumn` without the PDS prefix is invalid.
+
+When the plan requires standalone page creation (not through `create-app-section`):
+- Use `list-page-templates` → `create-page` → `get-page` verification
+- Resolve the full creation contract through `docs://mcp/guides/page-creation`
+
+For additive page edits that should not overwrite existing customizations, use `update-page` with `mode: "append"`.
+
+For targeted field additions without full body replacement, use `add-form-fields` or `add-list-columns`.
+
+Use `validate-page` for client-side validation before persisting page bodies.
+
 ## Evidence Rules
 
 Use `scripts/mcp_result_evidence.py` and the normalized result document as the source for:
@@ -152,6 +168,7 @@ If `create-app` returns a top-level `dataforge` block:
 - do not treat degraded coverage or warnings as a blocker when the app shell itself was created successfully
 
 Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
+Use `scripts/mcp_result_evidence.py` for all mutations to the result document. If the initial result must be persisted before MCP response, use `ensure_result_document()` with the MCP response payload — never a manually constructed JSON object.
 
 ## Steps
 

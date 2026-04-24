@@ -108,7 +108,7 @@ Required sections:
 
 - `# <AppName> - Requirements`
 - `## 1. Business Outcome`
-- `## 2. Roles and Permitions`
+- `## 2. Roles and Permissions`
 - `## 3. Object Model`
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
@@ -135,6 +135,22 @@ Do not expose any of the following in `requirements.md`:
 
 Use tables only in `## 3. Object Model` unless the developer explicitly asks for a tabular business matrix elsewhere.
 Sections `1`, `2`, `4`, `5`, `6`, and `7` must use short paragraphs and bullets, not tables.
+
+## Pre-Write Self-Check
+
+Before writing `requirements.md`, verify the assembled draft against `REQUIRED_REQUIREMENTS_SECTIONS` from `scripts/workflow_cli.py`.
+All seven sections must be present in the draft, in the exact order:
+
+1. `## 1. Business Outcome`
+2. `## 2. Roles and Permissions`
+3. `## 3. Object Model`
+4. `## 4. Lifecycle and Statuses`
+5. `## 5. Business Logic`
+6. `## 6. UX Expectations`
+7. `## 7. Edge Cases and Exceptions`
+
+If any required section is absent, renamed, or out of order in the assembled draft, do not persist the file.
+Regenerate the missing section from conversation context or business discovery before writing.
 
 ## Hard Fail Conditions
 
@@ -165,7 +181,7 @@ Rules for the output:
 Use this exact visible skeleton for `requirements.md`:
 
 - `## 1. Business Outcome`
-- `## 2. Roles and Permitions`
+- `## 2. Roles and Permissions`
 - `## 3. Object Model`
   - `### 3.1 Main entity: <Business title>`
   - entity metadata block in this exact order:
@@ -193,7 +209,7 @@ Use this exact visible skeleton for `requirements.md`:
 - success signal or expected result
 - explicit assumptions that remain in scope
 
-`## 2. Roles and Permitions` must include:
+`## 2. Roles and Permissions` must include:
 
 - actors and responsibilities
 - access posture or ownership limits
@@ -298,7 +314,7 @@ If no such concept exists, persist `reuseCheckRequired: []`.
 `businessChecklist` must include these groups plus `complete=true`:
 
 - `businessOutcome`
-- `rolesAndPermitions`
+- `rolesAndPermissions`
 - `objectModel`
 - `lifecycleAndStatuses`
 - `businessLogic`
@@ -362,7 +378,7 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | # | Section | Required |
 |---|---------|----------|
 | 1 | Business Outcome | yes |
-| 2 | Roles and Permitions | yes |
+| 2 | Roles and Permissions | yes |
 | 3 | Object Model | yes |
 | 4 | Lifecycle and Statuses | yes |
 | 5 | Business Logic | yes |
@@ -376,7 +392,7 @@ A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body insi
 Section mapping rules:
 
 - `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
-- `Roles and Permitions` must include actors, responsibilities, personas, and access posture.
+- `Roles and Permissions` must include actors, responsibilities, personas, and access posture.
 - `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
 
 ---

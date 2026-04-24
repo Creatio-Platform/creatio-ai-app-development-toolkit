@@ -129,6 +129,22 @@ Do not expose any of the following in `requirements.md`:
 Use tables only in `## 3. Object Model` unless the developer explicitly asks for a tabular business matrix elsewhere.
 Sections `1`, `2`, `4`, `5`, `6`, and `7` must use short paragraphs and bullets, not tables.
 
+## Pre-Write Self-Check
+
+Before writing `requirements.md`, verify the assembled draft against `REQUIRED_REQUIREMENTS_SECTIONS` from `scripts/workflow_cli.py`.
+All seven sections must be present in the draft, in the exact order:
+
+1. `## 1. Business Outcome`
+2. `## 2. Roles and Permissions`
+3. `## 3. Object Model`
+4. `## 4. Lifecycle and Statuses`
+5. `## 5. Business Logic`
+6. `## 6. UX Expectations`
+7. `## 7. Edge Cases and Exceptions`
+
+If any required section is absent, renamed, or out of order in the assembled draft, do not persist the file.
+Regenerate the missing section from conversation context or business discovery before writing.
+
 ## Hard Fail Conditions
 
 Do not show the draft to the developer if any of the following is true:

@@ -41,6 +41,8 @@ Fallback (if bundle unavailable or stale):
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
+When the plan includes standalone page creation (not through `create-app-section`), resolve the page creation flow through `docs://mcp/guides/page-creation`.
+
 ## Preconditions
 
 - Implementation or technical execution detail was explicitly requested.
@@ -150,7 +152,34 @@ This override still applies even if Agent 2, the BA draft, or an earlier plan pr
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
 Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
 
+#### `mcp_client.py` invocation cheat-sheet
+
+All `dataforge-*` calls below are made through `scripts/mcp_client.py`.
+Use this exact invocation shape — do not invent argparse flags.
+
+```powershell
+# PowerShell — pipe JSON via stdin (preferred)
+'{"environment-name":"<env>"}' | py -3 scripts\mcp_client.py <tool-name> --args-stdin --timeout 60
+```
+
+```bash
+# bash — same pattern
+echo '{"environment-name":"<env>"}' | py -3 scripts/mcp_client.py <tool-name> --args-stdin --timeout 60
+```
+
+There is **no `--args-json` flag**. The only argument sources are:
+`<args-json>` (legacy positional, single JSON string), `--args-file <path>`, or `--args-stdin` with piped JSON.
+Resolve `<env>` from `output/<AppName>/.creatio-env.json`.
+
 Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
+
+`dataforge-status` itself requires `environment-name`. Example payload:
+
+```json
+{"environment-name": "<env from .creatio-env.json>"}
+```
+
+An empty body `{}` returns `invalid-request` ("Missing required connection parameters").
 
 - If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
 - If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
@@ -162,6 +191,9 @@ Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*`
 
 When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
 Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+
+This rule applies to **all** `validate-implementation-plan-doc` failures, not only the unavailable fast path.
+On a validator failure, fix the artifact based on the error string returned by the script. The canonical templates already live in this runbook (the `Model Decisions` section below) and in `context/model-discovery-evidence.md` — opening `scripts/workflow_cli.py` to reverse-engineer regexes is wasted work and forbidden.
 
 **Checks that are SKIPPED when DataForge is unavailable:**
 
@@ -241,7 +273,7 @@ Never treat "the BA draft already named a `Usr*` schema" as proof that the objec
 
 For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
 
-1. **Batched initial discovery — prefer a single `dataforge-context` call** that combines candidate-tables, lookups, and relations in one network round-trip:
+1. **Default initial discovery is a single `dataforge-context` call** that aggregates candidate tables, lookups, and relations in one round-trip. This is not a "prefer" — it is the required first call:
    ```
    dataforge-context({
      "environment-name": "<env>",
@@ -252,8 +284,11 @@ For the conditional discovery branch, use read-only tools only and resolve candi
    ```
    Use `candidate-terms` for entity candidates, `lookup-hints` for lookup candidates.
    Do **not** pass `schema-name` — that parameter does not exist on this tool.
-   Skip the separate `dataforge-find-tables` and `dataforge-find-lookups` calls when you pass both arrays above; `dataforge-context` already aggregates both results.
-   Fall back to `dataforge-find-tables` and `dataforge-find-lookups` individually only when you need to widen or narrow the search after reviewing the batched result.
+   Use `dataforge-find-tables` or `dataforge-find-lookups` individually **only as a widen-the-search fallback** after reviewing the batched result; never as the first call.
+
+   **Anti-pattern observed in past runs:** 2× `dataforge-find-tables` + 3× `dataforge-find-lookups` + 2× `dataforge-get-table-columns` instead of one `dataforge-context`. This multiplies network round-trips, surfaces inconsistent evidence, and burns several minutes on parameter-name retries (`term` vs `query`, `lookup-name` vs `schema-name`, empty-`query` rejections). Do not repeat it.
+
+   **DataForge call budget per business concept:** at most **3 active `dataforge-*` calls** during planning — one `dataforge-context`, one schema-level confirmation (`dataforge-get-table-columns` or `dataforge-get-relations`), and one optional `find-*` widen-the-search. Exceeding this budget is a signal to commit a `Model Decision` or escalate to the user, not to keep probing.
 
 2. When a strong candidate is found:
    - `application-get-info` for app-level context when the candidate belongs to an existing app

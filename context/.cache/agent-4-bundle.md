@@ -5,164 +5,153 @@ Do NOT edit manually — regenerate with `python3 scripts/build_context_bundle.p
 
 <!-- FILE: agents/04-implementation.md (full) -->
 
-# Agent 04 - Implementation
+# Agent 4 — Implementation
 
 ## Role
 
-Execute the approved MCP workflow synchronously, persist runtime evidence, synchronize required pages, and generate the final report and docs from persisted evidence.
-
-During app-generation execution, write only inside `output/<AppName>/`.
-
-## Input
-
-- `output/<AppName>/technical-annex.md` or `output/<AppName>/plan.md`
-- `output/<AppName>/workflow-state.json`
-- `output/<AppName>/.creatio-env.json`
-- `output/<AppName>/page-sync-plan.json` when page sync is required
-
-## Output
-
-- `output/<AppName>/mcp-application-result.json`
-- `output/<AppName>/mcp-application-report.md`
-- `output/<AppName>/docs/**`
+Execute the approved plan through `clio` MCP, persist runtime evidence, refresh the canonical app context, and report only what is materially implemented.
 
 ## Read First
 
 - `AGENTS.md`
-- `context/.cache/agent-4-bundle.md` when available and not internally inconsistent with currently loaded repository instructions
 - `context/essentials.md`
+- `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
-- `context/handlers-reference.md`
 - `context/data-bindings-reference.md`
-- `context/bindings-lookup.json`
 - `scripts/mcp_client.py`
-- `scripts/mcp_full_sync.py`
-- `scripts/page_body_tools.py`
-- `scripts/page_body_edit.py`
-- `scripts/mcp_result_evidence.py`
 
-## Contract Authority
+Resolve executable tool details through `get-tool-contract`.
+Use `context/mcp-application-tools-reference.md` only for local wrapper and normalization guidance.
 
-- `clio MCP` is the only authoritative source for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints.
-- Resolve executable contract metadata through `get-tool-contract`.
-- Repository runbooks define workflow policy, evidence requirements, and page-editing rules only.
+## MCP Transport
 
-## MCP Transport And Tooling
-
-- Prefer `scripts/mcp_client.py` for clio stdio transport; it handles MCP initialization internally.
-- `scripts/mcp_client.py` validates requests against `get-tool-contract` and normalizes nested tool failures.
-- Prefer `scripts/mcp_full_sync.py` when the plan batches schema and page synchronization in one process.
-- Respect `CLIO_CMD` when a custom clio binary is configured; otherwise use global `clio`.
-- Do not use raw curl for clio stdio transport.
-- Pass boolean MCP parameters as booleans, not strings.
+- Use `scripts/mcp_client.py`
+- Use `get-tool-contract` and `tools/list` before execution
+- Respect `CLIO_CMD` when a custom clio binary is configured
+- Do not use raw curl for clio stdio transport
+- Pass boolean MCP parameters as booleans, not strings
 
 ## Preconditions
 
-- `scripts/check-approval-gate.sh <AppName>` passes.
-- `output/<AppName>/.creatio-env.json` exists and is valid.
-- `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists.
-- Agent 4 runs in the foreground. Do not background it.
+- `scripts/check-approval-gate.sh <AppName>` passes
+- `scripts/check-implementation-plan-gate.sh <AppName>` passes
+- `output/<AppName>/requirements.md` passes `scripts/validate-requirements-doc.sh <AppName>` — reject stale or malformed requirements as a blocker
+- `output/<AppName>/.creatio-env.json` exists and is valid
+- when the current run has a request URL, `.creatio-env.json.url` matches it exactly
+- `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
+- Agent 4 runs in the foreground
+- `plan.md` includes explicit `Model Decisions` for every business object, supporting object, planned lookup, and non-obvious reference target that Agent 4 could otherwise reinterpret during execution
+- every schema creation or extension step in the plan is already justified by a matching `Model Decisions` record
+- when a `Model Decisions` record rejects a strong reuse candidate, the record already contains follow-up evidence (`dataforge-context`) and schema-level confirmation (`dataforge-get-table-columns`, `dataforge-get-relations`, `get-entity-schema-properties`, or `get-entity-schema-column-properties`)
+- if `chosen-action: create` was selected after discovery, the record already contains `candidate-fit-summary`, `required-capabilities`, and `mismatch-evidence`
+- `Model Decisions` have already resolved any technical rewrite away from BA placeholder schema names or custom lookup assumptions
+- no decision record remains at `tradeoff-escalation: user-confirmation-required`
 
-## Canonical Execution Order
+## Support-Mode Branch (Diagnostic-First)
+
+Apply this branch only when support mode is on:
+
+- Keep execution in the main thread/session; do not start delegated/background actions.
+- If no main-thread equivalent exists, allow one unavoidable support-mode exception record:
+  - `attempted_action`
+  - `no_main_thread_equivalent_reason`
+  - `main_thread_evidence_captured`
+- When an unavoidable non-main-thread action completes, surface its result in the main-thread support output before proceeding or stopping.
+- For any stage-critical failure in the current active stage, create a canonical failure record immediately.
+- Allow at most one confirmation probe, and only with the same tool + same contract path.
+- Severity routing in this stage:
+  - `clio_mcp_issue` is the primary critical-by-default target defect category and remains strict fail-fast after the optional single confirmation probe when blocking.
+  - `instruction_issue`, `environment_issue`, and `orchestration_tool_failure` are non-critical by default and should use bounded retry/workaround-first handling.
+  - `orchestration_tool_failure` may run one canonicalization pass before fail-fast, limited to call-shape normalization (argument format, wrapper invocation shape, serialization wrapper shape) on the same tool path.
+  - Canonicalization must not change the target tool, branch, business logic, or stage.
+  - Escalation rule: non-critical categories become fail-fast only when unresolvable and they prevent trustworthy CLIO MCP diagnosis/evidence.
+- For critical `clio_mcp_issue` failures, do not switch to alternate workaround branches, fallback strategy changes, or different mutation paths.
+- For non-critical failures, bounded same-path recovery is allowed within retry budgets.
+- After the optional confirmation probe, stop the blocked stage and emit:
+  - `exit_decision=fail_fast`
+  - `blocked_stage=<current_active_stage_label>`
+  - `why_continue_is_unsafe=<reason>`
+- In CLIO-focused support runs, attempt at least one real MCP tool invocation before concluding unless blocked by an unresolvable environment failure after bounded retries.
+- Page-sync classification rule in support mode:
+  - classify client-side validation issues caused by generated/edit strategy or known binding patterns as `instruction_issue`;
+  - classify as `clio_mcp_issue` only when sync-pages tool/backend behavior violates advertised contract semantics.
+
+## Execution Order
 
 1. Verify MCP reachability through `scripts/mcp_client.py`.
 2. Call `tools/list` and verify required tools exist.
 3. Resolve executable contract metadata through `get-tool-contract`.
-4. Resolve the execution branch:
-   - new app: `create-app`
-   - existing app: `list-apps -> get-app-info`
+4. Resolve the execution branch through the current `clio` contract and guidance resources.
 5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute ordered schema sync through `sync-schemas`.
-7. Refresh once through `get-app-info` and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, run `list-pages -> get-page -> sync-pages -> get-page`.
+6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
+7. Run the post-mutation refresh step required by the current `clio` guidance and overwrite `mcp-application-result.json`.
+8. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
 9. Persist page evidence and verification results.
 10. Validate the final normalized result.
 11. Build `mcp-application-report.md` from persisted evidence only.
 12. Sync and validate docs under `output/<AppName>/docs/`.
 
-Fallback execution paths:
-
-- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the approved plan explicitly requires an individual-tool fallback.
-- Use `update-page` only as an explicit fallback for single-page dry-run or legacy save workflows. It is not the canonical page write path.
-
 ## Branching Rules
 
-- If `create-app` reports that the app or configuration schema already exists, stop the create flow and switch to the documented existing-app discovery flow.
-- Surface which branch actually ran in the persisted evidence and final report.
-- Keep `create-app` scalar-only. Do not model localized captions there; apply them later through schema tools after the app shell exists.
+- If `create-app` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
+- Treat `create-app` as a DataForge-assisted create step; do not add an automatic standalone `dataforge-status` or `dataforge-context` preflight in the standard new-app branch.
+- Surface which branch actually ran in the persisted evidence and final report
 
 ## Schema Sync Rules
 
-- Treat the template-created section entity from `create-app` as the canonical main entity for a new app unless the plan explicitly defines multiple distinct business objects.
-- Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity.
-- Use `create-entity` only for additional business objects with distinct meaning.
-- Create lookup entities before entities that reference them.
-- Prefer inline lookup `seed-rows` in `sync-schemas`; use `create-data-binding-db` only when the workflow explicitly needs a separate binding artifact.
-- After `sync-schemas` completes successfully, call `get-app-info` once and overwrite `mcp-application-result.json`.
-- Treat schema mutations as successful only when refreshed metadata is available immediately and the schema is not left in `Database update required`.
-- If post-mutation refresh fails, stop with a blocker.
+- Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
+- Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
+- When executing a `reuse` decision and the wiring step fails (e.g., `create-app-section` returns `InsertQuery failed`), do not create a substitute entity that duplicates the reused schema's fields. The reused entity already exists — report it as available with its capabilities and let the user decide whether to use it as-is or switch to a new entity with separate data storage.
+- When `create-app-section` returns `success: false` due to a metadata readback timeout (not `InsertQuery failed`) and `list-app-sections` confirms the section was actually created, proceed with the recovery path but first verify the auto-generated greenfield entity from `create-app`: call `get-entity-schema-properties` on the app entity (e.g., `UsrTaskManagementApp`); if it still inherits from `BaseEntity` with only the auto-generated `UsrName` column and the section's `entity-schema-name` is a different entity, delete the orphaned entity using `delete-schema` before proceeding to page sync; if `delete-schema` fails, log a warning with the entity name and failure reason and continue to page sync; record this cleanup attempt as a recovery action in the implementation evidence.
+- Treat `Model Decisions` as the authoritative final technical plan even when the BA draft or earlier planning text named different `Usr*` schemas or custom lookups.
+- Treat a planning-time strong candidate as already resolved in favor of `reuse` for the most similar candidate unless the plan contains a proven capability failure. Do not honor stale create bias from Agent 2, the BA draft, or an earlier plan.
+- Never "finish the reuse reasoning" during execution. If Agent 3 did not complete the Evidence Ladder, stop with a blocker instead of improvising discovery or inventing a new create path.
+- do not reinterpret the absence of DataForge evidence as a blocker when the plan explicitly records `dataforge-availability: unavailable`.
+- If a requested schema step is not fully covered by `Model Decisions`, stop with a blocker instead of improvising a new entity or lookup.
+- If a requested schema step depends on rejecting a strong candidate but the plan lacks follow-up evidence or schema-level confirmation, stop with a blocker before any mutation.
+- If a requested schema step contradicts a final `reuse` or `extend` decision, stop with a blocker instead of honoring stale BA assumptions.
+- Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity
+- Use `create-entity-schema` only for additional business objects with distinct meaning
+- Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
+- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
+- Create lookup entities before entities that reference them
+- Prefer batched lookup seeding inside `sync-schemas`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
+- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a sync-schemas batch
+- Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
+- If post-mutation refresh fails, stop with a blocker
 
 ## Default Rules
 
-- A `schema default` must be implemented through the entity schema contract.
-- A `ui default` must be implemented through page logic such as `crt.CreateRecordRequest.defaultValues` or a handler.
-- Lookup seed rows alone do not satisfy a default requirement.
-- For lookup-backed schema defaults, use the seeded row GUID, not the caption.
+When the approved plan requires defaults, implement them explicitly.
+Seed data alone does not satisfy a default requirement.
+
+For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
+- Resolve the executable schema-side or page-side mechanism from the live contract and current page/runtime context; do not guess field-level request shape from repo docs
+- Either mechanism must be in the sync-pages plan and executed — never mark lookup defaults as `manualCheckPending`
 
 ## Page Sync Rules
 
 Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
 
 If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
+The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
 
-Canonical page sequence:
+Resolve page inspection, fallback, and verification guidance through `docs://mcp/guides/existing-app-maintenance`.
 
-1. `list-pages`
-2. `get-page`
-3. edit body
-4. `sync-pages`
-5. `get-page`
+Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
 
-Fallback page sequence:
+All FormPage field bindings must use `$PDS_<Column>` control format. `$UsrColumn` without the PDS prefix is invalid.
 
-1. `list-pages`
-2. `get-page`
-3. `update-page` with `dry-run: true`
-4. `update-page`
-5. `get-page`
+When the plan requires standalone page creation (not through `create-app-section`):
+- Use `list-page-templates` → `create-page` → `get-page` verification
+- Resolve the full creation contract through `docs://mcp/guides/page-creation`
 
-FormPage policy:
+For additive page edits that should not overwrite existing customizations, use `update-page` with `mode: "append"`.
 
-- Keep `Name` as the header when present.
-- Include all required non-inherited business fields.
-- Append only missing fields to the live page body.
-- Preserve existing handlers, imports, and live bindings unless the plan explicitly changes them.
+For targeted field additions without full body replacement, use `add-form-fields` or `add-list-columns`.
 
-ListPage policy:
-
-- Include `Name`.
-- Include all required non-inherited business fields.
-- Keep optional defaults compact and within the planned cap.
-- Exclude inherited audit/system fields and long/rich/blob fields unless explicitly required.
-
-Sorting policy:
-
-- Use plain DataGrid sorting only for plain sortable-column requirements.
-- If the requirement is semantic business ordering without an explicit technical carrier, stop with a blocker instead of improvising.
-
-## Page Body Editing Policy
-
-Read the skill doc: `skills/page-schema-editing/SKILL.md`.
-
-- Always use `get-page` before editing. Never construct a page body from scratch.
-- Always use marker-based section extraction and structured JSON modification.
-- Use `scripts/page_body_edit.py` and `scripts/page_body_tools.py` for standard field and column edits.
-- Direct string manipulation of page bodies is prohibited.
-- Preserve all marker pairs, existing handlers, and live SDK alias style.
-- Add matching `SCHEMA_VIEW_MODEL_CONFIG_DIFF` attributes for every inserted field or column binding.
-- For datasource-bound lookup fields, add only the main bound attribute unless the live page already materializes extra lookup-list bindings.
-- Use `get-component-info` after `get-page` whenever `bundle.viewConfig` contains an unfamiliar `crt.*` component type.
+Use `validate-page` for client-side validation before persisting page bodies.
 
 ## Evidence Rules
 
@@ -173,58 +162,68 @@ Use `scripts/mcp_result_evidence.py` and the normalized result document as the s
 - `pageEvidence`
 - `acceptanceEvidence`
 
-Persist the compact context from MCP.
-Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
-
-Persist page/report evidence with explicit status buckets:
+Persist page and report evidence with explicit status buckets:
 
 - `implemented`
 - `machineChecked`
 - `manualCheckPending`
 
+If `create-app` returns a top-level `dataforge` block:
+
+- preserve it in `mcp-application-result.json`
+- report it as advisory execution diagnostics
+- do not treat degraded coverage or warnings as a blocker when the app shell itself was created successfully
+
+Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
+Use `scripts/mcp_result_evidence.py` for all mutations to the result document. If the initial result must be persisted before MCP response, use `ensure_result_document()` with the MCP response payload — never a manually constructed JSON object.
+
 ## Steps
 
-### 0. Check Gate R
+### 0. Check Gates
 
-- Run `scripts/check-approval-gate.sh <AppName>`.
-- If this fails, stop immediately.
+- Run `scripts/check-approval-gate.sh <AppName>`
+- Run `scripts/check-implementation-plan-gate.sh <AppName>`
+- If this fails, stop immediately
 
 ### 1. Parse `plan.md`
 
-- Extract the execution branch, resolved business defaults, ordered schema sync steps, and page sync requirements.
-- Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps.
+- Extract the execution branch, resolved business defaults, `Model Decisions`, ordered schema sync steps, and page sync requirements
+- Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
+- Stop with blocker if the plan contains ambiguous entity, lookup, or reference choices but does not define explicit `Model Decisions`
+- Stop with blocker if Ordered Schema Sync would create or extend a schema that is not already covered by `Model Decisions`
+- Stop with blocker if `chosen-action: create` appears for a plausible reuse candidate but the record is missing `candidate-fit-summary`, `required-capabilities`, `mismatch-evidence`, follow-up evidence, or schema-level confirmation
+- Stop with blocker if any decision record remains at `tradeoff-escalation: user-confirmation-required`
 
 ### 2. Verify MCP reachability
 
-- Read the environment from `.creatio-env.json`.
-- Call `tools/list` through `scripts/mcp_client.py`.
-- Resolve the executable contract through `get-tool-contract`.
-- Stop with blocker if required tools are missing or `get-tool-contract` fails.
+- Validate that `.creatio-env.json.url` matches the current request URL for this run
+- Only after that validation, read the environment from `.creatio-env.json`
+- If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
+- Call `tools/list` through `scripts/mcp_client.py`
+- Resolve the executable contract through `get-tool-contract`
+- Stop with blocker if required tools are missing or `get-tool-contract` fails
 
 ### 3. Initialize application context
 
-- New app flow: call `create-app`.
-- Existing app flow: call `list-apps`, then `get-app-info` with the resolved app identifier.
-- Persist the normalized result to `mcp-application-result.json`.
-- Stop with blocker if the normalized result does not contain persisted success evidence.
+- Use the current `clio`-owned application create or discovery flow for the selected branch.
+- For the standard new-app branch, call `create-app` directly and consume its returned `dataforge` diagnostics instead of issuing standalone `dataforge-*` calls first.
+- Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
+- Normalize it with `scripts/mcp_context_adapter.py normalize`
 
 ### 4. Execute schema sync
 
-- Execute the approved schema batch through `sync-schemas`.
-- If the plan contains an approved individual-tool fallback, execute it in the documented dependency order.
-- Refresh once through `get-app-info`.
-- Overwrite `mcp-application-result.json`.
-- Stop with blocker on the first failed schema step or refresh failure.
+- Prefer the current `clio`-owned schema path resolved from `get-tool-contract` and guidance resources.
+- Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
+- After each approved schema batch, run the current `clio`-owned refresh step, overwrite `mcp-application-result.json`, and normalize again
+- Stop with blocker if required fields or columns are still missing after verification
 
 ### 5. Execute page sync
 
-- Discover the generated pages with `list-pages`.
-- Read the current bodies with `get-page`.
-- Edit bodies through `scripts/page_body_edit.py` and the approved page sync plan.
-- Apply the canonical write path through `sync-pages`.
-- Read pages back through `get-page` for verification.
-- Persist page verification with explicit status buckets.
-- Stop with blocker if required fields or columns are still missing after verification.
+- Read the live page bodies through the current `clio`-owned inspection flow
+- Apply page-body edits with the local page-body helpers
+- Apply the preferred page write path resolved from `get-tool-contract` and the maintenance guide
+- Verify the saved body again via the current `clio`-owned read-back step
+- Persist verification results for both `FormPage` and `ListPage`
 
 ### 6. Validate final result
 
@@ -236,6 +235,7 @@ Validate the normalized result payload:
 - when `success=false`, failure evidence is present
 - schema refresh evidence exists after entity mutations
 - page evidence exists when page sync was required
+- server-advertised canonical selectors are respected when present
 
 ### 7. Write summary report
 
@@ -254,11 +254,15 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 
 ## Retry And Failure Policy
 
-- Retry transient MCP transport failures up to 3 times with a short delay.
-- If required tools are missing in `tools/list`, stop with blocker.
-- If `get-tool-contract` cannot provide executable metadata, stop with blocker.
-- If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence.
-- If the plan tries to create a second BaseEntity for the same primary record type as the template-created section entity, stop with blocker instead of executing it.
+- Retry transient MCP transport failures up to 3 times with a short delay
+- If required tools are missing in `tools/list`, stop with blocker
+- If `get-tool-contract` cannot provide executable metadata, stop with blocker
+- If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence
+- Use standalone `dataforge-status`, `dataforge-context`, `dataforge-initialize`, and `dataforge-update` only in explicit inspection or remediation branches, not as automatic retries for the standard create flow
+- If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it
+- In support mode, a stage-critical failure allows only one same-path confirmation probe before fail-fast when escalation conditions are met
+- In support mode, resolved or temporary `orchestration_tool_failure` / `instruction_issue` items are reported as `Non-target friction`, not `Confirmed failures`
+- If execution reveals a missing or contradictory `Model Decision` for an ambiguous model choice, stop with blocker instead of improvising a new reuse/create path
 
 ## Completion Criteria
 
@@ -268,8 +272,8 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
-- Final normalized result passed validation
-- Summary persisted to `mcp-application-report.md`
+- Result and report are derived from runtime evidence
+- When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`
 
 <!-- FILE: context/ui-reference.md (full) -->
 
@@ -331,6 +335,9 @@ Array of operations that modify the parent page template:
 | DataValueType | Control Type | Type String |
 |---------------|-------------|-------------|
 | ShortText, MediumText, LongText | Input | `crt.Input` |
+| PhoneNumber | PhoneInput | `crt.PhoneInput` |
+| Email | EmailInput | `crt.EmailInput` |
+| WebLink | WebInput | `crt.WebInput` |
 | MaxSizeText, RichText | RichTextEditor | `crt.RichTextEditor` |
 | Integer, Float, Money | NumberInput | `crt.NumberInput` |
 | Boolean | Checkbox | `crt.Checkbox` |
@@ -351,6 +358,7 @@ The frontend runtime adds a few important rules that are not obvious from raw pa
 - `crt.NumberInput` supports `format.decimalPrecision`; use it when the numeric column scale is known.
 - `crt.DateTimePicker` supports `pickerType`, `useSeconds`, `startView`, `mode`, and `timeInterval`. Match `pickerType` to the real field kind (`date`, `time`, or `datetime`).
 - `crt.PhoneInput`, `crt.EmailInput`, and `crt.WebInput` are backed by preprocessors that can promote a bound text input to a more specific control based on the underlying data value type.
+- Resolve schema-side field-type semantics through `get-tool-contract` and `docs://mcp/guides/app-modeling`; this file is only about page control behavior.
 - `crt.ComboBox` is also preprocessor-backed: it can auto-build lookup loading requests, pagination wiring, and lookup list attributes from the main binding.
 - `crt.ImageInput` is preprocessor-backed: the frontend can auto-add `bindTo`, `value | crt.ToImageLink`, `imageSelected`, and `imageClear`.
 - `crt.Toggle` exists in the frontend control enum, but the located implementation is mobile-specific. Do not use it as a default web FormPage field control without page-specific evidence.
@@ -398,7 +406,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `sync-pages` or the fallback `update-page` path to register the localizableString.
+- `caption` — always `#ResourceString(<key>)#`; never a hardcoded plain string. For DataGrid columns bound to an entity column, use the **data-source-resolved** form `#ResourceString(PDS_<Column>)#` (e.g. `#ResourceString(PDS_UsrStatus)#`) — the platform pulls the caption from the entity column automatically, no `resources` param needed. This is a DIFFERENT case from custom non-field UI elements (tabs, buttons, standalone `crt.Label`), which use `#ResourceString(<itemName>_caption)#` and DO require a matching `resources` entry — see "Non-Field Element Captions" in `context/viewconfig-reference.md`.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -557,7 +565,7 @@ Use this pattern when the live page body already materializes a sibling sorting 
 - Do not reuse FormPage lookup `*_List` sorting examples as the recipe for ListPage DataGrid row sorting.
 - Do not assume sorting by a lookup column guarantees business lifecycle order.
 - Do not change `Items.modelConfig.path` or paging config unless the task explicitly requires a data-source change.
-- Do not put attribute keys such as `PDS_UsrDueDate_ab12cd3` into `columnName`; use the entity column name `UsrDueDate`.
+- Do not put attribute keys such as `PDS_UsrDueDate` into `columnName`; use the entity column name `UsrDueDate`.
 - Do not treat a manually added DataGrid `sorting` property as the primary source of truth when the collection metadata already defines sorting.
 
 #### Limitations
@@ -594,8 +602,8 @@ Binds page attributes to data source:
 		"path": ["attributes"],
 		"values": {
 			"Name": {"modelConfig": {"path": "PDS.Name"}},
-			"PDS_UsrStatus_ab12cd3": {"modelConfig": {"path": "PDS.UsrStatus"}},
-			"PDS_UsrDueDate_ab12cd3": {"modelConfig": {"path": "PDS.UsrDueDate"}}
+			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
+			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
 	}
 ]
@@ -726,7 +734,7 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 ```json
 {
 	"operation": "insert",
-	"name": "Input_ab12cd3",
+	"name": "PDS_UsrCode",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -735,8 +743,8 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
-		"control": "$PDS_UsrCode_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrCode",
+		"control": "$PDS_UsrCode",
 		"placeholder": "",
 		"tooltip": "",
 		"readonly": false,
@@ -760,17 +768,23 @@ Rules:
 - Keep `Name` as the header/title when it already exists and do not duplicate it.
 - Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
+- **Never hardcode a plain label string.** `"label": "Status"` is a bug — the field renders an English literal and will not localize. Only `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"` are valid.
+- **Label key MUST equal the attribute key from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus"` → `"label": "$Resources.Strings.PDS_UsrStatus"`. Mismatched key renders a blank "Title on page" with no validator error.
+- **Default pattern for new entity-field inserts:** attribute key `PDS_<Column>`, label `$Resources.Strings.PDS_<Column>`. No random suffix. Do not invent `_ab12cd3`-style tails for field attribute keys — binding happens in `viewModelConfigDiff.<key>.modelConfig.path`, not in the name.
+- **`sync-pages resources` param is mandatory for every new `$Resources.Strings.<key>`.** The platform does not auto-register page resource strings during `sync-pages`; the designer only registers them when the field is first opened in its right panel. Always pass `resources` as a flat JSON map alongside new field inserts: `{"PDS_UsrStatus": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
+- **Preserve existing live bindings.** If the live page already has `Name` bound as `control: "$Name"` with `label: "$Resources.Strings.Name"` (section-wizard output), keep it exactly. Only newly inserted fields follow the `PDS_<Column>` default above.
+- **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`.
 
 ### Runtime Lookup Special Case
 
 ```json
 {
 	"operation": "insert",
-	"name": "ComboBox_ab12cd3",
+	"name": "PDS_UsrStatus",
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 10, "rowSpan": 1},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrStatus",
 		"ariaLabel": "",
 		"isAddAllowed": true,
 		"showValueAsLink": true,
@@ -778,7 +792,7 @@ Rules:
 		"controlActions": [],
 		"listActions": [],
 		"tooltip": "",
-		"control": "$PDS_UsrStatus_ab12cd3"
+		"control": "$PDS_UsrStatus"
 	},
 	"parentName": "<primary-field-container>",
 	"propertyName": "items",
@@ -789,18 +803,18 @@ Rules:
 ```json
 {
 	"operation": "insert",
-	"name": "addRecord_ab12cd3",
+	"name": "addRecord_6jika7x",
 	"values": {
 		"code": "addRecord",
 		"type": "crt.ComboboxSearchTextAction",
 		"icon": "combobox-add-new",
-		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"caption": "#ResourceString(addRecord6jika7x_caption)#",
 		"clicked": {
 			"request": "crt.CreateRecordFromLookupRequest",
 			"params": {}
 		}
 	},
-	"parentName": "ComboBox_ab12cd3",
+	"parentName": "PDS_UsrStatus",
 	"propertyName": "listActions",
 	"index": 0
 }
@@ -820,10 +834,6 @@ The frontend also supports these field controls:
 | File input | `crt.FileInput` | Blob, File, Image, ImageLookup | Supports `accept`, `maxFileSize`, and upload/download/preview events. Use only when the scenario explicitly needs file upload UX. |
 | Encrypted input | `crt.EncryptedInput` | SecureText | Supports masking state and `toggleMaskValue`. Use for secure text, not as a generic text replacement. |
 | Slider | `crt.Slider` | Integer, Float, Money | Supports `minValue`, `maxValue`, `step`, `color`. Use only when the UX explicitly wants a range/slider control. |
-
-### Template Note
-
-`templates/pages/form-page/FormPage.js` is still useful for file generation, but its `GeneralInfoTab` example is not the source of truth for runtime sync-pages edits. When editing a live page, trust `get-page` and preserve the current container and binding pattern.
 
 ---
 
@@ -908,14 +918,19 @@ If the live page already contains `converters` or `validators`, preserve them an
 
 ## MCP Page Tools — Reading and Editing Pages
 
-Use these MCP tools to inspect and modify Freedom UI page schemas at runtime:
+Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. The executable tool semantics come from `get-tool-contract` plus `docs://mcp/guides/existing-app-maintenance`; this section keeps only the repo-local consumer workflow.
 
 | Tool | Description |
 |------|-------------|
 | `list-pages` | Discover page schemas by package or name pattern |
-| `get-page` | Read a page schema's metadata and raw JS body |
-| `sync-pages` | Canonical write path for edited page bodies, batch validation, and server-side verification |
-| `update-page` | Fallback single-page dry-run or legacy save path |
+| `get-page` | Read a page schema's hierarchy-aware body (`body.js` — editable own-body of the replacing schema in the design package) and merged view (`bundle.json`). Writes files to `.clio-pages/{schema-name}/` |
+| `sync-pages` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
+| `update-page` | Single-page save with `mode` (replace/append), `body-file`, `target-package-uid`, `target-schema-uid`, `skip-sampling`, `verify`, `optional-properties`. Append mode merges incoming body fragment with existing schema body. Fallback or targeted use only |
+| `create-page` | Create a new Freedom UI page schema from a template. Use `list-page-templates` to discover valid templates first |
+| `list-page-templates` | Discover valid Freedom UI page templates available on the target environment |
+| `validate-page` | Client-side page body validation (markers, JS syntax, JSON content, field bindings, column bindings) without saving to Creatio |
+| `add-form-fields` | Add form fields to an existing FormPage body — reads current body, inserts fields, and saves |
+| `add-list-columns` | Add columns to an existing ListPage body — reads current body, inserts columns into the DataTable, and saves |
 | `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -925,15 +940,36 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 1. call `list-pages` with `search-pattern: "MyApp"`
 2. call `get-page` with `schema-name: "UsrMyApp_FormPage"`
 3. Modify the body directly (update handlers + deps + viewConfigDiff in one pass)
-4. If the page contains unfamiliar `crt.*` components, inspect them with `get-component-info` and `component-type: "..."`
-5. call `sync-pages` with the edited page body and verify the saved page; use `update-page` only as an explicit fallback
+4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `get-component-info` and `component-type: "..."`
+5. call `sync-pages` with the edited page body and verify the saved page; keep `update-page` only as an explicit fallback
 ```
+
+### Page Creation Workflow
+
+When creating a new standalone Freedom UI page (not via `create-app-section`):
+```
+1. call `list-page-templates` to discover valid templates
+2. call `create-page` with the chosen template, target package, and optional entity binding
+3. call `get-page` to verify creation and retrieve the initial body
+4. edit the body and persist through `sync-pages` or `update-page`
+```
+
+Resolve the full page creation contract through `docs://mcp/guides/page-creation`.
+
+### Targeted Edits Without Full Body Replacement
+
+- `update-page` with `mode: "append"` merges incoming viewConfigDiff entries and handlers into the existing schema body — use for additive edits without clobbering existing customizations
+- `add-form-fields` inserts fields into an existing FormPage body directly
+- `add-list-columns` inserts columns into an existing ListPage DataTable directly
+- `validate-page` validates a page body client-side before saving
+
+Resolve detailed tool parameters through `get-tool-contract`.
+Resolve page modification patterns through `docs://mcp/guides/page-modification`.
 
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `get-page`.
 
 ---
 
-**📁 For complete page examples, see `templates/pages/`**
 **📁 For handler patterns and Creatio client APIs, see `context/handlers-reference.md`**
 **📁 For viewConfigDiff component reference (buttons, containers, properties), see `context/viewconfig-reference.md`**
 
@@ -942,7 +978,10 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 # viewConfigDiff Reference
 
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
-Used by coding agents with the runtime sync-pages flow. `update-page` is fallback-only.
+Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow, though `update-page` with `mode: "append"` is available for additive edits that merge into existing customizations.
+
+For targeted field additions, `add-form-fields` and `add-list-columns` insert entries directly without full body replacement.
+Use `validate-page` to check page body correctness (markers, JS syntax, field bindings) before saving.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
 
@@ -961,15 +1000,16 @@ For ListPage DataGrid sorting, use the canonical contract in `context/ui-referen
 
 ## Element Naming Convention
 
-New elements use the pattern: `{Type}_{randomId}`
+Rules by element kind:
 
-- `Button_6jika7x`
-- `Input_a3bc9d2`
-- `GridContainer_3ucdpjq`
-- `FlexContainer_w2py4t8`
-- `ExpansionPanel_umrgng3`
+- **Entity-field inserts on FormPage (Input, ComboBox, DateTimePicker, NumberInput, Checkbox, ...)** — use `name = PDS_<Column>` and `control = "$PDS_<Column>"`. No random suffix. This mirrors what `create-app-section` and the live designer produce for entity-bound fields and keeps the attribute key aligned with the data-source column. The `Name` field is a live-page special case: preserve whatever binding the existing page already uses (`$Name` with `label: "$Resources.Strings.Name"` on section-wizard output) instead of rewriting it to `$PDS_Name`.
+- **Non-field generic elements (Button, GridContainer, FlexContainer, ExpansionPanel, Tab, custom widgets)** — use `{Type}_{randomId}` with a random 7-character alphanumeric suffix to guarantee uniqueness:
+  - `Button_6jika7x`
+  - `GridContainer_3ucdpjq`
+  - `FlexContainer_w2py4t8`
+  - `ExpansionPanel_umrgng3`
 
-Generate a random 7-character alphanumeric suffix for each new element.
+Do NOT invent a random `_ab12cd3`-style suffix for entity-field attribute keys. Attribute-to-column binding lives in `viewModelConfigDiff.<key>.modelConfig.path`, not in the attribute name itself, so a bare `PDS_<Column>` key is enough.
 
 ---
 
@@ -984,11 +1024,18 @@ Use `get-page` to inspect the current page structure and identify available cont
 
 ### Deep Container Discovery
 
-`raw.body` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `get-page`.
+`body.js` (`viewConfigDiff`) contains only **child schema overrides** — it does NOT list parent template containers. To find the full set of available containers for any page type, use the `bundle.viewConfig` tree from `bundle.json` written by `get-page`.
 
-**Step 1 — Build a container map from `bundle.viewConfig`:**
+**Step 1 — Build a container map from `bundle.json`:**
 
 ```python
+import json
+
+r = call_mcp_tool('get-page', {'schema-name': '<PageName>', 'environment-name': '<env>'})
+bundle_file = r['data']['files']['bundleFile']
+with open(bundle_file) as f:
+    bundle = json.load(f)
+
 def map_containers(node, parent='(root)', depth=0):
     if isinstance(node, list):
         for item in node:
@@ -1007,8 +1054,7 @@ def map_containers(node, parent='(root)', depth=0):
         if isinstance(v, (list, dict)):
             map_containers(v, child_parent, depth + (1 if name and is_container else 0))
 
-r = call_mcp_tool('get-page', {'schema-name': '<PageName>', 'environment-name': '<env>'})
-map_containers(r['data']['bundle']['viewConfig'])
+map_containers(bundle['viewConfig'])
 ```
 
 This reveals the full inherited hierarchy: side areas, center areas, tab panels, tab containers, grid containers — regardless of page type.
@@ -1017,9 +1063,9 @@ This reveals the full inherited hierarchy: side areas, center areas, tab panels,
 
 Some page templates expose a minimal bundle tree. In that case, use these fallback heuristics:
 
-1. Collect all unique `parentName` values from `raw.body` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
+1. Collect all unique `parentName` values from `body.js` viewConfigDiff — these are confirmed existing containers even if `bundle.viewConfig` does not surface them.
 2. If any `parentName` ends with `TabContainer` (e.g., `AttachmentsTabContainer`, `FeedTabContainer`), those containers live inside tab items of a **`Tabs`** TabPanel. Use `parentName: "Tabs"` with `propertyName: "items"` to insert custom tabs.
-3. Use `get-component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
+3. Follow the clio guidance and use `get-component-info` with the discovered `crt.*` type to understand allowed children and nesting rules.
 
 **Step 3 — Choosing the right container for new elements:**
 
@@ -1078,6 +1124,37 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 | Color | `crt.ColorPicker` | `control` | `labelPosition: "auto"`, `pickerMode: "extended"` | Supports transparent color and custom `colors` palette. |
 | Image | `crt.ImageInput` | `value` | `readonly: false`, `placeholder: ""`, `labelPosition: "auto"`, `size: "large"`, `borderRadius: "medium"`, `positioning: "cover"` | `crt.ImageInput` binds through `value`, not `control`. The frontend can auto-add `bindTo`, `crt.ToImageLink`, `imageSelected`, and `imageClear`. |
 
+### Field Label Pattern Rule
+
+Hard invariants — violate any of these and the label renders blank or untranslatable:
+
+1. **Never write a hardcoded plain string as a field `label`.** `"label": "Status"` is a bug. The only legal forms are `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"`.
+2. **Label key MUST equal the attribute key from `control`** (strip the leading `$`). Mismatched key → blank label, no validator error.
+3. **Every new `$Resources.Strings.<key>` MUST be registered via the `sync-pages` `resources` param** — the platform does not auto-register page resource strings during `sync-pages`; the designer only registers them when the field is first opened in its right panel.
+
+Patterns by "Title on page" state:
+
+- **No custom title (default for new entity-field inserts)** —
+  - `control`: `"$PDS_<Column>"`
+  - `label`: `"$Resources.Strings.PDS_<Column>"`
+  - `sync-pages resources` param: `{"PDS_<Column>": "<Entity column caption>"}`
+  - Example: `control: "$PDS_UsrCode"` → `label: "$Resources.Strings.PDS_UsrCode"` + `resources: {"PDS_UsrCode": "Code"}`.
+- **Custom title specified** — the designer overwrites `label` to `#ResourceString(<key>)#` and registers the key via `sync-pages resources`. Key formula: `<itemName with dashes/dots stripped, underscores kept>_label`. Example: item `Input_ab12cd3` → key `Input_ab12cd3_label`. Full config: `"label": "#ResourceString(Input_ab12cd3_label)#"` with `resources: {"Input_ab12cd3_label": "My Title"}`.
+- **Existing live bindings** — do not rewrite an already-working binding. If the live page was produced by `create-app-section` and `Name` is bound as `control: "$Name"` with `label: "$Resources.Strings.Name"`, keep it exactly. Only new fields follow the `PDS_<Column>` pattern above.
+
+### Non-Field Element Captions (Label, Button, Tab, custom widgets)
+
+Non-field generic elements (`crt.Label`, `crt.Button`, tabs, any standalone widget that is not bound to an entity column) use **`caption`** instead of `label`, and the only valid form is `#ResourceString(<key>)#`.
+
+- **Key formula:** `<itemName with dashes/dots stripped, underscores kept>_caption`. The designer produces this automatically when a user drops a new element onto the canvas.
+  - Example: standalone `crt.Label` named `Label_twddy0z` → `caption: "#ResourceString(Label_twddy0z_caption)#"`, plus `resources: {"Label_twddy0z_caption": "My text"}` passed to `sync-pages`.
+  - Example: `crt.Button` named `Button_6jika7x` → `caption: "#ResourceString(Button_6jika7x_caption)#"`, plus `resources: {"Button_6jika7x_caption": "Save"}`.
+- **Never use a bare `$Resources.Strings.<key>` for non-field elements' `caption`** — that form is for field `label` bindings and is resolved against a different resource namespace.
+- **Never hardcode a plain string in `caption`** for user-facing text. `caption: "Save"` is a bug — it will not localize.
+- **DataTable column captions** are a separate data-source-resolved case: `caption: "#ResourceString(PDS_<Column>)#"` pulls the caption directly from the entity column, no `resources` registration needed. See the DataTable Configuration section in `context/ui-reference.md`.
+
+**Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`.
+
 ### Generic Runtime Field Insert Example
 
 > `parentName` below is a placeholder. Use the actual container discovered from the live page's `viewConfigDiff` (the container with the most field-type inserts).
@@ -1085,7 +1162,7 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 ```json
 {
 	"operation": "insert",
-	"name": "Input_ab12cd3",
+	"name": "PDS_UsrCode",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -1094,8 +1171,8 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
-		"control": "$PDS_UsrCode_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrCode",
+		"control": "$PDS_UsrCode",
 		"placeholder": "",
 		"tooltip": "",
 		"readonly": false,
@@ -1113,7 +1190,7 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 ```json
 {
 	"operation": "insert",
-	"name": "ComboBox_ab12cd3",
+	"name": "PDS_UsrStatus",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -1122,7 +1199,7 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 			"rowSpan": 1
 		},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrStatus",
 		"ariaLabel": "",
 		"isAddAllowed": true,
 		"showValueAsLink": true,
@@ -1130,7 +1207,7 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 		"controlActions": [],
 		"listActions": [],
 		"tooltip": "",
-		"control": "$PDS_UsrStatus_ab12cd3"
+		"control": "$PDS_UsrStatus"
 	},
 	"parentName": "<primary-field-container>",
 	"propertyName": "items",
@@ -1141,18 +1218,18 @@ If the live `bundle.viewConfig` contains an unfamiliar `crt.*` type around the t
 ```json
 {
 	"operation": "insert",
-	"name": "addRecord_ab12cd3",
+	"name": "addRecord_6jika7x",
 	"values": {
 		"code": "addRecord",
 		"type": "crt.ComboboxSearchTextAction",
 		"icon": "combobox-add-new",
-		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"caption": "#ResourceString(addRecord6jika7x_caption)#",
 		"clicked": {
 			"request": "crt.CreateRecordFromLookupRequest",
 			"params": {}
 		}
 	},
-	"parentName": "ComboBox_ab12cd3",
+	"parentName": "PDS_UsrStatus",
 	"propertyName": "listActions",
 	"index": 0
 }
@@ -1165,7 +1242,7 @@ If you omit `listActions` and keep `isAddAllowed: true`, the frontend can genera
 ```json
 {
 	"operation": "insert",
-	"name": "ImageInput_ab12cd3",
+	"name": "PDS_UsrPhoto",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -1174,8 +1251,8 @@ If you omit `listActions` and keep `isAddAllowed: true`, the frontend can genera
 			"rowSpan": 1
 		},
 		"type": "crt.ImageInput",
-		"label": "$Resources.Strings.PDS_UsrPhoto_ab12cd3",
-		"value": "$PDS_UsrPhoto_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrPhoto",
+		"value": "$PDS_UsrPhoto",
 		"readonly": false,
 		"placeholder": "",
 		"labelPosition": "auto",
@@ -1259,7 +1336,7 @@ When the user does not specify style/size, use these defaults:
 | Property | Type | Default | Valid Values |
 |----------|------|---------|--------------|
 | `type` | string | — | `"crt.Button"` (required) |
-| `caption` | string | `""` | Any string or `#ResourceString(...)#`. For custom elements, use `#ResourceString(UsrKey_caption)#` with `resources` param — clio auto-registers the localizableString. |
+| `caption` | string | `""` | Any string or `#ResourceString(...)#`. For custom elements, use `#ResourceString(UsrKey_caption)#` with `resources` param — clio auto-registers the localizableString. **Note: `caption` is for non-field elements (buttons, tabs, DataTable columns). Field controls (Input, ComboBox, DateTimePicker, etc.) use `label` instead — see Field Label Pattern Rule above.** |
 | `color` | string | `"default"` | `"primary"`, `"accent"`, `"warn"`, `"default"`, `"outline"` |
 | `size` | string | `"large"` | `"small"`, `"medium"`, `"large"`, `"extra-large"` |
 | `iconPosition` | string | `"only-text"` | `"only-text"`, `"left-icon"`, `"right-icon"`, `"only-icon"` |
@@ -1417,7 +1494,7 @@ Usr-prefixed keys without explicit values in `resources` are auto-derived from k
 }
 ```
 
-Save through the canonical `sync-pages` batch path and keep `update-page` only as a fallback save mechanism.
+Save through the clio-advertised canonical `sync-pages` batch path and keep `update-page` only as a fallback save mechanism.
 
 ---
 
@@ -1837,7 +1914,7 @@ These are advanced capabilities. Only surface them in generated page logic when 
 
 ## MCP Page Editing Workflow
 
-Use these MCP tools to read and edit handler logic in deployed pages:
+Use these MCP tools to read and edit handler logic in deployed pages. Resolve tool semantics through `get-tool-contract` plus `docs://mcp/guides/existing-app-maintenance`, then apply this repo-local workflow:
 
 1. `list-pages` — discover pages
 2. `get-page` — read metadata and raw JS body
@@ -2150,77 +2227,75 @@ Prefer these exports when generating custom frontend modules or controls:
 
 <!-- FILE: context/schema-reference.md (L7-29, L64-111) -->
 
-## Parent Entity Types (KNOWN_PARENTS)
+- localized title or description rules
+- lookup display-field behavior
+- default behavior
+- exact data type semantics
+- canonical create or update flows
 
-Every entity **must extend** one of these parents. Parent UId goes to `metadata.json` field `D8` and `descriptor.json` field `Parent.UId`.
-
-| Parent Name | UId | Use Case |
-|-------------|-----|----------|
-| **BaseEntity** | `1bab9dcf-17d5-49f8-9536-8e0064f1dce0` | Standard entity with Id, CreatedOn/By, ModifiedOn/By |
-| **BaseLookup** | `11ab4bcb-9b23-4b6d-9c86-520fae925d75` | Lookup/enum (adds Name + Description) |
-| **BaseCodeLookup** | `2681062b-df59-4e52-89ed-f9b7dc909ab2` | Lookup with Code column |
-| BaseTag | `9e3f203c-e905-4de5-9571-134f14b8c1e3` | Tag entity |
-| BaseFolder | `d602bf96-d029-4b07-9755-63c8f5cb5ed5` | Folder entity |
-| BaseFile | `556c5867-60a7-4456-aae1-a57a122bef70` | File attachment |
-| **BaseProcess** | `e20c0489-122a-4242-999d-c755bc51d76c` | Business process |
-
-### Page Template Parents
-
-| Parent Name | UId | Use Case |
-|-------------|-----|----------|
-| **ListPageV3Template** | `b7b898d0-8c77-4953-c097-23fa6800da02` | List page (section main page) |
-| **PageWithTabsFreedomTemplate** | `3b2e117f-8c6b-4ca5-80a2-7ebb497cddf9` | Form page with tabs |
-| **LightFormPage** | `ec5fd902-66ce-4139-a241-10ebd8addc40` | Light form (mini page) |
-| **MinimalCardTemplate** | `0f8eb896-7b62-4dfa-bd55-a414f50932a7` | Minimal card |
-
-## DataValueType → GUID Map (KNOWN_DVT)
-
-Use these GUIDs in entity metadata column definitions (field `S2`):
-
-| DataValueType | GUID | Notes |
-|---------------|------|-------|
-| **Guid** | `23018567-a13c-4320-8687-fd6f9e3699bd` | Primary keys, foreign keys |
-| **Lookup** | `b295071f-7ea9-4e62-8d1a-919bf3732ff2` | Reference to another entity |
-| **Boolean** | `90b65bf8-0ffc-4141-8779-2420877af907` | True/False |
-| **Integer** | `6b6b74e2-820d-490e-a017-2b73d4ccf2b0` | Whole numbers |
-| **Float** | `5cc8060d-6d10-4773-89fc-8c12d6f659a6` | Decimal numbers |
-| **Money** | `ff22e049-4d16-46ee-a529-92d8808932dc` | Currency values |
-| **DateTime** | `d21e9ef4-c064-4012-b286-fa1a8171da44` | Date + Time |
-| **Date** | `603d4960-a1a2-45e9-b232-206a54421b01` | Date only |
-| **Time** | `04cc757b-8f06-482c-8a1a-0c0e171d2410` | Time only |
-| **ShortText** | `ddb3a1ee-07e8-4d62-b7a9-d0e618b00fbd` | Up to 250 characters |
-| **MediumText** | `325a73b8-0f47-44a0-8412-7606f78003ac` | Up to 500 characters |
-| **LongText** | `c0f04627-4620-4bc0-84e5-9419dc8516b1` | Up to 1000+ characters |
-| **MaxSizeText** | `5ca35f10-a101-4c67-a96a-383da6afacfc` | Unlimited text |
-| **LargeText** | `79bccffa-8c8b-4863-b376-a69d2244182b` | Rich text/HTML |
-| **LocalizableString** | `8b3f29bb-ea14-4ce5-a5c5-293a929b6ba2` | Localizable |
-| **SecureText** | `3509b9dd-2c90-4540-b82e-8f6ae85d8248` | Encrypted |
-| **Image** | `fa6e6e49-b996-475e-a77e-73904e4c5a88` | Image (binary) |
-| **ImageLookup** | `b039feb0-ee7c-4884-8aa6-d6d45d84316f` | Image reference |
-| **Color** | `dafb71f9-ee9f-4e0b-a4d7-37aa15987155` | Color value |
-
-### DataValueType Numeric IDs
-
-Used in page `.js` files in DataTable column definitions:
-
-| DataValueType | Numeric ID |
-|---------------|------------|
-| Guid | 0 |
-| ShortText | 1 |
-| MediumText | 2 |
-| LongText | 3 |
-| Integer | 4 |
-| Float | 5 |
-| Money | 6 |
-| DateTime | 7 |
-| Date | 8 |
-| Time | 9 |
-| Lookup | 10 |
-| Boolean | 12 |
-| MaxSizeText | 13 |
+This repository must not redefine those rules.
 
 ---
 
+## What This File Covers
+
+- schema folder layout
+- descriptor and metadata file roles
+- generic diff-format reminders
+- local workflow hints for where structural artifacts usually live
+
+For live request payloads, aliases, validators, defaults, output shapes, and error shapes, read the current `clio` MCP contract instead of this file.
+
+---
+
+## Typical Schema Layout
+
+- `+` adds a node
+- `-` removes a node
+- `~` reorders nodes
+
+Use repository templates and existing package examples for file-shape familiarity only. Do not treat local examples as the normative MCP write contract.
+
+---
+
+## Properties Role
+
+`properties.json` stores schema-level flags and creation metadata such as:
+- creation version
+- availability flags
+- tracking flags
+- virtualization or editing flags
+
+These values are structural context, not a substitute for MCP contract discovery.
+
+---
+
+## Page Schema Notes
+
+Page or client schemas commonly include:
+- `descriptor.json`
+- `metadata.json`
+- `properties.json`
+- `<SchemaName>.js`
+
+The JavaScript body is typically an AMD module with sections such as:
+- `viewConfigDiff`
+- `viewModelConfigDiff`
+- `modelConfigDiff`
+- `handlers`
+- `converters`
+- `validators`
+
+For page editing mechanics, use `context/ui-reference.md`, `context/viewconfig-reference.md`, and the current page MCP contracts.
+
+---
+
+## Usage Rule
+
+Before planning or mutating schemas:
+1. Discover the live contract with `get-tool-contract`.
+2. Read `docs://mcp/guides/app-modeling`.
+3. Use this file only for structural orientation.
 
 <!-- FILE: scripts/mcp_client.py (full) -->
 
@@ -2229,9 +2304,12 @@ Used in page `.js` files in DataTable column definitions:
 Reusable stdio MCP client for clio.
 
 Usage:
+    python3 scripts/mcp_client.py --check-clio-version [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> <args-json> [timeout]
     python3 scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
     python3 scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
+    python3 scripts/mcp_client.py resources/list {} [timeout]
+    python3 scripts/mcp_client.py resources/read '{"uri":"docs://mcp/guides/app-modeling"}' [timeout]
 
 clio resolution (first match wins):
     1. CLIO_CMD env var — custom clio path provided by user at startup
@@ -2241,7 +2319,7 @@ clio resolution (first match wins):
 
 Notes:
     - clio MCP uses stdio transport (NOT HTTP/SSE)
-    - Tool names use dashes: create-app, create-lookup, update-page (NOT dots)
+    - Tool names use dashes: create-app, create-lookup, update-page, delete-app-section (NOT dots)
     - All parameters are wrapped in an "args" object
     - clio does not support notifications/initialized — it is omitted
     - NEVER pass -e flag to mcp-server — it is not supported
@@ -2262,10 +2340,11 @@ import sys
 import threading
 import time
 
-MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 37)
+MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 50)
 MIN_SUPPORTED_CLIO_VERSION_TEXT = ".".join(str(part) for part in MIN_SUPPORTED_CLIO_VERSION)
 _CLIO_VERSION_CACHE = {"key": None, "info": None}
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
+SCHEMA_SYNC_ALLOWED_OPERATION_TYPES = {"create-lookup", "create-entity", "update-entity"}
 
 def _resolve_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
@@ -2346,6 +2425,19 @@ def validate_clio_version(min_version=MIN_SUPPORTED_CLIO_VERSION, timeout=30):
 
 def ensure_supported_clio_version(timeout=30):
     return validate_clio_version(timeout=timeout)
+
+
+def check_clio_version(timeout=30):
+    info = validate_clio_version(timeout=timeout)
+    return {
+        "success": True,
+        "data": {
+            "version": info["version"],
+            "minimum-supported-version": MIN_SUPPORTED_CLIO_VERSION_TEXT,
+            "command": info["command"],
+        },
+        "raw": info["raw"],
+    }
 
 
 def _parse_rpc_result(message_id, collected, expect_tool_result):
@@ -2488,6 +2580,12 @@ class PersistentMcpClient:
     def list_tools(self, timeout=None):
         return self.call_method("tools/list", {}, timeout=timeout, expect_tool_result=False)
 
+    def list_resources(self, timeout=None):
+        return self.call_method("resources/list", {}, timeout=timeout, expect_tool_result=False)
+
+    def read_resource(self, uri, timeout=None):
+        return self.call_method("resources/read", {"uri": uri}, timeout=timeout, expect_tool_result=False)
+
     def call_tools_batch(self, calls):
         results = []
         for tool_name, arguments, timeout in calls:
@@ -2592,6 +2690,37 @@ def _get_tool_contract_index(timeout=120, force_refresh=False):
     return index
 
 
+def _merge_tool_contracts_into_cache(contracts: dict) -> dict:
+    cache_key = _current_clio_resolution_key()
+    cached_contracts = _TOOL_CONTRACT_CACHE["contracts"]
+    if _TOOL_CONTRACT_CACHE["key"] != cache_key or cached_contracts is None:
+        cached_contracts = {}
+    merged_contracts = dict(cached_contracts)
+    merged_contracts.update(contracts)
+    _TOOL_CONTRACT_CACHE["key"] = cache_key
+    _TOOL_CONTRACT_CACHE["contracts"] = merged_contracts
+    return merged_contracts
+
+
+def _load_explicit_tool_contract(tool_name: str, timeout=120):
+    client = _get_shared_client()
+    result = client.call_tool("get-tool-contract", {"tool-names": [tool_name]}, timeout=timeout)
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("get-tool-contract returned a non-object payload")
+    if data.get("success") is not True:
+        error = data.get("error")
+        if isinstance(error, dict) and error.get("code") == "tool-not-found":
+            return None
+        if isinstance(error, dict):
+            message = error.get("message") or json.dumps(error, ensure_ascii=True)
+        else:
+            message = json.dumps(data, ensure_ascii=True)
+        raise RuntimeError(message)
+    contracts = _normalize_tool_contract_index(data)
+    return _merge_tool_contracts_into_cache(contracts)
+
+
 def _find_property(contract_spec: dict, name: str) -> dict | None:
     input_schema = contract_spec.get("input-schema")
     if not isinstance(input_schema, dict):
@@ -2607,6 +2736,98 @@ def _find_property(contract_spec: dict, name: str) -> dict | None:
 
 def _value_is_missing(value) -> bool:
     return value is None or value == ""
+
+
+def _is_parameter_supplied(arguments: dict, name: str) -> bool:
+    return name in arguments and not _value_is_missing(arguments.get(name))
+
+
+def _collect_allowed_param_names(contract_spec: dict) -> set[str]:
+    input_schema = contract_spec.get("input-schema")
+    if not isinstance(input_schema, dict):
+        return set()
+    names = set()
+    for param in input_schema.get("required") or []:
+        if isinstance(param, str) and param:
+            names.add(param)
+    for group in input_schema.get("any-of") or []:
+        if not isinstance(group, list):
+            continue
+        for param in group:
+            if isinstance(param, str) and param:
+                names.add(param)
+    for prop in input_schema.get("properties") or []:
+        if isinstance(prop, dict):
+            name = prop.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+    for validator in input_schema.get("validators") or []:
+        if not isinstance(validator, dict):
+            continue
+        field = validator.get("field")
+        if isinstance(field, str) and field:
+            names.add(field)
+        for name in validator.get("fields") or []:
+            if isinstance(name, str) and name:
+                names.add(name)
+    for alias in contract_spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        canonical_name = alias.get("canonical-name")
+        if isinstance(canonical_name, str) and canonical_name:
+            names.add(canonical_name)
+    return names
+
+
+def _normalize_arguments_with_aliases(arguments: dict, contract_spec: dict) -> tuple[dict, list[str]]:
+    alias_index = {}
+    for alias in contract_spec.get("aliases") or []:
+        if not isinstance(alias, dict):
+            continue
+        if alias.get("scope") != "parameter":
+            continue
+        alias_name = alias.get("alias")
+        if isinstance(alias_name, str) and alias_name:
+            alias_index[alias_name] = alias
+    normalized = {}
+    errors = []
+    for key, value in arguments.items():
+        alias = alias_index.get(key)
+        if alias is None:
+            normalized[key] = value
+            continue
+        canonical_name = alias.get("canonical-name")
+        message = alias.get("message") or f"Use '{canonical_name}' instead of '{key}'."
+        if alias.get("status") == "rejected":
+            errors.append(f"Wrong parameter '{key}': {message}")
+            continue
+        if not isinstance(canonical_name, str) or not canonical_name:
+            errors.append(f"Wrong parameter '{key}': {message}")
+            continue
+        if canonical_name in normalized:
+            errors.append(f"Duplicate parameter '{canonical_name}' after alias normalization from '{key}'.")
+            continue
+        if canonical_name in arguments and canonical_name != key:
+            errors.append(f"Provide only '{canonical_name}', not both '{canonical_name}' and alias '{key}'.")
+            continue
+        normalized[canonical_name] = value
+    return normalized, errors
+
+
+def _validate_unknown_params(tool_name: str, arguments: dict, contract_spec: dict) -> list[str]:
+    allowed = _collect_allowed_param_names(contract_spec)
+    if not allowed:
+        return []
+    errors = []
+    for key in arguments:
+        if key in allowed:
+            continue
+        suggestions = difflib.get_close_matches(key, sorted(allowed), n=3, cutoff=0.45)
+        message = f"Unknown parameter '{key}' for tool '{tool_name}'."
+        if suggestions:
+            message += " Did you mean " + ", ".join(f"'{item}'" for item in suggestions) + "?"
+        errors.append(message)
+    return errors
 
 
 def _validate_field_type(field_name: str, expected_type: str, value) -> list[str]:
@@ -2625,132 +2846,74 @@ def _validate_field_type(field_name: str, expected_type: str, value) -> list[str
     return []
 
 
-def _validate_update_operations(operations, context_label) -> list[str]:
-    errors = []
+def _apply_validator(validator: dict, arguments: dict) -> list[str]:
+    name = validator.get("name")
+    fields = [field for field in validator.get("fields") or [] if isinstance(field, str) and field]
+    if name == "forbid-fields":
+        present = [field for field in fields if _is_parameter_supplied(arguments, field)]
+        if not present:
+            return []
+        message = "Parameters " + ", ".join(f"'{field}'" for field in present) + " are not allowed for this request."
+        context = validator.get("context")
+        if context:
+            message += f" {context}"
+        return [message]
+    if name == "mutually-exclusive-fields":
+        present = [field for field in fields if _is_parameter_supplied(arguments, field)]
+        if len(present) <= 1:
+            return []
+        context = validator.get("context")
+        if isinstance(context, str) and context:
+            return [context]
+        return ["Provide only one of " + ", ".join(f"'{field}'" for field in present) + "."]
+    return []
+
+
+def _validate_schema_sync_operations(arguments: dict) -> list[str]:
+    operations = arguments.get("operations")
     if not isinstance(operations, list):
-        return errors
+        return []
+    errors = []
     for index, operation in enumerate(operations):
+        prefix = f"operations[{index}]"
         if not isinstance(operation, dict):
+            errors.append(f"{prefix} must be an object.")
             continue
-        action = str(operation.get("action", "")).strip().lower()
-        if "title" in operation:
-            errors.append(f"{context_label}[{index}] must use 'title-localizations' instead of legacy scalar 'title'")
-        if "caption" in operation:
-            errors.append(f"{context_label}[{index}] must use 'title-localizations' instead of legacy scalar 'caption'")
-        if "description" in operation:
-            errors.append(f"{context_label}[{index}] must use 'description-localizations' instead of legacy scalar 'description'")
-        if action == "add":
-            errors.extend(_validate_localizations_map(
-                operation.get("title-localizations"),
-                "title-localizations",
-                f"{context_label}[{index}] action 'add'",
-                require_presence=True,
-            ))
-        if action == "remove":
-            if "title-localizations" in operation:
-                errors.append(f"{context_label}[{index}] action 'remove' must not include 'title-localizations'")
-            if "description-localizations" in operation:
-                errors.append(f"{context_label}[{index}] action 'remove' must not include 'description-localizations'")
-        else:
-            errors.extend(_validate_localizations_map(
-                operation.get("title-localizations"),
-                "title-localizations",
-                f"{context_label}[{index}] action '{action}'",
-            ))
-            errors.extend(_validate_localizations_map(
-                operation.get("description-localizations"),
-                "description-localizations",
-                f"{context_label}[{index}] action '{action}'",
-            ))
+        has_type = "type" in operation and not _value_is_missing(operation.get("type"))
+        has_legacy_operation = "operation" in operation and not _value_is_missing(operation.get("operation"))
+        if has_legacy_operation:
+            if has_type:
+                errors.append(f"{prefix}.operation is not supported. Use only {prefix}.type.")
+            else:
+                errors.append(
+                    f"{prefix}.type is required; received legacy field 'operation'. Use '{prefix}.type' instead."
+                )
+            continue
+        if not has_type:
+            errors.append(f"{prefix}.type is required.")
+            continue
+        operation_type = operation.get("type")
+        if not isinstance(operation_type, str):
+            errors.append(f"{prefix}.type must be a string, not {type(operation_type).__name__}.")
+            continue
+        if operation_type not in SCHEMA_SYNC_ALLOWED_OPERATION_TYPES:
+            allowed_values = ", ".join(sorted(SCHEMA_SYNC_ALLOWED_OPERATION_TYPES))
+            errors.append(f"{prefix}.type must be one of: {allowed_values}.")
     return errors
 
 
-def _apply_validator(validator: dict, arguments: dict) -> list[str]:
-    name = validator.get("name")
-    if name == "forbid-fields":
-        fields = validator.get("fields") or []
-        context = validator.get("context") or "Unsupported fields were provided."
-        return [f"Wrong parameter '{field}': {context}" for field in fields if field in arguments]
-    if name == "localizations-map":
-        return _validate_localizations_map(
-            arguments.get(validator.get("field")),
-            validator.get("field"),
-            validator.get("context") or "Parameter",
-            require_presence=bool(validator.get("required")),
-        )
-    if name == "update-operations-localizations":
-        return _validate_update_operations(arguments.get(validator.get("field")), validator.get("field") or "operations")
-    if name == "sync-schemas-operations-localizations":
-        errors = []
-        operations = arguments.get(validator.get("field"))
-        if not isinstance(operations, list):
-            return errors
-        for index, operation in enumerate(operations):
-            if not isinstance(operation, dict):
-                continue
-            operation_type = str(operation.get("type", "")).strip().lower()
-            if operation_type in {"create-lookup", "create-entity"}:
-                if "title" in operation:
-                    errors.append(f"operations[{index}] must use 'title-localizations' instead of legacy scalar 'title'")
-                if "caption" in operation:
-                    errors.append(f"operations[{index}] must use 'title-localizations' instead of legacy scalar 'caption'")
-                errors.extend(_validate_localizations_map(
-                    operation.get("title-localizations"),
-                    "title-localizations",
-                    f"operations[{index}] type '{operation_type}'",
-                    require_presence=True,
-                ))
-            if operation_type == "update-entity":
-                errors.extend(_validate_update_operations(
-                    operation.get("update-operations"),
-                    f"operations[{index}].update-operations",
-                ))
-        return errors
-    return []
-
-
-def _is_blank_text(value) -> bool:
-    return isinstance(value, str) and value.strip() == ""
-
-
-def _validate_localizations_map(value, field_name, context_label, require_presence=False) -> list[str]:
-    if value is None:
-        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"] if require_presence else []
-    if not isinstance(value, dict):
-        return [f"{context_label} requires '{field_name}' to be an object of culture -> value pairs"]
-    normalized = {}
-    for culture_name, culture_value in value.items():
-        if not isinstance(culture_name, str) or not culture_name.strip():
-            return [f"{context_label} requires '{field_name}' to use non-empty culture names"]
-        if not isinstance(culture_value, str) or not culture_value.strip():
-            return [f"{context_label} requires '{field_name}' to contain non-empty string values"]
-        normalized[culture_name.strip().lower()] = culture_value.strip()
-    if not normalized:
-        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"]
-    if not normalized.get("en-us"):
-        return [f"{context_label} requires '{field_name}' with a non-empty 'en-US' value"]
-    return []
-
-
-def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+def _normalize_and_validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> tuple[dict, list[str]]:
     contract_index = contract_index or {}
     spec = contract_index.get(tool_name)
     if not spec:
-        return []
+        return dict(arguments), []
     input_schema = spec.get("input-schema")
     if not isinstance(input_schema, dict):
-        return []
-    errors = []
-    for alias in spec.get("aliases") or []:
-        if not isinstance(alias, dict):
-            continue
-        if alias.get("scope") != "parameter" or alias.get("status") != "rejected":
-            continue
-        alias_name = alias.get("alias")
-        if isinstance(alias_name, str) and alias_name in arguments:
-            errors.append(f"Wrong parameter '{alias_name}': {alias.get('message')}")
+        return dict(arguments), []
+    normalized_arguments, errors = _normalize_arguments_with_aliases(arguments, spec)
+    errors.extend(_validate_unknown_params(tool_name, normalized_arguments, spec))
     for param in input_schema.get("required") or []:
-        if param not in arguments or _value_is_missing(arguments.get(param)):
+        if param not in normalized_arguments or _value_is_missing(normalized_arguments.get(param)):
             prop = _find_property(spec, param) or {}
             hint = prop.get("description") or ""
             message = f"Missing required parameter '{param}'"
@@ -2759,7 +2922,7 @@ def _validate_params(tool_name: str, arguments: dict, contract_index: dict | Non
             errors.append(message)
     any_of_groups = input_schema.get("any-of") or []
     if any_of_groups and not any(
-        all(param in arguments and not _value_is_missing(arguments.get(param)) for param in group)
+        all(param in normalized_arguments and not _value_is_missing(normalized_arguments.get(param)) for param in group)
         for group in any_of_groups
     ):
         group_descriptions = []
@@ -2773,13 +2936,19 @@ def _validate_params(tool_name: str, arguments: dict, contract_index: dict | Non
         if not isinstance(prop, dict):
             continue
         name = prop.get("name")
-        if not isinstance(name, str) or name not in arguments:
+        if not isinstance(name, str) or name not in normalized_arguments:
             continue
-        errors.extend(_validate_field_type(name, prop.get("type"), arguments.get(name)))
+        errors.extend(_validate_field_type(name, prop.get("type"), normalized_arguments.get(name)))
     for validator in input_schema.get("validators") or []:
         if isinstance(validator, dict):
-            errors.extend(_apply_validator(validator, arguments))
-    return errors
+            errors.extend(_apply_validator(validator, normalized_arguments))
+    if tool_name == "sync-schemas":
+        errors.extend(_validate_schema_sync_operations(normalized_arguments))
+    return normalized_arguments, errors
+
+
+def _validate_params(tool_name: str, arguments: dict, contract_index: dict | None = None) -> list[str]:
+    return _normalize_and_validate_params(tool_name, arguments, contract_index)[1]
 
 
 def _build_unknown_tool_result(tool_name: str, contract_index: dict) -> dict:
@@ -2850,16 +3019,27 @@ def call_mcp_tool(tool_name: str, arguments: dict, timeout: int = 120) -> dict:
             "raw": str(error),
         }
     if tool_name not in contract_index:
+        try:
+            explicit_contract_index = _load_explicit_tool_contract(tool_name, timeout=min(timeout, 60))
+        except Exception as error:
+            return {
+                "success": False,
+                "data": {"error": {"code": "tool-contract-unavailable", "message": str(error)}},
+                "raw": str(error),
+            }
+        if explicit_contract_index is not None:
+            contract_index = explicit_contract_index
+    if tool_name not in contract_index:
         return _build_unknown_tool_result(tool_name, contract_index)
-    validation_errors = _validate_params(tool_name, arguments, contract_index)
+    normalized_arguments, validation_errors = _normalize_and_validate_params(tool_name, arguments, contract_index)
     if validation_errors:
         return _build_validation_result(validation_errors)
     client = _get_shared_client()
     try:
-        return client.call_tool(tool_name, arguments, timeout)
+        return client.call_tool(tool_name, normalized_arguments, timeout)
     except Exception:
         client.close()
-        return client.call_tool(tool_name, arguments, timeout)
+        return client.call_tool(tool_name, normalized_arguments, timeout)
 
 
 def list_mcp_tools(timeout: int = 120) -> dict:
@@ -2869,6 +3049,26 @@ def list_mcp_tools(timeout: int = 120) -> dict:
     except Exception:
         client.close()
         return client.list_tools(timeout)
+
+
+def list_mcp_resources(timeout: int = 120) -> dict:
+    client = _get_shared_client()
+    try:
+        return client.list_resources(timeout)
+    except Exception:
+        client.close()
+        return client.list_resources(timeout)
+
+
+def read_mcp_resource(uri: str, timeout: int = 120) -> dict:
+    if not isinstance(uri, str) or not uri.strip():
+        return _build_validation_result(["Missing required parameter 'uri'"])
+    client = _get_shared_client()
+    try:
+        return client.read_resource(uri.strip(), timeout)
+    except Exception:
+        client.close()
+        return client.read_resource(uri.strip(), timeout)
 
 
 def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_text=None):
@@ -2888,9 +3088,12 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
 def parse_cli_request(argv):
     if not argv:
         raise ValueError(
-            "Usage: mcp_client.py <tool-name> <args-json> [timeout]\n"
+            "Usage: mcp_client.py --check-clio-version [--timeout <seconds>]\n"
+            "   or: mcp_client.py <tool-name> <args-json> [timeout]\n"
             "   or: mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
-            "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]"
+            "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]\n"
+            "   or: mcp_client.py resources/list {} [timeout]\n"
+            "   or: mcp_client.py resources/read '{\"uri\":\"docs://mcp/guides/app-modeling\"}' [timeout]"
         )
     tool_name = argv[0]
     remainder = argv[1:]
@@ -2903,7 +3106,12 @@ def parse_cli_request(argv):
             "arguments": load_cli_arguments(args_json=remainder[0]),
             "timeout": timeout,
         }
-    if remainder and remainder[-1].lstrip("-").isdigit() and not remainder[-1].startswith("--"):
+    if (
+        remainder
+        and remainder[-1].lstrip("-").isdigit()
+        and not remainder[-1].startswith("--")
+        and (len(remainder) < 2 or remainder[-2] != "--timeout")
+    ):
         raise ValueError(
             f"Positional timeout is not supported with named-mode flags.\n"
             f"Use --timeout {remainder[-1]} instead of a positional argument."
@@ -2921,13 +3129,38 @@ def parse_cli_request(argv):
     }
 
 
+def parse_clio_version_check_request(argv):
+    if not argv or argv[0] != "--check-clio-version":
+        return None
+    parser = argparse.ArgumentParser(prog="mcp_client.py", add_help=True)
+    parser.add_argument("--check-clio-version", action="store_true")
+    parser.add_argument("--timeout", type=int, default=30)
+    parsed = parser.parse_args(argv)
+    return {"timeout": parsed.timeout}
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    version_check = parse_clio_version_check_request(argv)
+    if version_check is not None:
+        try:
+            result = check_clio_version(timeout=version_check["timeout"])
+        except (ValueError, json.JSONDecodeError, OSError, RuntimeError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return 0
     try:
-        request = parse_cli_request(sys.argv[1:] if argv is None else argv)
+        request = parse_cli_request(argv)
     except (ValueError, json.JSONDecodeError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 1
-    result = call_mcp_tool(request["tool_name"], request["arguments"], request["timeout"])
+    if request["tool_name"] == "resources/list":
+        result = list_mcp_resources(request["timeout"])
+    elif request["tool_name"] == "resources/read":
+        result = read_mcp_resource((request["arguments"] or {}).get("uri"), request["timeout"])
+    else:
+        result = call_mcp_tool(request["tool_name"], request["arguments"], request["timeout"])
     print(json.dumps(result, indent=2))
     return 0
 
@@ -3247,6 +3480,14 @@ def validate_body_structure(body):
         except (PageBodyError, json.JSONDecodeError) as e:
             errors.append(f"Marker {marker}: invalid JSON — {e}")
 
+    label_check = validate_field_labels(body)
+    if not label_check["valid"]:
+        errors.extend(label_check["errors"])
+
+    binding_check = validate_bindings(body)
+    if not binding_check["valid"]:
+        errors.extend(binding_check["errors"])
+
     return {"valid": len(errors) == 0, "errors": errors}
 
 
@@ -3258,7 +3499,105 @@ FIELD_CONTROL_TYPES = {
 }
 
 
-def discover_form_container(view_config_diff):
+_RESOURCE_STRING_LABEL_RE = re.compile(r"^\$Resources\.Strings\.(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
+_RESOURCE_LITERAL_LABEL_RE = re.compile(r"^#ResourceString\((?P<key>[A-Za-z_][A-Za-z0-9_]*)\)#$")
+_CONTROL_BINDING_RE = re.compile(r"^\$(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def validate_field_labels(body):
+    """Validate FormPage field-insert label/control invariants.
+
+    Rules enforced:
+      1. Every field insert must provide a ``label`` using ``$Resources.Strings.<key>``
+         or ``#ResourceString(<key>)#``. Plain hardcoded strings are rejected.
+      2. When ``label`` is ``$Resources.Strings.<key>``, ``<key>`` must equal the
+         attribute key from ``control`` (strip the leading ``$``) or, for
+         ``crt.ImageInput``, from ``value``.
+    """
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        label = values.get("label")
+        if label is None:
+            errors.append(f"{name}: missing `label`")
+            continue
+        if not isinstance(label, str):
+            errors.append(f"{name}: `label` must be a string, got {type(label).__name__}")
+            continue
+        res_match = _RESOURCE_STRING_LABEL_RE.match(label)
+        literal_match = _RESOURCE_LITERAL_LABEL_RE.match(label)
+        if not (res_match or literal_match):
+            errors.append(
+                f"{name}: hardcoded label `{label}` — must be `$Resources.Strings.<key>` "
+                f"or `#ResourceString(<key>)#`"
+            )
+            continue
+        if res_match:
+            label_key = res_match.group("key")
+            binding = values.get("value") if ctrl_type == "crt.ImageInput" else values.get("control")
+            if not isinstance(binding, str):
+                errors.append(f"{name}: missing binding (`control` or `value`)")
+                continue
+            bind_match = _CONTROL_BINDING_RE.match(binding)
+            if not bind_match:
+                errors.append(f"{name}: binding `{binding}` is not a simple `$<key>` form")
+                continue
+            attr_key = bind_match.group("key")
+            if attr_key != label_key:
+                errors.append(
+                    f"{name}: label key `{label_key}` does not match attribute key "
+                    f"`{attr_key}` — label will render blank"
+                )
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+_PDS_BINDING_RE = re.compile(r"^\$PDS_[A-Za-z_][A-Za-z0-9_]*$")
+_BARE_USR_BINDING_RE = re.compile(r"^\$Usr[A-Za-z0-9_]*$")
+
+
+def validate_bindings(body):
+    errors = []
+    try:
+        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
+    except PageBodyError as e:
+        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
+    if not isinstance(diff, list):
+        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("operation") != "insert":
+            continue
+        values = entry.get("values") or {}
+        ctrl_type = values.get("type")
+        if ctrl_type not in FIELD_CONTROL_TYPES:
+            continue
+        name = entry.get("name") or "<unnamed>"
+        binding_prop = "value" if ctrl_type == "crt.ImageInput" else "control"
+        binding = values.get(binding_prop)
+        if not isinstance(binding, str):
+            continue
+        if _BARE_USR_BINDING_RE.match(binding) and not _PDS_BINDING_RE.match(binding):
+            errors.append(
+                f"{name}: binding `{binding}` uses bare $Usr prefix — "
+                f"must use `$PDS_<Column>` format (e.g. `$PDS_{binding[1:]}`)"
+            )
+    return {"valid": len(errors) == 0, "errors": errors}
     counts = {}
     for item in view_config_diff:
         if not isinstance(item, dict):
@@ -3299,7 +3638,19 @@ def find_max_row_index(view_config_diff, parent_name):
     return max_row, max_index
 
 
+def _derive_attr_key(field):
+    explicit = field.get("attrKey")
+    if explicit:
+        return explicit
+    path = field.get("path", "")
+    parts = path.split(".", 1) if path else []
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return f"{parts[0]}_{parts[1]}"
+    return field["name"]
+
+
 def build_form_field_insert(field, row, index, parent_name):
+    attr_key = _derive_attr_key(field)
     values = {
         "layoutConfig": {
             "column": 1,
@@ -3308,11 +3659,11 @@ def build_form_field_insert(field, row, index, parent_name):
             "rowSpan": 1,
         },
         "type": field["type"],
-        "label": field.get("label") or field.get("title") or field["name"],
+        "label": field.get("label") or f"$Resources.Strings.{attr_key}",
         "labelPosition": "auto",
     }
     binding_prop = "value" if field["type"] == "crt.ImageInput" else "control"
-    values[binding_prop] = f"${field['name']}"
+    values[binding_prop] = f"${attr_key}"
     if field["type"] == "crt.DateTimePicker":
         values["pickerType"] = field.get("pickerType", "date")
     if field["type"] == "crt.Input" and field.get("multiline"):
@@ -3321,7 +3672,7 @@ def build_form_field_insert(field, row, index, parent_name):
         values["format"] = {"decimalPrecision": field["decimalPrecision"]}
     return {
         "operation": "insert",
-        "name": field["name"],
+        "name": attr_key,
         "values": values,
         "parentName": field.get("parentName") or parent_name,
         "propertyName": "items",
@@ -3349,7 +3700,8 @@ def add_form_fields(body, fields):
     max_row, max_index = find_max_row_index(view_config, parent)
     existing_names = {item.get("name") for item in view_config if isinstance(item, dict)}
     for field in fields:
-        if field["name"] in existing_names:
+        attr_key = _derive_attr_key(field)
+        if attr_key in existing_names:
             continue
         max_row += 1
         max_index += 1
@@ -3362,8 +3714,9 @@ def add_form_fields(body, fields):
             vm_data = {"attributes": {}}
         attrs = vm_data.setdefault("attributes", {})
         for field in fields:
-            if field["name"] not in attrs:
-                attrs[field["name"]] = {"modelConfig": {"path": field["path"]}}
+            attr_key = _derive_attr_key(field)
+            if attr_key not in attrs:
+                attrs[attr_key] = {"modelConfig": {"path": field["path"]}}
         body = replace_marker_content(body, vm_marker,
                                       serialize_json_indented(vm_data, base_indent=2))
     else:
@@ -3377,8 +3730,9 @@ def add_form_fields(body, fields):
             vm_data.append(merge_op)
         values = merge_op.setdefault("values", {})
         for field in fields:
-            if field["name"] not in values:
-                values[field["name"]] = {"modelConfig": {"path": field["path"]}}
+            attr_key = _derive_attr_key(field)
+            if attr_key not in values:
+                values[attr_key] = {"modelConfig": {"path": field["path"]}}
         body = replace_marker_content(body, vm_marker,
                                       serialize_json_indented(vm_data, base_indent=2))
     return body

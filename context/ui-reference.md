@@ -127,7 +127,7 @@ Configure visible columns in the DataTable:
 - `id` — unique GUID
 - `code` — `PDS_<ColumnName>`
 - `path` — entity column name
-- `caption` — localized with `#ResourceString()#`. PDS-prefixed captions are data-source resolved. For custom UI elements (tabs, buttons), use `#ResourceString(UsrKey_caption)#` and provide `resources` in `sync-pages` or the fallback `update-page` path to register the localizableString.
+- `caption` — always `#ResourceString(<key>)#`; never a hardcoded plain string. For DataGrid columns bound to an entity column, use the **data-source-resolved** form `#ResourceString(PDS_<Column>)#` (e.g. `#ResourceString(PDS_UsrStatus)#`) — the platform pulls the caption from the entity column automatically, no `resources` param needed. This is a DIFFERENT case from custom non-field UI elements (tabs, buttons, standalone `crt.Label`), which use `#ResourceString(<itemName>_caption)#` and DO require a matching `resources` entry — see "Non-Field Element Captions" in `context/viewconfig-reference.md`.
 - `dataValueType` — numeric ID (see schema-reference.md)
 - `referenceSchemaName` — only for Lookup columns
 
@@ -286,7 +286,7 @@ Use this pattern when the live page body already materializes a sibling sorting 
 - Do not reuse FormPage lookup `*_List` sorting examples as the recipe for ListPage DataGrid row sorting.
 - Do not assume sorting by a lookup column guarantees business lifecycle order.
 - Do not change `Items.modelConfig.path` or paging config unless the task explicitly requires a data-source change.
-- Do not put attribute keys such as `PDS_UsrDueDate_ab12cd3` into `columnName`; use the entity column name `UsrDueDate`.
+- Do not put attribute keys such as `PDS_UsrDueDate` into `columnName`; use the entity column name `UsrDueDate`.
 - Do not treat a manually added DataGrid `sorting` property as the primary source of truth when the collection metadata already defines sorting.
 
 #### Limitations
@@ -323,8 +323,8 @@ Binds page attributes to data source:
 		"path": ["attributes"],
 		"values": {
 			"Name": {"modelConfig": {"path": "PDS.Name"}},
-			"PDS_UsrStatus_ab12cd3": {"modelConfig": {"path": "PDS.UsrStatus"}},
-			"PDS_UsrDueDate_ab12cd3": {"modelConfig": {"path": "PDS.UsrDueDate"}}
+			"PDS_UsrStatus": {"modelConfig": {"path": "PDS.UsrStatus"}},
+			"PDS_UsrDueDate": {"modelConfig": {"path": "PDS.UsrDueDate"}}
 		}
 	}
 ]
@@ -455,7 +455,7 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 ```json
 {
 	"operation": "insert",
-	"name": "Input_ab12cd3",
+	"name": "PDS_UsrCode",
 	"values": {
 		"layoutConfig": {
 			"column": 1,
@@ -464,8 +464,8 @@ Use the current page body from `get-page` as the source of truth. For live FormP
 			"rowSpan": 1
 		},
 		"type": "crt.Input",
-		"label": "$Resources.Strings.PDS_UsrCode_ab12cd3",
-		"control": "$PDS_UsrCode_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrCode",
+		"control": "$PDS_UsrCode",
 		"placeholder": "",
 		"tooltip": "",
 		"readonly": false,
@@ -489,20 +489,23 @@ Rules:
 - Keep `Name` as the header/title when it already exists and do not duplicate it.
 - Required non-inherited business fields must never be omitted from the synchronized FormPage.
 - Do not manually duplicate preprocessor-generated properties such as ComboBox load requests or ImageInput upload/clear requests unless the live page body already contains explicit versions of them.
-- **`label` = `$Resources.Strings.` + attribute name from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus_ab12cd3"` → `"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3"`. Using a mismatched key (e.g. without the suffix, or with `PDS_` stripped) renders blank "Title on page" in the designer. When a custom title is set, the designer overwrites `label` to `#ResourceString(someKey)#` and registers the key via `sync-pages` `resources` param.
-  **Critical for programmatic `sync-pages`:** `$Resources.Strings.KEY` is only resolved if the resource key is registered in the page schema. The platform auto-registers column captions only when the page is opened in the designer — NOT during `sync-pages`. Always pass `resources` alongside new field inserts as a flat JSON map string: `{"PDS_UsrStatus_ab12cd3": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
-  **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`. A mismatched label key renders blank silently — no error is surfaced by the validator.
+- **Never hardcode a plain label string.** `"label": "Status"` is a bug — the field renders an English literal and will not localize. Only `"$Resources.Strings.<key>"` or `"#ResourceString(<key>)#"` are valid.
+- **Label key MUST equal the attribute key from `control`** (strip the leading `$`). Example: `"control": "$PDS_UsrStatus"` → `"label": "$Resources.Strings.PDS_UsrStatus"`. Mismatched key renders a blank "Title on page" with no validator error.
+- **Default pattern for new entity-field inserts:** attribute key `PDS_<Column>`, label `$Resources.Strings.PDS_<Column>`. No random suffix. Do not invent `_ab12cd3`-style tails for field attribute keys — binding happens in `viewModelConfigDiff.<key>.modelConfig.path`, not in the name.
+- **`sync-pages resources` param is mandatory for every new `$Resources.Strings.<key>`.** The platform does not auto-register page resource strings during `sync-pages`; the designer only registers them when the field is first opened in its right panel. Always pass `resources` as a flat JSON map alongside new field inserts: `{"PDS_UsrStatus": "Status"}`. Without this, the label renders blank until the field is first touched in the designer.
+- **Preserve existing live bindings.** If the live page already has `Name` bound as `control: "$Name"` with `label: "$Resources.Strings.Name"` (section-wizard output), keep it exactly. Only newly inserted fields follow the `PDS_<Column>` default above.
+- **Rename consistency:** If any post-sync patch renames `control` from `$OldKey` to `$NewKey`, update `label` from `$Resources.Strings.OldKey` to `$Resources.Strings.NewKey` **in the same edit**, and replace the `OldKey` entry in the `resources` dict with `NewKey`.
 
 ### Runtime Lookup Special Case
 
 ```json
 {
 	"operation": "insert",
-	"name": "ComboBox_ab12cd3",
+	"name": "PDS_UsrStatus",
 	"values": {
 		"layoutConfig": {"column": 1, "colSpan": 1, "row": 10, "rowSpan": 1},
 		"type": "crt.ComboBox",
-		"label": "$Resources.Strings.PDS_UsrStatus_ab12cd3",
+		"label": "$Resources.Strings.PDS_UsrStatus",
 		"ariaLabel": "",
 		"isAddAllowed": true,
 		"showValueAsLink": true,
@@ -510,7 +513,7 @@ Rules:
 		"controlActions": [],
 		"listActions": [],
 		"tooltip": "",
-		"control": "$PDS_UsrStatus_ab12cd3"
+		"control": "$PDS_UsrStatus"
 	},
 	"parentName": "<primary-field-container>",
 	"propertyName": "items",
@@ -521,18 +524,18 @@ Rules:
 ```json
 {
 	"operation": "insert",
-	"name": "addRecord_ab12cd3",
+	"name": "addRecord_6jika7x",
 	"values": {
 		"code": "addRecord",
 		"type": "crt.ComboboxSearchTextAction",
 		"icon": "combobox-add-new",
-		"caption": "#ResourceString(addRecord_ab12cd3_caption)#",
+		"caption": "#ResourceString(addRecord6jika7x_caption)#",
 		"clicked": {
 			"request": "crt.CreateRecordFromLookupRequest",
 			"params": {}
 		}
 	},
-	"parentName": "ComboBox_ab12cd3",
+	"parentName": "PDS_UsrStatus",
 	"propertyName": "listActions",
 	"index": 0
 }
@@ -641,9 +644,14 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. Th
 | Tool | Description |
 |------|-------------|
 | `list-pages` | Discover page schemas by package or name pattern |
-| `get-page` | Read a page schema's metadata and raw JS body |
+| `get-page` | Read a page schema's hierarchy-aware body (`body.js` — editable own-body of the replacing schema in the design package) and merged view (`bundle.json`). Writes files to `.clio-pages/{schema-name}/` |
 | `sync-pages` | clio-advertised canonical write path for edited page bodies, batch validation, and optional server-side verification |
-| `update-page` | Fallback single-page dry-run or legacy save path |
+| `update-page` | Single-page save with `mode` (replace/append), `body-file`, `target-package-uid`, `target-schema-uid`, `skip-sampling`, `verify`, `optional-properties`. Append mode merges incoming body fragment with existing schema body. Fallback or targeted use only |
+| `create-page` | Create a new Freedom UI page schema from a template. Use `list-page-templates` to discover valid templates first |
+| `list-page-templates` | Discover valid Freedom UI page templates available on the target environment |
+| `validate-page` | Client-side page body validation (markers, JS syntax, JSON content, field bindings, column bindings) without saving to Creatio |
+| `add-form-fields` | Add form fields to an existing FormPage body — reads current body, inserts fields, and saves |
+| `add-list-columns` | Add columns to an existing ListPage body — reads current body, inserts columns into the DataTable, and saves |
 | `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -656,6 +664,28 @@ See `skills/page-schema-editing/SKILL.md` for the full workflow:
 4. If the page contains unfamiliar `crt.*` components, follow the clio guidance and inspect them with `get-component-info` and `component-type: "..."`
 5. call `sync-pages` with the edited page body and verify the saved page; keep `update-page` only as an explicit fallback
 ```
+
+### Page Creation Workflow
+
+When creating a new standalone Freedom UI page (not via `create-app-section`):
+```
+1. call `list-page-templates` to discover valid templates
+2. call `create-page` with the chosen template, target package, and optional entity binding
+3. call `get-page` to verify creation and retrieve the initial body
+4. edit the body and persist through `sync-pages` or `update-page`
+```
+
+Resolve the full page creation contract through `docs://mcp/guides/page-creation`.
+
+### Targeted Edits Without Full Body Replacement
+
+- `update-page` with `mode: "append"` merges incoming viewConfigDiff entries and handlers into the existing schema body — use for additive edits without clobbering existing customizations
+- `add-form-fields` inserts fields into an existing FormPage body directly
+- `add-list-columns` inserts columns into an existing ListPage DataTable directly
+- `validate-page` validates a page body client-side before saving
+
+Resolve detailed tool parameters through `get-tool-contract`.
+Resolve page modification patterns through `docs://mcp/guides/page-modification`.
 
 **Important:** When adding handlers that require imports, update BOTH the `handlers` AND `deps` sections. Always read current state first with `get-page`.
 

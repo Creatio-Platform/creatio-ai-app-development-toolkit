@@ -22,6 +22,36 @@ PAGE_SYNC_PLAN_START = "<!-- PAGE_SYNC_PLAN_JSON_START -->"
 PAGE_SYNC_PLAN_END = "<!-- PAGE_SYNC_PLAN_JSON_END -->"
 
 
+def extract_page_body(get_page_response):
+    if not isinstance(get_page_response, dict):
+        raise WorkflowError("get-page response must be an object")
+    files = get_page_response.get("files")
+    if isinstance(files, dict):
+        body_file = files.get("bodyFile")
+        if isinstance(body_file, str) and body_file:
+            body_path = Path(body_file)
+            if body_path.is_file():
+                return body_path.read_text(encoding="utf-8")
+    raw = get_page_response.get("raw")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and "raw" in parsed and isinstance(parsed["raw"], dict):
+                body = parsed["raw"].get("body")
+                if isinstance(body, str):
+                    return body
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if isinstance(raw, dict):
+        body = raw.get("body")
+        if isinstance(body, str):
+            return body
+    body = get_page_response.get("body")
+    if isinstance(body, str):
+        return body
+    raise WorkflowError("Cannot extract page body from get-page response: no body found in files, raw, or top-level body")
+
+
 def load_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -217,6 +247,9 @@ def build_page_sync_entry(page):
     resources = page.get("resources")
     if resources is not None:
         entry["resources"] = json.dumps(resources, ensure_ascii=True) if isinstance(resources, dict) else resources
+    optional_properties = page.get("optionalProperties") or page.get("optional-properties")
+    if optional_properties is not None:
+        entry["optional-properties"] = json.dumps(optional_properties, ensure_ascii=True) if isinstance(optional_properties, (dict, list)) else optional_properties
     return entry
 
 
@@ -262,7 +295,7 @@ def build_page_verification(page_result):
     }
 
 
-def sync_pages(client, current_document, result_path, pages, environment_name=None):
+def sync_pages(client, current_document, result_path, pages, environment_name=None, skip_sampling=None):
     sync_args = {
         "pages": [build_page_sync_entry(page) for page in pages],
         "validate": True,
@@ -270,6 +303,8 @@ def sync_pages(client, current_document, result_path, pages, environment_name=No
     }
     if environment_name:
         sync_args["environment-name"] = environment_name
+    if skip_sampling is not None:
+        sync_args["skip-sampling"] = bool(skip_sampling)
     sync_response = client.call_tool_json("sync-pages", sync_args)
     operation_status = "success" if sync_response.get("success") is True else "failed"
     current_document = append_operation_and_persist(current_document, result_path, "sync-pages", "batch", operation_status, response=sync_response)

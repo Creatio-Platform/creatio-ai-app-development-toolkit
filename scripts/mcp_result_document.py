@@ -40,8 +40,10 @@ def get_present_value(payload, *keys):
 
 
 def normalize_column(column, name=None):
+    if isinstance(column, str):
+        return {"name": column, "caption": column}
     if not isinstance(column, dict):
-        raise ContextError("Column must be an object")
+        raise ContextError("Column must be an object or a string")
     name = name or first_text_value(column, "name", "Name", "column-name")
     if not name:
         raise ContextError("Column name is required")
@@ -315,6 +317,14 @@ def _detect_runtime_shape(document):
     if "meta" in document and "packages" in document:
         raise ContextError("Legacy preview contract is not supported")
     success = document.get("success")
+    if isinstance(success, str):
+        coerced = success.strip().lower()
+        if coerced == "true":
+            document["success"] = True
+            success = True
+        elif coerced == "false":
+            document["success"] = False
+            success = False
     if not isinstance(success, bool):
         raise ContextError("Result document success is required and must be boolean")
     if success is False:
