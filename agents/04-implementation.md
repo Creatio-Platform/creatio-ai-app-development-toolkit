@@ -134,7 +134,9 @@ Resolve page inspection, fallback, and verification guidance through `docs://mcp
 
 Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
 
-All FormPage field bindings must use `$PDS_<Column>` control format. `$UsrColumn` without the PDS prefix is invalid.
+FormPage field attribute names are derived from the data source name, not from a fixed prefix. The attribute key is `{DataSourceName}_{ColumnName}` where `DataSourceName` comes from `modelConfig → dataSources` (typically `PDS`). So a column `UsrTitle` on data source `PDS` becomes attribute `PDS_UsrTitle`, control binding `$PDS_UsrTitle`, label `$Resources.Strings.PDS_UsrTitle`. Using `$UsrTitle` without the data source prefix is invalid and `validate-page` will reject it with: `Standard field 'UsrTitle' uses proxy binding '$UsrTitle' via 'control' for datasource path 'PDS.UsrTitle'. Use '$PDS_UsrTitle' instead.`
+
+Before building the page body, resolve required fields of the entity bound to the page: read `modelConfig → dataSources → PDS → config → entitySchemaName`, then call `get-entity-schema-properties` or `get-entity-schema-column-properties` to find all columns with `RequirementType = Required`. Every required column must be either visible on the form or auto-filled via a handler before save. Never remove a required field from the FormPage without providing an explicit filling strategy.
 
 When the plan requires standalone page creation (not through `create-app-section`):
 - Use `list-page-templates` → `create-page` → `get-page` verification
@@ -265,5 +267,5 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
-- Result and report are derived from runtime evidence
+d- Result and report are derived from runtime evidence
 - When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`
