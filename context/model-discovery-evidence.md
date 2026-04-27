@@ -54,7 +54,7 @@ Treat a candidate as strong when any of the following is true:
 
 - `dataforge-find-tables` returns a platform or existing custom schema with the same or adjacent business noun
 - `dataforge-find-lookups` returns a lookup whose values or title align with the approved lifecycle or taxonomy
-- the approved business wording maps naturally to a known platform concept such as activity, case, article, contact, account, request, knowledge, or comment
+- the approved business wording maps naturally to a known platform concept.
 - an existing `Usr*` schema or app already appears relevant
 - the current run is an existing-app update and a nearby entity already exists in the app
 
@@ -151,9 +151,9 @@ When several strong candidates exist, the decision record should say why the cho
 
 Good `create` evidence:
 
-- `candidate-fit-summary: Activity covers owner, due date, and completion semantics`
-- `required-capabilities: app-owned event task lifecycle, event linkage, lightweight task completion flow`
-- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader interaction flow; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
+- `candidate-fit-summary: Contact provides person identity and communication fields but lacks the required workflow and ownership semantics`
+- `required-capabilities: app-owned workflow lifecycle, custom status tracking, assignment and resolution trail`
+- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader CRM entity; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
 - `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
 
 Good `reuse` evidence:
@@ -234,9 +234,9 @@ When `dataforge-availability: unavailable` is recorded (because `dataforge-statu
 
 Good `create` evidence when DataForge is unavailable:
 
-- `candidates-considered: Case, Activity`
+- `candidates-considered: <none confirmed — DataForge unavailable>`
 - `candidate-fit-summary: candidates not inspected — DataForge unavailable`
-- `required-capabilities: app-owned support case lifecycle, custom status tracking, priority assignment, agent assignment`
+- `required-capabilities: app-owned custom workflow lifecycle, custom status tracking, priority assignment, owner assignment`
 - `mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)`
 - `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
 - `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`

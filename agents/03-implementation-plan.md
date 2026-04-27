@@ -214,7 +214,7 @@ On a validator failure, fix the artifact based on the error string returned by t
 
 ```
 - business-concept: <business name>
-  candidates-considered: <known platform candidates, e.g. "Case, Activity">
+  candidates-considered: <known platform candidates>
   chosen-action: create
   chosen-schema: <UsrXxx>
   tradeoff-escalation: none
@@ -258,7 +258,7 @@ Any concept listed in `request-spec.json -> planningSignals.reuseCheckRequired` 
 
 This includes, but is not limited to, cases where:
 
-- a business object resembles a standard or already-existing platform concept such as case, request, article, knowledge, activity, comment, account, or contact
+- a business object resembles a standard or already-existing platform concept.
 - a secondary managed entity could plausibly reuse an existing platform or custom schema
 - a reference field has a non-obvious target schema
 - the plan may be choosing between `update-entity-schema` and `create-entity-schema`
