@@ -319,11 +319,3 @@ output/
 - [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
 - Access to a running Creatio instance
 
-## Example Prompt
-
-```text
-Generate with a code agent an Events composable app with all required schema types.
-A simple Events app is a lightweight tool for managing events in Creatio.
-It allows users to create and maintain a list of events, see them in a structured list view,
-update their status, and manage event details throughout their lifecycle.
-```

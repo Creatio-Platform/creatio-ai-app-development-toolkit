@@ -50,7 +50,7 @@ When the request clearly maps to a familiar business domain, the BA draft should
 
 Examples:
 - for client/customer or partner registries, expect core profile and contact attributes for the legal entity or person unless explicitly out of scope
-- for case, request, or service workflows, expect at least the issue summary, status, owner, dates, and basic resolution trail
+- for request or service workflows, expect at least the issue summary, status, owner, dates, and basic resolution trail
 - for product or catalog scenarios, expect at least title, category, status, and key commercial or operational attributes
 
 Use domain expertise to propose these baseline fields and behaviors in the draft.
