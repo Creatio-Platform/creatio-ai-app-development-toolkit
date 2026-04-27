@@ -134,9 +134,16 @@ Resolve page inspection, fallback, and verification guidance through `docs://mcp
 
 Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
 
-FormPage field attribute names are derived from the data source name, not from a fixed prefix. The attribute key is `{DataSourceName}_{ColumnName}` where `DataSourceName` comes from `modelConfig → dataSources` (typically `PDS`). So a column `UsrTitle` on data source `PDS` becomes attribute `PDS_UsrTitle`, control binding `$PDS_UsrTitle`, label `$Resources.Strings.PDS_UsrTitle`. Using `$UsrTitle` without the data source prefix is invalid and `validate-page` will reject it with: `Standard field 'UsrTitle' uses proxy binding '$UsrTitle' via 'control' for datasource path 'PDS.UsrTitle'. Use '$PDS_UsrTitle' instead.`
+Page elements in `SCHEMA_VIEW_CONFIG_DIFF` fall into two categories:
 
-Before building the page body, resolve required fields of the entity bound to the page: read `modelConfig → dataSources → PDS → config → entitySchemaName`, then call `get-entity-schema-properties` or `get-entity-schema-column-properties` to find all columns with `RequirementType = Required`. Every required column must be either visible on the form or auto-filled via a handler before save. Never remove a required field from the FormPage without providing an explicit filling strategy.
+- **Data-source-bound** (e.g. `crt.Input`, `crt.ComboBox`, `crt.DateTimePicker`): have a `control` field that references an attribute. The attribute name is `{DataSourceName}_{ColumnName}` and the binding is `"control": "${DataSourceName}_{ColumnName}"`.
+- **Not data-source-bound** (e.g. `crt.Label`): use static resource strings directly, e.g. `"caption": "#ResourceString(Label_xyz_caption)#"`. No `control` field.
+
+To find the data source name, read `SCHEMA_MODEL_CONFIG → dataSources`. There may be zero, one, or multiple data sources with arbitrary names. The primary one is typically named `PDS`, but derive it from the actual page body — do not assume. Example: if `dataSources` contains `"PDS"`, then column `UsrTitle` becomes attribute `PDS_UsrTitle`, binding `$PDS_UsrTitle`, label `$Resources.Strings.PDS_UsrTitle`.
+
+Using a column name without the data source prefix (e.g. `$UsrTitle` instead of `$PDS_UsrTitle`) is invalid and `validate-page` will reject it with: `Standard field 'UsrTitle' uses proxy binding '$UsrTitle' via 'control' for datasource path 'PDS.UsrTitle'. Use '$PDS_UsrTitle' instead.`
+
+Before building the page body, resolve required fields of the entity bound to the page: find the entity name from `modelConfig → dataSources → <primaryDataSource> → config → entitySchemaName`, then call `get-entity-schema-properties` or `get-entity-schema-column-properties` to identify columns with `RequirementType = Required`. Every required column must be either visible on the form or auto-filled via a handler before save. Never remove a required field from the FormPage without providing an explicit filling strategy.
 
 When the plan requires standalone page creation (not through `create-app-section`):
 - Use `list-page-templates` → `create-page` → `get-page` verification
