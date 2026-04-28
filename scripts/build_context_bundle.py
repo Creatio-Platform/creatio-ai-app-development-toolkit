@@ -42,7 +42,6 @@ AGENT_READS = {
         ("context/schema-reference.md", [(7, 29), (64, 111)]),
         ("scripts/mcp_client.py", None),
         ("scripts/page_body_tools.py", None),
-        ("scripts/page_body_edit.py", None),
     ],
 }
 

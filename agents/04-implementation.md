@@ -134,7 +134,16 @@ Resolve page inspection, fallback, and verification guidance through `docs://mcp
 
 Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
 
-All FormPage field bindings must use `$PDS_<Column>` control format. `$UsrColumn` without the PDS prefix is invalid.
+Page elements in `SCHEMA_VIEW_CONFIG_DIFF` fall into two categories:
+
+- **Data-source-bound** (e.g. `crt.Input`, `crt.ComboBox`, `crt.DateTimePicker`): have a `control` field that references an attribute. The attribute name is `{DataSourceName}_{ColumnName}` and the binding is `"control": "${DataSourceName}_{ColumnName}"`.
+- **Not data-source-bound** (e.g. `crt.Label`): use static resource strings directly, e.g. `"caption": "#ResourceString(Label_xyz_caption)#"`. No `control` field.
+
+To find the data source name, read `SCHEMA_MODEL_CONFIG → dataSources`. There may be zero, one, or multiple data sources with arbitrary names. The primary one is typically named `PDS`, but derive it from the actual page body — do not assume. Example: if `dataSources` contains `"PDS"`, then column `UsrTitle` becomes attribute `PDS_UsrTitle`, binding `$PDS_UsrTitle`, label `$Resources.Strings.PDS_UsrTitle`.
+
+Using a column name without the data source prefix (e.g. `$UsrTitle` instead of `$PDS_UsrTitle`) is invalid and `validate-page` will reject it with: `Standard field 'UsrTitle' uses proxy binding '$UsrTitle' via 'control' for datasource path 'PDS.UsrTitle'. Use '$PDS_UsrTitle' instead.`
+
+Before building the page body, resolve required fields of the entity bound to the page: find the entity name from `modelConfig → dataSources → <primaryDataSource> → config → entitySchemaName`, then call `get-entity-schema-properties` or `get-entity-schema-column-properties` to identify columns with `RequirementType = Required`. Every required column must be either visible on the form or auto-filled via a handler before save. Never remove a required field from the FormPage without providing an explicit filling strategy.
 
 When the plan requires standalone page creation (not through `create-app-section`):
 - Use `list-page-templates` → `create-page` → `get-page` verification
@@ -142,7 +151,7 @@ When the plan requires standalone page creation (not through `create-app-section
 
 For additive page edits that should not overwrite existing customizations, use `update-page` with `mode: "append"`.
 
-For targeted field additions without full body replacement, use `add-form-fields` or `add-list-columns`.
+For targeted field or column additions, edit the `body.js` returned by `get-page` directly and validate it before saving.
 
 Use `validate-page` for client-side validation before persisting page bodies.
 
@@ -265,5 +274,5 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
-- Result and report are derived from runtime evidence
+d- Result and report are derived from runtime evidence
 - When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`

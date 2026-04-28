@@ -61,7 +61,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - UI is described via `viewConfigDiff`
 - Schema type is `"AngularSchema"`
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
-- `add-form-fields` and `add-list-columns` add fields or columns to an existing page body without replacing the whole body
+- Add fields or columns by editing the `body.js` returned by `get-page` directly without replacing unrelated marker sections
 - `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
 - `validate-page` validates a page body client-side without saving to Creatio
 

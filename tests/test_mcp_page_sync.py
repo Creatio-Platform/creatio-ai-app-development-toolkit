@@ -419,7 +419,7 @@ class McpPageSyncTests(unittest.TestCase):
             persisted = json.loads(result_path.read_text(encoding="utf-8"))
         self.assertIn("UsrTodoList_ListPage", persisted["pageEvidence"])
 
-    def test_apply_page_sync_plan_materializes_form_fields_from_structured_edit_spec(self):
+    def test_apply_page_sync_plan_rejects_form_fields_shortcut(self):
         pages = {
             "UsrTodoList_FormPage": {
                 "uId": "11111111-1111-1111-1111-111111111111",
@@ -434,34 +434,32 @@ class McpPageSyncTests(unittest.TestCase):
         with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             result_path.write_text(json.dumps(result_document), encoding="utf-8")
-            apply_page_sync_plan(
-                fake_client,
-                result_document,
-                {
-                    "packageName": "UsrTodoList",
-                    "pages": [
-                        {
-                            "schemaName": "UsrTodoList_FormPage",
-                            "kind": "form",
-                            "body": build_form_body(False),
-                            "formFields": [
-                                {
-                                    "name": "UsrStatus",
-                                    "type": "crt.ComboBox",
-                                    "path": "PDS.UsrStatus"
-                                }
-                            ]
-                        }
-                    ]
-                },
-                result_path
-            )
-            persisted = json.loads(result_path.read_text(encoding="utf-8"))
-        self.assertTrue(persisted["pageEvidence"]["UsrTodoList_FormPage"]["status"]["machineChecked"])
-        page_sync_call = next(call for call in fake_client.calls if call[0] == "sync-pages")
-        self.assertIn("PDS.UsrStatus", page_sync_call[1]["pages"][0]["body"])
+            with self.assertRaisesRegex(WorkflowError, "formFields/listColumns shortcuts are no longer supported"):
+                apply_page_sync_plan(
+                    fake_client,
+                    result_document,
+                    {
+                        "packageName": "UsrTodoList",
+                        "pages": [
+                            {
+                                "schemaName": "UsrTodoList_FormPage",
+                                "kind": "form",
+                                "body": build_form_body(False),
+                                "formFields": [
+                                    {
+                                        "name": "UsrStatus",
+                                        "type": "crt.ComboBox",
+                                        "path": "PDS.UsrStatus"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    result_path
+                )
+        self.assertEqual(fake_client.calls, [])
 
-    def test_apply_page_sync_plan_materializes_list_columns_from_structured_edit_spec_with_trailing_commas(self):
+    def test_apply_page_sync_plan_rejects_list_columns_shortcut(self):
         pages = {
             "UsrTodoList_ListPage": {
                 "uId": "33333333-3333-3333-3333-333333333333",
@@ -503,31 +501,29 @@ class McpPageSyncTests(unittest.TestCase):
         with temp_workdir() as temp_path:
             result_path = temp_path / "mcp-application-result.json"
             result_path.write_text(json.dumps(result_document), encoding="utf-8")
-            apply_page_sync_plan(
-                fake_client,
-                result_document,
-                {
-                    "packageName": "UsrTodoList",
-                    "pages": [
-                        {
-                            "schemaName": "UsrTodoList_ListPage",
-                            "kind": "list",
-                            "body": list_body_with_trailing_comma,
-                            "listColumns": [
-                                {
-                                    "code": "PDS_UsrStatus",
-                                    "dataValueType": 10
-                                }
-                            ]
-                        }
-                    ]
-                },
-                result_path
-            )
-            persisted = json.loads(result_path.read_text(encoding="utf-8"))
-        self.assertTrue(persisted["pageEvidence"]["UsrTodoList_ListPage"]["status"]["machineChecked"])
-        page_sync_call = next(call for call in fake_client.calls if call[0] == "sync-pages")
-        self.assertIn("PDS_UsrStatus", page_sync_call[1]["pages"][0]["body"])
+            with self.assertRaisesRegex(WorkflowError, "formFields/listColumns shortcuts are no longer supported"):
+                apply_page_sync_plan(
+                    fake_client,
+                    result_document,
+                    {
+                        "packageName": "UsrTodoList",
+                        "pages": [
+                            {
+                                "schemaName": "UsrTodoList_ListPage",
+                                "kind": "list",
+                                "body": list_body_with_trailing_comma,
+                                "listColumns": [
+                                    {
+                                        "code": "PDS_UsrStatus",
+                                        "dataValueType": 10
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    result_path
+                )
+        self.assertEqual(fake_client.calls, [])
 
     def test_apply_page_sync_plan_does_not_invent_environment_name(self):
         pages = {
