@@ -612,6 +612,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Do not add a separate mandatory Data Forge preflight in repo-local orchestration for the standard new-app branch
 - Planning-time read-only discovery is still required when the model is ambiguous or strong existing-schema candidates exist; use that discovery to decide `reuse`, `extend`, or `create` before execution
 - Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
+- `icon-background` for `create-app` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the 16 palette colors: `#A6DE00`, `#20A959`, `#22AC14`, `#FFAC07`, `#FF8800`, `#F9307F`, `#FF602E`, `#FF4013`, `#B87CCF`, `#7848EE`, `#247EE5`, `#0058EF`, `#009DE3`, `#4F43C2`, `#08857E`, `#00BFA5`.
 
 **MCP Section Management**
 - Use `list-app-sections` to list all sections of an installed application
@@ -620,6 +621,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Canonical section delete flow: `list-apps` → `get-app-info` → `list-app-sections` → `delete-app-section`
 - `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
 - Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
+- `icon-background` for `create-app-section` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the same 16 palette colors listed under MCP Application Creation above.
 
 **Entity Schema Sync (DB-first)**
 - Prefer `sync-schemas` for grouped entity work

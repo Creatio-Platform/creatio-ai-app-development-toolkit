@@ -201,35 +201,7 @@ clio healthcheck -e <env_name>
 - **Success** — proceed to Step 6.
 - **Failure** — see Error Handling below.
 
-### 6. Verify cliogate presence and version
-
-Immediately after a successful health check, perform a fast `cliogate` verification before deciding whether installation is needed.
-
-Start with a package presence/version check:
-
-```bash
-clio get-pkg-list -e <env_name> --Json true
-```
-
-Use the package list to confirm whether `cliogate` is already installed and whether its package version matches the version required by the current `clio` build.
-
-- **Present and current** — skip installation and proceed to Step 7.
-- **Missing or outdated** — run:
-
-```bash
-clio install-gate -e <env_name>
-```
-
-Why this timing matters:
-
-- the environment has already been registered and proven reachable
-- later stages may need live SysSettings reads or cliogate-backed MCP helpers for DataForge discovery and exact runtime inspection
-- checking first avoids a slow reinstall when `cliogate` is already usable on the target environment
-- installing only when needed keeps Agent 3 reuse/discovery work from depending on ad-hoc environment fixes while still minimizing setup overhead
-
-If the `cliogate` check fails, or if `clio install-gate` fails when remediation is required, stop the stage and treat that as an environment blocker. Do not continue to downstream planning or implementation with a partially prepared environment.
-
-### 7. Save environment configuration
+### 6. Save environment configuration
 
 Create or overwrite the file `output/<AppName>/.creatio-env.json` from the current request URL and the environment resolved in this run:
 
