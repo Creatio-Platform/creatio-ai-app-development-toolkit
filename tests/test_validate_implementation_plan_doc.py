@@ -191,5 +191,114 @@ class TestValidateImplementationPlanDocSchemaSyncCrossRef(unittest.TestCase):
         self.assertIsNone(result)
 
 
+PLANNING_FIRST_VALID_PLAN = f"""## Technical Annex
+
+- **Planning branch:** `planning-first`
+
+## Gate R Evidence
+
+> Реалізовуй
+
+user message: developer approved the BA Business Plan in the prior turn.
+
+## Model Decisions
+
+{DECISION_BLOCK}
+
+## Ordered Schema Sync
+
+- create UsrTask schema for the approved task model
+"""
+
+
+class TestValidateImplementationPlanDocGateREvidence(unittest.TestCase):
+    def test_planning_first_with_quote_passes(self):
+        result = validate_implementation_plan_doc(PLANNING_FIRST_VALID_PLAN)
+        self.assertIsNone(result)
+
+    def test_planning_first_with_only_labelled_reference_passes(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace("> Реалізовуй\n\n", "")
+        result = validate_implementation_plan_doc(doc)
+        self.assertIsNone(result)
+
+    def test_planning_first_assumed_marker_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "**Planning branch:** `planning-first`",
+            "**Planning branch:** `planning-first` (assumed from the request)",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Planning branch", str(ctx.exception))
+        self.assertIn("assumed", str(ctx.exception).lower())
+
+    def test_planning_first_inferred_marker_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "**Planning branch:** `planning-first`",
+            "**Planning branch:** `planning-first` (inferred from prompt)",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Planning branch", str(ctx.exception))
+
+    def test_planning_first_derived_marker_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "**Planning branch:** `planning-first`",
+            "**Planning branch:** `planning-first` (derived from context)",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Planning branch", str(ctx.exception))
+
+    def test_planning_first_auto_marker_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "**Planning branch:** `planning-first`",
+            "**Planning branch:** `planning-first` (auto-detected)",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Planning branch", str(ctx.exception))
+
+    def test_planning_first_missing_gate_r_evidence_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "## Gate R Evidence\n\n> Реалізовуй\n\nuser message: developer approved the BA Business Plan in the prior turn.\n\n",
+            "",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Gate R Evidence", str(ctx.exception))
+
+    def test_planning_first_empty_gate_r_evidence_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "## Gate R Evidence\n\n> Реалізовуй\n\nuser message: developer approved the BA Business Plan in the prior turn.\n\n",
+            "## Gate R Evidence\n\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Gate R Evidence", str(ctx.exception))
+
+    def test_planning_first_gate_r_evidence_without_quote_or_reference_fails(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "> Реалізовуй\n\nuser message: developer approved the BA Business Plan in the prior turn.",
+            "Routing was clear from the conversation flow.",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_implementation_plan_doc(doc)
+        self.assertIn("Gate R Evidence", str(ctx.exception))
+
+    def test_site_ready_now_without_gate_r_evidence_passes(self):
+        doc = PLANNING_FIRST_VALID_PLAN.replace(
+            "**Planning branch:** `planning-first`", "**Planning branch:** `site-ready-now`"
+        ).replace(
+            "## Gate R Evidence\n\n> Реалізовуй\n\nuser message: developer approved the BA Business Plan in the prior turn.\n\n",
+            "",
+        )
+        result = validate_implementation_plan_doc(doc)
+        self.assertIsNone(result)
+
+    def test_no_planning_branch_line_passes(self):
+        result = validate_implementation_plan_doc(VALID_PLAN)
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()

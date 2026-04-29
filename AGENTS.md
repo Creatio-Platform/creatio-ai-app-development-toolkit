@@ -9,6 +9,9 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST NOT** produce plan output using the VS Code template structure (Steps / Relevant files / Verification / Decisions).
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
+- **First plan in a fresh app generation session MUST be a BA-style Business Plan.** When no prior approved BA Business Plan exists in this conversation, the first plan output — whether via `exit_plan_mode`, inline message, or saved file — MUST be the BA-style Business Plan (Agent 2 output). It MUST NOT be a Technical Annex or Implementation Plan. The Implementation Plan is allowed only after Gate R approval is recorded inline in the conversation.
+- The routing choice (`site-ready-now` / `planning-first`) MUST come from a user message. `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, and `(auto-...)` markers are not allowed on the `Planning branch:` line.
+- When `Planning branch: planning-first` is recorded in the Implementation Plan, the plan MUST include a `## Gate R Evidence` section that cites the user message which approved the BA Business Plan and selected the routing (e.g., a `> ...` quote line, or a `user message:` / `developer reply:` / `approved by developer` reference).
 
 The required top-level sections of every BA-style Business Plan are, in order:
 
@@ -72,6 +75,7 @@ Before returning any Business Plan or Implementation Plan, the assistant MUST ru
 3. Are there any extra top-level sections?
 4. Is any section replaced by a synonym or merged with another section?
 5. Is the output for the correct stage: BA plan versus implementation plan?
+6. If the output is a Technical Annex or Implementation Plan: was the BA Business Plan already approved by the developer in this conversation, and is the routing choice (`site-ready-now` / `planning-first`) quoted from a user message rather than `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, or `(auto-...)`? When `planning-first`, is a `## Gate R Evidence` section present with a user-message quote or a labelled reference?
 
 If any answer indicates format drift, the assistant MUST regenerate before responding.
 

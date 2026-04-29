@@ -50,6 +50,22 @@ DATAFORGE_AVAILABILITY_RE = re.compile(
     r"^\s*dataforge-availability\s*:\s*(ready|unavailable)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+PLANNING_BRANCH_LINE_RE = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}Planning\s+branch:?\*{0,2}\s*[`'\"]?(?P<branch>planning-first|site-ready-now)[`'\"]?(?P<extra>[^\n]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+ROUTING_ASSUMED_MARKER_RE = re.compile(
+    r"\(\s*(?:assumed|inferred|derived|presumed|default|auto[- ]\w+)\b",
+    re.IGNORECASE,
+)
+GATE_R_EVIDENCE_SECTION_RE = re.compile(
+    r"^\s*#{2,6}\s+Gate\s+R\s+Evidence\s*$\n(?P<body>.*?)(?=^\s*#{1,6}\s+\S|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+GATE_R_EVIDENCE_QUOTE_RE = re.compile(
+    r"(?:^\s*>\s+\S+|user\s+message\s*:|developer\s+reply\s*:|approved\s+by\s+developer)",
+    re.IGNORECASE | re.MULTILINE,
+)
 CHOSEN_ACTION_RE = re.compile(r"chosen-action\s*:\s*(reuse|extend|create)\b", re.IGNORECASE)
 DISCOVERY_EVIDENCE_RE = re.compile(r"discovery-evidence\s*:", re.IGNORECASE)
 DISCOVERY_TOOL_SIGNAL_RE = re.compile(
@@ -361,6 +377,26 @@ def validate_implementation_plan_doc(content: str) -> None:
     dataforge_availability_match = DATAFORGE_AVAILABILITY_RE.search(text)
     dataforge_availability = dataforge_availability_match.group(1).lower() if dataforge_availability_match else None
     dataforge_unavailable = dataforge_availability == "unavailable"
+    planning_branch_match = PLANNING_BRANCH_LINE_RE.search(text)
+    if planning_branch_match and planning_branch_match.group("branch").lower() == "planning-first":
+        extra = planning_branch_match.group("extra") or ""
+        if ROUTING_ASSUMED_MARKER_RE.search(extra):
+            raise WorkflowError(
+                "Implementation plan failed: Planning branch=planning-first must reference an explicit user routing choice; "
+                "'(assumed)', '(inferred)', '(derived)', '(presumed)', '(default)', or '(auto-...)' markers are not allowed"
+            )
+        gate_r_section_match = GATE_R_EVIDENCE_SECTION_RE.search(text)
+        if not gate_r_section_match:
+            raise WorkflowError(
+                "Implementation plan failed: Planning branch=planning-first requires a '## Gate R Evidence' section "
+                "citing the user message that approved the BA Business Plan and chose the routing"
+            )
+        gate_r_body = gate_r_section_match.group("body").strip()
+        if not gate_r_body or not GATE_R_EVIDENCE_QUOTE_RE.search(gate_r_body):
+            raise WorkflowError(
+                "Implementation plan failed: '## Gate R Evidence' must contain at least one user-message quote "
+                "(line starting with '> ') or a labelled reference such as 'user message:', 'developer reply:', or 'approved by developer'"
+            )
     if not MODEL_DECISIONS_HEADING_RE.search(text):
         raise WorkflowError("Implementation plan failed: missing required section: Model Decisions")
     section_match = MODEL_DECISIONS_SECTION_RE.search(text)
