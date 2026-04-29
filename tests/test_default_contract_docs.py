@@ -214,7 +214,6 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_docs_define_machine_readable_page_sync_contract(self):
         for path in PAGE_SYNC_PLAN_DOCS:
             content = read_text(path)
-            self.assertIn("page-sync-plan.json", content, str(path))
             self.assertIn("PAGE_SYNC_PLAN_JSON_START", content, str(path))
 
     def test_docs_require_pre_analysis_before_ba_draft(self):
@@ -229,7 +228,6 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("latency", content, str(path))
             self.assertIn("structured input", content, str(path))
             self.assertIn("do not read large repository files", content, str(path))
-            self.assertIn("orchestration scripts", content, str(path))
 
     def test_docs_require_domain_expertise_for_recognizable_app_types(self):
         for path in DOMAIN_EXPERTISE_DOCS:

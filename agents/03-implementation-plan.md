@@ -10,17 +10,8 @@ The business contract for this agent is the BA-style requirements draft approved
 
 ## Input
 
-- `output/<AppName>/requirements.md`
-- `output/<AppName>/request-spec.json`
-- `output/<AppName>/workflow-state.json`
-- `output/<AppName>/.creatio-env.json` when runtime inputs are no longer deferred
-
-## Output
-
-- `output/<AppName>/technical-annex.md`
-- `output/<AppName>/plan.md`
-- `output/<AppName>/page-sync-plan.json` when page sync is required
-- `output/<AppName>/sync-pages/*.body.js` when page bodies are materialized outside `plan.md`
+- Approved requirements and request spec from conversation context (produced by Agent 2)
+- Resolved `<env_name>` from conversation context (produced by Agent 1)
 
 ## Read First
 Preferred: read `context/.cache/agent-3-bundle.md` when available.
@@ -46,9 +37,8 @@ When the plan includes standalone page creation (not through `create-app-section
 ## Preconditions
 
 - Implementation or technical execution detail was explicitly requested.
-- `scripts/check-planning-gate.sh <AppName>` passes.
-- `scripts/check-approval-gate.sh <AppName>` passes.
-- If runtime inputs are already available for the current run, `output/<AppName>/.creatio-env.json` exists and its `url` matches the current request URL.
+- Planning was approved and requirements were approved by the developer in the conversation.
+- If runtime inputs are already available for the current run, the env URL from conversation context matches the current request URL.
 
 ## Planning Goals
 
@@ -74,8 +64,7 @@ Validate `request-spec.json` and `workflow-state.json`:
 - runtime inputs are either present or explicitly deferred
 - the approved requirements follow the BA-style structure from Agent 2
 - the approved requirements are not merely a generic planning wrapper with non-BA headings
-- when runtime inputs are available, `.creatio-env.json` points to the same URL as the current request for this run
-- if `.creatio-env.json` exists with a different URL, stop and rerun Agent 1 instead of reusing stale runtime artifacts
+- when runtime inputs are available, the env URL from conversation context matches the current request URL
 
 If any of these checks fail, stop and report the blocker.
 
@@ -169,31 +158,31 @@ echo '{"environment-name":"<env>"}' | py -3 scripts/mcp_client.py <tool-name> --
 
 There is **no `--args-json` flag**. The only argument sources are:
 `<args-json>` (legacy positional, single JSON string), `--args-file <path>`, or `--args-stdin` with piped JSON.
-Resolve `<env>` from `output/<AppName>/.creatio-env.json`.
+Resolve `<env>` from conversation context (reported by Agent 1).
 
 Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
 
 `dataforge-status` itself requires `environment-name`. Example payload:
 
 ```json
-{"environment-name": "<env from .creatio-env.json>"}
+{"environment-name": "<env from conversation context>"}
 ```
 
 An empty body `{}` returns `invalid-request` ("Missing required connection parameters").
 
 - If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
 - If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
-- In that unavailable mode, record `dataforge-availability: unavailable` in `plan.md` and `technical-annex.md`.
+- In that unavailable mode, record `dataforge-availability: unavailable` in the plan presented in conversation.
 - When `dataforge-availability: unavailable` is recorded, Agent 3 should not run the reuse/extend/create discovery branch and should not require DataForge-based evidence or fallback proof for the skipped branch.
 - Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
 
 #### DataForge Unavailable — Fast Path
 
 When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
-Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+Do NOT read or analyze the validator source code in `scripts/workflow_validators.py` to determine what fields or phrases are required. The rules below are the complete specification.
 
-This rule applies to **all** `validate-implementation-plan-doc` failures, not only the unavailable fast path.
-On a validator failure, fix the artifact based on the error string returned by the script. The canonical templates already live in this runbook (the `Model Decisions` section below) and in `context/model-discovery-evidence.md` — opening `scripts/workflow_cli.py` to reverse-engineer regexes is wasted work and forbidden.
+This rule applies to **all** `validate_implementation_plan_doc` validation failures, not only the unavailable fast path.
+On a validation failure, fix the artifact based on the error message returned. The canonical templates already live in this runbook (the `Model Decisions` section below) and in `context/model-discovery-evidence.md` — reading `scripts/workflow_validators.py` to reverse-engineer regexes is wasted work and forbidden.
 
 **Checks that are SKIPPED when DataForge is unavailable:**
 
@@ -324,7 +313,7 @@ For every strong candidate, complete the full ladder before locking the final `M
    - when using `get-entity-schema-properties`, resolve `package-name` first via `find-entity-schema`
 4. Final choice:
    - only after the first three steps may the plan lock the final `reuse`, `extend`, or `create` outcome
-   - **begin writing `plan.md` immediately after Evidence Ladder is complete** — do not defer to re-read validator source or workflow scripts before committing to disk
+   - **present the plan immediately after Evidence Ladder is complete** — do not defer to re-read validator source or workflow scripts
 
 If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
 Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
@@ -552,9 +541,8 @@ Resolve the preferred page execution and verification sequence through `get-tool
 
 When page sync is required:
 
-- embed JSON between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in `plan.md`
-- materialize the same payload to `output/<AppName>/page-sync-plan.json`
-- prefer `bodyPath` references over large inline bodies
+- embed JSON between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in the plan presented in conversation
+- prefer inline bodies over `bodyPath` references since no files are written to disk
 
 ### Validation Rules
 
@@ -565,9 +553,11 @@ When page sync is required:
 
 ## Plan Output
 
-`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, verification strategy, and any planning-time reuse decisions.
+Present the Technical Annex and the execution plan inline in the conversation.
 
-`plan.md` should be execution-ready and include:
+The Technical Annex should explain the technical branch, payload decisions, defaults, blockers, verification strategy, and any planning-time reuse decisions.
+
+The execution plan should be execution-ready and include:
 
 - app payload
 - branch choice and collision handling
@@ -576,3 +566,18 @@ When page sync is required:
 - default implementation strategy
 - page sync contract when required
 - explicit blocker notes when the approved business draft is insufficient for safe execution
+
+After presenting the plan, validate it inline:
+
+```bash
+python3 -c "
+import sys
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_implementation_plan_doc
+validate_implementation_plan_doc(sys.stdin.read())
+" << 'EOF'
+<plan content>
+EOF
+```
+
+If validation raises `WorkflowError`, fix the plan and re-validate before proceeding to Agent 4.

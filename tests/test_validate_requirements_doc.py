@@ -5,16 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from workflow_cli import validate_requirements_doc, WorkflowError
-
-TMP_DIR = ROOT / ".tmp-tests" / "reqs"
-
-
-def _write(name, content):
-    path = TMP_DIR / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return str(path)
+from workflow_validators import validate_requirements_doc, WorkflowError
 
 
 VALID_DOC = """# TestApp - Requirements
@@ -81,63 +72,50 @@ Tasks move through New, Active, and Done.
 
 class TestValidateRequirementsDocSections(unittest.TestCase):
     def test_valid_doc_passes(self):
-        path = _write("valid.md", VALID_DOC)
-        result = validate_requirements_doc(path)
-        self.assertIn("REQUIREMENTS_DOC_OK", result)
+        result = validate_requirements_doc(VALID_DOC)
+        self.assertIsNone(result)
 
     def test_missing_section_2_roles_and_permissions(self):
         doc = VALID_DOC.replace("## 2. Roles and Permissions", "## 2. Team Roles")
-        path = _write("missing_s2.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 2. Roles and Permissions", str(ctx.exception))
 
     def test_missing_section_1_business_outcome(self):
         doc = VALID_DOC.replace("## 1. Business Outcome", "## 1. Overview")
-        path = _write("missing_s1.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 1. Business Outcome", str(ctx.exception))
 
     def test_missing_section_3_object_model(self):
         doc = VALID_DOC.replace("## 3. Object Model", "## 3. Data Model")
-        path = _write("missing_s3.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 3. Object Model", str(ctx.exception))
 
     def test_missing_section_4_lifecycle(self):
         doc = VALID_DOC.replace("## 4. Lifecycle and Statuses", "## 4. State Machine")
-        path = _write("missing_s4.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 4. Lifecycle and Statuses", str(ctx.exception))
 
     def test_missing_section_5_business_logic(self):
         doc = VALID_DOC.replace("## 5. Business Logic", "## 5. Rules")
-        path = _write("missing_s5.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 5. Business Logic", str(ctx.exception))
 
     def test_missing_section_6_ux(self):
         doc = VALID_DOC.replace("## 6. UX Expectations", "## 6. User Interface")
-        path = _write("missing_s6.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 6. UX Expectations", str(ctx.exception))
 
     def test_missing_section_7_edge_cases(self):
         doc = VALID_DOC.replace("## 7. Edge Cases and Exceptions", "## 7. Notes")
-        path = _write("missing_s7.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("## 7. Edge Cases and Exceptions", str(ctx.exception))
-
-    def test_file_not_found_raises(self):
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc("/nonexistent/path/requirements.md")
-        self.assertIn("file not found", str(ctx.exception))
 
 
 class TestValidateRequirementsDocTables(unittest.TestCase):
@@ -149,9 +127,8 @@ class TestValidateRequirementsDocTables(unittest.TestCase):
             "| Status | `UsrStatusId` | Lifecycle state | Lookup | Yes | New |\n",
             ""
         )
-        path = _write("no_table.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("field table", str(ctx.exception).lower())
 
     def test_table_outside_section_3_rejected(self):
@@ -160,69 +137,60 @@ class TestValidateRequirementsDocTables(unittest.TestCase):
             "- Name and Status are required to create a task.\n\n"
             "| Rule | When |\n| --- | --- |\n| Validate name | Always |"
         )
-        path = _write("table_outside_s3.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("only in section 3", str(ctx.exception))
 
 
 class TestValidateRequirementsDocMarkers(unittest.TestCase):
     def test_missing_minimum_to_create_marker(self):
         doc = VALID_DOC.replace("Minimum to create:", "Required fields:")
-        path = _write("no_min_marker.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("Minimum to create:", str(ctx.exception))
 
     def test_missing_default_list_columns_marker(self):
         doc = VALID_DOC.replace("- default list columns:", "- list columns:")
-        path = _write("no_list_cols.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("default list columns:", str(ctx.exception))
 
     def test_missing_default_filters_marker(self):
         doc = VALID_DOC.replace("- default filters:", "- filters:")
-        path = _write("no_filters.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("default filters:", str(ctx.exception))
 
     def test_missing_main_form_groups_marker(self):
         doc = VALID_DOC.replace("- main form groups:", "- form sections:")
-        path = _write("no_form.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("main form groups:", str(ctx.exception))
 
 
 class TestValidateRequirementsDocEntityMetadata(unittest.TestCase):
     def test_missing_entity_role_marker(self):
         doc = VALID_DOC.replace("Entity role: `main`", "")
-        path = _write("no_entity_role.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("Entity role:", str(ctx.exception))
 
     def test_missing_title_line_in_entity(self):
         doc = VALID_DOC.replace("Title: Task\n", "").replace("- Title: Status;", "- Status;")
-        path = _write("no_title.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("Title:", str(ctx.exception))
 
     def test_missing_title_heading(self):
         doc = VALID_DOC.replace("# TestApp - Requirements", "# TestApp Notes")
-        path = _write("bad_title.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("title must match", str(ctx.exception))
 
     def test_obsolete_section_6_rejected(self):
         doc = VALID_DOC + "\n## 6. Implementation-shaping decisions and assumptions\n\nNone.\n"
-        path = _write("obsolete_s6.md", doc)
         with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(path)
+            validate_requirements_doc(doc)
         self.assertIn("obsolete section 6", str(ctx.exception))
 
 
