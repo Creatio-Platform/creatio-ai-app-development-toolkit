@@ -382,9 +382,9 @@ Gate P:
 
 Gate R:
 
-- Before writing `requirements.md`, read `context/.cache/agent-2-bundle.md` (preferred) or `agents/02-requirements-gathering.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before writing. It cannot be recalled from memory.
+- Before presenting the Business Plan, read `context/.cache/agent-2-bundle.md` (preferred) or `agents/02-requirements-gathering.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Each checklist group must persist `source="confirmed"` or `source="assumed"`.
+- Each checklist group must record `source="confirmed"` or `source="assumed"` directly in the visible draft.
 - Requires the developer to see the full Business Plan before approval.
 - The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
@@ -416,9 +416,9 @@ Approval-ready vs execution-ready rule:
 - For MCP transport, tool request/response shape, canonical app-modeling rules, and lookup/default semantics, follow the current `clio` MCP contract and prompts/resources such as `docs://mcp/guides/app-modeling` rather than re-declaring those rules locally.
 - If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
 - Final user-facing status must be derived from the tool execution evidence reported in the conversation. Do not report planned items as implemented without confirmed evidence.
-- Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
+- Report page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
 - When page sync is required, the machine-readable page sync contract must be embedded in the plan presented in the conversation between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
-- App code and workflow-state collisions are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
+- App code collisions and stage-transition state conflicts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
 - Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
@@ -446,8 +446,8 @@ For targeted changes, use this reduced checklist instead:
 6. Return evidence-based status without generating a BA plan.
 
 Optimization rule:
-- Do not repeat the same gate check unnecessarily within the same uninterrupted stage transition.
-- A successful canonical gate check remains valid until the workflow state for that gate is modified.
+- Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
+- A satisfied gate remains valid for the rest of the current conversation unless its inputs change.
 
 ## Approved Plan Fast Path
 
