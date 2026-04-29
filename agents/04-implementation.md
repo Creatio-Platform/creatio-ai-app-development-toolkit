@@ -6,31 +6,19 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 
 ## Read First
 
-Preferred: read `context/.cache/agent-4-bundle.md` when available.
-
-Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
-- the bundle is missing
-- the bundle declares a build timestamp or manifest hash that no longer matches its source set
-- the current task requires a reference file that is known to be outside the bundle
-- the bundle content is internally inconsistent with currently loaded repository instructions
-
-Fallback (if bundle unavailable or stale):
+Repository files (load only what the current step touches):
 - `AGENTS.md`
-- `context/essentials.md`
-- `context/ui-reference.md`
-- `context/viewconfig-reference.md`
-- `context/data-bindings-reference.md`
-- `scripts/mcp_client.py`
+- `context/ui-reference.md` and `context/viewconfig-reference.md` — when page sync runs.
+- `context/data-bindings-reference.md` — when the plan seeds lookup data outside `sync-schemas`.
+- `scripts/mcp_client.py` — transport wrapper.
 
-Resolve executable tool details through `get-tool-contract`.
+clio MCP guides (fetch on demand through the MCP client):
+- `docs://mcp/guides/agent-execution` — authoritative source for MCP transport rules, execution order, branching rules, schema-sync recovery patterns, page-sync rules, and retry/failure policy. Do not duplicate that content here.
+- `docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`, `docs://mcp/guides/page-creation`, `docs://mcp/guides/page-modification` — canonical entity and page flow semantics.
+- `docs://mcp/guides/dataforge-orchestration` — discovery layers and stale-index recovery for live DataForge work.
+- `docs://mcp/guides/support-mode` — diagnostic-first execution under support mode (severity routing, confirmation probes, fail-fast evidence, reporting). Replaces any inline support-mode content in this runbook.
 
-## MCP Transport
-
-- Use `scripts/mcp_client.py`
-- Use `get-tool-contract` and `tools/list` before execution
-- Respect `CLIO_CMD` when a custom clio binary is configured
-- Do not use raw curl for clio stdio transport
-- Pass boolean MCP parameters as booleans, not strings
+Resolve executable tool parameter shapes through `get-tool-contract` rather than restating them in this runbook.
 
 ## Preconditions
 
@@ -46,75 +34,24 @@ Resolve executable tool details through `get-tool-contract`.
 - `Model Decisions` have already resolved any technical rewrite away from BA placeholder schema names or custom lookup assumptions
 - no decision record remains at `tradeoff-escalation: user-confirmation-required`
 
-## Support-Mode Branch (Diagnostic-First)
+## Execution Mechanics (delegated to clio MCP)
 
-Apply this branch only when support mode is on:
+Transport rules, the numbered execution order, branching rules between new-app and existing-app flows, schema-sync recovery patterns (including the `InsertQuery failed` reuse rule and the section-readback-timeout / orphaned-entity cleanup path), retry/failure policy, and completion criteria are owned by `docs://mcp/guides/agent-execution`. Fetch that guide on demand and follow it as the source of truth instead of duplicating those mechanics here.
 
-- Keep execution in the main thread/session; do not start delegated/background actions.
-- If no main-thread equivalent exists, allow one unavoidable support-mode exception record:
-  - `attempted_action`
-  - `no_main_thread_equivalent_reason`
-  - `main_thread_evidence_captured`
-- When an unavoidable non-main-thread action completes, surface its result in the main-thread support output before proceeding or stopping.
-- For any stage-critical failure in the current active stage, create a canonical failure record immediately.
-- Allow at most one confirmation probe, and only with the same tool + same contract path.
-- Severity routing in this stage:
-  - `clio_mcp_issue` is the primary critical-by-default target defect category and remains strict fail-fast after the optional single confirmation probe when blocking.
-  - `instruction_issue`, `environment_issue`, and `orchestration_tool_failure` are non-critical by default and should use bounded retry/workaround-first handling.
-  - `orchestration_tool_failure` may run one canonicalization pass before fail-fast, limited to call-shape normalization (argument format, wrapper invocation shape, serialization wrapper shape) on the same tool path.
-  - Canonicalization must not change the target tool, branch, business logic, or stage.
-  - Escalation rule: non-critical categories become fail-fast only when unresolvable and they prevent trustworthy CLIO MCP diagnosis/evidence.
-- For critical `clio_mcp_issue` failures, do not switch to alternate workaround branches, fallback strategy changes, or different mutation paths.
-- For non-critical failures, bounded same-path recovery is allowed within retry budgets.
-- After the optional confirmation probe, stop the blocked stage and emit:
-  - `exit_decision=fail_fast`
-  - `blocked_stage=<current_active_stage_label>`
-  - `why_continue_is_unsafe=<reason>`
-- In CLIO-focused support runs, attempt at least one real MCP tool invocation before concluding unless blocked by an unresolvable environment failure after bounded retries.
-- Page-sync classification rule in support mode:
-  - classify client-side validation issues caused by generated/edit strategy or known binding patterns as `instruction_issue`;
-  - classify as `clio_mcp_issue` only when sync-pages tool/backend behavior violates advertised contract semantics.
+When support mode is on, also fetch `docs://mcp/guides/support-mode` for diagnostic-first behavior, severity routing, confirmation probes, fail-fast evidence, and reporting sections. This runbook does not restate that policy.
 
-## Execution Order
+## Plan-Bound Decision Rules (repository-owned)
 
-1. Verify MCP reachability through `scripts/mcp_client.py`.
-2. Call `tools/list` and verify required tools exist.
-3. Resolve executable contract metadata through `get-tool-contract`.
-4. Resolve the execution branch through the current `clio` contract and guidance resources.
-5. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
-6. Run the post-mutation refresh step required by the current `clio` guidance.
-7. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
-8. Validate the final normalized result.
-9. Report implementation summary in conversation.
-
-## Branching Rules
-
-- If `create-app` reports that the app or configuration schema already exists, stop the create flow and switch to the existing-app discovery flow
-- Treat `create-app` as a DataForge-assisted create step; do not add an automatic standalone `dataforge-status` or `dataforge-context` preflight in the standard new-app branch.
-- Surface which branch actually ran in the persisted evidence and final report
-
-## Schema Sync Rules
-
-- Resolve template-created main-entity behavior from the current `clio` guidance instead of restating it here
 - Do not reinterpret `reuse` / `extend` / `create` during execution. Execute the `Model Decisions` already recorded in the plan.
-- When executing a `reuse` decision and the wiring step fails (e.g., `create-app-section` returns `InsertQuery failed`), do not create a substitute entity that duplicates the reused schema's fields. The reused entity already exists — report it as available with its capabilities and let the user decide whether to use it as-is or switch to a new entity with separate data storage.
-- When `create-app-section` returns `success: false` due to a metadata readback timeout (not `InsertQuery failed`) and `list-app-sections` confirms the section was actually created, proceed with the recovery path but first verify the auto-generated greenfield entity from `create-app`: call `get-entity-schema-properties` on the app entity (e.g., `UsrTaskManagementApp`); if it still inherits from `BaseEntity` with only the auto-generated `UsrName` column and the section's `entity-schema-name` is a different entity, delete the orphaned entity using `delete-schema` before proceeding to page sync; if `delete-schema` fails, log a warning with the entity name and failure reason and continue to page sync; record this cleanup attempt as a recovery action in the implementation evidence.
 - Treat `Model Decisions` as the authoritative final technical plan even when the BA draft or earlier planning text named different `Usr*` schemas or custom lookups.
 - Treat a planning-time strong candidate as already resolved in favor of `reuse` for the most similar candidate unless the plan contains a proven capability failure. Do not honor stale create bias from Agent 2, the BA draft, or an earlier plan.
 - Never "finish the reuse reasoning" during execution. If Agent 3 did not complete the Evidence Ladder, stop with a blocker instead of improvising discovery or inventing a new create path.
-- do not reinterpret the absence of DataForge evidence as a blocker when the plan explicitly records `dataforge-availability: unavailable`.
+- Do not reinterpret the absence of DataForge evidence as a blocker when the plan explicitly records `dataforge-availability: unavailable`.
 - If a requested schema step is not fully covered by `Model Decisions`, stop with a blocker instead of improvising a new entity or lookup.
 - If a requested schema step depends on rejecting a strong candidate but the plan lacks follow-up evidence or schema-level confirmation, stop with a blocker before any mutation.
 - If a requested schema step contradicts a final `reuse` or `extend` decision, stop with a blocker instead of honoring stale BA assumptions.
-- Use `update-entity-schema` semantics inside `sync-schemas` to extend that main entity
-- Use `create-entity-schema` only for additional business objects with distinct meaning
-- Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns
-- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes
-- Create lookup entities before entities that reference them
-- Prefer batched lookup seeding inside `sync-schemas`; use `create-data-binding-db` only when the run explicitly needs a separate binding artifact
-- Use `create-data-binding-db` only for non-standard binding scenarios such as custom filters, cross-package references, or standalone binding artifacts outside a sync-schemas batch
-- Treat schema work as successful only when refreshed metadata is available immediately and no schema is left in `Database update required`
-- If post-mutation refresh fails, stop with a blocker
+- Apply the naming contract from `AGENTS.md` Global Invariants for all newly created entities and custom columns.
+- Practical reminder: lookup storage aliases such as `...Id` are backend physical names, not canonical business field codes.
 
 ## Default Rules
 
@@ -233,24 +170,21 @@ Report in conversation:
 
 Never claim UI acceptance is verified unless the corresponding evidence was returned by MCP tools.
 
-## Retry And Failure Policy
+## Retry And Failure Policy (plan-bound)
 
-- Retry transient MCP transport failures up to 3 times with a short delay
-- If required tools are missing in `tools/list`, stop with blocker
-- If `get-tool-contract` cannot provide executable metadata, stop with blocker
-- If any normalized tool result is unsuccessful, stop with blocker and persist the raw evidence
-- Use standalone `dataforge-status`, `dataforge-context`, `dataforge-initialize`, and `dataforge-update` only in explicit inspection or remediation branches, not as automatic retries for the standard create flow
-- If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it
-- In support mode, a stage-critical failure allows only one same-path confirmation probe before fail-fast when escalation conditions are met
-- In support mode, resolved or temporary `orchestration_tool_failure` / `instruction_issue` items are reported as `Non-target friction`, not `Confirmed failures`
-- If execution reveals a missing or contradictory `Model Decision` for an ambiguous model choice, stop with blocker instead of improvising a new reuse/create path
+Transport-level retry budgets, contract-discovery failures, and DataForge tooling rules are owned by `docs://mcp/guides/agent-execution`. Repository-side rules that depend on the approved plan:
+
+- If the plan tries to create a second `BaseEntity` for the same primary record type as the resolved main section entity, stop with blocker instead of executing it.
+- If execution reveals a missing or contradictory `Model Decision` for an ambiguous model choice, stop with blocker instead of improvising a new reuse/create path.
+
+Support-mode retry, confirmation-probe, and reporting rules are owned by `docs://mcp/guides/support-mode`. Apply that guide when support mode is on.
 
 ## Completion Criteria
 
-- Requirements and plan were approved in conversation
-- MCP reachability and contract discovery succeeded
-- All required schema sync steps executed and canonical context refreshed
-- No created or updated schema is left in `Database update required`
-- Page sync executed and verified for every run that required it
-- Implementation summary reported in conversation from MCP evidence
-- When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`
+- Requirements and plan were approved in conversation.
+- MCP reachability and contract discovery succeeded (per `docs://mcp/guides/agent-execution`).
+- All required schema sync steps executed and canonical context refreshed.
+- No created or updated schema is left in `Database update required`.
+- Page sync executed and verified for every run that required it.
+- Implementation summary reported in conversation from MCP evidence with explicit `implemented` / `machineChecked` / `manualCheckPending` buckets.
+- When support mode is on, the final response uses the section contract from `docs://mcp/guides/support-mode`.

@@ -60,16 +60,10 @@ class Agent3ReuseDiscoveryContractTests(unittest.TestCase):
             self.assertIn(marker, content)
         self.assertIn("schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`", content)
 
-    def test_agent3_bundle_matches_live_reuse_discovery_contract(self):
-        bundle = read_text(ROOT / "context/.cache/agent-3-bundle.md")
-        for marker in AGENT3_REUSE_DISCOVERY_MARKERS:
-            self.assertIn(marker, bundle)
-        self.assertIn("schema-creation step unless the matching `Model Decisions` record already resolved that exact business concept to `chosen-action: create`", bundle)
-
-    def test_agent3_bundle_includes_model_discovery_evidence_guide(self):
-        bundle = read_text(ROOT / "context/.cache/agent-3-bundle.md")
+    def test_model_discovery_evidence_guide_lives_in_repo(self):
+        content = read_text(ROOT / "context/model-discovery-evidence.md")
         for marker in MODEL_DISCOVERY_GUIDE_MARKERS:
-            self.assertIn(marker, bundle)
+            self.assertIn(marker, content)
 
 
 if __name__ == "__main__":

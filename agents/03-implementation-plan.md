@@ -14,25 +14,21 @@ The business contract for this agent is the BA-style requirements draft approved
 - Resolved `<env_name>` from conversation context (produced by Agent 1)
 
 ## Read First
-Preferred: read `context/.cache/agent-3-bundle.md` when available.
 
-Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
-- the bundle is missing
-- the bundle declares a build timestamp or manifest hash that no longer matches its source set
-- the current task requires a reference file that is known to be outside the bundle
-- the bundle content is internally inconsistent with currently loaded repository instructions
-
-Fallback (if bundle unavailable or stale):
+Repository files (load only the sections that match the current step):
 - `AGENTS.md`
-- `context/essentials.md` L166-229 (MCP Tools)
-- `context/schema-reference.md` L7-90 (Parents + DataValueTypes)
-- `context/business-checklist.md`
-- `context/ui-reference.md`
-- `context/viewconfig-reference.md`
-- `context/data-bindings-reference.md`
-- `scripts/mcp_client.py`
+- `context/schema-reference.md` (Parents + DataValueTypes)
+- `context/model-discovery-evidence.md` (reuse evidence ladder)
+- `context/business-checklist.md` (only when reconciling against the approved BA draft)
+- `context/data-bindings-reference.md` (only when the plan includes lookup seeding or bindings)
 
-When the plan includes standalone page creation (not through `create-app-section`), resolve the page creation flow through `docs://mcp/guides/page-creation`.
+clio MCP guides (fetch on demand through the MCP client):
+- `docs://mcp/guides/app-modeling` — canonical app payload, entity flows, lookup semantics.
+- `docs://mcp/guides/dataforge-orchestration` — discovery layers and stale-index recovery before live discovery calls.
+- `docs://mcp/guides/page-creation` — standalone page creation when the plan does not go through `create-app-section`.
+- `docs://mcp/guides/agent-execution` — referenced only to keep Agent 3 plan steps consistent with Agent 4 execution mechanics; do not duplicate its content into the plan.
+
+Resolve executable parameter shapes through `get-tool-contract` instead of restating them in the plan.
 
 ## Preconditions
 

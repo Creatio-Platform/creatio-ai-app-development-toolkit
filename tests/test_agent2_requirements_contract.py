@@ -23,11 +23,5 @@ class Agent2RequirementsContractTests(unittest.TestCase):
             self.assertIn(marker, content)
         self.assertIn("must not pre-decide `reuse`, `extend`, or `create`", content)
 
-    def test_agent2_bundle_includes_reuse_check_handoff_signals(self):
-        bundle = read_text(ROOT / "context/.cache/agent-2-bundle.md")
-        for marker in REUSE_CHECK_MARKERS:
-            self.assertIn(marker, bundle)
-
-
 if __name__ == "__main__":
     unittest.main()

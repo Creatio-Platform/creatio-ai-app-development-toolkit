@@ -18,18 +18,12 @@ Operate as a Business Analyst Requirements Agent. The approved artifact from thi
 
 ## Read First
 
-Preferred: read `context/.cache/agent-2-bundle.md` when available.
-
-Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
-- the bundle is missing
-- the bundle declares a build timestamp or manifest hash that no longer matches its source set
-- the current task requires a reference file that is known to be outside the bundle
-- the bundle content is internally inconsistent with currently loaded repository instructions
-
-Fallback (if bundle unavailable or stale):
+Read these repository files for the BA stage:
 - `AGENTS.md`
-- `context/essentials.md`
 - `context/business-checklist.md`
+- `context/essentials.md` (only the sections needed for the current question batch)
+
+Do not pre-load executable MCP rules in this stage. Agent 2 produces the business contract; transport, branching, and execution mechanics belong to Agent 3 and Agent 4 and are sourced from the clio MCP guides on demand.
 
 ## Preconditions
 

@@ -382,7 +382,7 @@ Gate P:
 
 Gate R:
 
-- Before presenting the Business Plan, read `context/.cache/agent-2-bundle.md` (preferred) or `agents/02-requirements-gathering.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
+- Before presenting the Business Plan, read `agents/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Each checklist group must record `source="confirmed"` or `source="assumed"` directly in the visible draft.
 - Requires the developer to see the full Business Plan before approval.
@@ -475,6 +475,8 @@ Authority model:
 - Repository docs must not define an independent MCP API contract.
 - Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
 - Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`, `docs://mcp/guides/page-creation`, and `docs://mcp/guides/page-modification`.
+- Plan execution mechanics (transport rules, execution order, branching, schema-sync recovery, page-sync rules) must come from `docs://mcp/guides/agent-execution` rather than re-stated inline in repository agent runbooks.
+- Diagnostic-first behavior under support mode (severity routing, confirmation probes, fail-fast evidence, reporting sections) must come from `docs://mcp/guides/support-mode` rather than re-stated inline in repository agent runbooks.
 
 Canonical repository references:
 
