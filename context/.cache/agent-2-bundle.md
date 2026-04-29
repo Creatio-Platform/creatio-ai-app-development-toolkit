@@ -23,13 +23,6 @@ Operate as a Business Analyst Requirements Agent. The approved artifact from thi
 - Developer's natural-language app request
 - `<AppName>`
 
-## Output
-
-- `output/<AppName>/requirements.md`
-- `output/<AppName>/request-spec.json`
-- `output/<AppName>/workflow-state.json`
-- `output/<AppName>/docs/**` draft skeleton
-
 ## Read First
 
 Preferred: read `context/.cache/agent-2-bundle.md` when available.
@@ -55,7 +48,7 @@ Fallback (if bundle unavailable or stale):
 1. Parse the free-form prompt.
 2. Apply first-turn latency rules from `AGENTS.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
 3. On the first turn, ask the routing question plus the main 3-5 business discovery questions together.
-4. Do not read large repository files or run orchestration scripts before the first clarification round completes.
+4. Do not read large repository files or run heavy setup steps before the first clarification round completes.
 5. Ask additional business questions in the next small themed batch.
 6. Show "What still needs clarification" only after the first clarification round if it still adds value.
 7. Ask technical questions only for true blockers.
@@ -63,7 +56,7 @@ Fallback (if bundle unavailable or stale):
 9. Resolve any material contradictions or missing carriers before showing the draft.
 10. Present the full BA-style Business Plan.
 11. Ask for natural-language approval.
-12. After approval, persist Gate R artifacts and initialize docs.
+12. After approval, validate the documents inline and proceed to Agent 3.
 
 ## Checklist Authority
 
@@ -138,8 +131,7 @@ Sections `1`, `2`, `4`, `5`, `6`, and `7` must use short paragraphs and bullets,
 
 ## Pre-Write Self-Check
 
-Before writing `requirements.md`, verify the assembled draft against `REQUIRED_REQUIREMENTS_SECTIONS` from `scripts/workflow_cli.py`.
-All seven sections must be present in the draft, in the exact order:
+Before presenting `requirements.md` to the developer, verify the assembled draft contains all seven sections in the exact order:
 
 1. `## 1. Business Outcome`
 2. `## 2. Roles and Permissions`
@@ -149,8 +141,8 @@ All seven sections must be present in the draft, in the exact order:
 6. `## 6. UX Expectations`
 7. `## 7. Edge Cases and Exceptions`
 
-If any required section is absent, renamed, or out of order in the assembled draft, do not persist the file.
-Regenerate the missing section from conversation context or business discovery before writing.
+If any required section is absent, renamed, or out of order, do not present the draft.
+Regenerate the missing section from conversation context or business discovery before presenting.
 
 ## Hard Fail Conditions
 
@@ -334,10 +326,29 @@ Each group must contain:
 - `creatioUrl`
 - `credentialsStatus`
 
-Use both acceptance checks before approval artifacts are written:
+Before presenting the draft for approval, run both inline validation checks:
 
-- `scripts/validate-request-spec.sh`
-- `scripts/validate-requirements-doc.sh`
+```bash
+python3 -c "
+import sys, json
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_requirements_doc
+validate_requirements_doc(sys.stdin.read())
+" << 'EOF'
+<requirements.md content>
+EOF
+
+python3 -c "
+import sys, json
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_request_spec
+validate_request_spec(json.load(sys.stdin))
+" << 'EOF'
+<request-spec.json content>
+EOF
+```
+
+If validation raises `WorkflowError`, fix the artifact and re-validate before presenting for approval.
 
 ## Business Modeling Rules
 
@@ -419,7 +430,7 @@ When the request clearly maps to a familiar business domain, the BA draft should
 
 Examples:
 - for client/customer or partner registries, expect core profile and contact attributes for the legal entity or person unless explicitly out of scope
-- for case, request, or service workflows, expect at least the issue summary, status, owner, dates, and basic resolution trail
+- for request or service workflows, expect at least the issue summary, status, owner, dates, and basic resolution trail
 - for product or catalog scenarios, expect at least title, category, status, and key commercial or operational attributes
 
 Use domain expertise to propose these baseline fields and behaviors in the draft.

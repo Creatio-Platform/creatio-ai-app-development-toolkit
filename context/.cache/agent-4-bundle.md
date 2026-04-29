@@ -13,16 +13,23 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 
 ## Read First
 
+Preferred: read `context/.cache/agent-4-bundle.md` when available.
+
+Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
+- the bundle is missing
+- the bundle declares a build timestamp or manifest hash that no longer matches its source set
+- the current task requires a reference file that is known to be outside the bundle
+- the bundle content is internally inconsistent with currently loaded repository instructions
+
+Fallback (if bundle unavailable or stale):
 - `AGENTS.md`
 - `context/essentials.md`
-- `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
 Resolve executable tool details through `get-tool-contract`.
-Use `context/mcp-application-tools-reference.md` only for local wrapper and normalization guidance.
 
 ## MCP Transport
 
@@ -34,12 +41,10 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 ## Preconditions
 
-- `scripts/check-approval-gate.sh <AppName>` passes
-- `scripts/check-implementation-plan-gate.sh <AppName>` passes
-- `output/<AppName>/requirements.md` passes `scripts/validate-requirements-doc.sh <AppName>` — reject stale or malformed requirements as a blocker
-- `output/<AppName>/.creatio-env.json` exists and is valid
-- when the current run has a request URL, `.creatio-env.json.url` matches it exactly
-- `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
+- Requirements and plan were approved by the developer in the conversation
+- Resolved env name and URL are present in conversation context
+- When the current run has a request URL, the env URL from conversation context matches it exactly
+- The approved plan includes explicit `Model Decisions` for every business object
 - Agent 4 runs in the foreground
 - `plan.md` includes explicit `Model Decisions` for every business object, supporting object, planned lookup, and non-obvious reference target that Agent 4 could otherwise reinterpret during execution
 - every schema creation or extension step in the plan is already justified by a matching `Model Decisions` record
@@ -83,14 +88,11 @@ Apply this branch only when support mode is on:
 2. Call `tools/list` and verify required tools exist.
 3. Resolve executable contract metadata through `get-tool-contract`.
 4. Resolve the execution branch through the current `clio` contract and guidance resources.
-5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
-7. Run the post-mutation refresh step required by the current `clio` guidance and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
-9. Persist page evidence and verification results.
-10. Validate the final normalized result.
-11. Build `mcp-application-report.md` from persisted evidence only.
-12. Sync and validate docs under `output/<AppName>/docs/`.
+5. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
+6. Run the post-mutation refresh step required by the current `clio` guidance.
+7. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
+8. Validate the final normalized result.
+9. Report implementation summary in conversation.
 
 ## Branching Rules
 
@@ -134,14 +136,22 @@ For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
 
 Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
 
-If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
-The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
+Read the embedded page sync contract from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in the approved plan from conversation context.
 
 Resolve page inspection, fallback, and verification guidance through `docs://mcp/guides/existing-app-maintenance`.
 
 Read page bodies through `get-page` file paths (`files.bodyFile`), not by manual JSON parsing of the raw response.
 
-All FormPage field bindings must use `$PDS_<Column>` control format. `$UsrColumn` without the PDS prefix is invalid.
+Page elements in `SCHEMA_VIEW_CONFIG_DIFF` fall into two categories:
+
+- **Data-source-bound** (e.g. `crt.Input`, `crt.ComboBox`, `crt.DateTimePicker`): have a `control` field that references an attribute. The attribute name is `{DataSourceName}_{ColumnName}` and the binding is `"control": "${DataSourceName}_{ColumnName}"`.
+- **Not data-source-bound** (e.g. `crt.Label`): use static resource strings directly, e.g. `"caption": "#ResourceString(Label_xyz_caption)#"`. No `control` field.
+
+To find the data source name, read `SCHEMA_MODEL_CONFIG → dataSources`. There may be zero, one, or multiple data sources with arbitrary names. The primary one is typically named `PDS`, but derive it from the actual page body — do not assume. Example: if `dataSources` contains `"PDS"`, then column `UsrTitle` becomes attribute `PDS_UsrTitle`, binding `$PDS_UsrTitle`, label `$Resources.Strings.PDS_UsrTitle`.
+
+Using a column name without the data source prefix (e.g. `$UsrTitle` instead of `$PDS_UsrTitle`) is invalid and `validate-page` will reject it with: `Standard field 'UsrTitle' uses proxy binding '$UsrTitle' via 'control' for datasource path 'PDS.UsrTitle'. Use '$PDS_UsrTitle' instead.`
+
+Before building the page body, resolve required fields of the entity bound to the page: find the entity name from `modelConfig → dataSources → <primaryDataSource> → config → entitySchemaName`, then call `get-entity-schema-properties` or `get-entity-schema-column-properties` to identify columns with `RequirementType = Required`. Every required column must be either visible on the form or auto-filled via a handler before save. Never remove a required field from the FormPage without providing an explicit filling strategy.
 
 When the plan requires standalone page creation (not through `create-app-section`):
 - Use `list-page-templates` → `create-page` → `get-page` verification
@@ -149,20 +159,13 @@ When the plan requires standalone page creation (not through `create-app-section
 
 For additive page edits that should not overwrite existing customizations, use `update-page` with `mode: "append"`.
 
-For targeted field additions without full body replacement, use `add-form-fields` or `add-list-columns`.
+For targeted field or column additions, edit the `body.js` returned by `get-page` directly and validate it before saving.
 
 Use `validate-page` for client-side validation before persisting page bodies.
 
 ## Evidence Rules
 
-Use `scripts/mcp_result_evidence.py` and the normalized result document as the source for:
-
-- `schemaSync`
-- `operationLog`
-- `pageEvidence`
-- `acceptanceEvidence`
-
-Persist page and report evidence with explicit status buckets:
+Track execution evidence in memory using these status buckets:
 
 - `implemented`
 - `machineChecked`
@@ -170,22 +173,12 @@ Persist page and report evidence with explicit status buckets:
 
 If `create-app` returns a top-level `dataforge` block:
 
-- preserve it in `mcp-application-result.json`
 - report it as advisory execution diagnostics
 - do not treat degraded coverage or warnings as a blocker when the app shell itself was created successfully
 
-Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
-Use `scripts/mcp_result_evidence.py` for all mutations to the result document. If the initial result must be persisted before MCP response, use `ensure_result_document()` with the MCP response payload — never a manually constructed JSON object.
-
 ## Steps
 
-### 0. Check Gates
-
-- Run `scripts/check-approval-gate.sh <AppName>`
-- Run `scripts/check-implementation-plan-gate.sh <AppName>`
-- If this fails, stop immediately
-
-### 1. Parse `plan.md`
+### 1. Parse the approved plan
 
 - Extract the execution branch, resolved business defaults, `Model Decisions`, ordered schema sync steps, and page sync requirements
 - Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
@@ -196,9 +189,8 @@ Use `scripts/mcp_result_evidence.py` for all mutations to the result document. I
 
 ### 2. Verify MCP reachability
 
-- Validate that `.creatio-env.json.url` matches the current request URL for this run
-- Only after that validation, read the environment from `.creatio-env.json`
-- If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
+- Validate that the env URL from conversation context matches the current request URL for this run
+- If the URL mismatches, stop immediately and rerun Agent 1.
 - Call `tools/list` through `scripts/mcp_client.py`
 - Resolve the executable contract through `get-tool-contract`
 - Stop with blocker if required tools are missing or `get-tool-contract` fails
@@ -207,14 +199,12 @@ Use `scripts/mcp_result_evidence.py` for all mutations to the result document. I
 
 - Use the current `clio`-owned application create or discovery flow for the selected branch.
 - For the standard new-app branch, call `create-app` directly and consume its returned `dataforge` diagnostics instead of issuing standalone `dataforge-*` calls first.
-- Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
-- Normalize it with `scripts/mcp_context_adapter.py normalize`
 
 ### 4. Execute schema sync
 
 - Prefer the current `clio`-owned schema path resolved from `get-tool-contract` and guidance resources.
 - Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
-- After each approved schema batch, run the current `clio`-owned refresh step, overwrite `mcp-application-result.json`, and normalize again
+- After each approved schema batch, run the current `clio`-owned refresh step
 - Stop with blocker if required fields or columns are still missing after verification
 
 ### 5. Execute page sync
@@ -237,11 +227,9 @@ Validate the normalized result payload:
 - page evidence exists when page sync was required
 - server-advertised canonical selectors are respected when present
 
-### 7. Write summary report
+### 7. Report implementation summary
 
-Create `output/<AppName>/mcp-application-report.md`.
-
-Include:
+Report in conversation:
 
 - branch that actually ran
 - resolved defaults that were applied
@@ -250,7 +238,7 @@ Include:
 - explicit distinction between `implemented`, `machineChecked`, and `manualCheckPending`
 - blockers or manual verification gaps that remain
 
-Never claim UI acceptance is verified unless the corresponding evidence exists in `mcp-application-result.json`.
+Never claim UI acceptance is verified unless the corresponding evidence was returned by MCP tools.
 
 ## Retry And Failure Policy
 
@@ -266,13 +254,12 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 
 ## Completion Criteria
 
-- Gate R passed
+- Requirements and plan were approved in conversation
 - MCP reachability and contract discovery succeeded
-- Initial application context was persisted
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
-- Result and report are derived from runtime evidence
+- Implementation summary reported in conversation from MCP evidence
 - When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`
 
 <!-- FILE: context/ui-reference.md (full) -->
@@ -929,8 +916,6 @@ Use these MCP tools to inspect and modify Freedom UI page schemas at runtime. Th
 | `create-page` | Create a new Freedom UI page schema from a template. Use `list-page-templates` to discover valid templates first |
 | `list-page-templates` | Discover valid Freedom UI page templates available on the target environment |
 | `validate-page` | Client-side page body validation (markers, JS syntax, JSON content, field bindings, column bindings) without saving to Creatio |
-| `add-form-fields` | Add form fields to an existing FormPage body — reads current body, inserts fields, and saves |
-| `add-list-columns` | Add columns to an existing ListPage body — reads current body, inserts columns into the DataTable, and saves |
 | `get-component-info` | Inspect curated Freedom UI component properties and example payloads |
 
 ### Editing Workflow
@@ -959,8 +944,7 @@ Resolve the full page creation contract through `docs://mcp/guides/page-creation
 ### Targeted Edits Without Full Body Replacement
 
 - `update-page` with `mode: "append"` merges incoming viewConfigDiff entries and handlers into the existing schema body — use for additive edits without clobbering existing customizations
-- `add-form-fields` inserts fields into an existing FormPage body directly
-- `add-list-columns` inserts columns into an existing ListPage DataTable directly
+- Add fields and list columns by editing the `body.js` returned by `get-page` directly
 - `validate-page` validates a page body client-side before saving
 
 Resolve detailed tool parameters through `get-tool-contract`.
@@ -980,7 +964,7 @@ Resolve page modification patterns through `docs://mcp/guides/page-modification`
 Reference for constructing `viewConfigDiff` operations in Freedom UI page schemas.
 Used by coding agents with the runtime sync-pages flow that this repo consumes from `clio`. `update-page` remains fallback-only in the local workflow, though `update-page` with `mode: "append"` is available for additive edits that merge into existing customizations.
 
-For targeted field additions, `add-form-fields` and `add-list-columns` insert entries directly without full body replacement.
+For targeted field additions, edit the `body.js` returned by `get-page` directly without replacing unrelated marker sections.
 Use `validate-page` to check page body correctness (markers, JS syntax, field bindings) before saving.
 
 For ListPage DataGrid sorting, use the canonical contract in `context/ui-reference.md`. This file covers field and control recipes, not the runtime sorting contract for ListPage collections.
@@ -1400,7 +1384,7 @@ See `context/handlers-reference.md` for the full request type reference.
 
 ## Editing Safety Contract
 
-When editing page bodies for the runtime sync-pages flow, always use marker-based section extraction and structured JSON modification. The utility `scripts/page_body_edit.py` provides safe implementations of common operations.
+When editing page bodies for the runtime sync-pages flow, always use marker-based section extraction and structured JSON modification. Use `scripts/page_body_tools.py` for marker-safe inspection and verification helpers.
 
 ### Correct: FormPage field insertion via parsed JSON
 
@@ -3369,498 +3353,6 @@ def main():
         print(json.dumps(verify_list_page_sync(load_text(args.body_file), required_codes), ensure_ascii=True, indent=2))
     if args.command == "build-update-args":
         print(json.dumps(build_page_update_arguments(args.schema_name, load_text(args.body_file), dry_run=args.dry_run), ensure_ascii=True, indent=2))
-
-
-if __name__ == "__main__":
-    main()
-
-<!-- FILE: scripts/page_body_edit.py (full) -->
-
-#!/usr/bin/env python3
-import argparse
-import json
-import re
-import sys
-import uuid
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-from page_body_tools import (
-    PageBodyError,
-    extract_marker_text,
-    load_text,
-    parse_marker_json,
-    parse_first_available_marker,
-    strip_trailing_commas,
-)
-
-
-REQUIRED_MARKERS = [
-    "SCHEMA_DEPS",
-    "SCHEMA_ARGS",
-    "SCHEMA_VIEW_CONFIG_DIFF",
-    "SCHEMA_HANDLERS",
-    "SCHEMA_CONVERTERS",
-    "SCHEMA_VALIDATORS",
-]
-
-VM_MARKER_VARIANTS = ["SCHEMA_VIEW_MODEL_CONFIG_DIFF", "SCHEMA_VIEW_MODEL_CONFIG"]
-MC_MARKER_VARIANTS = ["SCHEMA_MODEL_CONFIG_DIFF", "SCHEMA_MODEL_CONFIG"]
-
-
-def find_marker_span(body, marker):
-    token = f"/**{marker}*/"
-    first = body.find(token)
-    if first < 0:
-        return None
-    content_start = first + len(token)
-    second = body.find(token, content_start)
-    if second < 0:
-        return None
-    return (content_start, second)
-
-
-def detect_vm_marker(body):
-    for m in VM_MARKER_VARIANTS:
-        if find_marker_span(body, m) is not None:
-            return m
-    return None
-
-
-def detect_mc_marker(body):
-    for m in MC_MARKER_VARIANTS:
-        if find_marker_span(body, m) is not None:
-            return m
-    return None
-
-
-def replace_marker_content(body, marker, new_content):
-    span = find_marker_span(body, marker)
-    if span is None:
-        raise PageBodyError(f"Marker {marker} not found in body")
-    return body[: span[0]] + new_content + body[span[1] :]
-
-
-def serialize_json_indented(data, base_indent=2):
-    raw = json.dumps(data, indent="\t", ensure_ascii=False)
-    prefix = "\t" * base_indent
-    lines = raw.split("\n")
-    result = lines[0]
-    for line in lines[1:]:
-        result += "\n" + prefix + line
-    return result
-
-
-def validate_body_structure(body):
-    errors = []
-    for marker in REQUIRED_MARKERS:
-        if find_marker_span(body, marker) is None:
-            errors.append(f"Missing required marker: {marker}")
-
-    vm_marker = detect_vm_marker(body)
-    if vm_marker is None:
-        errors.append(f"Missing viewModelConfig marker (need one of: {VM_MARKER_VARIANTS})")
-
-    mc_marker = detect_mc_marker(body)
-    if mc_marker is None:
-        errors.append(f"Missing modelConfig marker (need one of: {MC_MARKER_VARIANTS})")
-
-    if errors:
-        return {"valid": False, "errors": errors}
-
-    NON_JSON_MARKERS = {"SCHEMA_DEPS", "SCHEMA_ARGS"}
-    all_markers = REQUIRED_MARKERS + ([vm_marker] if vm_marker else []) + ([mc_marker] if mc_marker else [])
-    for marker in all_markers:
-        if marker in NON_JSON_MARKERS:
-            continue
-        try:
-            text = extract_marker_text(body, marker)
-            cleaned = strip_trailing_commas(text)
-            json.loads(cleaned)
-        except (PageBodyError, json.JSONDecodeError) as e:
-            errors.append(f"Marker {marker}: invalid JSON — {e}")
-
-    label_check = validate_field_labels(body)
-    if not label_check["valid"]:
-        errors.extend(label_check["errors"])
-
-    binding_check = validate_bindings(body)
-    if not binding_check["valid"]:
-        errors.extend(binding_check["errors"])
-
-    return {"valid": len(errors) == 0, "errors": errors}
-
-
-FIELD_CONTROL_TYPES = {
-    "crt.Input", "crt.NumberInput", "crt.Checkbox", "crt.DateTimePicker",
-    "crt.ComboBox", "crt.RichTextEditor", "crt.PhoneInput", "crt.EmailInput",
-    "crt.WebInput", "crt.ColorPicker", "crt.ImageInput", "crt.FileInput",
-    "crt.EncryptedInput", "crt.Slider",
-}
-
-
-_RESOURCE_STRING_LABEL_RE = re.compile(r"^\$Resources\.Strings\.(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
-_RESOURCE_LITERAL_LABEL_RE = re.compile(r"^#ResourceString\((?P<key>[A-Za-z_][A-Za-z0-9_]*)\)#$")
-_CONTROL_BINDING_RE = re.compile(r"^\$(?P<key>[A-Za-z_][A-Za-z0-9_]*)$")
-
-
-def validate_field_labels(body):
-    """Validate FormPage field-insert label/control invariants.
-
-    Rules enforced:
-      1. Every field insert must provide a ``label`` using ``$Resources.Strings.<key>``
-         or ``#ResourceString(<key>)#``. Plain hardcoded strings are rejected.
-      2. When ``label`` is ``$Resources.Strings.<key>``, ``<key>`` must equal the
-         attribute key from ``control`` (strip the leading ``$``) or, for
-         ``crt.ImageInput``, from ``value``.
-    """
-    errors = []
-    try:
-        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
-    except PageBodyError as e:
-        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
-    if not isinstance(diff, list):
-        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
-
-    for entry in diff:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("operation") != "insert":
-            continue
-        values = entry.get("values") or {}
-        ctrl_type = values.get("type")
-        if ctrl_type not in FIELD_CONTROL_TYPES:
-            continue
-        name = entry.get("name") or "<unnamed>"
-        label = values.get("label")
-        if label is None:
-            errors.append(f"{name}: missing `label`")
-            continue
-        if not isinstance(label, str):
-            errors.append(f"{name}: `label` must be a string, got {type(label).__name__}")
-            continue
-        res_match = _RESOURCE_STRING_LABEL_RE.match(label)
-        literal_match = _RESOURCE_LITERAL_LABEL_RE.match(label)
-        if not (res_match or literal_match):
-            errors.append(
-                f"{name}: hardcoded label `{label}` — must be `$Resources.Strings.<key>` "
-                f"or `#ResourceString(<key>)#`"
-            )
-            continue
-        if res_match:
-            label_key = res_match.group("key")
-            binding = values.get("value") if ctrl_type == "crt.ImageInput" else values.get("control")
-            if not isinstance(binding, str):
-                errors.append(f"{name}: missing binding (`control` or `value`)")
-                continue
-            bind_match = _CONTROL_BINDING_RE.match(binding)
-            if not bind_match:
-                errors.append(f"{name}: binding `{binding}` is not a simple `$<key>` form")
-                continue
-            attr_key = bind_match.group("key")
-            if attr_key != label_key:
-                errors.append(
-                    f"{name}: label key `{label_key}` does not match attribute key "
-                    f"`{attr_key}` — label will render blank"
-                )
-    return {"valid": len(errors) == 0, "errors": errors}
-
-
-_PDS_BINDING_RE = re.compile(r"^\$PDS_[A-Za-z_][A-Za-z0-9_]*$")
-_BARE_USR_BINDING_RE = re.compile(r"^\$Usr[A-Za-z0-9_]*$")
-
-
-def validate_bindings(body):
-    errors = []
-    try:
-        diff = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
-    except PageBodyError as e:
-        return {"valid": False, "errors": [f"SCHEMA_VIEW_CONFIG_DIFF: {e}"]}
-    if not isinstance(diff, list):
-        return {"valid": False, "errors": ["SCHEMA_VIEW_CONFIG_DIFF is not an array"]}
-    for entry in diff:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("operation") != "insert":
-            continue
-        values = entry.get("values") or {}
-        ctrl_type = values.get("type")
-        if ctrl_type not in FIELD_CONTROL_TYPES:
-            continue
-        name = entry.get("name") or "<unnamed>"
-        binding_prop = "value" if ctrl_type == "crt.ImageInput" else "control"
-        binding = values.get(binding_prop)
-        if not isinstance(binding, str):
-            continue
-        if _BARE_USR_BINDING_RE.match(binding) and not _PDS_BINDING_RE.match(binding):
-            errors.append(
-                f"{name}: binding `{binding}` uses bare $Usr prefix — "
-                f"must use `$PDS_<Column>` format (e.g. `$PDS_{binding[1:]}`)"
-            )
-    return {"valid": len(errors) == 0, "errors": errors}
-    counts = {}
-    for item in view_config_diff:
-        if not isinstance(item, dict):
-            continue
-        if item.get("operation") != "insert":
-            continue
-        values = item.get("values") or {}
-        if values.get("layoutConfig") is None:
-            continue
-        control_type = values.get("type", "")
-        if control_type not in FIELD_CONTROL_TYPES:
-            continue
-        parent = item.get("parentName")
-        if parent:
-            counts[parent] = counts.get(parent, 0) + 1
-    if not counts:
-        return None
-    return max(counts, key=counts.get)
-
-
-def find_max_row_index(view_config_diff, parent_name):
-    max_row = 0
-    max_index = -1
-    for item in view_config_diff:
-        if not isinstance(item, dict):
-            continue
-        if item.get("operation") != "insert":
-            continue
-        if item.get("parentName") != parent_name:
-            continue
-        layout = (item.get("values") or {}).get("layoutConfig") or {}
-        row = layout.get("row", 0)
-        index = item.get("index", 0)
-        if row > max_row:
-            max_row = row
-        if index > max_index:
-            max_index = index
-    return max_row, max_index
-
-
-def _derive_attr_key(field):
-    explicit = field.get("attrKey")
-    if explicit:
-        return explicit
-    path = field.get("path", "")
-    parts = path.split(".", 1) if path else []
-    if len(parts) == 2 and parts[0] and parts[1]:
-        return f"{parts[0]}_{parts[1]}"
-    return field["name"]
-
-
-def build_form_field_insert(field, row, index, parent_name):
-    attr_key = _derive_attr_key(field)
-    values = {
-        "layoutConfig": {
-            "column": 1,
-            "row": row,
-            "colSpan": 1,
-            "rowSpan": 1,
-        },
-        "type": field["type"],
-        "label": field.get("label") or f"$Resources.Strings.{attr_key}",
-        "labelPosition": "auto",
-    }
-    binding_prop = "value" if field["type"] == "crt.ImageInput" else "control"
-    values[binding_prop] = f"${attr_key}"
-    if field["type"] == "crt.DateTimePicker":
-        values["pickerType"] = field.get("pickerType", "date")
-    if field["type"] == "crt.Input" and field.get("multiline"):
-        values["multiline"] = True
-    if field["type"] == "crt.NumberInput" and field.get("decimalPrecision") is not None:
-        values["format"] = {"decimalPrecision": field["decimalPrecision"]}
-    return {
-        "operation": "insert",
-        "name": attr_key,
-        "values": values,
-        "parentName": field.get("parentName") or parent_name,
-        "propertyName": "items",
-        "index": index,
-    }
-
-
-def add_form_fields(body, fields):
-    for field in fields:
-        if "path" not in field:
-            raise PageBodyError(
-                f"Field '{field.get('name', '?')}' missing required 'path' "
-                f"(e.g. 'PDS.{field.get('name', 'UsrColumnName')}')"
-            )
-    view_config = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
-    vm_marker = detect_vm_marker(body)
-    if vm_marker is None:
-        raise PageBodyError("No viewModelConfig marker found")
-    vm_data = parse_marker_json(body, vm_marker)
-    explicit_parent = fields[0].get("parentName") if fields else None
-    if explicit_parent:
-        parent = explicit_parent
-    else:
-        parent = discover_form_container(view_config) or "SideAreaProfileContainer"
-    max_row, max_index = find_max_row_index(view_config, parent)
-    existing_names = {item.get("name") for item in view_config if isinstance(item, dict)}
-    for field in fields:
-        attr_key = _derive_attr_key(field)
-        if attr_key in existing_names:
-            continue
-        max_row += 1
-        max_index += 1
-        insert = build_form_field_insert(field, max_row, max_index, parent)
-        view_config.append(insert)
-    body = replace_marker_content(body, "SCHEMA_VIEW_CONFIG_DIFF",
-                                  serialize_json_indented(view_config, base_indent=2))
-    if vm_marker == "SCHEMA_VIEW_MODEL_CONFIG":
-        if not isinstance(vm_data, dict):
-            vm_data = {"attributes": {}}
-        attrs = vm_data.setdefault("attributes", {})
-        for field in fields:
-            attr_key = _derive_attr_key(field)
-            if attr_key not in attrs:
-                attrs[attr_key] = {"modelConfig": {"path": field["path"]}}
-        body = replace_marker_content(body, vm_marker,
-                                      serialize_json_indented(vm_data, base_indent=2))
-    else:
-        merge_op = None
-        for op in vm_data:
-            if isinstance(op, dict) and "attributes" in (op.get("path") or []):
-                merge_op = op
-                break
-        if merge_op is None:
-            merge_op = {"operation": "merge", "path": ["attributes"], "values": {}}
-            vm_data.append(merge_op)
-        values = merge_op.setdefault("values", {})
-        for field in fields:
-            attr_key = _derive_attr_key(field)
-            if attr_key not in values:
-                values[attr_key] = {"modelConfig": {"path": field["path"]}}
-        body = replace_marker_content(body, vm_marker,
-                                      serialize_json_indented(vm_data, base_indent=2))
-    return body
-
-
-def add_list_columns(body, columns):
-    view_config = parse_marker_json(body, "SCHEMA_VIEW_CONFIG_DIFF")
-    datatable_op = None
-    for op in view_config:
-        if isinstance(op, dict) and op.get("name") == "DataTable":
-            datatable_op = op
-            break
-    if datatable_op is None:
-        raise PageBodyError("DataTable operation not found in viewConfigDiff")
-    existing_columns = (datatable_op.get("values") or {}).get("columns") or []
-    existing_codes = {c.get("code") for c in existing_columns if isinstance(c, dict)}
-    for col in columns:
-        if col["code"] in existing_codes:
-            continue
-        entry = {
-            "id": col.get("id", str(uuid.uuid4())),
-            "code": col["code"],
-            "caption": col.get("caption") or col.get("title") or col["code"],
-            "dataValueType": col["dataValueType"],
-        }
-        if col.get("width"):
-            entry["width"] = col["width"]
-        existing_columns.append(entry)
-    datatable_op.setdefault("values", {})["columns"] = existing_columns
-    body = replace_marker_content(body, "SCHEMA_VIEW_CONFIG_DIFF",
-                                  serialize_json_indented(view_config, base_indent=2))
-    vm_marker = detect_vm_marker(body)
-    if vm_marker is None:
-        raise PageBodyError("No viewModelConfig marker found")
-    vm_data = parse_marker_json(body, vm_marker)
-    if vm_marker == "SCHEMA_VIEW_MODEL_CONFIG":
-        attrs = vm_data.setdefault("attributes", {}) if isinstance(vm_data, dict) else {}
-        for col in columns:
-            attr_key = col["code"]
-            if attr_key not in attrs:
-                entity_col = col["code"].replace("PDS_", "", 1)
-                attrs[attr_key] = {"modelConfig": {"path": f"PDS.{entity_col}"}}
-        body = replace_marker_content(body, vm_marker,
-                                      serialize_json_indented(vm_data, base_indent=2))
-    else:
-        merge_op = None
-        for op in vm_data:
-            if isinstance(op, dict):
-                op_path = op.get("path") or []
-                if "attributes" in op_path:
-                    merge_op = op
-                    break
-        if merge_op is None:
-            merge_op = {"operation": "merge", "path": ["attributes", "Items", "viewModelConfig", "attributes"], "values": {}}
-            vm_data.append(merge_op)
-        values = merge_op.setdefault("values", {})
-        for col in columns:
-            attr_key = col["code"]
-            if attr_key not in values:
-                entity_col = col["code"].replace("PDS_", "", 1)
-                values[attr_key] = {"modelConfig": {"path": f"PDS.{entity_col}"}}
-        body = replace_marker_content(body, vm_marker,
-                                      serialize_json_indented(vm_data, base_indent=2))
-    return body
-
-
-def build_parser():
-    parser = argparse.ArgumentParser(description="Structured page body editor")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    validate_parser = subparsers.add_parser("validate", help="Validate page body structure")
-    validate_parser.add_argument("body_file", help="Path to page body JS file")
-
-    form_parser = subparsers.add_parser("add-form-fields", help="Add fields to FormPage")
-    form_parser.add_argument("body_file", help="Path to page body JS file")
-    form_parser.add_argument("fields_json", help="JSON array of field specs or path to JSON file")
-    form_parser.add_argument("-o", "--output", help="Output file (default: stdout)")
-
-    list_parser = subparsers.add_parser("add-list-columns", help="Add columns to ListPage")
-    list_parser.add_argument("body_file", help="Path to page body JS file")
-    list_parser.add_argument("columns_json", help="JSON array of column specs or path to JSON file")
-    list_parser.add_argument("-o", "--output", help="Output file (default: stdout)")
-
-    return parser
-
-
-def load_json_arg(value):
-    path = Path(value)
-    if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return json.loads(value)
-
-
-def main():
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.command == "validate":
-        body = load_text(args.body_file)
-        result = validate_body_structure(body)
-        print(json.dumps(result, indent=2))
-        sys.exit(0 if result["valid"] else 1)
-
-    if args.command == "add-form-fields":
-        body = load_text(args.body_file)
-        fields = load_json_arg(args.fields_json)
-        result = add_form_fields(body, fields)
-        validation = validate_body_structure(result)
-        if not validation["valid"]:
-            print(json.dumps({"error": "Post-edit validation failed", "details": validation["errors"]}), file=sys.stderr)
-            sys.exit(1)
-        if args.output:
-            Path(args.output).write_text(result, encoding="utf-8")
-        else:
-            print(result)
-
-    if args.command == "add-list-columns":
-        body = load_text(args.body_file)
-        columns = load_json_arg(args.columns_json)
-        result = add_list_columns(body, columns)
-        validation = validate_body_structure(result)
-        if not validation["valid"]:
-            print(json.dumps({"error": "Post-edit validation failed", "details": validation["errors"]}), file=sys.stderr)
-            sys.exit(1)
-        if args.output:
-            Path(args.output).write_text(result, encoding="utf-8")
-        else:
-            print(result)
 
 
 if __name__ == "__main__":

@@ -6,16 +6,23 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 
 ## Read First
 
+Preferred: read `context/.cache/agent-4-bundle.md` when available.
+
+Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
+- the bundle is missing
+- the bundle declares a build timestamp or manifest hash that no longer matches its source set
+- the current task requires a reference file that is known to be outside the bundle
+- the bundle content is internally inconsistent with currently loaded repository instructions
+
+Fallback (if bundle unavailable or stale):
 - `AGENTS.md`
 - `context/essentials.md`
-- `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
 Resolve executable tool details through `get-tool-contract`.
-Use `context/mcp-application-tools-reference.md` only for local wrapper and normalization guidance.
 
 ## MCP Transport
 
@@ -27,12 +34,10 @@ Use `context/mcp-application-tools-reference.md` only for local wrapper and norm
 
 ## Preconditions
 
-- `scripts/check-approval-gate.sh <AppName>` passes
-- `scripts/check-implementation-plan-gate.sh <AppName>` passes
-- `output/<AppName>/requirements.md` passes `scripts/validate-requirements-doc.sh <AppName>` — reject stale or malformed requirements as a blocker
-- `output/<AppName>/.creatio-env.json` exists and is valid
-- when the current run has a request URL, `.creatio-env.json.url` matches it exactly
-- `output/<AppName>/plan.md` or `output/<AppName>/technical-annex.md` exists
+- Requirements and plan were approved by the developer in the conversation
+- Resolved env name and URL are present in conversation context
+- When the current run has a request URL, the env URL from conversation context matches it exactly
+- The approved plan includes explicit `Model Decisions` for every business object
 - Agent 4 runs in the foreground
 - `plan.md` includes explicit `Model Decisions` for every business object, supporting object, planned lookup, and non-obvious reference target that Agent 4 could otherwise reinterpret during execution
 - every schema creation or extension step in the plan is already justified by a matching `Model Decisions` record
@@ -76,14 +81,11 @@ Apply this branch only when support mode is on:
 2. Call `tools/list` and verify required tools exist.
 3. Resolve executable contract metadata through `get-tool-contract`.
 4. Resolve the execution branch through the current `clio` contract and guidance resources.
-5. Persist the initial normalized result to `mcp-application-result.json`.
-6. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
-7. Run the post-mutation refresh step required by the current `clio` guidance and overwrite `mcp-application-result.json`.
-8. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
-9. Persist page evidence and verification results.
-10. Validate the final normalized result.
-11. Build `mcp-application-report.md` from persisted evidence only.
-12. Sync and validate docs under `output/<AppName>/docs/`.
+5. Execute the approved schema mutation step using the current `clio`-owned preferred or fallback tool path (support mode still follows the diagnostic-first restriction above).
+6. Run the post-mutation refresh step required by the current `clio` guidance.
+7. If the plan requires page sync, execute the current `clio`-owned page inspection/write/verify flow.
+8. Validate the final normalized result.
+9. Report implementation summary in conversation.
 
 ## Branching Rules
 
@@ -127,8 +129,7 @@ For lookup-backed field defaults (e.g. `UsrStatus defaults to New`):
 
 Page sync is mandatory when the run creates a new app or extends the main section entity with approved business fields.
 
-If `plan.md` carries the embedded page sync contract, read it from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
-The machine-readable page sync contract may also be materialized as `page-sync-plan.json`.
+Read the embedded page sync contract from the block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in the approved plan from conversation context.
 
 Resolve page inspection, fallback, and verification guidance through `docs://mcp/guides/existing-app-maintenance`.
 
@@ -157,14 +158,7 @@ Use `validate-page` for client-side validation before persisting page bodies.
 
 ## Evidence Rules
 
-Use `scripts/mcp_result_evidence.py` and the normalized result document as the source for:
-
-- `schemaSync`
-- `operationLog`
-- `pageEvidence`
-- `acceptanceEvidence`
-
-Persist page and report evidence with explicit status buckets:
+Track execution evidence in memory using these status buckets:
 
 - `implemented`
 - `machineChecked`
@@ -172,22 +166,12 @@ Persist page and report evidence with explicit status buckets:
 
 If `create-app` returns a top-level `dataforge` block:
 
-- preserve it in `mcp-application-result.json`
 - report it as advisory execution diagnostics
 - do not treat degraded coverage or warnings as a blocker when the app shell itself was created successfully
 
-Never hand-write `mcp-application-result.json` or `mcp-application-report.md` from shell variables once runtime evidence exists.
-Use `scripts/mcp_result_evidence.py` for all mutations to the result document. If the initial result must be persisted before MCP response, use `ensure_result_document()` with the MCP response payload — never a manually constructed JSON object.
-
 ## Steps
 
-### 0. Check Gates
-
-- Run `scripts/check-approval-gate.sh <AppName>`
-- Run `scripts/check-implementation-plan-gate.sh <AppName>`
-- If this fails, stop immediately
-
-### 1. Parse `plan.md`
+### 1. Parse the approved plan
 
 - Extract the execution branch, resolved business defaults, `Model Decisions`, ordered schema sync steps, and page sync requirements
 - Stop with blocker if page sync is mandatory but the plan does not define explicit `FormPage` and `ListPage` sync steps
@@ -198,9 +182,8 @@ Use `scripts/mcp_result_evidence.py` for all mutations to the result document. I
 
 ### 2. Verify MCP reachability
 
-- Validate that `.creatio-env.json.url` matches the current request URL for this run
-- Only after that validation, read the environment from `.creatio-env.json`
-- If the URL mismatches, stop immediately and rerun Agent 1. Do not patch generated artifacts to match a stale environment file.
+- Validate that the env URL from conversation context matches the current request URL for this run
+- If the URL mismatches, stop immediately and rerun Agent 1.
 - Call `tools/list` through `scripts/mcp_client.py`
 - Resolve the executable contract through `get-tool-contract`
 - Stop with blocker if required tools are missing or `get-tool-contract` fails
@@ -209,14 +192,12 @@ Use `scripts/mcp_result_evidence.py` for all mutations to the result document. I
 
 - Use the current `clio`-owned application create or discovery flow for the selected branch.
 - For the standard new-app branch, call `create-app` directly and consume its returned `dataforge` diagnostics instead of issuing standalone `dataforge-*` calls first.
-- Write the raw flat MCP result to `output/<AppName>/mcp-application-result.json`
-- Normalize it with `scripts/mcp_context_adapter.py normalize`
 
 ### 4. Execute schema sync
 
 - Prefer the current `clio`-owned schema path resolved from `get-tool-contract` and guidance resources.
 - Preserve semantic text field types in execution payloads: emit `Email`, `PhoneNumber`, and `WebLink` for email, phone, and URL fields rather than generic `ShortText`
-- After each approved schema batch, run the current `clio`-owned refresh step, overwrite `mcp-application-result.json`, and normalize again
+- After each approved schema batch, run the current `clio`-owned refresh step
 - Stop with blocker if required fields or columns are still missing after verification
 
 ### 5. Execute page sync
@@ -239,11 +220,9 @@ Validate the normalized result payload:
 - page evidence exists when page sync was required
 - server-advertised canonical selectors are respected when present
 
-### 7. Write summary report
+### 7. Report implementation summary
 
-Create `output/<AppName>/mcp-application-report.md`.
-
-Include:
+Report in conversation:
 
 - branch that actually ran
 - resolved defaults that were applied
@@ -252,7 +231,7 @@ Include:
 - explicit distinction between `implemented`, `machineChecked`, and `manualCheckPending`
 - blockers or manual verification gaps that remain
 
-Never claim UI acceptance is verified unless the corresponding evidence exists in `mcp-application-result.json`.
+Never claim UI acceptance is verified unless the corresponding evidence was returned by MCP tools.
 
 ## Retry And Failure Policy
 
@@ -268,11 +247,10 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 
 ## Completion Criteria
 
-- Gate R passed
+- Requirements and plan were approved in conversation
 - MCP reachability and contract discovery succeeded
-- Initial application context was persisted
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
-d- Result and report are derived from runtime evidence
+- Implementation summary reported in conversation from MCP evidence
 - When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`

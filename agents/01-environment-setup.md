@@ -7,7 +7,7 @@ Configure clio CLI and establish connection to the target Creatio runtime for th
 ## Input/Output
 
 - **Input:** Developer request with Creatio URL and `<AppName>`
-- **Output:** `output/<AppName>/.creatio-env.json`
+- **Output:** Resolved `<env_name>` reported in conversation context
 
 ## Context
 
@@ -142,18 +142,8 @@ If `clio list-environments` returns multiple registered environments whose norma
 
 1. Treat the environment choice as ambiguous.
 2. Ask the developer to choose the exact `environmentName`.
-3. Do not auto-select based on prior runs, `output/<AppName>/.creatio-env.json`, active-environment status, or an internal plan that mentions one of the matching aliases.
+3. Do not auto-select based on prior runs, active-environment status, or an internal plan that mentions one of the matching aliases.
 4. Skip the question only when the current conversation explicitly names the environment key to use for the current URL.
-
-### Existing Output Guard
-
-If `output/<AppName>/.creatio-env.json` already exists:
-
-1. Read it only to detect staleness.
-2. Compare its `url` with the current request URL.
-3. If the URLs differ, do not reuse its `environment` value and do not trust any runtime artifacts under `output/<AppName>/`.
-4. Resolve the environment again from `clio list-environments` using the current request URL and overwrite `.creatio-env.json`.
-5. Reuse is allowed only when the existing `.creatio-env.json` points to the exact same URL as the current request.
 
 ### 2. List existing environments
 
@@ -163,7 +153,6 @@ clio list-environments
 
 Display the list to the developer. Check if an environment for the current request URL already exists.
 
-- Ignore `output/<AppName>/.creatio-env.json` as the runtime source of truth for a new run.
 - **If exactly one environment for the current request URL exists** — use that environment name and skip to Step 5.
 - **If two or more environments for the current request URL exist** — stop and ask the developer which environment name to use. Do not guess.
 - **If it does not exist** — proceed to Step 3.
@@ -201,23 +190,16 @@ clio healthcheck -e <env_name>
 - **Success** — proceed to Step 6.
 - **Failure** — see Error Handling below.
 
-### 6. Save environment configuration
+### 6. Report resolved environment
 
-Create or overwrite the file `output/<AppName>/.creatio-env.json` from the current request URL and the environment resolved in this run:
+Report the resolved environment for use by subsequent agents in the conversation:
 
-```json
-{
-  "environment": "<env_name>",
-  "url": "<URL>",
-  "isNetCore": true
-}
-```
+- **Environment name:** `<env_name>`
+- **URL:** `<URL>`
+- **Runtime:** .NET Core (or .NET Framework if detected in Step 4)
+- **Custom clio path:** `<path>` (only if the developer provided one; omit otherwise)
 
-Replace `true` with `false` if .NET Framework was detected in Step 4.
-Read the resolved value from clio settings after registration. Do not infer it inside ADAC.
-
-If the user provided a custom clio path at startup, add `"mcpCommand": "<custom clio command>"` to `.creatio-env.json`.
-For the standard global install, omit `mcpCommand` and let the runtime resolve `clio` from PATH.
+This information stays in the conversation context — Agents 3 and 4 read the environment name from the conversation, not from a file.
 
 ## Error Handling
 
@@ -239,5 +221,5 @@ For the standard global install, omit `mcpCommand` and let the runtime resolve `
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ `cliogate` is verified as present and current on `<env_name>`, or `clio install-gate -e <env_name>` succeeds when remediation is required  
-✅ `output/<AppName>/.creatio-env.json` exists with the current request URL, the correct `environment`, and persisted runtime MCP details  
+✅ Resolved environment name, URL, and runtime are reported in the conversation  
 ✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  

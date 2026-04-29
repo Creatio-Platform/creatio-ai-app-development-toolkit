@@ -17,17 +17,8 @@ The business contract for this agent is the BA-style requirements draft approved
 
 ## Input
 
-- `output/<AppName>/requirements.md`
-- `output/<AppName>/request-spec.json`
-- `output/<AppName>/workflow-state.json`
-- `output/<AppName>/.creatio-env.json` when runtime inputs are no longer deferred
-
-## Output
-
-- `output/<AppName>/technical-annex.md`
-- `output/<AppName>/plan.md`
-- `output/<AppName>/page-sync-plan.json` when page sync is required
-- `output/<AppName>/sync-pages/*.body.js` when page bodies are materialized outside `plan.md`
+- Approved requirements and request spec from conversation context (produced by Agent 2)
+- Resolved `<env_name>` from conversation context (produced by Agent 1)
 
 ## Read First
 Preferred: read `context/.cache/agent-3-bundle.md` when available.
@@ -53,9 +44,8 @@ When the plan includes standalone page creation (not through `create-app-section
 ## Preconditions
 
 - Implementation or technical execution detail was explicitly requested.
-- `scripts/check-planning-gate.sh <AppName>` passes.
-- `scripts/check-approval-gate.sh <AppName>` passes.
-- If runtime inputs are already available for the current run, `output/<AppName>/.creatio-env.json` exists and its `url` matches the current request URL.
+- Planning was approved and requirements were approved by the developer in the conversation.
+- If runtime inputs are already available for the current run, the env URL from conversation context matches the current request URL.
 
 ## Planning Goals
 
@@ -81,8 +71,7 @@ Validate `request-spec.json` and `workflow-state.json`:
 - runtime inputs are either present or explicitly deferred
 - the approved requirements follow the BA-style structure from Agent 2
 - the approved requirements are not merely a generic planning wrapper with non-BA headings
-- when runtime inputs are available, `.creatio-env.json` points to the same URL as the current request for this run
-- if `.creatio-env.json` exists with a different URL, stop and rerun Agent 1 instead of reusing stale runtime artifacts
+- when runtime inputs are available, the env URL from conversation context matches the current request URL
 
 If any of these checks fail, stop and report the blocker.
 
@@ -176,31 +165,31 @@ echo '{"environment-name":"<env>"}' | py -3 scripts/mcp_client.py <tool-name> --
 
 There is **no `--args-json` flag**. The only argument sources are:
 `<args-json>` (legacy positional, single JSON string), `--args-file <path>`, or `--args-stdin` with piped JSON.
-Resolve `<env>` from `output/<AppName>/.creatio-env.json`.
+Resolve `<env>` from conversation context (reported by Agent 1).
 
 Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
 
 `dataforge-status` itself requires `environment-name`. Example payload:
 
 ```json
-{"environment-name": "<env from .creatio-env.json>"}
+{"environment-name": "<env from conversation context>"}
 ```
 
 An empty body `{}` returns `invalid-request` ("Missing required connection parameters").
 
 - If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
 - If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
-- In that unavailable mode, record `dataforge-availability: unavailable` in `plan.md` and `technical-annex.md`.
+- In that unavailable mode, record `dataforge-availability: unavailable` in the plan presented in conversation.
 - When `dataforge-availability: unavailable` is recorded, Agent 3 should not run the reuse/extend/create discovery branch and should not require DataForge-based evidence or fallback proof for the skipped branch.
 - Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
 
 #### DataForge Unavailable — Fast Path
 
 When `dataforge-availability: unavailable` is recorded, follow this fast path directly.
-Do NOT read or analyze the validator source code in `scripts/workflow_cli.py` to determine what fields or phrases are required. The rules below are the complete specification.
+Do NOT read or analyze the validator source code in `scripts/workflow_validators.py` to determine what fields or phrases are required. The rules below are the complete specification.
 
-This rule applies to **all** `validate-implementation-plan-doc` failures, not only the unavailable fast path.
-On a validator failure, fix the artifact based on the error string returned by the script. The canonical templates already live in this runbook (the `Model Decisions` section below) and in `context/model-discovery-evidence.md` — opening `scripts/workflow_cli.py` to reverse-engineer regexes is wasted work and forbidden.
+This rule applies to **all** `validate_implementation_plan_doc` validation failures, not only the unavailable fast path.
+On a validation failure, fix the artifact based on the error message returned. The canonical templates already live in this runbook (the `Model Decisions` section below) and in `context/model-discovery-evidence.md` — reading `scripts/workflow_validators.py` to reverse-engineer regexes is wasted work and forbidden.
 
 **Checks that are SKIPPED when DataForge is unavailable:**
 
@@ -221,7 +210,7 @@ On a validator failure, fix the artifact based on the error string returned by t
 
 ```
 - business-concept: <business name>
-  candidates-considered: <known platform candidates, e.g. "Case, Activity">
+  candidates-considered: <known platform candidates>
   chosen-action: create
   chosen-schema: <UsrXxx>
   tradeoff-escalation: none
@@ -265,7 +254,7 @@ Any concept listed in `request-spec.json -> planningSignals.reuseCheckRequired` 
 
 This includes, but is not limited to, cases where:
 
-- a business object resembles a standard or already-existing platform concept such as case, request, article, knowledge, activity, comment, account, or contact
+- a business object resembles a standard or already-existing platform concept.
 - a secondary managed entity could plausibly reuse an existing platform or custom schema
 - a reference field has a non-obvious target schema
 - the plan may be choosing between `update-entity-schema` and `create-entity-schema`
@@ -331,7 +320,7 @@ For every strong candidate, complete the full ladder before locking the final `M
    - when using `get-entity-schema-properties`, resolve `package-name` first via `find-entity-schema`
 4. Final choice:
    - only after the first three steps may the plan lock the final `reuse`, `extend`, or `create` outcome
-   - **begin writing `plan.md` immediately after Evidence Ladder is complete** — do not defer to re-read validator source or workflow scripts before committing to disk
+   - **present the plan immediately after Evidence Ladder is complete** — do not defer to re-read validator source or workflow scripts
 
 If the candidate remains plausible after step 1, do not stop at arguments such as "broader platform object", "ownership boundary", "unwanted coupling", or "lifecycle mismatch".
 Those arguments are valid only when follow-up confirmation and schema-level confirmation show the exact technical mismatch against the approved business model.
@@ -540,9 +529,8 @@ FormPage defaults:
 - include all approved required non-inherited business fields
 - fill in missing explicit requirements with deterministic defaults
 - when the entity uses a custom `UsrName` column as its primary display field (not the
-  inherited platform `Name`), pass it as `{"name": "UsrName", "path": "PDS.UsrName",
-  "type": "crt.Input"}` in `formFields`; the page-body script derives attr_key
-  `PDS_UsrName` automatically, producing consistent `control` and `label` bindings
+  inherited platform `Name`), edit the FormPage `body.js` directly so the inserted field
+  uses the `PDS_UsrName` attribute key with consistent `control` and `label` bindings
 - include the title field in the form-page `resources` dict alongside all other
   custom fields: `"PDS_UsrName": "<human-readable caption>"`; omitting it causes the
   field to render without a label in the designer even when the page saves successfully
@@ -560,9 +548,8 @@ Resolve the preferred page execution and verification sequence through `get-tool
 
 When page sync is required:
 
-- embed JSON between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in `plan.md`
-- materialize the same payload to `output/<AppName>/page-sync-plan.json`
-- prefer `bodyPath` references over large inline bodies
+- embed JSON between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->` in the plan presented in conversation
+- prefer inline bodies over `bodyPath` references since no files are written to disk
 
 ### Validation Rules
 
@@ -573,9 +560,11 @@ When page sync is required:
 
 ## Plan Output
 
-`technical-annex.md` should explain the technical branch, payload decisions, defaults, blockers, verification strategy, and any planning-time reuse decisions.
+Present the Technical Annex and the execution plan inline in the conversation.
 
-`plan.md` should be execution-ready and include:
+The Technical Annex should explain the technical branch, payload decisions, defaults, blockers, verification strategy, and any planning-time reuse decisions.
+
+The execution plan should be execution-ready and include:
 
 - app payload
 - branch choice and collision handling
@@ -584,6 +573,21 @@ When page sync is required:
 - default implementation strategy
 - page sync contract when required
 - explicit blocker notes when the approved business draft is insufficient for safe execution
+
+After presenting the plan, validate it inline:
+
+```bash
+python3 -c "
+import sys
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_implementation_plan_doc
+validate_implementation_plan_doc(sys.stdin.read())
+" << 'EOF'
+<plan content>
+EOF
+```
+
+If validation raises `WorkflowError`, fix the plan and re-validate before proceeding to Agent 4.
 
 <!-- FILE: context/essentials.md (full) -->
 
@@ -603,8 +607,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
 - The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
-- `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
-- After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
+- Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation rather than persisted to repo-local files
 
 **MCP Application Creation (DB-first)**
 - Resolve current application creation, discovery, refresh, and main-entity semantics through `get-tool-contract` and the `clio` MCP guidance resources
@@ -652,7 +655,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - UI is described via `viewConfigDiff`
 - Schema type is `"AngularSchema"`
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
-- `add-form-fields` and `add-list-columns` add fields or columns to an existing page body without replacing the whole body
+- Add fields or columns by editing the `body.js` returned by `get-page` directly without replacing unrelated marker sections
 - `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
 - `validate-page` validates a page body client-side without saving to Creatio
 
@@ -760,7 +763,6 @@ packages/<PackageName>/
 
 ### Generation Order
 
-For local MCP invocation helpers and result normalization, see `context/mcp-application-tools-reference.md`.
 For executable MCP tool shape and app-modeling semantics, use discovered `clio` MCP tool schema and prompts/resources such as `docs://mcp/guides/app-modeling`.
 
 - `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
@@ -774,7 +776,6 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 ### Working With MCP Tools
 
 - Use `scripts/mcp_client.py` for local `clio` stdio transport
-- Use `scripts/mcp_context_adapter.py normalize` for local runtime result normalization
 
 ```python
 from scripts.mcp_client import call_mcp_tool
@@ -997,7 +998,7 @@ Treat a candidate as strong when any of the following is true:
 
 - `dataforge-find-tables` returns a platform or existing custom schema with the same or adjacent business noun
 - `dataforge-find-lookups` returns a lookup whose values or title align with the approved lifecycle or taxonomy
-- the approved business wording maps naturally to a known platform concept such as activity, case, article, contact, account, request, knowledge, or comment
+- the approved business wording maps naturally to a known platform concept.
 - an existing `Usr*` schema or app already appears relevant
 - the current run is an existing-app update and a nearby entity already exists in the app
 
@@ -1094,9 +1095,9 @@ When several strong candidates exist, the decision record should say why the cho
 
 Good `create` evidence:
 
-- `candidate-fit-summary: Activity covers owner, due date, and completion semantics`
-- `required-capabilities: app-owned event task lifecycle, event linkage, lightweight task completion flow`
-- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader interaction flow; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
+- `candidate-fit-summary: Contact provides person identity and communication fields but lacks the required workflow and ownership semantics`
+- `required-capabilities: app-owned workflow lifecycle, custom status tracking, assignment and resolution trail`
+- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader CRM entity; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
 - `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
 
 Good `reuse` evidence:
@@ -1177,9 +1178,9 @@ When `dataforge-availability: unavailable` is recorded (because `dataforge-statu
 
 Good `create` evidence when DataForge is unavailable:
 
-- `candidates-considered: Case, Activity`
+- `candidates-considered: <none confirmed — DataForge unavailable>`
 - `candidate-fit-summary: candidates not inspected — DataForge unavailable`
-- `required-capabilities: app-owned support case lifecycle, custom status tracking, priority assignment, agent assignment`
+- `required-capabilities: app-owned custom workflow lifecycle, custom status tracking, priority assignment, owner assignment`
 - `mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)`
 - `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
 - `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`

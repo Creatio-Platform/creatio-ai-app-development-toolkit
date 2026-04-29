@@ -41,8 +41,6 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 3. Use `docs://mcp/guides/app-modeling` for app-modeling semantics.
 4. Treat repository docs as workflow and policy guidance only.
 
-`context/mcp-application-tools-reference.md` documents the local wrapper and normalization flow. It is not the executable MCP spec.
-
 ## Reading Strategy
 
 1. Read `AGENTS.md` for orchestration rules.
@@ -57,10 +55,10 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Phase | Must Read | What It Covers |
 |------|-----------|----------------|
 | Gate P | `AGENTS.md` | UX contract, routing, Gate P, global invariants |
-| Agent 1 | `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
-| Agent 2 | `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
-| Agent 3 | `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | canonical entity and page plan policy, reuse evidence ladder |
-| Agent 4 | `agents/04-implementation.md`, `context/mcp-application-tools-reference.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
+| Agent 1 | `context/.cache/agent-1-bundle.md` (preferred); fallback: `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
+| Agent 2 | `context/.cache/agent-2-bundle.md` (preferred); fallback: `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
+| Agent 3 | `context/.cache/agent-3-bundle.md` (preferred); fallback: `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | canonical entity and page plan policy, reuse evidence ladder |
+| Agent 4 | `context/.cache/agent-4-bundle.md` (preferred); fallback: `agents/04-implementation.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
 
 ## Topic Map
 
@@ -76,7 +74,6 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Handler patterns and request types | `context/handlers-reference.md` | page-body handler policy |
 | Safe SDK usage in page bodies | `context/devkit-common-reference.md` | page-body runtime API guidance |
 | Data bindings and lookup seeding | `context/data-bindings-reference.md` | binding policy and tool usage |
-| Local MCP transport and normalization | `context/mcp-application-tools-reference.md` | local wrapper, stdio transport, normalization |
 | MCP transport helper | `scripts/mcp_client.py` | stdio client wrapper |
 
 ## Canonical MCP Guidance
@@ -114,5 +111,4 @@ When you need executable tool parameters or current response shape:
 | Current MCP tool signature | `tools/list` and the discovered `clio` MCP tool schema |
 | App-modeling semantics | `docs://mcp/guides/app-modeling` |
 | Local invocation pattern | `scripts/mcp_client.py` |
-| Local result normalization | `context/mcp-application-tools-reference.md` |
 | Repo-local execution flow | `agents/04-implementation.md` and the relevant skill file |

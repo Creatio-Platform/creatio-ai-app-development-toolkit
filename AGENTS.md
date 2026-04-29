@@ -82,8 +82,8 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 - Primary interaction mode is natural language.
 - Keep the workflow business-first.
 - Do not ask the developer to provide `APPROVE_*` tokens.
-- Treat natural-language confirmation as the approval source and persist it through the provided scripts.
-- Do not expose internal gate names, tokens, or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
+- Treat natural-language confirmation as the approval source.
+- Do not expose internal gate names or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
 
 ## Task Classification
 
@@ -284,7 +284,7 @@ First-turn latency rule:
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
 - Additional discovery questions should be asked in the next small themed batch.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
-- Do not read large repository files or run orchestration scripts (Gate P/R) before the first clarification turn (routing + initial discovery batch) is completed for the current request.
+- Do not read large repository files before the first clarification turn (routing + initial discovery batch) is completed for the current request.
 
 Business discovery must follow a Business Analyst style:
 
@@ -306,17 +306,13 @@ Do not apply `site-ready-now` / `planning-first`, Gate P, or Gate R to targeted 
 - On the first turn, this routing question may be asked via structured input when the host mode supports it.
 - If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and any missing credentials.
 - If `planning-first`, defer runtime inputs until implementation is explicitly requested.
-- Before Gate P approval, do not run agents, do not run `clio`, and do not create or modify `output/<AppName>/`.
-- Persist Gate P in `.workflow-state/<AppName>/planning-state.json` with `scripts/write-planning-state.sh`.
-- Never treat a pre-existing `planning-state.json` as satisfying Gate P for a new user request. Always rewrite planning state from the current conversation's routing choice, understanding summary, and natural-language confirmation.
-- Never treat a pre-existing `output/<AppName>/.creatio-env.json` as satisfying Environment Setup for a new user request.
+- Before Gate P approval, do not run agents and do not run `clio`.
+- Gate P is confirmed by the developer's natural-language routing choice and understanding summary in the conversation. Always derive planning state from the current conversation — never from a prior run.
 - When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
-- Agent 1 must resolve the environment from the current request URL and rewrite `output/<AppName>/.creatio-env.json` for the current run before Agent 3 or Agent 4 reads it.
+- Agent 1 must resolve the environment from the current request URL and report it in the conversation before Agent 3 or Agent 4 uses it.
 - If `clio list-environments` returns multiple registered environments for the same normalized current-request URL, treat the environment choice as ambiguous and ask the developer to choose the environment name explicitly before continuing.
-- Do not auto-select one of several matching environments based on internal artifacts, stale plans, previous runs, active-environment status, or a familiar alias.
+- Do not auto-select one of several matching environments based on previous runs, active-environment status, or a familiar alias.
 - Reuse a matching environment without asking only when the current conversation explicitly names the environment key to use for that URL.
-- If `output/<AppName>/` already exists for the same app name but points to a different URL or environment, treat its runtime artifacts as stale for the current run.
-- Existing `.workflow-state/<AppName>/planning-state.json` or `output/<AppName>/` artifacts are internal implementation details. Do not surface them in business dialogue unless they create a real blocker that changes business intent.
 
 Technical question policy:
 
@@ -370,14 +366,10 @@ Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent re
 
 ## Agent Responsibilities
 
-1. Environment Setup
-   Output: `output/<AppName>/.creatio-env.json`
-2. Requirements Gathering
-   Output: `output/<AppName>/requirements.md`, `output/<AppName>/request-spec.json`, `output/<AppName>/workflow-state.json`, `output/<AppName>/docs/**`
-3. Implementation Plan
-   Output: `output/<AppName>/technical-annex.md`, `output/<AppName>/plan.md`, `output/<AppName>/page-sync-plan.json` when required
-4. Implementation
-   Output: `output/<AppName>/mcp-application-result.json`, `output/<AppName>/mcp-application-report.md`, `output/<AppName>/docs/**`
+1. Environment Setup — resolves env name and reports it in conversation
+2. Requirements Gathering — presents Business Plan and spec inline in conversation, validates with `scripts/workflow_validators.py`
+3. Implementation Plan — presents Technical Annex and plan inline in conversation, validates with `scripts/workflow_validators.py`
+4. Implementation — executes approved plan via clio MCP, reports summary in conversation
 
 Agent 2 is interactive and must not be delegated. Agent 4 runs synchronously.
 Agent 2 and Agent 3 are for full app generation or business-shaped feature work only. They must not be invoked for targeted changes.
@@ -387,18 +379,17 @@ Agent 2 and Agent 3 are for full app generation or business-shaped feature work 
 Gate P:
 
 - Requires routing choice, short understanding summary, assumptions/risks, and natural-language confirmation.
-- Use `scripts/check-planning-gate.sh <AppName>` before Agent 1.
 
 Gate R:
 
+- Before writing `requirements.md`, read `context/.cache/agent-2-bundle.md` (preferred) or `agents/02-requirements-gathering.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before writing. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Each checklist group must persist `source="confirmed"` or `source="assumed"`.
 - Requires the developer to see the full Business Plan before approval.
 - The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
-- Persist approval with `scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`.
-- Use `scripts/check-approval-gate.sh <AppName>` before Agents 3 and 4.
+- Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
 
 Gate bypass rule for targeted changes:
 
@@ -420,39 +411,30 @@ Approval-ready vs execution-ready rule:
 - Semantic `Id` in business terms is allowed (for example `Tax ID` -> `UsrTaxId`).
 - Treat physical FK/storage aliases (for example `E17`/`ColumnValueName` values like `...Id`) as storage aliases only, never as naming source for new entities or new custom columns.
 - Existing manually edited title/code divergence is allowed; this derivation contract applies to new creations only.
-- Generated artifacts under `output/**` are execution evidence, not policy sources.
 - Do not add inherited base columns to requirements.
 - Enum-like business values must be modeled as lookup entities.
 - For MCP transport, tool request/response shape, canonical app-modeling rules, and lookup/default semantics, follow the current `clio` MCP contract and prompts/resources such as `docs://mcp/guides/app-modeling` rather than re-declaring those rules locally.
 - If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
-- Final user-facing status must be derived from `mcp-application-result.json`. Do not report planned items as implemented without persisted evidence.
+- Final user-facing status must be derived from the tool execution evidence reported in the conversation. Do not report planned items as implemented without confirmed evidence.
 - Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
-- When page sync is required, the machine-readable page sync contract must be embedded in `plan.md` between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`, and may also be materialized as `page-sync-plan.json`.
-- App code, workflow-state collisions, and stale output artifacts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
-- A stale `output/<AppName>/.creatio-env.json` must never rebind a new run to an old site.
-- Before any internal run that depends on `output/<AppName>/.creatio-env.json`, verify that its `url` matches the current request URL or the runtime URL resolved by Agent 1 for the current conversation.
-- If that URL does not match, stop using the file, rerun Agent 1, and rewrite downstream environment references for the current run instead of patching around the mismatch.
-- Do not infer the current environment from `plan.md`, `technical-annex.md`, `page-sync-plan.json`, `build_pages.py`, or previous report artifacts. Those files may only consume the environment resolved by Agent 1 for the current run.
+- When page sync is required, the machine-readable page sync contract must be embedded in the plan presented in the conversation between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
+- App code and workflow-state collisions are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
+- Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
 - Implementation success does not excuse format non-compliance. Even if the app is successfully created, the assistant must still provide the required planning artifacts in the exact prescribed format.
-- Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`scripts/workflow_cli.py`, `scripts/validate-requirements-doc.sh`, etc.) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
+- Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 
 ## Orchestration Checklist
 
-1. Run Gate P and persist planning state for the current request.
-2. Verify Gate P with the canonical gate-check script before any stage that depends on planning approval.
-3. Run Agent 1 if runtime inputs are available.
-4. Run Agent 2 interactively, produce the BA-style requirements draft, and persist Gate R artifacts only after that draft is approved.
-5. Initialize draft docs immediately after Gate R.
-6. Verify Gate R with the canonical gate-check script before Agents 3 and 4.
-7. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract.
-8. Verify the implementation plan gate before implementation so explicit `Model Decisions` are present in `plan.md`, every planned creation or extension is covered by those decisions, and unsupported greenfield assumptions are blocked before Agent 4 runs.
-9. Run Agent 4 synchronously.
-10. Before moving to the next stage, verify expected artifacts for that stage exist and are non-empty.
-11. On failure, either retry with a justified fix or stop with a blocker.
+1. Confirm Gate P: routing choice, understanding summary, assumptions/risks, and natural-language confirmation from the developer.
+2. Run Agent 1 if runtime inputs are available.
+3. Run Agent 2 interactively and produce the BA-style requirements draft. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation.
+4. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract. Verify the implementation plan gate before Agent 4: explicit `Model Decisions` must be present in the plan, every planned creation or extension must be covered by those decisions, and unsupported greenfield assumptions are blocked before Agent 4 runs.
+5. Run Agent 4 synchronously.
+6. On failure, either retry with a justified fix or stop with a blocker.
 
 For targeted changes, use this reduced checklist instead:
 
@@ -477,9 +459,7 @@ then do not restart business discovery and do not regenerate the BA draft from s
 
 In that case:
 1. Derive `<AppName>` from the approved plan or current request.
-2. Persist Gate P and Gate R artifacts from the current conversation.
-3. Initialize required draft docs if missing.
-4. Proceed directly to Agent 3 and Agent 4 when the execution trigger is satisfied.
+2. Proceed directly to Agent 3 and Agent 4 when the execution trigger is satisfied.
 
 Fast-path guardrails:
 - Use this fast path only when the approved plan is for the current request, not a stale prior run.

@@ -13,11 +13,11 @@ Generate the package manifest file at package root.
 
 ## Output
 
-- `output/<AppName>/packages/<PackageName>/descriptor.json`
+- `descriptor.json` content presented inline in the conversation
 
 ## Source Inputs
 
-From `plan.md`:
+From the implementation plan in conversation context:
 - Package UId
 - Package name
 

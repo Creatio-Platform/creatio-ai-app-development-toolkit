@@ -18,6 +18,5 @@ copilot-session-*.md
 .workflow-state/
 output/
 .tmp-tests/
-context/.cache/
 .serena/
 .clio-pages/
