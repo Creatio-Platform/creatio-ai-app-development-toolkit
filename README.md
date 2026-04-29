@@ -34,9 +34,8 @@ Primary workflow is natural language:
 8. For full app generation or business-shaped feature work, the agent persists a fresh Gate P for the current request after natural-language confirmation; `planning-first` may defer runtime endpoints until implementation.
 9. For targeted changes, the agent skips BA planning and executes the focused change directly, asking questions only for missing blockers.
 10. Agent asks minimal technical questions only for blockers.
-11. After Gate R in full-app flow, the agent initializes `output/<AppName>/docs/**` as a draft skeleton before implementation starts.
-12. Agent runs the remaining pipeline and returns final artifacts/results.
-13. Internal gate tokens, old workflow-state details, and scripts stay hidden from developer-facing dialogue unless they are real blockers.
+11. Agent runs the remaining pipeline and returns final artifacts/results inline in the conversation.
+12. Internal gate names and scripts stay hidden from developer-facing dialogue unless they are real blockers.
 
 Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
 
@@ -204,12 +203,11 @@ Support mode is on. Please share this session with support for analysis.
 
 Orchestrator flow:
 
-1. Planning start with natural-language confirmation and persisted Gate P in `.workflow-state/<AppName>/planning-state.json`.
-2. If the route is `site-ready-now`, environment setup creates `output/<AppName>/.creatio-env.json`; if the route is `planning-first`, this step waits until implementation is requested.
-3. Requirements gathering produces a BA-style `requirements.md`, writes `request-spec.json`, persists approved `workflow-state.json`, and initializes draft docs under `output/<AppName>/docs/**`.
-   The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`.
-4. Implementation plan generates `output/<AppName>/technical-annex.md` and `output/<AppName>/plan.md` when implementation is explicitly requested.
-5. Implementation runs synchronously, resolves executable contract metadata through `get-tool-contract`, initializes canonical context in `mcp-application-result.json`, and executes the current `clio`-owned entity and page flows referenced by `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
+1. Planning start: routing choice, understanding summary, assumptions/risks, and natural-language confirmation. Gate P is satisfied when the developer confirms in conversation.
+2. If the route is `site-ready-now`, Agent 1 resolves the environment name and reports it in conversation; if the route is `planning-first`, this step waits until implementation is requested.
+3. Agent 2 produces a BA-style Business Plan and request spec inline in the conversation. The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`. Gate R is satisfied when the developer explicitly approves the plan.
+4. Agent 3 presents the technical annex and implementation plan inline in the conversation when implementation is explicitly requested.
+5. Agent 4 runs synchronously, resolves executable contract metadata through `get-tool-contract`, and executes the current `clio`-owned entity and page flows referenced by `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`. Tool execution evidence is reported inline.
 6. Existing-app branching remains explicit in the workflow, but the canonical discover/inspect/mutate path and fallback tool guidance are owned by `clio` rather than this repository.
 
 Targeted-change flow:
@@ -220,32 +218,24 @@ Targeted-change flow:
 4. Execute the focused mutation path directly.
 5. Verify the result and return evidence-based status.
 
-All generated artifacts are under `output/<AppName>/`.
-
 ## Runtime Scripts
 
-- Canonical helper logic lives in `python3 scripts/workflow_cli.py`.
-- Unix/macOS wrappers stay supported:
-  - `bash scripts/write-planning-state.sh <AppName> "<approvedBy>" "<routingMode>" "<creatioUrlOrDeferred>" "<understandingText>" "<confirmationText>"`
-  - `bash scripts/check-planning-gate.sh <AppName>`
-  - `bash scripts/validate-request-spec.sh output/<AppName>/request-spec.json`
-  - `bash scripts/write-approval-state.sh <AppName> "<approvedBy>" "<approvalText>"`
-  - `bash scripts/check-approval-gate.sh <AppName>`
-- PowerShell peers are available on Windows:
-  - `.\scripts\write-planning-state.ps1 <AppName> <approvedBy> <routingMode> <creatioUrlOrDeferred> <understandingText> <confirmationText>`
-  - `.\scripts\check-planning-gate.ps1 <AppName>`
-  - `.\scripts\validate-request-spec.ps1 output/<AppName>/request-spec.json`
-  - `.\scripts\write-approval-state.ps1 <AppName> <approvedBy> <approvalText>`
-  - `.\scripts\check-approval-gate.ps1 <AppName>`
-- `python3 scripts/mcp_context_adapter.py normalize output/<AppName>/mcp-application-result.json`
-- `python3 scripts/mcp_result_evidence.py report output/<AppName>/mcp-application-result.json output/<AppName>/mcp-application-report.md`
-- `python3 scripts/page_body_tools.py build-update-args <SchemaName> <body-file> --dry-run`
-- `python3 scripts/mcp_schema_sync.py plan --current-result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json`
-- `python3 scripts/mcp_schema_sync.py apply --result output/<AppName>/mcp-application-result.json --edited-context output/<AppName>/editable-context.json --env output/<AppName>/.creatio-env.json`
-- `python3 scripts/mcp_page_sync.py build-plan --plan-md output/<AppName>/plan.md --output output/<AppName>/page-sync-plan.json`
-- `python3 scripts/mcp_page_sync.py apply --result output/<AppName>/mcp-application-result.json --plan output/<AppName>/page-sync-plan.json --env output/<AppName>/.creatio-env.json --report output/<AppName>/mcp-application-report.md`
+Validation logic lives in `scripts/workflow_validators.py` and is called inline from Python with content passed as a string/dict (no file I/O):
 
-For JSON-heavy MCP payloads, prefer `args.json` plus `--args-file` over inline shell quoting.
+```bash
+python3 -c "
+import sys
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_requirements_doc
+validate_requirements_doc(sys.stdin.read())
+" << 'EOF'
+<requirements.md content>
+EOF
+```
+
+Available validators: `validate_requirements_doc(content: str)`, `validate_request_spec(spec: dict)`, `validate_implementation_plan_doc(content: str)`. Each raises `WorkflowError` on failure.
+
+For MCP transport, the agent uses `scripts/mcp_client.py` for stdio MCP calls. JSON-heavy payloads should be passed via `--args-file` to avoid inline shell quoting.
 
 ### Bash
 
@@ -260,19 +250,21 @@ $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
 & $env:PYTHON_CMD .\scripts\mcp_client.py list-apps --args-file .\args.json --timeout 30
 ```
 
-`mcp-application-result.json` stores the normalized runtime context used by this repository, plus `editableContext`, `operationLog`, `pageEvidence`, and any persisted acceptance evidence. Reports must be derived from that runtime evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
+Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation. Final user-facing status must be derived from that evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
 
-When page sync is required, `plan.md` must contain an embedded machine-readable `page-sync-plan.json` block between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. The same payload can be materialized to `output/<AppName>/page-sync-plan.json` with `scripts/mcp_page_sync.py build-plan`, and `scripts/mcp_page_sync.py apply` can consume either the JSON file or the markdown plan directly. `scripts/mcp_page_sync.py` is a thin adapter: it reads the embedded plan, calls `sync-pages`, and persists repo-local evidence. Resolve page-write and verification semantics through the current `clio` guidance resources; this repository no longer owns a custom page executor or fallback save flow.
+When page sync is required, the implementation plan presented in the conversation must contain an embedded machine-readable page sync contract between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. Resolve page-write and verification semantics through the current `clio` guidance resources; this repository no longer owns a custom page executor or fallback save flow.
 
 ## Architecture
 
+The entire workflow runs in a single AI session. State lives in conversation context — there is no file-based IPC between agents.
+
 ```text
 Orchestrator (AGENTS.md)
-|-- Agent 1: Environment Setup           -> .creatio-env.json
-|-- Agent 2: Requirements (interactive)  -> requirements.md + request-spec.json + workflow-state.json
-|-- Agent 3: Implementation Plan         -> technical-annex.md + plan.md
-|-- Agent 4: Implementation              -> mcp-application-result.json + report
-|   `-- clio stdio MCP via scripts/mcp_client.py and sync helpers
+|-- Agent 1: Environment Setup           -> env name reported in conversation
+|-- Agent 2: Requirements (interactive)  -> BA-style Business Plan + spec inline
+|-- Agent 3: Implementation Plan         -> technical annex + plan inline
+|-- Agent 4: Implementation              -> tool execution evidence + summary inline
+|   `-- clio stdio MCP via scripts/mcp_client.py
 ```
 
 ## Repository Structure
@@ -285,23 +277,9 @@ agents/
   03-implementation-plan.md
   04-implementation.md
 scripts/
-  workflow_cli.py
-  check-planning-gate.sh
-  check-planning-gate.ps1
-  check-approval-gate.sh
-  check-approval-gate.ps1
-  validate-request-spec.sh
-  validate-request-spec.ps1
-  write-planning-state.sh
-  write-planning-state.ps1
-  write-approval-state.sh
-  write-approval-state.ps1
-  workflow_gate.sh
-  workflow_gate.ps1
-  mcp_context_adapter.py
-  mcp_schema_sync.py
-  mcp_page_sync.py
-.workflow-state/
+  workflow_validators.py     # pure validation functions (no file I/O)
+  mcp_client.py              # stdio MCP client
+  find_python.{sh,ps1}       # python resolver
 context/
   business-checklist.md
   essentials.md
@@ -310,7 +288,6 @@ context/
   data-bindings-reference.md
   bindings-lookup.json
 templates/
-output/
 ```
 
 ## Prerequisites
