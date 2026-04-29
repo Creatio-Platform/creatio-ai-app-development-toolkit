@@ -28,7 +28,6 @@
 
 - робити progress reporting зручним для агентів
 - зберігати runtime evidence інкрементально
-- спрощувати handoff у `mcp-application-result.json` і `mcp-application-report.md`
 
 ## Expected Effect
 

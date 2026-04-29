@@ -126,4 +126,3 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 ## Дивіться також
 
 - [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md)
-- [`context/mcp-application-tools-reference.md`](../context/mcp-application-tools-reference.md)

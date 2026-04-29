@@ -67,10 +67,8 @@ Translate these into executable payloads only at runtime through `get-tool-contr
 After a successful `sync-schemas` batch:
 
 1. call `get-app-info` once
-2. overwrite `output/<AppName>/mcp-application-result.json`
-3. append execution evidence to `schemaSync`
-4. stop if the refreshed context does not show the materialized schema state
-5. normalize the result with `scripts/mcp_context_adapter.py normalize`
+2. capture the refreshed runtime context in conversation evidence
+3. stop if the refreshed context does not show the materialized schema state
 
 Do not document per-operation refresh as the primary flow.
 

@@ -233,9 +233,6 @@ This information stays in the conversation context — Agents 3 and 4 read the e
 
 <!-- FILE: context/essentials.md (L230-277) -->
 
-
-```bash
-clio new-pkg UsrMyPackage
 clio list-packages -e myenv
 clio pull-pkg MyPackage -e myenv
 clio delete-pkg-remote MyPackage -e myenv

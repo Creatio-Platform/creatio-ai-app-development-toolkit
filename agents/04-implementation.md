@@ -17,14 +17,12 @@ Treat the bundle as stale only when there is explicit evidence that it is outdat
 Fallback (if bundle unavailable or stale):
 - `AGENTS.md`
 - `context/essentials.md`
-- `context/mcp-application-tools-reference.md`
 - `context/ui-reference.md`
 - `context/viewconfig-reference.md`
 - `context/data-bindings-reference.md`
 - `scripts/mcp_client.py`
 
 Resolve executable tool details through `get-tool-contract`.
-Use `context/mcp-application-tools-reference.md` only for local wrapper and normalization guidance.
 
 ## MCP Transport
 

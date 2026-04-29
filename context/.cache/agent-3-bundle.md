@@ -607,8 +607,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
 - The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
-- `output/<AppName>/mcp-application-result.json` is the local normalized runtime context and evidence file used by helper scripts and final reporting
-- After normalization, the local result document may also contain helper projections such as `editableContext`, but those are repo-local derived views rather than the MCP response contract
+- Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation rather than persisted to repo-local files
 
 **MCP Application Creation (DB-first)**
 - Resolve current application creation, discovery, refresh, and main-entity semantics through `get-tool-contract` and the `clio` MCP guidance resources
@@ -764,7 +763,6 @@ packages/<PackageName>/
 
 ### Generation Order
 
-For local MCP invocation helpers and result normalization, see `context/mcp-application-tools-reference.md`.
 For executable MCP tool shape and app-modeling semantics, use discovered `clio` MCP tool schema and prompts/resources such as `docs://mcp/guides/app-modeling`.
 
 - `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
@@ -778,7 +776,6 @@ For executable MCP tool shape and app-modeling semantics, use discovered `clio` 
 ### Working With MCP Tools
 
 - Use `scripts/mcp_client.py` for local `clio` stdio transport
-- Use `scripts/mcp_context_adapter.py normalize` for local runtime result normalization
 
 ```python
 from scripts.mcp_client import call_mcp_tool

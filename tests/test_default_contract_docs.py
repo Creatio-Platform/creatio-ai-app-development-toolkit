@@ -52,7 +52,6 @@ DOC_PATHS = [
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "agents/04-implementation.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/mcp-application-tools-reference.md",
 ]
 
 CANONICAL_FLOW_DOCS = [
@@ -110,7 +109,6 @@ STDIO_ONLY_DOCS = existing([
     ROOT / "AGENTS.md",
     ROOT / "agents/01-environment-setup.md",
     ROOT / "agents/02-requirements-gathering.md",
-    ROOT / "context/mcp-application-tools-reference.md",
     ROOT / "README.md",
     ROOT / "skills/README.md",
 ])
@@ -121,7 +119,6 @@ DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "agents/04-implementation.md",
     ROOT / "context/business-checklist.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/mcp-application-tools-reference.md",
     ROOT / "context/data-bindings-reference.md",
     ROOT / "skills/README.md",
     ROOT / "skills/entity-creation/SKILL.md",
@@ -148,8 +145,6 @@ class DefaultContractDocsTests(unittest.TestCase):
         agents_doc = read_text(ROOT / "AGENTS.md")
         self.assertRegex(agents_doc, r"only authoritative source|single source of truth")
         self.assertRegex(agents_doc, r"must not define an independent MCP API contract|must not define an independent MCP contract")
-        reference_doc = read_text(ROOT / "context/mcp-application-tools-reference.md")
-        self.assertRegex(reference_doc, r"It is not the executable MCP (specification|spec)\.")
 
     def test_docs_delegate_default_semantics_to_clio_guidance(self):
         for path in DOC_PATHS:
@@ -276,9 +271,6 @@ class DefaultContractDocsTests(unittest.TestCase):
             content = read_text(path)
             self.assertNotIn(legacy_mcp_url, content, str(path))
             self.assertNotIn(legacy_frontend_label, content, str(path))
-        reference_doc = read_text(ROOT / "context/mcp-application-tools-reference.md")
-        self.assertIn("clio stdio transport", reference_doc)
-        self.assertTrue(contains_all(reference_doc, ["curl", "MCP execution pattern"]))
 
     def test_active_policy_docs_do_not_embed_hand_written_contract_tables(self):
         disallowed_markers = [
