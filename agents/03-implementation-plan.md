@@ -55,11 +55,11 @@ The approved BA draft preserves business intent, but live discovery may amend th
 
 ## Validation Before Planning
 
-Validate `request-spec.json` and `workflow-state.json`:
+Validate the request spec and the conversation state:
 
 - the business checklist is complete
 - all required checklist groups have values
-- natural-language approval is persisted
+- natural-language approval was given in the conversation
 - routing mode is known
 - runtime inputs are either present or explicitly deferred
 - the approved requirements follow the BA-style structure from Agent 2
@@ -131,7 +131,7 @@ Rules:
 
 Agent 2 may suggest business concepts, likely schema names, and suspected candidates, but it does not freeze the final technical model.
 Live discovery may amend the technical plan after Gate R.
-If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, `technical-annex.md`, and ordered schema sync to reflect the stronger technical choice.
+If the BA draft names `Usr*` placeholder schemas or custom lookups but discovery finds a viable existing candidate, Agent 3 must update `Model Decisions`, the technical annex, and the ordered schema sync to reflect the stronger technical choice.
 `Model Decisions` are authoritative for execution.
 Earlier business wording is not a blocker to `reuse` unless the user explicitly required technical isolation, custom ownership, or separate governance as a business requirement.
 This override still applies even if Agent 2, the BA draft, or an earlier plan preferred `create`.
@@ -243,7 +243,7 @@ When `dataforge-availability: unavailable` is recorded, **skip all five sections
 
 Open the discovery branch for any business object, supporting object, lookup, or reference target that could plausibly map to an existing app or schema.
 Treat this as mandatory planning work, not an optional optimization.
-Any concept listed in `request-spec.json -> planningSignals.reuseCheckRequired` is an automatic trigger.
+Any concept listed in the request spec under `planningSignals.reuseCheckRequired` is an automatic trigger.
 
 This includes, but is not limited to, cases where:
 

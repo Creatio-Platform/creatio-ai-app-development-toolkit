@@ -107,7 +107,7 @@ Required sections:
 The agent must not improvise the document shape.
 
 `requirements.md` is for business reading and approval.
-`request-spec.json` is the normalized machine-readable persistence artifact.
+`request-spec.json` is the normalized machine-readable companion presented inline alongside the Business Plan.
 Do not mirror request-spec markers, checklist source labels, or validation vocabulary in the visible Business Plan.
 
 Do not expose any of the following in `requirements.md`:
@@ -351,7 +351,7 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
 - If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
-- When that ambiguity exists, persist a `planningSignals.reuseCheckRequired` entry in `request-spec.json` so Agent 3 must open the discovery branch for that concept.
+- When that ambiguity exists, include a `planningSignals.reuseCheckRequired` entry in the request spec so Agent 3 must open the discovery branch for that concept.
 
 ## Default Resolution Rules
 
