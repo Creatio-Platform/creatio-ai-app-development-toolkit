@@ -2,39 +2,39 @@
 
 > Historical design note. This document records protocol-level opportunities and must not be used as a contract reference for live clio MCP tools.
 
-Нотатки про MCP capabilities, які можуть покращити UX і зменшити дублювання knowledge між server і client.
+Notes on MCP capabilities that can improve UX and reduce knowledge duplication between server and client.
 
 ## Main Themes
 
 ### Prompts And Resources As Live Guidance
 
-- використовувати server-discovered prompts/resources як живе джерело execution guidance
-- зменшити обсяг repo-local agent text, який дублює server-owned rules
-- дати агентам актуальні підказки без ручного оновлення repo docs
+- use server-discovered prompts/resources as a live source of execution guidance
+- reduce the volume of repo-local agent text that duplicates server-owned rules
+- give agents up-to-date hints without manually updating repo docs
 
 ### Progress Reporting
 
-- підхоплювати protocol-level progress і передавати його в orchestration UX
-- робити довгі operations зрозумілішими для агента і користувача
+- pick up protocol-level progress and surface it in orchestration UX
+- make long operations more transparent for the agent and the user
 
 ### Tool Metadata
 
-- використовувати annotations і metadata для smarter retry policy, safety decisions і richer logging
-- не дублювати ці правила в hand-written wrapper maps
+- use annotations and metadata for smarter retry policy, safety decisions, and richer logging
+- do not duplicate these rules in hand-written wrapper maps
 
 ### Resource And Subscription Flows
 
-- оцінити, де protocol-level resources або subscriptions можуть прибрати зайві refresh calls
-- покращити пост-mutation visibility без додаткового polling там, де server already knows state changed
+- evaluate where protocol-level resources or subscriptions can remove redundant refresh calls
+- improve post-mutation visibility without extra polling where the server already knows the state has changed
 
 ## Expected Effect
 
-- менше contract drift між repo docs і live server behavior
-- краща explainability long-running tool calls
+- less contract drift between repo docs and live server behavior
+- better explainability for long-running tool calls
 - cleaner wrapper logic
-- зручніший path для agent guidance that evolves with clio itself
+- a more convenient path for agent guidance that evolves together with clio itself
 
 ## Notes
 
-- Цей документ описує adoption ideas, а не current prompt/resource catalog.
-- Поточні prompts, resources, annotations і інші protocol surfaces мають читатися з live MCP discovery під час виконання.
+- This document describes adoption ideas, not the current prompt/resource catalog.
+- Current prompts, resources, annotations, and other protocol surfaces must be read from live MCP discovery at execution time.

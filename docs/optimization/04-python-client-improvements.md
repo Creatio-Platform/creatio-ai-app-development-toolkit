@@ -2,41 +2,41 @@
 
 > Historical design note. This document describes client-side optimization ideas only. It is not a source of executable MCP contract truth.
 
-Нотатки про те, як зменшити накладні витрати Python wrapper та orchestration scripts.
+Notes on how to reduce overhead in the Python wrapper and orchestration scripts.
 
 ## Main Themes
 
 ### Persistent MCP Session
 
-- тримати один живий clio MCP process замість repeated startup for every call
-- повторно використовувати initialize state і contract cache
-- зменшити fixed overhead на багатокрокових flows
+- keep a single live clio MCP process instead of repeated startup for every call
+- reuse initialize state and contract cache
+- reduce fixed overhead on multi-step flows
 
 ### Fewer Shell Boundaries
 
-- скоротити кількість окремих bash/powershell invocations
-- зібрати послідовні orchestration steps у меншу кількість Python entrypoints
-- зменшити module import overhead і quoting-related fragility
+- reduce the number of separate bash/powershell invocations
+- consolidate sequential orchestration steps into fewer Python entrypoints
+- reduce module import overhead and quoting-related fragility
 
 ### Better Wrapper Responsibilities
 
-- залишити wrapper відповідальним за transport, bootstrap, cache, unknown-tool suggestions і top-level metadata validation
-- не дублювати nested tool contract локально
-- повертати server errors як primary source of truth для складних payload mismatches
+- keep the wrapper responsible for transport, bootstrap, cache, unknown-tool suggestions, and top-level metadata validation
+- do not duplicate the nested tool contract locally
+- return server errors as the primary source of truth for complex payload mismatches
 
 ### Better Progress And Evidence Handling
 
-- робити progress reporting зручним для агентів
-- зберігати runtime evidence інкрементально
+- make progress reporting convenient for agents
+- preserve runtime evidence incrementally
 
 ## Expected Effect
 
-- коротші end-to-end runs
-- менше flaky shell failures
-- простіший wrapper code path
-- менше шансів на contract drift між repo і clio MCP
+- shorter end-to-end runs
+- fewer flaky shell failures
+- simpler wrapper code path
+- lower chance of contract drift between the repo and clio MCP
 
 ## Notes
 
-- Якщо потрібен точний tool shape, Python client має читати його з live contract metadata, а не з repo-local fallback maps.
-- Цей документ не повинен містити hard-coded request або response examples для clio MCP tools.
+- When an exact tool shape is needed, the Python client must read it from live contract metadata, not from repo-local fallback maps.
+- This document must not contain hard-coded request or response examples for clio MCP tools.

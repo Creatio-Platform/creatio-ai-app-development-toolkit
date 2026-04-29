@@ -34,7 +34,7 @@ LOOKUPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Lookups\s*$", re.MULTILI
 RELATIONSHIPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Relationships\s*$", re.MULTILINE)
 MAIN_ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Main entity:", re.MULTILINE)
 TABLE_HEADER_RE = re.compile(
-    r"^\s*\|\s*(Title|Назва)\s*\|\s*(Code|Код)\s*\|\s*(Description|Опис)\s*\|\s*(Data type|Тип)\s*\|\s*(Required|Обов'язкове)\s*\|\s*Default\s*\|",
+    r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
     re.IGNORECASE,
 )
 UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNORECASE)
@@ -232,7 +232,7 @@ def validate_requirements_doc(content: str) -> None:
     for section_text in (section1_text, section2_text, section4_text, section5_text, section6_text, section7_text):
         if re.search(r"^[ \t]*\|", section_text, re.MULTILINE):
             raise WorkflowError("Requirements doc failed: markdown tables are allowed only in section 3 object model")
-    if not re.search(r"^[ \t]*\|[ \t]*(Title|Назва)[ \t]*\|[ \t]*(Code|Код)[ \t]*\|[ \t]*(Description|Опис)[ \t]*\|", section3_text, re.IGNORECASE | re.MULTILINE):
+    if not re.search(r"^[ \t]*\|[ \t]*Title[ \t]*\|[ \t]*Code[ \t]*\|[ \t]*Description[ \t]*\|", section3_text, re.IGNORECASE | re.MULTILINE):
         raise WorkflowError("Requirements doc failed: section 3 must include a field table with the required columns")
     lines = section3_text.splitlines()
     entity_indices = [index for index, line in enumerate(lines) if ENTITY_HEADING_RE.search(line)]

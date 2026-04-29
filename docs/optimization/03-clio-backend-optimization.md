@@ -2,40 +2,40 @@
 
 > Historical design note. This document records backend optimization directions and must not be used as the executable MCP contract reference.
 
-Нотатки про server-side bottlenecks, які не вирішуються лише Python client tuning.
+Notes on server-side bottlenecks that cannot be resolved by Python client tuning alone.
 
 ## Main Themes
 
 ### Reduce N+1 Metadata Loading
 
-- скоротити кількість backend calls під час runtime context refresh
-- віддавати достатній aggregated state за один logical refresh
-- уникати повторного loading тих самих schema fragments між сусідніми operations
+- shrink the number of backend calls during runtime context refresh
+- return sufficient aggregated state in a single logical refresh
+- avoid repeated loading of the same schema fragments between adjacent operations
 
 ### Reuse Expensive Context
 
-- мінімізувати повторне створення короткоживучих backend objects
-- по можливості кешувати або повторно використовувати immutable metadata
-- зменшити latency на large app contexts
+- minimize repeated creation of short-lived backend objects
+- where possible, cache or reuse immutable metadata
+- reduce latency on large app contexts
 
 ### Keep Materialization Observable
 
-- після mutation клієнт має бачити, що schema або binding справді матеріалізувався
-- evidence model має дозволяти верифікувати успішний стан без зайвих round trips там, де це безпечно
+- after a mutation the client must see that the schema or binding was actually materialized
+- the evidence model must allow verifying a successful state without extra round trips where it is safe
 
 ## Expected Effect
 
-- менше backend chatter під час `get-app-info`
-- швидші multi-step entity flows
-- менше залежності від follow-up discovery лише для того, щоб підтвердити щойно виконану mutation
+- less backend chatter during `get-app-info`
+- faster multi-step entity flows
+- less reliance on follow-up discovery solely to confirm a mutation that was just executed
 
 ## Risks
 
-- агресивне кешування може приховати stale state
-- richer backend aggregation не повинна ламати існуючих клієнтів
-- оптимізації треба перевіряти на mixed flows: create, update, lookup seeding, page sync follow-up
+- aggressive caching may hide stale state
+- richer backend aggregation must not break existing clients
+- optimizations must be validated against mixed flows: create, update, lookup seeding, page sync follow-up
 
 ## Notes
 
-- Цей документ описує напрямки backend optimization, а не поточний wire contract.
-- Актуальні tool params і response shapes мають читатися з clio MCP discovery під час виконання.
+- This document describes backend optimization directions, not the current wire contract.
+- Current tool params and response shapes must be read from clio MCP discovery at execution time.

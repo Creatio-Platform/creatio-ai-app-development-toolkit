@@ -2,67 +2,67 @@
 
 > Historical design note. This document explains optimization ideas, not the executable MCP contract. Resolve live tool names, params, response shapes, and errors through `get-tool-contract`.
 
-Нотатки про найшвидші зміни в clio MCP server, які можуть дати помітний виграш у latency без повного redesign.
+Notes on the fastest changes in clio MCP server that can yield a noticeable latency win without a full redesign.
 
 ## A1. Remove Post-Execution Delay
 
 ### Problem
 
-Частина tool calls має штучну затримку після виконання. Для сесій із великою кількістю викликів це додає помітний fixed overhead.
+Some tool calls have an artificial delay after execution. For sessions with many calls, this adds noticeable fixed overhead.
 
 ### Optimization Goal
 
-- прибрати або параметризувати post-exec delay
-- перевірити, чи затримка реально потрібна для логування або синхронізації
-- зменшити базову latency без зміни user-facing workflow
+- remove or parameterize the post-exec delay
+- verify whether the delay is actually needed for logging or synchronization
+- reduce baseline latency without changing the user-facing workflow
 
 ### Expected Effect
 
-- нижчий per-call overhead
-- коротші app-creation сесії без зміни orchestration logic
+- lower per-call overhead
+- shorter app-creation sessions without changes to orchestration logic
 
 ## A2. Replace Global Lock With Narrower Concurrency Control
 
 ### Problem
 
-Глобальний lock серіалізує незалежні tool calls і не дає використовувати безпечний паралелізм навіть там, де він можливий.
+A global lock serializes independent tool calls and prevents safe parallelism even where it would be possible.
 
 ### Optimization Goal
 
-- звузити lock scope щонайменше до environment level
-- окремо оцінити read/write separation для безпечних read-only flows
-- не допустити змішування логів або shared mutable state між concurrent calls
+- narrow lock scope to at least environment level
+- separately evaluate read/write separation for safe read-only flows
+- prevent mixing of logs or shared mutable state between concurrent calls
 
 ### Expected Effect
 
-- розблокування паралельних read flows
-- кращий throughput для multi-step orchestration
+- unblocking parallel read flows
+- better throughput for multi-step orchestration
 
 ## A5. Return Richer Mutation Evidence
 
 ### Problem
 
-Після schema mutations клієнт часто змушений робити додатковий refresh, щоб отримати оновлений runtime state та використати його в наступних кроках.
+After schema mutations, the client is often forced to make an additional refresh to obtain updated runtime state and use it in subsequent steps.
 
 ### Optimization Goal
 
-- збагачувати mutation responses достатнім runtime evidence
-- зменшити кількість follow-up refresh calls у тих flows, де це безпечно
-- залишити backward compatibility для існуючих клієнтів
+- enrich mutation responses with sufficient runtime evidence
+- reduce the number of follow-up refresh calls in flows where it is safe to do so
+- preserve backward compatibility for existing clients
 
 ### Expected Effect
 
-- менше round trips після mutations
-- швидший перехід до наступного orchestration step
+- fewer round trips after mutations
+- faster transition to the next orchestration step
 
 ## Validation Focus
 
-- latency before/after для типових app-creation flows
-- коректність log capture після прибирання затримок
-- відсутність race conditions при звуженні lock scope
-- достатність enriched evidence для клієнтів без обов’язкового extra refresh
+- latency before/after for typical app-creation flows
+- correctness of log capture after removing the delays
+- absence of race conditions after narrowing lock scope
+- sufficiency of enriched evidence for clients without a mandatory extra refresh
 
 ## Notes
 
-- Ці quick wins треба оцінювати разом із Python client optimization track і composite-tool proposals.
-- Документ не повинен використовуватись як reference для MCP request або response shape.
+- These quick wins should be evaluated together with the Python client optimization track and composite-tool proposals.
+- This document must not be used as a reference for MCP request or response shape.

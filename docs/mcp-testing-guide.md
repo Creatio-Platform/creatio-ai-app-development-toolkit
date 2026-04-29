@@ -1,24 +1,24 @@
 # MCP Testing Guide — Bootstrap And Verification
 
-> Для візуального UI-тестування дивіться [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md).
+> For visual UI testing, see [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md).
 
-Цей документ описує, як перевіряти released clio MCP bootstrap і wrapper behavior через `scripts/mcp_client.py`.
-Executable contract визначається тільки `clio MCP` через `get-tool-contract`; цей документ не дублює tool payload shape.
+This document describes how to verify released clio MCP bootstrap and wrapper behavior through `scripts/mcp_client.py`.
+The executable contract is defined only by `clio MCP` via `get-tool-contract`; this document does not duplicate tool payload shape.
 
-## Базові правила
+## Base Rules
 
-- Підтримуваний runtime: released `clio` `8.0.2.50+`
-- `CLIO_CMD` можна використовувати лише як override шляху до сумісного `clio`
-- Виконання MCP іде через clio stdio, не через HTTP/SSE
-- Для реальних викликів використовуйте `python3 scripts/mcp_client.py ...`
-- Для JSON-heavy payloads використовуйте `--args-file` або `--args-stdin`, а не inline quoting
-- Спочатку перевіряйте manifest через `tools/list`, а executable contract через `get-tool-contract`
+- Supported runtime: released `clio` `8.0.2.50+`
+- `CLIO_CMD` may be used only as an override for the path to a compatible `clio`
+- MCP execution runs over clio stdio, not over HTTP/SSE
+- For real calls, use `python3 scripts/mcp_client.py ...`
+- For JSON-heavy payloads, use `--args-file` or `--args-stdin` instead of inline quoting
+- First check the manifest via `tools/list`, then the executable contract via `get-tool-contract`
 - Canonical entity flow: `create-app -> sync-schemas -> get-app-info`
 - clio-advertised canonical page flow: `list-pages -> get-page -> sync-pages -> get-page`
-- `update-page` лишається тільки fallback path для single-page dry-run або legacy save
-- Якщо потрібен точний tool shape, дочитуйте його в момент виконання через `get-tool-contract` і `docs://mcp/guides/app-modeling`
+- `update-page` remains a fallback path only for single-page dry-run or legacy save
+- When you need an exact tool shape, read it at execution time through `get-tool-contract` and `docs://mcp/guides/app-modeling`
 
-## Швидка перевірка середовища
+## Quick Environment Check
 
 ```bash
 clio ver
@@ -34,24 +34,24 @@ py -3 .\scripts\mcp_client.py tools/list '{}' 30
 py -3 .\scripts\mcp_client.py get-tool-contract '{}' 30
 ```
 
-Очікування:
+Expectations:
 
-- `clio ver` повертає `8.0.2.50` або новіше
-- `--check-clio-version` завершується успішно
-- `tools/list` повертає non-empty manifest
-- `get-tool-contract` повертає non-empty metadata для доступних tools
+- `clio ver` returns `8.0.2.50` or newer
+- `--check-clio-version` exits successfully
+- `tools/list` returns a non-empty manifest
+- `get-tool-contract` returns non-empty metadata for available tools
 
 ## Generic Invocation Pattern
 
-Для будь-якого non-bootstrap tool:
+For any non-bootstrap tool:
 
-1. перевірити, що tool присутній у `tools/list`
-2. отримати exact params, aliases, required fields, type expectations, response hints і rejected aliases через `get-tool-contract`
-3. підготувати payload у `args.json` або через stdin
-4. викликати `scripts/mcp_client.py <tool-name> --args-file ./args.json --timeout <seconds>`
-5. якщо виклик змінює entity metadata, виконати подальшу перевірку через canonical refresh path
+1. verify the tool is present in `tools/list`
+2. obtain exact params, aliases, required fields, type expectations, response hints, and rejected aliases via `get-tool-contract`
+3. prepare the payload in `args.json` or via stdin
+4. invoke `scripts/mcp_client.py <tool-name> --args-file ./args.json --timeout <seconds>`
+5. if the call mutates entity metadata, run a follow-up verification through the canonical refresh path
 
-Приклади wrapper invocation pattern:
+Wrapper invocation pattern examples:
 
 ```bash
 python3 scripts/mcp_client.py <tool-name> --args-file ./args.json --timeout 120
@@ -65,64 +65,64 @@ Get-Content .\args.json | py -3 .\scripts\mcp_client.py <tool-name> --args-stdin
 
 ## Wrapper Verification Focus
 
-Перевіряйте локальний wrapper на такі властивості:
+Verify the local wrapper for these properties:
 
-- `tools/list` і `get-tool-contract` працюють без попереднього contract cache
-- non-bootstrap tools вимагають успішного `get-tool-contract`
-- top-level metadata validation використовує лише live contract data:
+- `tools/list` and `get-tool-contract` work without a prior contract cache
+- non-bootstrap tools require a successful `get-tool-contract`
+- top-level metadata validation uses only live contract data:
   - `required`
   - `any-of`
   - declared field types
   - rejected aliases
-- nested request shapes не вгадуються локально; помилки такого типу повертає сам clio MCP
-- unknown tool names повертають suggestion list із live contract index
+- nested request shapes are not guessed locally; errors of that kind are returned by clio MCP itself
+- unknown tool names return a suggestion list from the live contract index
 
-## Перевірки після mutation flows
+## Checks After Mutation Flows
 
-- Після entity mutation flow виконайте canonical refresh через `get-app-info`
-- Після page write flow повторно перевірте результат через `get-page`, якщо helper або server response не дає достатньої verification evidence
-- Не тримайте локальні hard-coded param або response expectations; якщо потрібен точний shape, дочитайте його через `get-tool-contract`
+- After an entity mutation flow, run a canonical refresh through `get-app-info`
+- After a page write flow, re-verify the result through `get-page` if the helper or server response does not provide sufficient verification evidence
+- Do not keep local hard-coded param or response expectations; if you need the exact shape, read it through `get-tool-contract`
 
-## Типові помилки
+## Common Errors
 
 ### Unsupported clio version
 
-Причина:
+Cause:
 
-- встановлено `clio` старіше за `8.0.2.50`
+- installed `clio` is older than `8.0.2.50`
 
-Рішення:
+Resolution:
 
-- оновити `clio`
-- або вказати сумісний released binary через `CLIO_CMD`
+- update `clio`
+- or point to a compatible released binary via `CLIO_CMD`
 
-### `get-tool-contract` недоступний
+### `get-tool-contract` Unavailable
 
-Причина:
+Cause:
 
-- wrapper не може отримати live metadata
-- несумісна версія `clio`
-- transport/bootstrap проблема
+- wrapper cannot retrieve live metadata
+- incompatible `clio` version
+- transport/bootstrap problem
 
-Рішення:
+Resolution:
 
-- перевірити `clio ver`
-- перевірити `tools/list`
-- окремо перевірити `get-tool-contract`
-- не намагатися будувати non-bootstrap payload з repo docs
+- check `clio ver`
+- check `tools/list`
+- check `get-tool-contract` separately
+- do not try to build non-bootstrap payloads from repo docs
 
-### Generic invocation error from clio
+### Generic Invocation Error From clio
 
-Причина:
+Cause:
 
-- payload shape або nested fields не відповідають live contract
-- wrapper більше не перевіряє складні nested rules локально
+- payload shape or nested fields do not match the live contract
+- wrapper no longer validates complex nested rules locally
 
-Рішення:
+Resolution:
 
-- звірити exact params, aliases, validators, prompt/resource guidance і tool-specific notes через `get-tool-contract`
-- для app-modeling semantics дочитати `docs://mcp/guides/app-modeling`
+- reconcile exact params, aliases, validators, prompt/resource guidance, and tool-specific notes via `get-tool-contract`
+- for app-modeling semantics, read `docs://mcp/guides/app-modeling`
 
-## Дивіться також
+## See Also
 
 - [`context/mcp-inspector-guide.md`](../context/mcp-inspector-guide.md)

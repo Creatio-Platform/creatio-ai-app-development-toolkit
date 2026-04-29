@@ -2,17 +2,17 @@
 
 > Historical design note. This document captures architectural motivation for composite tools. It is not the executable MCP contract source of truth.
 
-Нотатки про composite tools як спосіб прибрати orchestration overhead між багатьма дрібними MCP calls.
+Notes on composite tools as a way to remove orchestration overhead between many small MCP calls.
 
 ## Goal
 
-Зменшити кількість окремих round trips у flows, де агент майже завжди виконує фіксовану послідовність пов’язаних operations.
+Reduce the number of separate round trips in flows where the agent almost always executes a fixed sequence of related operations.
 
 ## A6. `sync-schemas`
 
 ### Motivation
 
-Нові app flows зазвичай виконують кілька тісно пов’язаних entity mutations:
+New app flows typically perform several tightly-coupled entity mutations:
 
 - create/discover main app shell
 - add lookup entities
@@ -20,26 +20,26 @@
 - extend the main entity with new business fields
 - refresh runtime state
 
-Коли ці кроки розбиті на багато atomic calls, витрати на transport, locking і repeated refresh швидко домінують над реальною корисною роботою.
+When these steps are broken into many atomic calls, transport, locking, and repeated-refresh costs quickly dominate over the actual useful work.
 
 ### Desired Characteristics
 
-- одна orchestration boundary для пов’язаного schema batch
-- одна відповідальність за ordering lookup-before-reference
-- менше проміжних refresh steps
-- достатня per-operation evidence, щоб клієнт міг побачити, що реально матеріалізувалось
+- one orchestration boundary for a related schema batch
+- single responsibility for lookup-before-reference ordering
+- fewer intermediate refresh steps
+- sufficient per-operation evidence for the client to see what was actually materialized
 
 ### Design Constraints
 
-- atomic tools мають залишатися доступними як compatibility path
-- composite flow не повинен ставати альтернативною hand-written contract spec у repo docs
-- client side має далі довіряти live contract discovery, а не historical прикладам
+- atomic tools must remain available as a compatibility path
+- the composite flow must not become an alternative hand-written contract spec in repo docs
+- the client side must continue to trust live contract discovery, not historical examples
 
 ## A7. `sync-pages`
 
 ### Motivation
 
-Runtime page editing часто включає:
+Runtime page editing often includes:
 
 - discover page
 - read live body
@@ -47,29 +47,29 @@ Runtime page editing часто включає:
 - persist page
 - verify result
 
-Коли це робиться багатьма окремими write/save/dry-run calls, виникає зайвий network і process overhead.
+When this is done through many separate write/save/dry-run calls, unnecessary network and process overhead accumulates.
 
 ### Desired Characteristics
 
-- batch save для пов’язаних сторінок одного app flow
-- вбудована validation/verification evidence
-- зручний fast path для FormPage + ListPage sync
-- збереження fallback path для legacy single-page workflows
+- batch save for related pages in a single app flow
+- built-in validation/verification evidence
+- convenient fast path for FormPage + ListPage sync
+- preservation of a fallback path for legacy single-page workflows
 
 ## Expected Effect
 
-- менше tool calls на один app-creation run
-- менше transport overhead
-- чистіший execution trace для агентів
-- менше спокуси дублювати tool payload details у repo docs
+- fewer tool calls per app-creation run
+- less transport overhead
+- cleaner execution trace for agents
+- less temptation to duplicate tool payload details in repo docs
 
 ## Risks
 
-- composite tools не повинні приховувати реальні partial failures
-- richer flows потребують чіткої evidence model
-- server/client rollout має зберегти backward compatibility для existing atomic workflows
+- composite tools must not hide real partial failures
+- richer flows require a clear evidence model
+- server/client rollout must preserve backward compatibility for existing atomic workflows
 
 ## Notes
 
-- Цей документ описує навіщо composite tools корисні, а не як саме має виглядати їхній live payload.
-- Будь-який поточний executable shape треба брати тільки з clio MCP discovery.
+- This document describes why composite tools are useful, not what their live payload should look like.
+- Any current executable shape must be taken only from clio MCP discovery.
