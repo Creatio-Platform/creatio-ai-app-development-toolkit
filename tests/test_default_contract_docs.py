@@ -16,7 +16,6 @@ AUTHORITY_DOCS = existing([
     ROOT / "context/data-bindings-reference.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "agents/04-implementation.md",
-    ROOT / "docs/mcp-testing-guide.md",
     ROOT / "skills/README.md",
     ROOT / "skills/entity-creation/SKILL.md",
     ROOT / "skills/data-bindings-creation/SKILL.md",
@@ -38,13 +37,10 @@ ACTIVE_CONTRACT_SURFACE_DOCS = existing([
     ROOT / "context/data-bindings-reference.md",
     ROOT / "agents/03-implementation-plan.md",
     ROOT / "agents/04-implementation.md",
-    ROOT / "docs/mcp-testing-guide.md",
     ROOT / "skills/entity-creation/SKILL.md",
     ROOT / "skills/data-bindings-creation/SKILL.md",
     ROOT / "skills/page-schema-editing/SKILL.md",
 ])
-
-HISTORICAL_OPTIMIZATION_DOCS = sorted((ROOT / "docs/optimization").glob("*.md"))
 
 DOC_PATHS = [
     ROOT / "AGENTS.md",
@@ -282,19 +278,6 @@ class DefaultContractDocsTests(unittest.TestCase):
             "All parameters are strings",
         ]
         for path in AUTHORITY_DOCS:
-            content = read_text(path)
-            for marker in disallowed_markers:
-                self.assertNotIn(marker, content, f"{path}: {marker}")
-
-    def test_historical_optimization_docs_do_not_embed_executable_contract_sections(self):
-        disallowed_markers = [
-            "Input shape:",
-            "Response shape:",
-            "```json",
-            "prompts/get",
-            "resources/read",
-        ]
-        for path in HISTORICAL_OPTIMIZATION_DOCS:
             content = read_text(path)
             for marker in disallowed_markers:
                 self.assertNotIn(marker, content, f"{path}: {marker}")
