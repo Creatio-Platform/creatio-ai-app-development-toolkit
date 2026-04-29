@@ -221,7 +221,7 @@ On a validator failure, fix the artifact based on the error string returned by t
 
 ```
 - business-concept: <business name>
-  candidates-considered: <known platform candidates, e.g. "Case, Activity">
+  candidates-considered: <known platform candidates>
   chosen-action: create
   chosen-schema: <UsrXxx>
   tradeoff-escalation: none
@@ -265,7 +265,7 @@ Any concept listed in `request-spec.json -> planningSignals.reuseCheckRequired` 
 
 This includes, but is not limited to, cases where:
 
-- a business object resembles a standard or already-existing platform concept such as case, request, article, knowledge, activity, comment, account, or contact
+- a business object resembles a standard or already-existing platform concept.
 - a secondary managed entity could plausibly reuse an existing platform or custom schema
 - a reference field has a non-obvious target schema
 - the plan may be choosing between `update-entity-schema` and `create-entity-schema`
@@ -540,9 +540,8 @@ FormPage defaults:
 - include all approved required non-inherited business fields
 - fill in missing explicit requirements with deterministic defaults
 - when the entity uses a custom `UsrName` column as its primary display field (not the
-  inherited platform `Name`), pass it as `{"name": "UsrName", "path": "PDS.UsrName",
-  "type": "crt.Input"}` in `formFields`; the page-body script derives attr_key
-  `PDS_UsrName` automatically, producing consistent `control` and `label` bindings
+  inherited platform `Name`), edit the FormPage `body.js` directly so the inserted field
+  uses the `PDS_UsrName` attribute key with consistent `control` and `label` bindings
 - include the title field in the form-page `resources` dict alongside all other
   custom fields: `"PDS_UsrName": "<human-readable caption>"`; omitting it causes the
   field to render without a label in the designer even when the page saves successfully
@@ -652,7 +651,7 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - UI is described via `viewConfigDiff`
 - Schema type is `"AngularSchema"`
 - When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
-- `add-form-fields` and `add-list-columns` add fields or columns to an existing page body without replacing the whole body
+- Add fields or columns by editing the `body.js` returned by `get-page` directly without replacing unrelated marker sections
 - `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
 - `validate-page` validates a page body client-side without saving to Creatio
 
@@ -997,7 +996,7 @@ Treat a candidate as strong when any of the following is true:
 
 - `dataforge-find-tables` returns a platform or existing custom schema with the same or adjacent business noun
 - `dataforge-find-lookups` returns a lookup whose values or title align with the approved lifecycle or taxonomy
-- the approved business wording maps naturally to a known platform concept such as activity, case, article, contact, account, request, knowledge, or comment
+- the approved business wording maps naturally to a known platform concept.
 - an existing `Usr*` schema or app already appears relevant
 - the current run is an existing-app update and a nearby entity already exists in the app
 
@@ -1094,9 +1093,9 @@ When several strong candidates exist, the decision record should say why the cho
 
 Good `create` evidence:
 
-- `candidate-fit-summary: Activity covers owner, due date, and completion semantics`
-- `required-capabilities: app-owned event task lifecycle, event linkage, lightweight task completion flow`
-- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader interaction flow; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
+- `candidate-fit-summary: Contact provides person identity and communication fields but lacks the required workflow and ownership semantics`
+- `required-capabilities: app-owned workflow lifecycle, custom status tracking, assignment and resolution trail`
+- `mismatch-evidence: dataforge-context showed the candidate belongs to a broader CRM entity; get-entity-schema-properties confirmed the lifecycle and ownership model do not match the approved object`
 - `discovery-evidence: dataforge-find-tables, dataforge-context, get-entity-schema-properties`
 
 Good `reuse` evidence:
@@ -1177,9 +1176,9 @@ When `dataforge-availability: unavailable` is recorded (because `dataforge-statu
 
 Good `create` evidence when DataForge is unavailable:
 
-- `candidates-considered: Case, Activity`
+- `candidates-considered: <none confirmed — DataForge unavailable>`
 - `candidate-fit-summary: candidates not inspected — DataForge unavailable`
-- `required-capabilities: app-owned support case lifecycle, custom status tracking, priority assignment, agent assignment`
+- `required-capabilities: app-owned custom workflow lifecycle, custom status tracking, priority assignment, owner assignment`
 - `mismatch-evidence: no suitable candidate found — discovery skipped (dataforge-availability: unavailable)`
 - `discovery-evidence: dataforge-status returned unavailable; active discovery branch bypassed for this session`
 - `rejected-candidates: no suitable candidate found — dataforge-status returned unavailable; cannot verify candidate compatibility`

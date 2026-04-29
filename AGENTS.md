@@ -307,7 +307,9 @@ Do not apply `site-ready-now` / `planning-first`, Gate P, or Gate R to targeted 
 - If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and any missing credentials.
 - If `planning-first`, defer runtime inputs until implementation is explicitly requested.
 - Before Gate P approval, do not run agents, do not run `clio`, and do not create or modify `output/<AppName>/`.
-- Persist Gate P in `.workflow-state/<AppName>/planning-state.json` with `scripts/write-planning-state.sh`.
+- Persist Gate P in `.workflow-state/<AppName>/planning-state.json`:
+  `scripts/write-planning-state.sh <AppName> <approvedBy> <routingMode> <creatioUrl> "<understandingText>" "<confirmationText>"`
+  For `planning-first`, pass `planning-first` as `<routingMode>` and `deferred` as `<creatioUrl>`.
 - Never treat a pre-existing `planning-state.json` as satisfying Gate P for a new user request. Always rewrite planning state from the current conversation's routing choice, understanding summary, and natural-language confirmation.
 - Never treat a pre-existing `output/<AppName>/.creatio-env.json` as satisfying Environment Setup for a new user request.
 - When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
@@ -391,6 +393,7 @@ Gate P:
 
 Gate R:
 
+- Before writing `requirements.md`, read `context/.cache/agent-2-bundle.md` (preferred) or `agents/02-requirements-gathering.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before writing. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Each checklist group must persist `source="confirmed"` or `source="assumed"`.
 - Requires the developer to see the full Business Plan before approval.

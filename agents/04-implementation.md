@@ -6,6 +6,15 @@ Execute the approved plan through `clio` MCP, persist runtime evidence, refresh 
 
 ## Read First
 
+Preferred: read `context/.cache/agent-4-bundle.md` when available.
+
+Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
+- the bundle is missing
+- the bundle declares a build timestamp or manifest hash that no longer matches its source set
+- the current task requires a reference file that is known to be outside the bundle
+- the bundle content is internally inconsistent with currently loaded repository instructions
+
+Fallback (if bundle unavailable or stale):
 - `AGENTS.md`
 - `context/essentials.md`
 - `context/mcp-application-tools-reference.md`
@@ -274,5 +283,5 @@ Never claim UI acceptance is verified unless the corresponding evidence exists i
 - All required schema sync steps executed and canonical context refreshed
 - No created or updated schema is left in `Database update required`
 - Page sync executed and verified for every run that required it
-d- Result and report are derived from runtime evidence
+- Result and report are derived from runtime evidence
 - When support mode is on and the run returns a final response, include the canonical final support block sections in order; sections with no items must be emitted as `None`

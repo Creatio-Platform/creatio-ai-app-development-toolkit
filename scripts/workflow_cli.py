@@ -784,7 +784,25 @@ def check_implementation_plan_gate(app_name):
 def build_parser():
     parser = argparse.ArgumentParser(prog="workflow_cli.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    write_planning_parser = subparsers.add_parser("write-planning-state")
+    write_planning_parser = subparsers.add_parser(
+        "write-planning-state",
+        description="Persist Gate P planning state for an app workflow.",
+        epilog=(
+            "Positional arguments (in order):\n"
+            "  AppName           Application code, e.g. UsrMyApp\n"
+            "  approvedBy        Who confirmed, e.g. user\n"
+            "  routingMode       site-ready-now | planning-first\n"
+            "  creatioUrl        http(s) URL for site-ready-now; 'deferred' for planning-first\n"
+            "  understandingText Short summary of what was understood\n"
+            "  confirmationText  Natural-language confirmation, e.g. 'start'\n\n"
+            "Examples:\n"
+            "  workflow_cli.py write-planning-state UsrMyApp user site-ready-now "
+            'http://host/env "Customer base app" "start"\n'
+            "  workflow_cli.py write-planning-state UsrMyApp user planning-first "
+            'deferred "Customer base app" "yes"'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     write_planning_parser.add_argument("values", nargs="+")
     check_planning_parser = subparsers.add_parser("check-planning-gate")
     check_planning_parser.add_argument("app_name")

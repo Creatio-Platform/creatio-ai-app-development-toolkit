@@ -57,10 +57,10 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Phase | Must Read | What It Covers |
 |------|-----------|----------------|
 | Gate P | `AGENTS.md` | UX contract, routing, Gate P, global invariants |
-| Agent 1 | `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
-| Agent 2 | `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
-| Agent 3 | `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | canonical entity and page plan policy, reuse evidence ladder |
-| Agent 4 | `agents/04-implementation.md`, `context/mcp-application-tools-reference.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
+| Agent 1 | `context/.cache/agent-1-bundle.md` (preferred); fallback: `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
+| Agent 2 | `context/.cache/agent-2-bundle.md` (preferred); fallback: `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
+| Agent 3 | `context/.cache/agent-3-bundle.md` (preferred); fallback: `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | canonical entity and page plan policy, reuse evidence ladder |
+| Agent 4 | `context/.cache/agent-4-bundle.md` (preferred); fallback: `agents/04-implementation.md`, `context/mcp-application-tools-reference.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
 
 ## Topic Map
 
