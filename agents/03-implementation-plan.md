@@ -137,39 +137,19 @@ This override still applies even if Agent 2, the BA draft, or an earlier plan pr
 Run a planning-time reuse assessment for the approved business objects before execution planning begins.
 Do not defer this assessment to Agent 4, MCP execution, application-create side effects, or "follow-up discovery during implementation".
 
-#### `mcp_client.py` invocation cheat-sheet
+#### MCP transport for discovery calls
 
-All `dataforge-*` calls below are made through `scripts/mcp_client.py`.
-Use this exact invocation shape — do not invent argparse flags.
+All `dataforge-*` calls in this stage go through `scripts/mcp_client.py`. The transport rules (stdin piping, `--args-stdin`, `--timeout`, no `--args-json` flag) and the parameter shapes for every `dataforge-*` tool are owned by `docs://mcp/guides/agent-execution` and `docs://mcp/guides/dataforge-orchestration`. Resolve them on demand instead of restating them here.
 
-```powershell
-# PowerShell — pipe JSON via stdin (preferred)
-'{"environment-name":"<env>"}' | py -3 scripts\mcp_client.py <tool-name> --args-stdin --timeout 60
-```
+#### DataForge availability preflight
 
-```bash
-# bash — same pattern
-echo '{"environment-name":"<env>"}' | py -3 scripts/mcp_client.py <tool-name> --args-stdin --timeout 60
-```
+Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call. The exact request payload, response shape, and stale-index recovery flow are in `docs://mcp/guides/dataforge-orchestration`.
 
-There is **no `--args-json` flag**. The only argument sources are:
-`<args-json>` (legacy positional, single JSON string), `--args-file <path>`, or `--args-stdin` with piped JSON.
-Resolve `<env>` from conversation context (reported by Agent 1).
+Repository-owned policy:
 
-Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
-
-`dataforge-status` itself requires `environment-name`. Example payload:
-
-```json
-{"environment-name": "<env from conversation context>"}
-```
-
-An empty body `{}` returns `invalid-request` ("Missing required connection parameters").
-
-- If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the current Evidence Ladder.
-- If `status.status != "Ready"` or the `dataforge-status` call throws, skip all active DataForge calls for the current session.
-- In that unavailable mode, record `dataforge-availability: unavailable` in the plan presented in conversation.
-- When `dataforge-availability: unavailable` is recorded, Agent 3 should not run the reuse/extend/create discovery branch and should not require DataForge-based evidence or fallback proof for the skipped branch.
+- If `status.status == "Ready"`, proceed with the normal active DataForge discovery branch and the Evidence Ladder below.
+- If `status.status != "Ready"` or `dataforge-status` throws, skip all active DataForge calls for the current session.
+- In the unavailable mode, record `dataforge-availability: unavailable` in the plan presented in conversation, do not run the reuse/extend/create discovery branch, and do not require DataForge-based evidence for the skipped branch.
 - Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
 
 #### DataForge Unavailable — Fast Path
@@ -256,44 +236,18 @@ Never treat "the BA draft already named a `Usr*` schema" as proof that the objec
 
 #### Canonical Discovery Sequence
 
-For the conditional discovery branch, use read-only tools only and resolve candidates in this order:
+For the conditional discovery branch, use read-only tools only and resolve candidates in this fixed order:
 
-1. **Default initial discovery is a single `dataforge-context` call** that aggregates candidate tables, lookups, and relations in one round-trip. This is not a "prefer" — it is the required first call:
-   ```
-   dataforge-context({
-     "environment-name": "<env>",
-     "candidate-terms": ["<main concept>", "<supporting concept>"],
-     "lookup-hints": ["<status phrase>", "<priority phrase>", "<category phrase>"],
-     "requirement-summary": "<brief business description>"
-   })
-   ```
-   Use `candidate-terms` for entity candidates, `lookup-hints` for lookup candidates.
-   Do **not** pass `schema-name` — that parameter does not exist on this tool.
-   Use `dataforge-find-tables` or `dataforge-find-lookups` individually **only as a widen-the-search fallback** after reviewing the batched result; never as the first call.
+1. **Default initial discovery is a single `dataforge-context` call** that aggregates candidate tables, lookups, and relations in one round-trip. Use `candidate-terms` for entity candidates and `lookup-hints` for lookup candidates. Use `dataforge-find-tables` or `dataforge-find-lookups` individually **only as a widen-the-search fallback** after reviewing the batched result, never as the first call. Do not use `dataforge-initialize` or `dataforge-update` during planning. Exact payload, response shape, and stale-index recovery are in `docs://mcp/guides/dataforge-orchestration`.
 
-   **Anti-pattern observed in past runs:** 2× `dataforge-find-tables` + 3× `dataforge-find-lookups` + 2× `dataforge-get-table-columns` instead of one `dataforge-context`. This multiplies network round-trips, surfaces inconsistent evidence, and burns several minutes on parameter-name retries (`term` vs `query`, `lookup-name` vs `schema-name`, empty-`query` rejections). Do not repeat it.
+2. **DataForge call budget per business concept:** at most **3 active `dataforge-*` calls** during planning — one `dataforge-context`, one schema-level confirmation (`dataforge-get-table-columns` or `dataforge-get-relations`), and one optional `find-*` widen-the-search. Exceeding this budget is a signal to commit a `Model Decision` or escalate to the user, not to keep probing. The historical anti-pattern (2× `dataforge-find-tables` + 3× `dataforge-find-lookups` + 2× `dataforge-get-table-columns` instead of one `dataforge-context`) multiplies round-trips, surfaces inconsistent evidence, and burns time on parameter-name retries.
 
-   **DataForge call budget per business concept:** at most **3 active `dataforge-*` calls** during planning — one `dataforge-context`, one schema-level confirmation (`dataforge-get-table-columns` or `dataforge-get-relations`), and one optional `find-*` widen-the-search. Exceeding this budget is a signal to commit a `Model Decision` or escalate to the user, not to keep probing.
+3. **When a strong candidate is found:**
+   - call `application-get-info` for app-level context when the candidate belongs to an existing app
+   - resolve `package-name` before calling `get-entity-schema-properties`: first `find-entity-schema(schema-name)` and read `package-name` from the entry where `parent-schema-name` is `BaseEntity` or `BaseCase` (the root definition); then `get-entity-schema-properties(schema-name, package-name)` using that resolved package
+   - issue at least one additional schema-level confirmation call: `dataforge-get-table-columns`, `dataforge-get-relations`, or `get-entity-schema-column-properties` when a specific column remains ambiguous
 
-2. When a strong candidate is found:
-   - `application-get-info` for app-level context when the candidate belongs to an existing app
-   - Resolve `package-name` before calling `get-entity-schema-properties`:
-     1. `find-entity-schema(schema-name)` → read `package-name` from the entry where `parent-schema-name` is `BaseEntity` or `BaseCase` (the root definition)
-     2. `get-entity-schema-properties(schema-name, package-name)` using that resolved package
-   - At least one additional schema-level confirmation call:
-     - `dataforge-get-table-columns`
-     - `dataforge-get-relations`
-     - `get-entity-schema-column-properties` when a specific column remains ambiguous
-
-**`dataforge-find-lookups` response field names** (use these when iterating results):
-- `similar-lookups[].schema-name` — the lookup entity name (not `"name"`)
-- `similar-lookups[].value` — the row display value (not `"caption"`)
-- `similar-lookups[].score` — relevance score
-
-**Large response handling:** `dataforge-context` may return 50–80 KB saved to a temp file. Always parse it with Python via `call_mcp_tool` from `scripts/mcp_client.py` rather than PowerShell `ConvertFrom-Json`, which fails on multi-root or header-prefixed output.
-
-Do not use `dataforge-initialize` or `dataforge-update` during planning.
-If `dataforge-availability: unavailable` is already recorded for the session, skip this sequence entirely.
+If `dataforge-availability: unavailable` is already recorded for the session, skip this sequence entirely. Response field names, parameter aliases, and large-response file-handling rules live in `docs://mcp/guides/dataforge-orchestration` and the live tool contract; resolve them on demand.
 
 #### Evidence Ladder
 
