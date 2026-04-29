@@ -73,6 +73,9 @@ Reading rules:
 | Orchestration, approvals, business invariants | `AGENTS.md` | primary policy document |
 | BA checklist | `context/business-checklist.md` | required business plan shape and completeness |
 | Platform basics and canonical flows | `context/essentials.md` | high-level workflow only |
+| `Usr` prefixes, casing, GUIDs, binding naming | `context/naming-conventions.md` | naming policy |
+| `descriptor.json`, package layout, generation order | `context/package-structure.md` | package shape and local MCP tool usage |
+| Local clio CLI commands | `context/clio-cli-reference.md` | environment setup, package management, dev tools |
 | Entity parents, DVTs, schema formats | `context/schema-reference.md` | structural reference |
 | Reuse-evidence ladder and candidate comparison | `context/model-discovery-evidence.md` | strong-candidate discovery and rejection standards |
 | Freedom UI structure and runtime page patterns | `context/ui-reference.md` | form/list runtime policy, page creation and editing workflows |

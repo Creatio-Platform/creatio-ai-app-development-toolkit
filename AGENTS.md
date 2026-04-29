@@ -482,6 +482,9 @@ Canonical repository references:
 
 - `context/INDEX.md`
 - `context/essentials.md`
+- `context/naming-conventions.md`
+- `context/package-structure.md`
+- `context/clio-cli-reference.md`
 - `context/business-checklist.md`
 - `context/devkit-common-reference.md`
 - `context/schema-reference.md`

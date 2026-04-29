@@ -11,7 +11,7 @@ Configure clio CLI and establish connection to the target Creatio runtime for th
 
 ## Context
 
-Read `AGENTS.md` for Context Files Reference (specifically `context/essentials.md` for clio commands).
+Read `AGENTS.md` for the Context Files Reference. For local clio CLI invocations used during environment bootstrap, read `context/clio-cli-reference.md`.
 
 ## Support Mode
 
