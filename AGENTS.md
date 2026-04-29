@@ -384,7 +384,7 @@ Gate R:
 
 - Before presenting the Business Plan, read `agents/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Each checklist group must record `source="confirmed"` or `source="assumed"` directly in the visible draft.
+- Each checklist group must record `source="confirmed"` or `source="assumed"` in the request spec companion, not in the visible Business Plan.
 - Requires the developer to see the full Business Plan before approval.
 - The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.

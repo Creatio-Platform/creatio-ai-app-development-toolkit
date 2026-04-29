@@ -152,13 +152,12 @@ SCHEMA_STEP_RE = re.compile(
 )
 
 
-def ensure_non_empty(value, message):
-    if not isinstance(value, str) or not value:
-        raise WorkflowError(message)
-
-
 def extract_decision_field(block_text, field_name):
-    match = re.search(rf"{re.escape(field_name)}\s*:\s*(.+)", block_text, re.IGNORECASE)
+    match = re.search(
+        rf"{re.escape(field_name)}\s*:\s*(.+?)(?=\n[ \t]*[a-zA-Z][-a-zA-Z]*\s*:|\Z)",
+        block_text,
+        re.IGNORECASE | re.DOTALL,
+    )
     if not match:
         return None
     return match.group(1).strip()
@@ -169,10 +168,10 @@ def extract_section(text, start_heading, end_heading=None):
     capture = False
     captured = []
     for line in lines:
-        if line == start_heading:
+        if line.rstrip() == start_heading:
             capture = True
             continue
-        if capture and end_heading and line == end_heading:
+        if capture and end_heading and line.rstrip() == end_heading:
             break
         if capture:
             captured.append(line)
@@ -463,7 +462,6 @@ def validate_implementation_plan_doc(content: str) -> None:
                 candidate_already_covers_capabilities = bool(CAPABILITY_COVERAGE_SIGNAL_RE.search(full_decision_text))
                 only_additive_or_extendable_gaps = bool(EXTENDABLE_GAP_SIGNAL_RE.search(full_decision_text))
                 exact_lookup_match = bool(LOOKUP_EXACT_MATCH_SIGNAL_RE.search(full_decision_text))
-                most_similar_selection = bool(MOST_SIMILAR_SELECTION_SIGNAL_RE.search(full_decision_text))
                 if has_capability_failure and has_extra_required_field_relabel:
                     raise WorkflowError(
                         "Implementation plan failed: create decision uses a capability-failure phrase "
@@ -491,12 +489,12 @@ def validate_implementation_plan_doc(content: str) -> None:
                     raise WorkflowError(
                         "Implementation plan failed: create cannot rely only on broader/shared/module-coupling reasoning without a concrete capability failure under the reuse-first policy"
                     )
-                if not has_user_confirmed_create:
+                if not has_capability_failure and not has_user_confirmed_create:
                     raise WorkflowError(
                         "Implementation plan failed: create against a discovered strong candidate "
-                        "requires explicit user confirmation — the agent must present both options "
-                        "(reuse vs create) to the user and record the confirmation in the rationale "
-                        "field (e.g. 'user confirmed create over reuse')"
+                        "requires either a documented capability failure or explicit user confirmation — "
+                        "the agent must present both options (reuse vs create) to the user and record "
+                        "the confirmation in the rationale field (e.g. 'user confirmed create over reuse')"
                     )
             if chosen_action == "extend":
                 has_capability_failure = bool(CAPABILITY_FAILURE_SIGNAL_RE.search(full_decision_text))

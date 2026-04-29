@@ -100,7 +100,7 @@ Resolve:
 Rules:
 
 - Resolve exact executable parameter names, aliases, defaults, and validation rules from `get-tool-contract`.
-  Use `tool-names` (array, plural) to target only the tools you need, e.g. `{"tool-names": ["create-app"], "environment-name": "..."}`.
+  Use `tool-names` (array, plural) to target only the tools you need, e.g. `{"tool-names": ["create-app"]}`.
   Omitting `tool-names` returns all 80+ tools (~300 KB) and requires a secondary extraction step.
 - Treat `create-app` as the canonical app-shell entrypoint with internal Data Forge enrichment already performed by `clio`.
 - `code` must start with `Usr`.

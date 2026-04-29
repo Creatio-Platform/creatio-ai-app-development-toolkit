@@ -193,8 +193,6 @@ This information stays in the conversation context — Agents 3 and 4 read the e
 | Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
-| `cliogate` presence/version check fails | Stop before downstream planning. Surface the clio error and ask the developer to fix the environment or package inspection issue. |
-| `clio install-gate` fails | Stop before downstream planning when `cliogate` is missing or outdated. Surface the clio error and ask the developer to fix the environment or installation issue. |
 | Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 | Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
@@ -202,6 +200,5 @@ This information stays in the conversation context — Agents 3 and 4 read the e
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
-✅ `cliogate` is verified as present and current on `<env_name>`, or `clio install-gate -e <env_name>` succeeds when remediation is required  
 ✅ Resolved environment name, URL, and runtime are reported in the conversation  
 ✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  

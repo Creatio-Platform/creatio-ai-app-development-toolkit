@@ -7,7 +7,7 @@ Clio is the command-line tool for Creatio deployments. This file lists the local
 ```bash
 clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
 clio reg-web-app -a myenv
-clio healthcheck myenv
+clio healthcheck -e myenv
 ```
 
 ```bash

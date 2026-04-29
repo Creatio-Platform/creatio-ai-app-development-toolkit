@@ -64,7 +64,8 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 Reading rules:
 - Each repo file in this table is the static stage runbook. Read it once per stage as needed; do not pre-load every supporting reference up front.
 - Each clio MCP guide is on-demand. Fetch it through `ReadMcpResourceTool` (or the equivalent client) only when its scope matches the current step, and avoid re-reading the same guide inside the same stage.
-- Do not invent local copies of clio MCP guide content. The clio guide is the source of truth for transport, execution order, branching, recovery, and support-mode mechanics.
+- A guide already fetched by a prior agent in the same session is already in context — do not re-fetch it.
+- Do not invent local copies of clio MCP guide content. The clio guide is the source of truth for execution order, branching, recovery, and support-mode mechanics.
 
 ## Topic Map
 

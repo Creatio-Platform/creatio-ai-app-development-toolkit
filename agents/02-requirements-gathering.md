@@ -83,6 +83,7 @@ Stage-specific constraints for this agent:
 ## Requirements Output Contract
 
 `requirements.md` is the Business Plan. Keep it business-facing.
+The Business Plan and its companion request spec are presented inline in the conversation — they are not written to disk.
 
 Required sections:
 

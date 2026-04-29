@@ -9,6 +9,10 @@ AGENT4_DELEGATED_GUIDE_MARKERS = [
     "docs://mcp/guides/support-mode",
 ]
 
+AGENT3_DELEGATED_GUIDE_MARKERS = [
+    "docs://mcp/guides/agent-execution",
+]
+
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -29,6 +33,21 @@ class Agent4ImplementationContractTests(unittest.TestCase):
         content = read_text(ROOT / "agents/04-implementation.md")
         self.assertIn("missing or contradictory `Model Decision`", content)
         self.assertIn("second `BaseEntity` for the same primary record type", content)
+
+    def test_agent4_runbook_documents_args_transport_wrapper(self):
+        content = read_text(ROOT / "agents/04-implementation.md")
+        self.assertIn(
+            "args",
+            content,
+            "runbook must document that mcp_client.py wraps parameters in an args object",
+        )
+
+
+class Agent3ImplementationPlanContractTests(unittest.TestCase):
+    def test_agent3_runbook_references_agent_execution_guide(self):
+        content = read_text(ROOT / "agents/03-implementation-plan.md")
+        for marker in AGENT3_DELEGATED_GUIDE_MARKERS:
+            self.assertIn(marker, content, f"Missing in 03-implementation-plan.md: {marker!r}")
 
 
 if __name__ == "__main__":
