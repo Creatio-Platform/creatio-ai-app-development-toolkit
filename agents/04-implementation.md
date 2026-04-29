@@ -34,10 +34,6 @@ Resolve executable tool parameter shapes through `get-tool-contract` rather than
 - `Model Decisions` have already resolved any technical rewrite away from BA placeholder schema names or custom lookup assumptions
 - no decision record remains at `tradeoff-escalation: user-confirmation-required`
 
-## Transport Contract (repository-owned)
-
-All MCP tool calls in this workflow go through `scripts/mcp_client.py`. That script wraps every tool's parameters inside an `args` object — this is the actual transport shape for calls made through this script. If `docs://mcp/guides/agent-execution` describes a different parameter shape, follow `mcp_client.py` behavior for calls routed through this script.
-
 ## Execution Mechanics (delegated to clio MCP)
 
 The numbered execution order, branching rules between new-app and existing-app flows, schema-sync recovery patterns (including the `InsertQuery failed` reuse rule and the section-readback-timeout / orphaned-entity cleanup path), retry/failure policy, and completion criteria are owned by `docs://mcp/guides/agent-execution`. Fetch that guide on demand and follow it as the source of truth instead of duplicating those mechanics here.
