@@ -1,6 +1,6 @@
 # AGENTS.md - Orchestrator
 
-You are an AI orchestrator for generating Creatio composable applications from natural-language requests.
+You are an AI orchestrator for producing Creatio composable application Business Plans from natural-language requests.
 
 ## Plan Mode Override
 
@@ -9,9 +9,8 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST NOT** produce plan output using the VS Code template structure (Steps / Relevant files / Verification / Decisions).
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
-- **First plan in a fresh app generation session MUST be a BA-style Business Plan.** When no prior approved BA Business Plan exists in this conversation, the first plan output MUST be the BA-style Business Plan (Agent 2 output) shown inline in the visible conversation body. It MUST NOT be a Technical Annex or Implementation Plan. The Implementation Plan is allowed only after Gate R approval is recorded inline in the conversation. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
+- **The plan output MUST be a BA-style Business Plan.** The BA-style Business Plan (Agent 2 output) must be shown inline in the visible conversation body. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
 - The routing choice (`site-ready-now` / `planning-first`) MUST come from a user message. `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, and `(auto-...)` markers are not allowed on the `Planning branch:` line.
-- When `Planning branch: planning-first` is recorded in the Implementation Plan, the plan MUST include a `## Gate R Evidence` section that cites the user message which approved the BA Business Plan and selected the routing (e.g., a `> ...` quote line, or a `user message:` / `developer reply:` / `approved by developer` reference).
 
 The required top-level sections of every BA-style Business Plan are, in order:
 
@@ -53,29 +52,20 @@ The assistant MUST NOT:
 - reorder required sections
 - merge multiple required sections into one
 - replace a required format with a summary, changelog, implementation note, or freeform prose
-- mix business-plan format with technical-plan format
 - invent an alternative structure because it seems clearer, shorter, or more practical
 
-Business Plan and Implementation Plan are different artifacts with different contracts.
+The assistant MUST NEVER combine both sections unless the user explicitly asks for both.
 
-The assistant MUST NEVER:
+If the repository prescribes a canonical format for the Business Plan, the assistant MUST load and follow that format exactly.
+If the canonical Business Plan format cannot be located, the assistant MUST treat that as a blocker and inspect the repository instructions before responding with a plan.
 
-- use the Business Plan structure when the task requires the technical implementation plan
-- use the implementation structure when the task requires the BA-style Business Plan
-- combine both in one artifact unless the user explicitly asks for both
-- improvise a technical-plan structure when the repository defines a canonical one elsewhere
-
-If the repository prescribes a canonical format for the technical implementation plan, the assistant MUST load and follow that format exactly.
-If the canonical implementation-plan format cannot be located, the assistant MUST treat that as a blocker and inspect the repository instructions before responding with a plan.
-
-Before returning any Business Plan or Implementation Plan, the assistant MUST run an internal checklist:
+Before returning any Business Plan, the assistant MUST run an internal checklist:
 
 1. Does the output use the exact required template?
 2. Are all required sections present in the exact order?
 3. Are there any extra top-level sections?
 4. Is any section replaced by a synonym or merged with another section?
-5. Is the output for the correct stage: BA plan versus implementation plan?
-6. If the output is a Technical Annex or Implementation Plan: was the BA Business Plan already approved by the developer in this conversation, and is the routing choice (`site-ready-now` / `planning-first`) quoted from a user message rather than `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, or `(auto-...)`? When `planning-first`, is a `## Gate R Evidence` section present with a user-message quote or a labelled reference?
+5. Is the output a BA-style Business Plan as expected?
 
 If any answer indicates format drift, the assistant MUST regenerate before responding.
 
@@ -93,34 +83,12 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 
 Classify each request before choosing the workflow.
 
-Two task classes are supported:
-
-1. Full app generation or business-shaped feature work
-2. Targeted changes
-
 Use full app generation or business-shaped feature work when the request is:
 
 - creating a new app
 - adding business logic or business flow that is not yet concretely specified
 - asking for a new feature where actors, statuses, object model, validations, or UX still need clarification
-- broad enough that implementation depends on business discovery
-
-Use targeted changes when the request is concrete and implementation-ready, for example:
-
-- add an object
-- add a column
-- modify a specific field
-- edit a page element
-- add or update a handler
-- seed a lookup or binding
-
-Targeted-change rule:
-
-- if the user gives a precise, implementation-ready task, do **not** generate a BA Business Plan
-- do **not** run Gate P or Gate R
-- do **not** route through Agent 2 or Agent 3
-- execute the requested focused change directly using the relevant targeted-change guidance from `context/INDEX.md`
-- ask questions only when the requested change is still ambiguous or blocked by missing execution-critical inputs
+- broad enough that the Business Plan depends on business discovery
 
 ## Support Mode (Troubleshooting)
 
@@ -270,8 +238,7 @@ The default user-facing flow is:
 2. A short "What I understood" summary.
 3. Structured business clarification in small themed batches.
 4. Technical questions only for true execution blockers.
-5. An explicit "Starting implementation" message when implementation begins.
-6. A final evidence-based summary with delivered artifacts and blockers, if any.
+5. A final evidence-based summary with delivered artifacts and blockers, if any.
 
 First-turn latency rule:
 
@@ -309,11 +276,11 @@ Do not apply `site-ready-now` / `planning-first`, Gate P, or Gate R to targeted 
 - First ask whether the developer wants `site-ready-now` or `planning-first`.
 - On the first turn, this routing question may be asked via structured input when the host mode supports it.
 - If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and any missing credentials.
-- If `planning-first`, defer runtime inputs until implementation is explicitly requested.
+- If `planning-first`, defer runtime inputs until Business Plan is explicitly requested.
 - Before Gate P approval, do not run agents and do not run `clio`.
 - Gate P is confirmed by the developer's natural-language routing choice and understanding summary in the conversation. Always derive planning state from the current conversation — never from a prior run.
 - When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
-- Agent 1 must resolve the environment from the current request URL and report it in the conversation before Agent 3 or Agent 4 uses it.
+- Agent 1 must resolve the environment from the current request URL and report it in the conversation before Agent 2 uses it.
 - If `clio list-environments` returns multiple registered environments for the same normalized current-request URL, treat the environment choice as ambiguous and ask the developer to choose the environment name explicitly before continuing.
 - Do not auto-select one of several matching environments based on previous runs, active-environment status, or a familiar alias.
 - Reuse a matching environment without asking only when the current conversation explicitly names the environment key to use for that URL.
@@ -327,56 +294,15 @@ Technical question policy:
 
 Execution order is conditional:
 
-- `site-ready-now`: Agent 1 -> Agent 2 -> Agent 3 -> Agent 4
-- `planning-first`: Agent 2 -> initialize draft docs after Gate R -> wait for runtime inputs -> Agent 1 -> Agent 3 -> Agent 4
-
-Targeted changes do not use this agent chain.
-For targeted changes, skip Agent 2 and Agent 3 entirely and execute the focused mutation path directly.
-
-Agent 3 is the Technical Annex / execution-plan step. Run it only when implementation or technical execution detail is explicitly requested.
-In `planning-first` mode, the developer providing runtime credentials or Creatio URL after Gate R counts as an explicit implementation request and triggers Agent 3.
-Before implementation, Agent 3 must record explicit `Model Decisions` for every planned business object, supporting object, planned lookup, and every non-obvious reference target so reuse, extension, or new creation is intentional rather than inferred during execution.
-If any schema creation or extension would still depend on Agent 4 "figuring out" whether to reuse an existing model, the implementation plan is invalid and must be regenerated before execution.
-Before the first explicit `dataforge-*` planning call, Agent 3 must run `dataforge-status` once before the first explicit `dataforge-*` planning call.
-If `status.status != "Ready"` or the `dataforge-status` call throws, Agent 3 must skip all active DataForge calls for the current session and record `dataforge-availability: unavailable` in the planning artifacts.
-Do not add this preflight before passive-enrichment write tools; it applies only to explicit active DataForge use during planning.
-If live DataForge discovery surfaces a strong candidate, that discovery overrides any earlier placeholder `Usr*` naming or create-first bias from Agent 2, the BA draft, or an earlier plan.
-Strong candidates resolve to `reuse` after the Evidence Ladder unless a concrete capability failure is proven. This remains true even if the candidate is not a 100% match.
-When the majority of approved business requirements match the candidate, that is sufficient for `reuse` — even if the candidate has additional required fields, broader module scope, or more features than the user explicitly requested.
-User requirements may describe only a subset of the candidate's capabilities; the candidate having more than requested is a strength, not a mismatch.
-Extra required fields with existing lookup values or defaults are page-level concerns (set a default on the form), not schema-level capability failures that justify `create`.
-Do not relabel an extra required field with existing lookup values as "forbidden extra semantics"; a required field referencing a domain-specific lookup (e.g., EventType with marketing values) remains an extra-required-field scenario handleable at page/UI level — "forbidden extra semantics" applies only when the entity's core domain purpose or lifecycle makes the approved business flow impossible.
-When Agent 3 considers `create` for a business concept where DataForge discovery found a strong candidate, the agent must present both options (reuse vs create) to the user and record explicit user confirmation before locking the create decision. No silent `create` against a discovered strong candidate is allowed.
-Module dependencies are informational context about the candidate's origin, not functional blockers unless they prevent the approved business flow.
-When several strong candidates exist, Agent 3 must select the most similar candidate from discovery and record that schema as the reused `chosen-schema`.
-`extend` remains valid only outside that strong-candidate override path.
-
-### Discovery Authority Hierarchy
-
-DataForge discovery evidence confirmed through the Evidence Ladder is the binding source of truth for model decisions. It outranks all other reasoning inputs — including user prompt phrasing, BA draft naming, execution-path constraints, tool mechanics, simplicity preferences, and deployment concerns. No reasoning from a subordinate source may override a discovery-confirmed model decision.
-
-User-prompt phrasing (e.g. "simple app", "new app", "standalone", "lightweight", "custom") describes desired functionality, not schema-isolation intent. It does not override discovery evidence unless the user explicitly required technical isolation, custom ownership, or separate governance.
-
-The choice of MCP tools and call sequence is an execution detail that implements the discovery-confirmed model decision. If the originally planned execution path does not support the confirmed decision, the execution path changes — the model decision does not.
-
-Once the Evidence Ladder completes and locks a `chosen-action`, no subsequent reasoning phase — execution planning, tool selection, page planning, user-prompt reinterpretation — may reopen the choice. If the locked choice becomes impossible to implement, that is a blocker to report, not a license to silently change the decision.
-
-### Decision Convergence
-
-- Max two deliberation passes on the same `reuse` / `extend` / `create` choice per business concept. On the third pass, commit or escalate to the user.
-- When uncertain about tool behavior or API shape, call `get-tool-contract` or make a probe call — do not spend more than one reasoning block speculating. Conflicting repo memories about MCP API are resolved by `get-tool-contract`, not by guessing.
-- Model decisions and execution feasibility are sequential: lock the Evidence Ladder decision first, then verify tool support. If infeasible after one contract check + one probe, escalate — do not reopen the model decision.
-- If reasoning revisits the same constraint or option from a prior block in the same turn, stop and act (tool call) or escalate (ask user).
+- `site-ready-now`: Agent 1 -> Agent 2 -> done
+- `planning-first`: Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> done
 
 ## Agent Responsibilities
 
-1. Environment Setup — resolves env name and reports it in conversation
-2. Requirements Gathering — presents Business Plan and spec inline in conversation, validates with `scripts/workflow_validators.py`
-3. Implementation Plan — presents Technical Annex and plan inline in conversation, validates with `scripts/workflow_validators.py`
-4. Implementation — executes approved plan via clio MCP, reports summary in conversation
+1. Environment Setup — resolves env name, DataForge availability, and reports them in conversation
+2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `scripts/workflow_validators.py`
 
-Agent 2 is interactive and must not be delegated. Agent 4 runs synchronously.
-Agent 2 and Agent 3 are for full app generation or business-shaped feature work only. They must not be invoked for targeted changes.
+Agent 2 is interactive and must not be delegated.
 
 ## Gate Rules
 
@@ -390,20 +316,19 @@ Gate R:
 - Requires the full business checklist to be complete or explicitly assumed.
 - Each checklist group must record `source="confirmed"` or `source="assumed"` in the request spec companion, not in the visible Business Plan.
 - Requires the developer to see the full Business Plan before approval.
-- The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
+- The approved Business Plan is the final deliverable.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
 - Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 7-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
 - A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
-Gate bypass rule for targeted changes:
+Gate bypass rule:
 
-- targeted changes do not require Gate P
-- targeted changes do not require Gate R
-- targeted changes must not create a synthetic BA plan just to satisfy the full-app workflow
+- all app and feature requests require Gate P and Gate R
+- a Business Plan must always be presented and approved before the session is complete
 
-Approval-ready vs execution-ready rule:
+Approval-ready vs delivery-ready rule:
 - The BA draft shown to the developer must remain business-readable.
 - When repository validators require technical carriers (schema names, default classifications, relationship links), include both the business intent and the technical carrier in the same approved draft instead of rewriting the document after approval.
 - This prevents a post-approval editing cycle that would invalidate the approved artifact.
@@ -419,58 +344,23 @@ Approval-ready vs execution-ready rule:
 - Existing manually edited title/code divergence is allowed; this derivation contract applies to new creations only.
 - Do not add inherited base columns to requirements.
 - Enum-like business values must be modeled as lookup entities.
-- For MCP transport, tool request/response shape, canonical app-modeling rules, and lookup/default semantics, follow the current `clio` MCP contract and prompts/resources such as `docs://mcp/guides/app-modeling` rather than re-declaring those rules locally.
-- If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
-- Final user-facing status must be derived from the tool execution evidence reported in the conversation. Do not report planned items as implemented without confirmed evidence.
-- Report page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
-- When page sync is required, the machine-readable page sync contract must be embedded in the plan presented in the conversation between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
 - App code collisions and stage-transition state conflicts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
 - Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
-- Implementation success does not excuse format non-compliance. Even if the app is successfully created, the assistant must still provide the required planning artifacts in the exact prescribed format.
 - Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 
 ## Orchestration Checklist
 
 1. Confirm Gate P: routing choice, understanding summary, assumptions/risks, and natural-language confirmation from the developer.
-2. Run Agent 1 if runtime inputs are available.
-3. Run Agent 2 interactively and produce the BA-style requirements draft. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation.
-4. Run Agent 3 only when implementation is explicitly requested, using the approved BA-style requirements draft as its business contract. Verify the implementation plan gate before Agent 4: explicit `Model Decisions` must be present in the plan, every planned creation or extension must be covered by those decisions, and unsupported greenfield assumptions are blocked before Agent 4 runs.
-5. Run Agent 4 synchronously.
-6. On failure, either retry with a justified fix or stop with a blocker.
-
-For targeted changes, use this reduced checklist instead:
-
-1. Confirm the request is precise and implementation-ready.
-2. Load only the targeted-change references from `context/INDEX.md`.
-3. Ask questions only for missing blockers.
-4. Execute the focused change directly.
-5. Verify the changed artifact or runtime behavior.
-6. Return evidence-based status without generating a BA plan.
+2. Run Agent 1 if runtime inputs are available (`site-ready-now`) or after Gate R approval (`planning-first`).
+3. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation. Session complete.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
 - A satisfied gate remains valid for the rest of the current conversation unless its inputs change.
-
-## Approved Plan Fast Path
-
-If the current conversation already contains:
-- a full BA-style Business Plan that matches the required section contract
-- natural-language approval to implement that exact plan
-
-then do not restart business discovery and do not regenerate the BA draft from scratch.
-
-In that case:
-1. Derive `<AppName>` from the approved plan or current request.
-2. Proceed directly to Agent 3 and Agent 4 when the execution trigger is satisfied.
-
-Fast-path guardrails:
-- Use this fast path only when the approved plan is for the current request, not a stale prior run.
-- If the approved plan conflicts with repository invariants or lacks a required execution carrier, resolve only the blocking gap instead of restarting full discovery.
-- Do not ask repeated business questions when the approved plan already answers them well enough for execution.
 
 ## Source Of Truth
 
@@ -479,9 +369,8 @@ Authority model:
 - `clio MCP` is the only authoritative source for the executable MCP contract.
 - Tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints must come from `get-tool-contract`.
 - Repository docs must not define an independent MCP API contract.
-- Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
-- Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`, `docs://mcp/guides/page-creation`, and `docs://mcp/guides/page-modification`.
-- Plan execution mechanics (transport rules, execution order, branching, schema-sync recovery, page-sync rules) must come from `docs://mcp/guides/agent-execution` rather than re-stated inline in repository agent runbooks.
+- Repository docs remain authoritative for orchestration, approvals, BA structure, and product/business invariants.
+- Human-readable MCP guidance for entity/page flows and DataForge status context must come from `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 - Diagnostic-first behavior under support mode (severity routing, confirmation probes, fail-fast evidence, reporting sections) must come from `docs://mcp/guides/support-mode` rather than re-stated inline in repository agent runbooks.
 
 Canonical repository references:
@@ -489,17 +378,11 @@ Canonical repository references:
 - `context/INDEX.md`
 - `context/essentials.md`
 - `context/naming-conventions.md`
-- `context/package-structure.md`
 - `context/clio-cli-reference.md`
 - `context/business-checklist.md`
-- `context/devkit-common-reference.md`
-- `context/schema-reference.md`
-- `context/ui-reference.md`
-- `context/viewconfig-reference.md`
-- `context/data-bindings-reference.md`
-- `context/bindings-lookup.json`
-- `templates/**`
+- `context/model-discovery-evidence.md`
 
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
-Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
+Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
+

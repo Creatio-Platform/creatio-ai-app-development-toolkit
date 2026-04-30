@@ -22,8 +22,7 @@ Read these repository files for the BA stage:
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md` (only the sections needed for the current question batch)
-
-Do not pre-load executable MCP rules in this stage. Agent 2 produces the business contract; transport, branching, and execution mechanics belong to Agent 3 and Agent 4 and are sourced from the clio MCP guides on demand.
+- `context/model-discovery-evidence.md` (DataForge tool parameter contract — for embedding DataForge status in the Technical Implementation Handoff)
 
 ## Preconditions
 
@@ -43,7 +42,7 @@ Do not pre-load executable MCP rules in this stage. Agent 2 produces the busines
 9. Resolve any material contradictions or missing carriers before showing the draft.
 10. Present the full BA-style Business Plan.
 11. Ask for natural-language approval.
-12. After approval, validate the documents inline and proceed to Agent 3.
+12. After approval, validate the documents inline. Session complete — the Business Plan and Technical Implementation Handoff are the final deliverables for this session.
 
 ## Checklist Authority
 
@@ -283,7 +282,7 @@ The request spec must include:
 
 - `reuseCheckRequired`
 
-Use `planningSignals.reuseCheckRequired` as the Agent 2 handoff list for Agent 3.
+Use `planningSignals.reuseCheckRequired` as the Agent 2 handoff list for the implementing agent.
 This list must stay technical-light: it marks business concepts that need live reuse discovery, but it must not pre-decide `reuse`, `extend`, or `create`.
 
 When a business concept is recognizable and could plausibly map to an existing platform or custom schema, add an entry with:
@@ -366,3 +365,39 @@ The BA draft is incomplete if any of the following is true:
 - a pipeline, funnel, or stages are mentioned without clarifying where lifecycle state lives
 - a secondary entity is listed without explaining its business purpose
 - the `businessLogic` group does not cover or explicitly assume minimum create fields, duplicate handling, archive/close posture, and ownership/editing posture
+
+## Technical Implementation Handoff
+
+After the 7-section Business Plan is approved, append a Technical Implementation Handoff block separated by `---`.
+
+This block is **not** a BA section. It is not numbered and not subject to BA format rules.
+It is consumed by the implementing code agent running in a separate session with clio MCP tools.
+
+### Format
+
+```
+---
+
+## Technical Implementation Handoff
+
+**Environment:**
+- Name: <env_name or "Not yet configured (planning-first mode)">
+- URL: <URL or "Deferred">
+- Runtime: <.NET Core / .NET Framework or "Deferred">
+
+**DataForge Status:** <ready / unavailable / "Not checked (planning-first mode)">
+
+**Reuse Discovery Signals:**
+<For each entry in planningSignals.reuseCheckRequired:>
+- Business concept: <businessConcept>
+  - Why ambiguous: <whyAmbiguous>
+  - Suspected candidates: <suspectedCandidates comma-separated>
+<If empty: "None — all entities are new custom objects.">
+```
+
+### Population rules
+
+- In `site-ready-now` mode: populate all three blocks from the Agent 1 conversation context (env name, URL, runtime, DataForge availability).
+- In `planning-first` mode: set `Environment` and `DataForge Status` to their deferred values; populate `Reuse Discovery Signals` from `planningSignals.reuseCheckRequired`.
+- `DataForge Status` comes from the `dataforge-availability` value reported by Agent 1 Step 7. If Agent 1 was not run (planning-first), set to `"Not checked (planning-first mode)"`.
+- Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.
