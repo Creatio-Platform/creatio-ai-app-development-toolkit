@@ -52,13 +52,20 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 
 ## Full App Generation Reads
 
-| Phase | Must Read | What It Covers |
-|------|-----------|----------------|
-| Gate P | `AGENTS.md` | UX contract, routing, Gate P, global invariants |
-| Agent 1 | `context/.cache/agent-1-bundle.md` (preferred); fallback: `agents/01-environment-setup.md`, `context/essentials.md` | environment setup and local runtime rules |
-| Agent 2 | `context/.cache/agent-2-bundle.md` (preferred); fallback: `agents/02-requirements-gathering.md`, `context/business-checklist.md` | BA discovery, pre-analysis, Gate R approval |
-| Agent 3 | `context/.cache/agent-3-bundle.md` (preferred); fallback: `agents/03-implementation-plan.md`, `context/essentials.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | canonical entity and page plan policy, reuse evidence ladder |
-| Agent 4 | `context/.cache/agent-4-bundle.md` (preferred); fallback: `agents/04-implementation.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | execution, verification, page-editing mechanics |
+| Phase | Must Read (repo) | clio MCP Guide (on-demand) | What It Covers |
+|------|------------------|----------------------------|----------------|
+| Gate P | `AGENTS.md` | — | UX contract, routing, Gate P, global invariants |
+| Agent 1 | `agents/01-environment-setup.md`, `context/essentials.md` | `docs://mcp/guides/agent-execution` | environment setup and local runtime rules |
+| Agent 2 | `agents/02-requirements-gathering.md`, `context/business-checklist.md` | — | BA discovery, pre-analysis, Gate R approval |
+| Agent 3 | `agents/03-implementation-plan.md`, `context/schema-reference.md`, `context/model-discovery-evidence.md` | `docs://mcp/guides/app-modeling`, `docs://mcp/guides/dataforge-orchestration` | canonical entity and page plan policy, reuse evidence ladder |
+| Agent 4 | `agents/04-implementation.md`, `context/ui-reference.md`, `context/viewconfig-reference.md`, `scripts/mcp_client.py` | `docs://mcp/guides/agent-execution`, `docs://mcp/guides/page-modification`, `docs://mcp/guides/existing-app-maintenance` | execution, verification, page-editing mechanics |
+| Support run | `AGENTS.md` (Support Mode sections) | `docs://mcp/guides/support-mode` | diagnostic-first behavior, severity routing, fail-fast evidence |
+
+Reading rules:
+- Each repo file in this table is the static stage runbook. Read it once per stage as needed; do not pre-load every supporting reference up front.
+- Each clio MCP guide is on-demand. Fetch it through `ReadMcpResourceTool` (or the equivalent client) only when its scope matches the current step, and avoid re-reading the same guide inside the same stage.
+- A guide already fetched by a prior agent in the same session is already in context — do not re-fetch it.
+- Do not invent local copies of clio MCP guide content. The clio guide is the source of truth for execution order, branching, recovery, and support-mode mechanics.
 
 ## Topic Map
 
@@ -67,6 +74,9 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Orchestration, approvals, business invariants | `AGENTS.md` | primary policy document |
 | BA checklist | `context/business-checklist.md` | required business plan shape and completeness |
 | Platform basics and canonical flows | `context/essentials.md` | high-level workflow only |
+| `Usr` prefixes, casing, GUIDs, binding naming | `context/naming-conventions.md` | naming policy |
+| `descriptor.json`, package layout, generation order | `context/package-structure.md` | package shape and local MCP tool usage |
+| Local clio CLI commands | `context/clio-cli-reference.md` | environment setup, package management, dev tools |
 | Entity parents, DVTs, schema formats | `context/schema-reference.md` | structural reference |
 | Reuse-evidence ladder and candidate comparison | `context/model-discovery-evidence.md` | strong-candidate discovery and rejection standards |
 | Freedom UI structure and runtime page patterns | `context/ui-reference.md` | form/list runtime policy, page creation and editing workflows |

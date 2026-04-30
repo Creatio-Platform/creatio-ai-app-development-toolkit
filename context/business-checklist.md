@@ -194,7 +194,7 @@ The pre-analysis must check for:
 If pre-analysis finds a material issue:
 - ask a targeted follow-up question when the issue changes business intent or acceptance
 - otherwise resolve it as an explicit assumption before showing the draft
-- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, add a `planningSignals.reuseCheckRequired` handoff entry in `request-spec.json`
+- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, add a `planningSignals.reuseCheckRequired` handoff entry in the request spec
 
 Do not present the BA draft while known cross-section contradictions or missing carriers still exist.
 

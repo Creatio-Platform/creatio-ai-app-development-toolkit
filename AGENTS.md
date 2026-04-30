@@ -9,6 +9,9 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST NOT** produce plan output using the VS Code template structure (Steps / Relevant files / Verification / Decisions).
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
+- **First plan in a fresh app generation session MUST be a BA-style Business Plan.** When no prior approved BA Business Plan exists in this conversation, the first plan output MUST be the BA-style Business Plan (Agent 2 output) shown inline in the visible conversation body. It MUST NOT be a Technical Annex or Implementation Plan. The Implementation Plan is allowed only after Gate R approval is recorded inline in the conversation. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
+- The routing choice (`site-ready-now` / `planning-first`) MUST come from a user message. `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, and `(auto-...)` markers are not allowed on the `Planning branch:` line.
+- When `Planning branch: planning-first` is recorded in the Implementation Plan, the plan MUST include a `## Gate R Evidence` section that cites the user message which approved the BA Business Plan and selected the routing (e.g., a `> ...` quote line, or a `user message:` / `developer reply:` / `approved by developer` reference).
 
 The required top-level sections of every BA-style Business Plan are, in order:
 
@@ -72,6 +75,7 @@ Before returning any Business Plan or Implementation Plan, the assistant MUST ru
 3. Are there any extra top-level sections?
 4. Is any section replaced by a synonym or merged with another section?
 5. Is the output for the correct stage: BA plan versus implementation plan?
+6. If the output is a Technical Annex or Implementation Plan: was the BA Business Plan already approved by the developer in this conversation, and is the routing choice (`site-ready-now` / `planning-first`) quoted from a user message rather than `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, or `(auto-...)`? When `planning-first`, is a `## Gate R Evidence` section present with a user-message quote or a labelled reference?
 
 If any answer indicates format drift, the assistant MUST regenerate before responding.
 
@@ -382,14 +386,16 @@ Gate P:
 
 Gate R:
 
-- Before writing `requirements.md`, read `context/.cache/agent-2-bundle.md` (preferred) or `agents/02-requirements-gathering.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before writing. It cannot be recalled from memory.
+- Before presenting the Business Plan, read `agents/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Each checklist group must persist `source="confirmed"` or `source="assumed"`.
+- Each checklist group must record `source="confirmed"` or `source="assumed"` in the request spec companion, not in the visible Business Plan.
 - Requires the developer to see the full Business Plan before approval.
 - The approved Business Plan must be the BA-style requirements draft used by Agent 3 as the source for technical planning.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
+- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 7-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
+- A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
 Gate bypass rule for targeted changes:
 
@@ -416,9 +422,9 @@ Approval-ready vs execution-ready rule:
 - For MCP transport, tool request/response shape, canonical app-modeling rules, and lookup/default semantics, follow the current `clio` MCP contract and prompts/resources such as `docs://mcp/guides/app-modeling` rather than re-declaring those rules locally.
 - If the main entity is created or extended, FormPage and ListPage synchronization is mandatory in the same workflow.
 - Final user-facing status must be derived from the tool execution evidence reported in the conversation. Do not report planned items as implemented without confirmed evidence.
-- Persist page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
+- Report page/report evidence with explicit status buckets: `implemented`, `machineChecked`, `manualCheckPending`.
 - When page sync is required, the machine-readable page sync contract must be embedded in the plan presented in the conversation between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`.
-- App code and workflow-state collisions are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
+- App code collisions and stage-transition state conflicts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
 - Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
@@ -446,8 +452,8 @@ For targeted changes, use this reduced checklist instead:
 6. Return evidence-based status without generating a BA plan.
 
 Optimization rule:
-- Do not repeat the same gate check unnecessarily within the same uninterrupted stage transition.
-- A successful canonical gate check remains valid until the workflow state for that gate is modified.
+- Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
+- A satisfied gate remains valid for the rest of the current conversation unless its inputs change.
 
 ## Approved Plan Fast Path
 
@@ -475,11 +481,16 @@ Authority model:
 - Repository docs must not define an independent MCP API contract.
 - Repository docs remain authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and product/business invariants.
 - Human-readable MCP guidance for entity/page flows and fallback usage must come from `docs://mcp/guides/app-modeling`, `docs://mcp/guides/existing-app-maintenance`, `docs://mcp/guides/page-creation`, and `docs://mcp/guides/page-modification`.
+- Plan execution mechanics (transport rules, execution order, branching, schema-sync recovery, page-sync rules) must come from `docs://mcp/guides/agent-execution` rather than re-stated inline in repository agent runbooks.
+- Diagnostic-first behavior under support mode (severity routing, confirmation probes, fail-fast evidence, reporting sections) must come from `docs://mcp/guides/support-mode` rather than re-stated inline in repository agent runbooks.
 
 Canonical repository references:
 
 - `context/INDEX.md`
 - `context/essentials.md`
+- `context/naming-conventions.md`
+- `context/package-structure.md`
+- `context/clio-cli-reference.md`
 - `context/business-checklist.md`
 - `context/devkit-common-reference.md`
 - `context/schema-reference.md`

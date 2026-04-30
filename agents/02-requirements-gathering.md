@@ -18,18 +18,12 @@ Operate as a Business Analyst Requirements Agent. The approved artifact from thi
 
 ## Read First
 
-Preferred: read `context/.cache/agent-2-bundle.md` when available.
-
-Treat the bundle as stale only when there is explicit evidence that it is outdated for the current run, such as:
-- the bundle is missing
-- the bundle declares a build timestamp or manifest hash that no longer matches its source set
-- the current task requires a reference file that is known to be outside the bundle
-- the bundle content is internally inconsistent with currently loaded repository instructions
-
-Fallback (if bundle unavailable or stale):
+Read these repository files for the BA stage:
 - `AGENTS.md`
-- `context/essentials.md`
 - `context/business-checklist.md`
+- `context/essentials.md` (only the sections needed for the current question batch)
+
+Do not pre-load executable MCP rules in this stage. Agent 2 produces the business contract; transport, branching, and execution mechanics belong to Agent 3 and Agent 4 and are sourced from the clio MCP guides on demand.
 
 ## Preconditions
 
@@ -78,9 +72,9 @@ Stage-specific constraints for this agent:
 - On the first clarification turn, prefer structured input popup UX for routing and the highest-priority business questions when the host mode supports it.
 - If structured input is unavailable, fall back to a compact plain-text first turn without changing the business flow.
 - Apply domain expertise when the app type is recognizable. Do not draft an unrealistically thin data model if standard business attributes are normally expected for that domain.
-- Before presenting `requirements.md`, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
+- Before presenting the Business Plan, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
-- Before presenting `requirements.md`, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
+- Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
 - In `planning-first`, defer runtime questions such as URL and credentials until implementation is requested.
 - Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `AGENTS.md`.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in BA dialogue unless the developer explicitly asks about the internal mechanics.
@@ -88,7 +82,11 @@ Stage-specific constraints for this agent:
 
 ## Requirements Output Contract
 
-`requirements.md` is the Business Plan. Keep it business-facing.
+The Business Plan is the business-facing requirements document.
+
+The Business Plan and its companion request spec are presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
+
+Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 7-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
 
 Required sections:
 
@@ -103,14 +101,14 @@ Required sections:
 
 ## Document Rendering Contract
 
-`requirements.md` must follow the exact BA-style Business Plan structure defined in `AGENTS.md` and `context/business-checklist.md`.
+The Business Plan must follow the exact BA-style structure defined in `AGENTS.md` and `context/business-checklist.md`.
 The agent must not improvise the document shape.
 
-`requirements.md` is for business reading and approval.
-`request-spec.json` is the normalized machine-readable persistence artifact.
+The Business Plan is for business reading and approval.
+The request spec is the normalized machine-readable companion presented inline alongside the Business Plan.
 Do not mirror request-spec markers, checklist source labels, or validation vocabulary in the visible Business Plan.
 
-Do not expose any of the following in `requirements.md`:
+Do not expose any of the following in the Business Plan:
 
 - `confirmed`
 - `assumed`
@@ -124,7 +122,7 @@ Sections `1`, `2`, `4`, `5`, `6`, and `7` must use short paragraphs and bullets,
 
 ## Pre-Write Self-Check
 
-Before presenting `requirements.md` to the developer, verify the assembled draft contains all seven sections in the exact order:
+Before presenting the Business Plan to the developer, verify the assembled draft contains all seven sections in the exact order:
 
 1. `## 1. Business Outcome`
 2. `## 2. Roles and Permissions`
@@ -163,7 +161,7 @@ Rules for the output:
 - Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
 - Keep each top-level section concise. Prefer 1 short opening paragraph plus compact bullets unless the request genuinely needs more detail.
 
-Use this exact visible skeleton for `requirements.md`:
+Use this exact visible skeleton for the Business Plan:
 
 - `## 1. Business Outcome`
 - `## 2. Roles and Permissions`
@@ -273,7 +271,7 @@ Before finalizing the BA draft, verify at minimum:
 
 ## Request Spec Contract
 
-`request-spec.json` must include:
+The request spec must include:
 
 - `sourcePrompt`
 - `businessChecklist`
@@ -328,7 +326,7 @@ sys.path.insert(0, 'scripts')
 from workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
 " << 'EOF'
-<requirements.md content>
+<Business Plan content>
 EOF
 
 python3 -c "
@@ -337,7 +335,7 @@ sys.path.insert(0, 'scripts')
 from workflow_validators import validate_request_spec
 validate_request_spec(json.load(sys.stdin))
 " << 'EOF'
-<request-spec.json content>
+<request spec content>
 EOF
 ```
 
@@ -351,7 +349,7 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
 - If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
-- When that ambiguity exists, persist a `planningSignals.reuseCheckRequired` entry in `request-spec.json` so Agent 3 must open the discovery branch for that concept.
+- When that ambiguity exists, include a `planningSignals.reuseCheckRequired` entry in the request spec so Agent 3 must open the discovery branch for that concept.
 
 ## Default Resolution Rules
 

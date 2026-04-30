@@ -11,6 +11,9 @@ Use these files as canonical:
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md`
+- `context/naming-conventions.md`
+- `context/package-structure.md`
+- `context/clio-cli-reference.md`
 - `context/schema-reference.md`
 - `context/ui-reference.md`
 - `context/data-bindings-reference.md`
@@ -283,6 +286,9 @@ scripts/
 context/
   business-checklist.md
   essentials.md
+  naming-conventions.md
+  package-structure.md
+  clio-cli-reference.md
   schema-reference.md
   ui-reference.md
   data-bindings-reference.md

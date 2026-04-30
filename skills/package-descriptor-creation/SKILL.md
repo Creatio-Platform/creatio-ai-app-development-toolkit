@@ -1,7 +1,7 @@
 ---
 name: package-descriptor-creation
 description: Generate package root descriptor.json for Creatio composable app packages.
-compatibility: Requires context/essentials.md and templates/package/descriptor.json
+compatibility: Requires context/package-structure.md and templates/package/descriptor.json
 metadata:
   version: "3.0"
   category: creatio-schema-generation
@@ -22,7 +22,7 @@ From the implementation plan in conversation context:
 - Package name
 
 From context and template:
-- `context/essentials.md`
+- `context/package-structure.md`
 - `templates/package/descriptor.json`
 
 ## Required Descriptor Shape

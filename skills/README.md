@@ -7,6 +7,8 @@ This directory contains **reference documents** that describe workflows and best
 Agent 4 executes MCP tools through the clio stdio client flow documented in:
 - `agents/04-implementation.md` — Agent instructions with stdio execution guidance
 - `context/essentials.md` — repository policy and canonical execution flow
+- `context/package-structure.md` — descriptor and package layout used by skills
+- `context/clio-cli-reference.md` — local clio CLI commands for environment work
 - `scripts/mcp_client.py` — transport and local normalization
 
 Executable tool names, parameters, aliases, defaults, response shapes, and error shapes are authoritative only in `clio MCP` through `get-tool-contract`.

@@ -1,5 +1,13 @@
 # Creatio Platform Essentials
 
+This file contains the high-level platform overview and the local MCP workflow shape. Use the topic-specific files below for naming conventions, package structure, and clio CLI commands. For the executable MCP contract (parameter names, response shapes, error codes), use `get-tool-contract` and the clio MCP guidance resources.
+
+## Companion files
+
+- `context/naming-conventions.md` — `Usr` prefixes, casing, GUIDs, data binding naming.
+- `context/package-structure.md` — `descriptor.json`, directory layout, generation order, MCP tool usage from local scripts.
+- `context/clio-cli-reference.md` — CLI commands for environment setup, package management, and development tooling.
+
 ## Platform Overview
 
 Creatio is a no-code/low-code platform for process management and CRM using a composable application architecture where functionality is delivered as packages.
@@ -27,10 +35,8 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 **MCP Section Management**
 - Use `list-app-sections` to list all sections of an installed application
 - Use `delete-app-section` to remove a section from an installed application
-- Canonical section discovery flow: `list-apps` → `get-app-info` → `list-app-sections`
-- Canonical section delete flow: `list-apps` → `get-app-info` → `list-app-sections` → `delete-app-section`
-- `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
 - Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
+- `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
 - `icon-background` for `create-app-section` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the same 16 palette colors listed under MCP Application Creation above.
 
 **Entity Schema Sync (DB-first)**
@@ -93,153 +99,6 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - `SysModule` registers a section
 - `SysModuleEntity` binds an entity to a section
 - `SysModuleEdit` binds a form page to a section
-
----
-
-## Naming Conventions
-
-### Prefixes
-
-| Element | Prefix | Example |
-|---------|--------|---------|
-| Custom entity | `Usr` | `UsrTodoTask` |
-| Custom column | `Usr` | `UsrStatus`, `UsrDueDate` |
-| Custom page | `Usr` | `UsrTodoTask_FormPage` |
-| Custom package | `Usr` | `UsrTodoListApp` |
-
-### Casing
-
-- Entities and columns use PascalCase
-- Pages use PascalCase with underscore suffixes such as `UsrTodoTask_ListPage`
-- Packages use PascalCase
-
-### GUIDs
-
-- Format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-- Generate new GUIDs for packages, schemas, columns, and data binding records
-- Never reuse GUIDs from other packages
-
-### Data Binding Naming
-
-| Type | Pattern | Example |
-|------|---------|---------|
-| SysModule | `SysModule_<Code>` | `SysModule_UsrTodoTask` |
-| SysModuleEntity | `SysModuleEntity_<Code>` | `SysModuleEntity_UsrTodoTask` |
-
----
-
-## Package Structure
-
-### descriptor.json
-
-Every package must have `descriptor.json` at the root:
-
-```json
-{
-  "Descriptor": {
-    "UId": "<new-package-guid>",
-    "PackageVersion": "1.0.0",
-    "Name": "UsrTodoListApp",
-    "ModifiedOnUtc": "/Date(1700000000000)/",
-    "Type": 1,
-    "Maintainer": "Customer",
-    "DependsOn": []
-  }
-}
-```
-
-Use empty `DependsOn: []` by default unless the package genuinely requires explicit dependencies.
-
-### Typical Directory Layout
-
-```text
-packages/<PackageName>/
-├── descriptor.json
-├── Schemas/
-│   ├── UsrLookup/
-│   ├── UsrEntity/
-│   ├── UsrEntity_ListPage/
-│   ├── UsrEntity_FormPage/
-│   └── UsrEntity_FormPage_Addon/
-├── Data/
-│   ├── SysModule_UsrEntity/
-│   ├── SysModuleEntity_UsrEntity/
-│   └── UsrLookup/
-└── Files/
-```
-
-### Generation Order
-
-For executable MCP tool shape and app-modeling semantics, use discovered `clio` MCP tool schema and prompts/resources such as `docs://mcp/guides/app-modeling`.
-
-- `clio MCP` is the only source of truth for tool names, parameter names, aliases, defaults, response shapes, error shapes, and canonical or fallback flow hints
-- Use `get-tool-contract` through `scripts/mcp_client.py` whenever you need the exact executable contract
-- When a tool is not present in the default bootstrap contract set, resolve it through explicit `get-tool-contract {"tool-names":[...]}` lookup instead of assuming it is unavailable
-- Repository docs describe workflow policy and modeling rules only and must not become a second MCP API specification
-- Resolve human-readable MCP flow, fallback, verification, main-entity, localization, and page inspection guidance through `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
-- Treat `editableContext` as a local helper projection, not as the primary MCP response contract.
-- When `dataforge-find-tables`, `dataforge-find-lookups`, or `dataforge-context` surfaces strong model candidates, persist the resulting `reuse` / `extend` / `create` decision in the plan instead of treating the discovery output as advisory only.
-
-### Working With MCP Tools
-
-- Use `scripts/mcp_client.py` for local `clio` stdio transport
-
-```python
-from scripts.mcp_client import call_mcp_tool
-
-contracts = call_mcp_tool("get-tool-contract", {})
-apps = call_mcp_tool("list-apps", {"environment-name": "local"})
-```
-
-Use discovered MCP tool schema plus `clio` prompts/resources for:
-- tool parameters and response payloads
-- canonical main-entity selection
-- lookup display-field semantics
-- default semantics and lookup-seed implications
-- current `sync-schemas` and `sync-pages` behavior
-
-Use this repo’s wrapper docs and helper scripts for:
-- local transport invocation patterns
-- normalized result-file handling
-- evidence generation and follow-up apply helpers
-
----
-
-## Clio CLI Commands
-
-Clio is the command-line tool for Creatio deployments.
-
-### Environment Setup
-
-```bash
-clio reg-web-app myenv -u <creatio-url-from-planning> -l <login> -p <password>
-clio reg-web-app -a myenv
-clio healthcheck myenv
-```
-
-```bash
-clio compile-configuration -e myenv
-clio restart-web-app myenv
-clio last-compilation-log -e myenv
-```
-
-### Package Management
-
-```bash
-clio new-pkg UsrMyPackage
-clio list-packages -e myenv
-clio pull-pkg MyPackage -e myenv
-clio delete-pkg-remote MyPackage -e myenv
-clio validation-pkg ./MyPackage
-```
-
-### Development Tools
-
-```bash
-clio execute-sql-script "SELECT Id FROM Contact LIMIT 5" -e myenv
-clio clear-redis-db myenv
-clio set-syssetting MySetting "Value" -e myenv
-```
 
 ---
 
