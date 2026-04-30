@@ -13,33 +13,17 @@ AUTHORITY_DOCS = existing([
     ROOT / "README.md",
     ROOT / "context/essentials.md",
     ROOT / "context/INDEX.md",
-    ROOT / "context/data-bindings-reference.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
-    ROOT / "skills/README.md",
-    ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / "skills/data-bindings-creation/SKILL.md",
-    ROOT / "skills/page-schema-editing/SKILL.md",
 ])
 
 WORKFLOW_ONLY_SCHEMA_DOCS = existing([
     ROOT / "context/INDEX.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/schema-reference.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "skills/entity-creation/SKILL.md",
 ])
 
 ACTIVE_CONTRACT_SURFACE_DOCS = existing([
     ROOT / "README.md",
     ROOT / "context/INDEX.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/data-bindings-reference.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
-    ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / "skills/data-bindings-creation/SKILL.md",
-    ROOT / "skills/page-schema-editing/SKILL.md",
 ])
 
 DOC_PATHS = [

@@ -5,7 +5,6 @@ This file contains the high-level platform overview and the local MCP workflow s
 ## Companion files
 
 - `context/naming-conventions.md` — `Usr` prefixes, casing, GUIDs, data binding naming.
-- `context/package-structure.md` — `descriptor.json`, directory layout, generation order, MCP tool usage from local scripts.
 - `context/clio-cli-reference.md` — CLI commands for environment setup, package management, and development tooling.
 
 ## Platform Overview
@@ -67,7 +66,6 @@ Creatio is a no-code/low-code platform for process management and CRM using a co
 - Modern UI pages are AMD modules
 - UI is described via `viewConfigDiff`
 - Schema type is `"AngularSchema"`
-- When page-body code imports `@creatio-devkit/common`, use `context/devkit-common-reference.md` and stay within the documented `src/lib/public/**` surface
 - Add fields or columns by editing the `body.js` returned by `get-page` directly without replacing unrelated marker sections
 - `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
 - `validate-page` validates a page body client-side without saving to Creatio
