@@ -318,8 +318,8 @@ Gate R:
 - Before presenting the Business Plan, read `agents/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Each checklist group must record `source="confirmed"` or `source="assumed"` in the request spec companion, not in the visible Business Plan.
-- Requires the developer to see the full Business Plan before approval.
-- The approved Business Plan is the final deliverable.
+- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
+- The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.

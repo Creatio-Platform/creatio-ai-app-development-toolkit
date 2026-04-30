@@ -40,10 +40,10 @@ Read these repository files for the BA stage:
 7. Ask technical questions only for true blockers.
 8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round.
 9. Resolve any material contradictions or missing carriers before showing the draft.
-10. Present the full BA-style Business Plan.
+10. Present the full BA-style Business Plan followed immediately by the Technical Implementation Handoff in the same message.
 11. Ask for natural-language approval using this exact closing line:
-    > "Does this Business Plan look good? Once you confirm, I'll append the Technical Implementation Handoff and this session is complete — a separate implementing agent will use it to build and deploy the app."
-12. After approval, validate the documents inline. Session complete — the Business Plan and Technical Implementation Handoff are the final deliverables for this session. Do not attempt to run any clio commands, create apps, or deploy anything after approval.
+    > "Does this Business Plan look good? If yes, this session is complete — a separate implementing agent will use it to build and deploy the app."
+12. After approval, validate the documents inline. Session complete. Do not attempt to run any clio commands, create apps, or deploy anything after approval.
 
 ## Checklist Authority
 
@@ -393,7 +393,7 @@ The BA draft is incomplete if any of the following is true:
 
 ## Technical Implementation Handoff
 
-After the 7-section Business Plan is approved, append a Technical Implementation Handoff block separated by `---`.
+Present the Technical Implementation Handoff immediately after the 7-section Business Plan in the same message, before asking for approval.
 
 This block is **not** a BA section. It is not numbered and not subject to BA format rules.
 It is consumed by the implementing code agent running in a separate session with clio MCP tools.
