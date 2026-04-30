@@ -238,7 +238,7 @@ The default user-facing flow is:
 2. A short "What I understood" summary.
 3. Structured business clarification in small themed batches.
 4. Technical questions only for true execution blockers.
-5. A final evidence-based summary with delivered artifacts and blockers, if any.
+5. A final summary confirming the Business Plan and Technical Implementation Handoff are complete. The session ends here — no implementation takes place in this repository.
 
 First-turn latency rule:
 
@@ -273,10 +273,11 @@ Run Gate P once at the start of each app workflow.
 This routing block applies only to full app generation or business-shaped feature work.
 Do not apply `site-ready-now` / `planning-first`, Gate P, or Gate R to targeted changes.
 
-- First ask whether the developer wants `site-ready-now` or `planning-first`.
+- First ask whether the developer wants to connect to the Creatio environment before drafting (`site-ready-now`) or draft the Business Plan without a runtime connection first (`planning-first`). The routing affects only when environment setup runs — it does not trigger implementation in either mode.
+- When presenting the routing choice, phrase it as "connect to Creatio now vs. draft first" — **not** as "build and deploy now vs. review first". This is a Business Plan-only session; neither routing option leads to implementation.
 - On the first turn, this routing question may be asked via structured input when the host mode supports it.
 - If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and any missing credentials.
-- If `planning-first`, defer runtime inputs until Business Plan is explicitly requested.
+- If `planning-first`, defer runtime inputs until the Business Plan is approved.
 - Before Gate P approval, do not run agents and do not run `clio`.
 - Gate P is confirmed by the developer's natural-language routing choice and understanding summary in the conversation. Always derive planning state from the current conversation — never from a prior run.
 - When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
@@ -296,6 +297,8 @@ Execution order is conditional:
 
 - `site-ready-now`: Agent 1 -> Agent 2 -> done
 - `planning-first`: Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> done
+
+**Hard stop:** Both modes end with the Business Plan and Technical Implementation Handoff. This session never proceeds to implementation. Do not call clio MCP mutation tools (`create-app`, `sync-schemas`, `sync-pages`, and similar), do not create apps, schemas, entities, or pages in Creatio. The Technical Implementation Handoff is the artifact for the implementing code agent — it runs in a separate session.
 
 ## Agent Responsibilities
 
@@ -356,7 +359,7 @@ Approval-ready vs delivery-ready rule:
 
 1. Confirm Gate P: routing choice, understanding summary, assumptions/risks, and natural-language confirmation from the developer.
 2. Run Agent 1 if runtime inputs are available (`site-ready-now`) or after Gate R approval (`planning-first`).
-3. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation. Session complete.
+3. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation. **Session complete — this is the final step. Do not proceed to implementation. Do not call any clio MCP mutation tools.**
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.

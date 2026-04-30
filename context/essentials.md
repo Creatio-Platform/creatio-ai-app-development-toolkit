@@ -1,5 +1,7 @@
 # Creatio Platform Essentials
 
+> **Scope note for this repository:** This file is platform reference material only. The active session produces a Business Plan only — no Creatio artifacts are created. Do not use this file as authorization to call clio MCP tools or create apps, schemas, or pages. All clio mutation tools (`create-app`, `sync-schemas`, `sync-pages`, etc.) are out of scope for this repository; implementation runs in a separate agent session.
+
 This file contains the high-level platform overview and the local MCP workflow shape. Use the topic-specific files below for naming conventions, package structure, and clio CLI commands. For the executable MCP contract (parameter names, response shapes, error codes), use `get-tool-contract` and the clio MCP guidance resources.
 
 ## Companion files
