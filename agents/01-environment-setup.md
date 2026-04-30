@@ -174,12 +174,15 @@ clio healthcheck -e <env_name>
 
 ### 6. Report resolved environment
 
-Report the resolved environment for use by subsequent agents in the conversation:
+Report the resolved environment using this exact block heading and format:
 
-- **Environment name:** `<env_name>`
-- **URL:** `<URL>`
-- **Runtime:** .NET Core (or .NET Framework if detected in Step 4)
-- **Custom clio path:** `<path>` (only if the developer provided one; omit otherwise)
+```
+**Runtime Environment**
+- Environment name: <env_name>
+- URL: <URL>
+- Runtime: .NET Core | .NET Framework
+- Custom clio path: <path>   ← omit this line when the developer did not provide a custom path
+```
 
 This information stays in the conversation context — Agent 2 reads the environment name from the conversation, not from a file.
 
@@ -196,10 +199,10 @@ Where `dataforge-status.args.json` contains:
 { "environment-name": "<env_name>" }
 ```
 
-Interpret the result and report one of these in the conversation:
+Interpret the result and append one of these lines to the **Runtime Environment** block reported in Step 6:
 
-- `dataforge-availability: ready` — `status.status` equals `"Ready"`
-- `dataforge-availability: unavailable` — any error, exception, or non-Ready status
+- `dataforge-availability: ready — use dataforge-find-tables / dataforge-context for entity discovery` — when `status.status` equals `"Ready"`
+- `dataforge-availability: unavailable — skip entity discovery, create new schemas directly` — any error, exception, or non-Ready status
 
 If the call throws or times out, record `dataforge-availability: unavailable`. Do not retry.
 

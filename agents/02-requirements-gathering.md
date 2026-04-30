@@ -410,7 +410,9 @@ It is consumed by the implementing code agent running in a separate session with
 - URL: <URL or "Deferred">
 - Runtime: <.NET Core / .NET Framework or "Deferred">
 
-**DataForge Status:** <ready / unavailable / "Not checked (planning-first mode)">
+**DataForge:**
+- Status: <ready / unavailable / "Not checked (planning-first mode)">
+- Entity discovery: <"Use dataforge-find-tables and dataforge-context before creating new schemas" when ready, or "Skip — create new custom schemas directly with sync-schemas" when unavailable or not checked>
 
 **Reuse Discovery Signals:**
 <For each entry in planningSignals.reuseCheckRequired:>
@@ -423,6 +425,7 @@ It is consumed by the implementing code agent running in a separate session with
 ### Population rules
 
 - In `site-ready-now` mode: populate all three blocks from the Agent 1 conversation context (env name, URL, runtime, DataForge availability).
-- In `planning-first` mode: set `Environment` and `DataForge Status` to their deferred values; populate `Reuse Discovery Signals` from `planningSignals.reuseCheckRequired`.
-- `DataForge Status` comes from the `dataforge-availability` value reported by Agent 1 Step 7. If Agent 1 was not run (planning-first), set to `"Not checked (planning-first mode)"`.
+- In `planning-first` mode: set `Environment` and `DataForge` to their deferred values; populate `Reuse Discovery Signals` from `planningSignals.reuseCheckRequired`.
+- `DataForge.Status` comes from the `dataforge-availability` value reported by Agent 1 Step 7. If Agent 1 was not run (planning-first), set to `"Not checked (planning-first mode)"`.
+- `DataForge.Entity discovery` must reflect the status: `ready` → instruct the implementing agent to use `dataforge-find-tables` / `dataforge-context`; `unavailable` or not checked → instruct it to skip discovery and use `sync-schemas` directly.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.
