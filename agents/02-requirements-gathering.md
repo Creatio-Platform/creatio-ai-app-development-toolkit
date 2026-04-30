@@ -41,8 +41,9 @@ Read these repository files for the BA stage:
 8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round.
 9. Resolve any material contradictions or missing carriers before showing the draft.
 10. Present the full BA-style Business Plan.
-11. Ask for natural-language approval.
-12. After approval, validate the documents inline. Session complete — the Business Plan and Technical Implementation Handoff are the final deliverables for this session.
+11. Ask for natural-language approval using this exact closing line:
+    > "Does this Business Plan look good? Once you confirm, I'll append the Technical Implementation Handoff and this session is complete — a separate implementing agent will use it to build and deploy the app."
+12. After approval, validate the documents inline. Session complete — the Business Plan and Technical Implementation Handoff are the final deliverables for this session. Do not attempt to run any clio commands, create apps, or deploy anything after approval.
 
 ## Checklist Authority
 
@@ -247,13 +248,17 @@ Each relationship bullet must state:
 - a short business rationale when the role of the secondary entity is not obvious
 
 `## 6. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
-Its bullets must cover:
 
-- default list columns
-- default filters
-- main form groups
-- default sort for time-based records when they exist
-- visibility of overdue or open work items when they exist
+Its bullets **must use these exact text labels** (colon included) — the validator checks for them verbatim:
+
+- `default list columns:` — followed by comma-separated field Titles, e.g. `default list columns: Title, Status, Priority`
+- `default filters:` — followed by the filter field Title, e.g. `default filters: Status`
+- `main form groups:` — followed by a description, e.g. `main form groups: Details (Title, Description), Assignment (Status, Assignee)`
+
+Also include when applicable:
+
+- default sort for time-based records
+- visibility of overdue or open work items
 
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
@@ -316,26 +321,46 @@ Each group must contain:
 - `creatioUrl`
 - `credentialsStatus`
 
-Before presenting the draft for approval, run both inline validation checks:
+Before presenting the draft for approval, save the artifacts to temp files and validate using the platform-appropriate command:
 
-```bash
-python3 -c "
-import sys, json
+**Windows (PowerShell):**
+```powershell
+# Validate Business Plan
+Get-Content "$env:TEMP\<appname>-plan.md" -Raw | py -3 -c "
+import sys
 sys.path.insert(0, 'scripts')
 from workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
-" << 'EOF'
-<Business Plan content>
-EOF
+print('Business Plan validation PASSED')
+"
+
+# Validate request spec
+Get-Content "$env:TEMP\<appname>-spec.json" -Raw | py -3 -c "
+import sys, json
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_request_spec
+validate_request_spec(json.loads(sys.stdin.read()))
+print('Request spec validation PASSED')
+"
+```
+
+**macOS / Linux (bash):**
+```bash
+python3 -c "
+import sys
+sys.path.insert(0, 'scripts')
+from workflow_validators import validate_requirements_doc
+validate_requirements_doc(sys.stdin.read())
+print('Business Plan validation PASSED')
+" < /tmp/<appname>-plan.md
 
 python3 -c "
 import sys, json
 sys.path.insert(0, 'scripts')
 from workflow_validators import validate_request_spec
 validate_request_spec(json.load(sys.stdin))
-" << 'EOF'
-<request spec content>
-EOF
+print('Request spec validation PASSED')
+" < /tmp/<appname>-spec.json
 ```
 
 If validation raises `WorkflowError`, fix the artifact and re-validate before presenting for approval.
