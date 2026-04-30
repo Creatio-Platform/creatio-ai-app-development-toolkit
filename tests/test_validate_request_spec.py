@@ -39,10 +39,10 @@ class TestValidateRequestSpecValid(unittest.TestCase):
         result = validate_request_spec(_build_valid_spec())
         self.assertIsNone(result)
 
-    def test_site_ready_now_with_url_passes(self):
+    def test_planning_first_with_url_passes(self):
         spec = _build_valid_spec(
             technicalInputs={
-                "environmentMode": "site-ready-now",
+                "environmentMode": "planning-first",
                 "creatioUrl": "http://localhost:5001",
                 "credentialsStatus": "provided",
             }
@@ -154,16 +154,17 @@ class TestValidateRequestSpecChecklist(unittest.TestCase):
 
 
 class TestValidateRequestSpecEnvironmentMode(unittest.TestCase):
-    def test_site_ready_now_without_url_fails(self):
+    def test_site_ready_now_mode_rejected(self):
         spec = _build_valid_spec(
             technicalInputs={
                 "environmentMode": "site-ready-now",
+                "creatioUrl": "http://localhost:5001",
                 "credentialsStatus": "provided",
             }
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_request_spec(spec)
-        self.assertIn("creatioUrl", str(ctx.exception))
+        self.assertIn("environmentMode", str(ctx.exception))
 
     def test_invalid_credentials_status_fails(self):
         spec = _build_valid_spec()

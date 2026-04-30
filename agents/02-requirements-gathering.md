@@ -9,7 +9,7 @@ Do not delegate this agent.
 This agent is for full app generation or business-shaped feature work only.
 Do not invoke Agent 2 for targeted changes such as adding a concrete object, column, page element, handler, or lookup row when the request is already implementation-ready.
 
-Operate as a Business Analyst Requirements Agent. The approved artifact from this stage is the business contract that Agent 3 will translate into the implementation plan.
+Operate as a Business Analyst Requirements Agent. The approved artifact from this stage is the business contract that drives the implementation plan.
 
 ## Input
 
@@ -27,13 +27,13 @@ Read these repository files for the BA stage:
 ## Preconditions
 
 - Gate P is approved.
-- If routing is `planning-first`, environment inputs may remain deferred.
+- Environment inputs are deferred until after Gate R approval.
 
 ## Conversation Contract
 
 1. Parse the free-form prompt.
 2. Apply first-turn latency rules from `AGENTS.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
-3. On the first turn, ask the routing question plus the main 3-5 business discovery questions together.
+3. On the first turn, ask the main 3-5 business discovery questions.
 4. Do not read large repository files or run heavy setup steps before the first clarification round completes.
 5. Ask additional business questions in the next small themed batch.
 6. Show "What still needs clarification" only after the first clarification round if it still adds value.
@@ -42,8 +42,8 @@ Read these repository files for the BA stage:
 9. Resolve any material contradictions or missing carriers before showing the draft.
 10. Present the full BA-style Business Plan followed immediately by the Technical Implementation Handoff in the same message.
 11. Ask for natural-language approval using this exact closing line:
-    > "Does this Business Plan look good? If yes, this session is complete — a separate implementing agent will use it to build and deploy the app."
-12. After approval, validate the documents inline. Session complete. Do not attempt to run any clio commands, create apps, or deploy anything after approval.
+    > "Does this Business Plan look good? If yes, provide your Creatio URL and credentials to proceed with implementation."
+12. After approval, validate the documents inline, collect runtime inputs, run Agent 1 to set up the environment, then implement using clio MCP tools.
 
 ## Checklist Authority
 
@@ -75,7 +75,7 @@ Stage-specific constraints for this agent:
 - Before presenting the Business Plan, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
-- In `planning-first`, defer runtime questions such as URL and credentials until implementation is requested.
+- Defer runtime questions such as URL and credentials until after Gate R approval.
 - Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `AGENTS.md`.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in BA dialogue unless the developer explicitly asks about the internal mechanics.
 - Do not surface workflow-state collisions, stale artifacts, or similar internal repository details in BA dialogue unless they create a genuine product-level ambiguity.
@@ -150,12 +150,12 @@ Rules for the output:
 - Restate the request in business terms.
 - Explain the likely business intent of the application.
 - Include the resolved clarification decisions that drove the draft.
-- Reflect the result of the pre-analysis pass; do not leave hidden contradictions for Agent 3 to discover later.
+- Reflect the result of the pre-analysis pass; do not leave hidden contradictions for the implementation stage to discover later.
 - Use domain-aware BA judgment. If the domain is recognizable, include standard baseline attributes and behaviors that a domain expert would expect unless they are explicitly out of scope.
 - Keep the document compact, structured, and business-focused.
 - Use business language rather than technical implementation language.
-- Technical choreography, exact MCP execution steps, and payload mechanics belong to Agent 3, not here.
-- Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery in Agent 3.
+- Technical choreography, exact MCP execution steps, and payload mechanics belong to the implementation stage, not here.
+- Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery during implementation.
 - When the BA draft shows a likely schema code or custom lookup name, treat it as a planning placeholder rather than a binding implementation commitment.
 - If the host environment requires a wrapper such as `<proposed_plan>`, keep the wrapper only as a container. The visible body must still use the BA-style headings defined here.
 - Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
@@ -287,7 +287,7 @@ The request spec must include:
 
 - `reuseCheckRequired`
 
-Use `planningSignals.reuseCheckRequired` as the Agent 2 handoff list for the implementing agent.
+Use `planningSignals.reuseCheckRequired` as the handoff list for the implementation stage.
 This list must stay technical-light: it marks business concepts that need live reuse discovery, but it must not pre-decide `reuse`, `extend`, or `create`.
 
 When a business concept is recognizable and could plausibly map to an existing platform or custom schema, add an entry with:
@@ -372,8 +372,8 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 - Enum-like fields must be separate lookup entities.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
-- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
-- When that ambiguity exists, include a `planningSignals.reuseCheckRequired` entry in the request spec so Agent 3 must open the discovery branch for that concept.
+- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to the implementation stage after live model discovery.
+- When that ambiguity exists, include a `planningSignals.reuseCheckRequired` entry in the request spec so the implementation stage opens the discovery branch for that concept.
 
 ## Default Resolution Rules
 
@@ -406,12 +406,12 @@ It is consumed by the implementing code agent running in a separate session with
 ## Technical Implementation Handoff
 
 **Environment:**
-- Name: <env_name or "Not yet configured (planning-first mode)">
+- Name: <env_name or "Not yet configured">
 - URL: <URL or "Deferred">
 - Runtime: <.NET Core / .NET Framework or "Deferred">
 
 **DataForge:**
-- Status: <ready / unavailable / "Not checked (planning-first mode)">
+- Status: <ready / unavailable / "Not checked">
 - Entity discovery: <"Use dataforge-find-tables and dataforge-context before creating new schemas" when ready, or "Skip — create new custom schemas directly with sync-schemas" when unavailable or not checked>
 
 **Reuse Discovery Signals:**
@@ -424,8 +424,7 @@ It is consumed by the implementing code agent running in a separate session with
 
 ### Population rules
 
-- In `site-ready-now` mode: populate all three blocks from the Agent 1 conversation context (env name, URL, runtime, DataForge availability).
-- In `planning-first` mode: set `Environment` and `DataForge` to their deferred values; populate `Reuse Discovery Signals` from `planningSignals.reuseCheckRequired`.
-- `DataForge.Status` comes from the `dataforge-availability` value reported by Agent 1 Step 7. If Agent 1 was not run (planning-first), set to `"Not checked (planning-first mode)"`.
+- Set `Environment` and `DataForge` to their deferred values; populate `Reuse Discovery Signals` from `planningSignals.reuseCheckRequired`.
+- `DataForge.Status` comes from the `dataforge-availability` value reported by Agent 1 Step 7. Until Agent 1 has run, set to `"Not checked"`.
 - `DataForge.Entity discovery` must reflect the status: `ready` → instruct the implementing agent to use `dataforge-find-tables` / `dataforge-context`; `unavailable` or not checked → instruct it to skip discovery and use `sync-schemas` directly.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.

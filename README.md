@@ -26,13 +26,12 @@ Primary workflow is natural language:
 
 1. Developer sends one free-form prompt.
 2. Agent returns a short "What I understood".
-3. Agent asks a routing question: `site-ready-now` or `planning-first`.
-4. Agent runs compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
-5. The routing question and the main discovery questions appear in that same first user-facing response.
-6. Agent persists a fresh Gate P for the current request after natural-language confirmation; `planning-first` may defer runtime endpoints until the implementing agent starts.
-7. Agent asks minimal technical questions only for blockers.
-8. Agent produces the BA-style Business Plan (7 sections) and Technical Implementation Handoff.
-9. Internal gate names and scripts stay hidden from developer-facing dialogue unless they are real blockers.
+3. Agent runs compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
+4. The main discovery questions appear in that same first user-facing response.
+5. Agent asks minimal technical questions only for blockers.
+6. Agent produces the BA-style Business Plan (7 sections) and Technical Implementation Handoff.
+7. Developer approves the Business Plan. After approval, agent collects runtime inputs and implements the plan with clio MCP tools.
+8. Internal gate names and scripts stay hidden from developer-facing dialogue unless they are real blockers.
 
 Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
 
@@ -189,10 +188,10 @@ Support mode is on. Please share this session with support for analysis.
 
 Orchestrator flow:
 
-1. Planning start: routing choice, understanding summary, assumptions/risks, and natural-language confirmation. Gate P is satisfied when the developer confirms in conversation.
-2. If the route is `site-ready-now`, Agent 1 resolves the environment name and runs DataForge availability check, reporting both in conversation; if the route is `planning-first`, this step waits until the developer provides runtime credentials.
-3. Agent 2 produces a BA-style Business Plan (7 sections) and Technical Implementation Handoff inline in the conversation. Gate R is satisfied when the developer explicitly approves the plan.
-4. Session complete. The Business Plan and Technical Implementation Handoff are the final deliverables.
+1. Planning start: understanding summary, assumptions/risks, and natural-language confirmation. Gate P is satisfied when the developer confirms in conversation.
+2. Agent 2 produces a BA-style Business Plan (7 sections) and Technical Implementation Handoff inline in the conversation. Gate R is satisfied when the developer explicitly approves the plan.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to resolve the environment name and DataForge availability, then implement the plan with clio MCP tools.
+4. Session complete. The implemented app is the final deliverable.
 
 ## Runtime Scripts
 
@@ -260,4 +259,4 @@ context/
 
 - AI code agent
 - [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
-- Access to a running Creatio instance (for `site-ready-now` routing only)
+- Access to a running Creatio instance (required after Business Plan approval)

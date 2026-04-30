@@ -10,7 +10,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
 - **The plan output MUST be a BA-style Business Plan.** The BA-style Business Plan (Agent 2 output) must be shown inline in the visible conversation body. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
-- The routing choice (`site-ready-now` / `planning-first`) MUST come from a user message. `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, and `(auto-...)` markers are not allowed on the `Planning branch:` line.
+
 
 The required top-level sections of every BA-style Business Plan are, in order:
 
@@ -238,7 +238,9 @@ The default user-facing flow is:
 2. A short "What I understood" summary.
 3. Structured business clarification in small themed batches.
 4. Technical questions only for true execution blockers.
-5. A final summary confirming the Business Plan and Technical Implementation Handoff are complete. The session ends here — no implementation takes place in this repository.
+5. A final summary confirming the Business Plan and Technical Implementation Handoff are complete.
+6. Wait for the developer's explicit approval of the Business Plan (Gate R).
+7. After Gate R approval, implement the plan using clio MCP tools.
 
 First-turn latency rule:
 
@@ -249,9 +251,8 @@ First-turn latency rule:
 - Optimize for first visible response latency over completeness on the first turn.
 - The first turn should include:
   - a short "What I understood"
-  - the routing question: `site-ready-now` or `planning-first`
   - the main 3-5 highest-priority business discovery questions when they are needed
-- The routing question and first discovery questions should appear in the same first user-facing interaction, whether via compact text or structured input.
+- The first discovery questions should appear in that same first user-facing interaction, whether via compact text or structured input.
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
 - Additional discovery questions should be asked in the next small themed batch.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
@@ -271,17 +272,13 @@ Business discovery must follow a Business Analyst style:
 Run Gate P once at the start of each app workflow.
 
 This routing block applies only to full app generation or business-shaped feature work.
-Do not apply `site-ready-now` / `planning-first`, Gate P, or Gate R to targeted changes.
+Do not apply Gate P or Gate R to targeted changes.
 
-- First ask whether the developer wants to connect to the Creatio environment before drafting (`site-ready-now`) or draft the Business Plan without a runtime connection first (`planning-first`). The routing affects only when environment setup runs — it does not trigger implementation in either mode.
-- When presenting the routing choice, phrase it as "connect to Creatio now vs. draft first" — **not** as "build and deploy now vs. review first". This is a Business Plan-only session; neither routing option leads to implementation.
-- On the first turn, this routing question may be asked via structured input when the host mode supports it.
-- If `site-ready-now`, collect required runtime inputs up front, including Creatio URL and any missing credentials.
-- If `planning-first`, defer runtime inputs until the Business Plan is approved.
+- The workflow always uses planning-first order: draft the Business Plan first, then collect runtime inputs and set up the environment after Gate R approval.
 - Before Gate P approval, do not run agents and do not run `clio`.
-- Gate P is confirmed by the developer's natural-language routing choice and understanding summary in the conversation. Always derive planning state from the current conversation — never from a prior run.
+- Gate P is confirmed by the developer's natural-language understanding summary in the conversation. Always derive planning state from the current conversation — never from a prior run.
 - When the current request provides a Creatio URL, that URL is the runtime source of truth for the current run.
-- Agent 1 must resolve the environment from the current request URL and report it in the conversation before Agent 2 uses it.
+- Agent 1 must resolve the environment from the current request URL and report it in the conversation before implementation begins.
 - If `clio list-environments` returns multiple registered environments for the same normalized current-request URL, treat the environment choice as ambiguous and ask the developer to choose the environment name explicitly before continuing.
 - Do not auto-select one of several matching environments based on previous runs, active-environment status, or a familiar alias.
 - Reuse a matching environment without asking only when the current conversation explicitly names the environment key to use for that URL.
@@ -290,15 +287,14 @@ Technical question policy:
 
 - ask only execution blockers
 - do not ask for MCP/template/icon details when deterministic defaults exist
-- runtime credentials or endpoints remain execution blockers when the selected routing mode requires them
+- runtime credentials or endpoints are execution blockers after Gate R approval
 - if the developer asks for an autonomous flow without required runtime inputs, ask only for the missing blockers
 
-Execution order is conditional:
+Execution order:
 
-- `site-ready-now`: Agent 1 -> Agent 2 -> done
-- `planning-first`: Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> done
+Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP tools
 
-**Hard stop:** Both modes end with the Business Plan and Technical Implementation Handoff. This session never proceeds to implementation. Do not call clio MCP mutation tools (`create-app`, `sync-schemas`, `sync-pages`, and similar), do not create apps, schemas, entities, or pages in Creatio. The Technical Implementation Handoff is the artifact for the implementing code agent — it runs in a separate session.
+**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan. Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
 
 ## Agent Responsibilities
 
@@ -311,7 +307,7 @@ Agent 2 is interactive and must not be delegated.
 
 Gate P:
 
-- Requires routing choice, short understanding summary, assumptions/risks, and natural-language confirmation.
+- Requires short understanding summary, assumptions/risks, and natural-language confirmation.
 
 Gate R:
 
@@ -357,9 +353,9 @@ Approval-ready vs delivery-ready rule:
 
 ## Orchestration Checklist
 
-1. Confirm Gate P: routing choice, understanding summary, assumptions/risks, and natural-language confirmation from the developer.
-2. Run Agent 1 if runtime inputs are available (`site-ready-now`) or after Gate R approval (`planning-first`).
-3. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation. **Session complete — this is the final step. Do not proceed to implementation. Do not call any clio MCP mutation tools.**
+1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer.
+2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.

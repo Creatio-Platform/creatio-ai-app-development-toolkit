@@ -217,21 +217,16 @@ def validate_request_spec(spec: dict) -> None:
     environment_mode = technical_inputs.get("environmentMode")
     creatio_url = technical_inputs.get("creatioUrl")
     if environment_mode is None:
-        environment_mode = "site-ready-now" if isinstance(creatio_url, str) and HTTP_URL_RE.search(creatio_url) else "planning-first"
-    if environment_mode not in {"site-ready-now", "planning-first"}:
-        raise WorkflowError("Request spec failed: technicalInputs.environmentMode must be site-ready-now or planning-first when provided")
+        environment_mode = "planning-first"
+    if environment_mode not in {"planning-first"}:
+        raise WorkflowError("Request spec failed: technicalInputs.environmentMode must be planning-first when provided")
     credentials_status = technical_inputs.get("credentialsStatus")
     if credentials_status not in {"provided", "missing", "existing_env", "deferred"}:
         raise WorkflowError(
             "Request spec failed: technicalInputs.credentialsStatus must be one of: provided, missing, existing_env, deferred"
         )
-    if environment_mode == "site-ready-now":
-        if not isinstance(creatio_url, str) or not HTTP_URL_RE.search(creatio_url):
-            raise WorkflowError(
-                "Request spec failed: technicalInputs.creatioUrl must be a valid http(s) URL when environmentMode=site-ready-now; planning-first may defer it"
-            )
-    elif creatio_url not in (None, "") and (not isinstance(creatio_url, str) or not HTTP_URL_RE.search(creatio_url)):
+    if creatio_url not in (None, "") and (not isinstance(creatio_url, str) or not HTTP_URL_RE.search(creatio_url)):
         raise WorkflowError(
-            "Request spec failed: technicalInputs.creatioUrl must be a valid http(s) URL when environmentMode=site-ready-now; planning-first may defer it"
+            "Request spec failed: technicalInputs.creatioUrl must be a valid http(s) URL when provided"
         )
 
