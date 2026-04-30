@@ -9,7 +9,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST NOT** produce plan output using the VS Code template structure (Steps / Relevant files / Verification / Decisions).
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
-- **First plan in a fresh app generation session MUST be a BA-style Business Plan.** When no prior approved BA Business Plan exists in this conversation, the first plan output — whether via `exit_plan_mode`, inline message, or saved file — MUST be the BA-style Business Plan (Agent 2 output). It MUST NOT be a Technical Annex or Implementation Plan. The Implementation Plan is allowed only after Gate R approval is recorded inline in the conversation.
+- **First plan in a fresh app generation session MUST be a BA-style Business Plan.** When no prior approved BA Business Plan exists in this conversation, the first plan output MUST be the BA-style Business Plan (Agent 2 output) shown inline in the visible conversation body. It MUST NOT be a Technical Annex or Implementation Plan. The Implementation Plan is allowed only after Gate R approval is recorded inline in the conversation. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
 - The routing choice (`site-ready-now` / `planning-first`) MUST come from a user message. `(assumed)`, `(inferred)`, `(derived)`, `(presumed)`, `(default)`, and `(auto-...)` markers are not allowed on the `Planning branch:` line.
 - When `Planning branch: planning-first` is recorded in the Implementation Plan, the plan MUST include a `## Gate R Evidence` section that cites the user message which approved the BA Business Plan and selected the routing (e.g., a `> ...` quote line, or a `user message:` / `developer reply:` / `approved by developer` reference).
 
@@ -394,6 +394,8 @@ Gate R:
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
+- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 7-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
+- A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
 Gate bypass rule for targeted changes:
 
