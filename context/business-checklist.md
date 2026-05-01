@@ -189,12 +189,12 @@ The pre-analysis must check for:
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the object model section
 - checklist-source language leaking into the visible BA draft
-- recognizable business concepts that may map to existing schemas but are not marked in `planningSignals.reuseCheckRequired`
+- recognizable business concepts that may map to existing schemas but are not noted in the Technical Implementation Handoff
 
 If pre-analysis finds a material issue:
 - ask a targeted follow-up question when the issue changes business intent or acceptance
 - otherwise resolve it as an explicit assumption before showing the draft
-- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, add a `planningSignals.reuseCheckRequired` handoff entry in the request spec
+- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, note it in the Technical Implementation Handoff "Reuse Discovery Signals" block
 
 Do not present the BA draft while known cross-section contradictions or missing carriers still exist.
 

@@ -313,7 +313,6 @@ Gate R:
 
 - Before presenting the Business Plan, read `agents/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Each checklist group must record `source="confirmed"` or `source="assumed"` in the request spec companion, not in the visible Business Plan.
 - Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
@@ -324,8 +323,8 @@ Gate R:
 
 Gate bypass rule:
 
-- all app and feature requests require Gate P and Gate R
-- a Business Plan must always be presented and approved before the session is complete
+- all app and feature requests require Gate P and Gate R, except targeted, implementation-ready changes
+- except for targeted, implementation-ready changes, a Business Plan must always be presented and approved before the session is complete
 
 Approval-ready vs delivery-ready rule:
 - The BA draft shown to the developer must remain business-readable.
@@ -384,4 +383,3 @@ Canonical repository references:
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
 Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
-

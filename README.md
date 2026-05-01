@@ -208,7 +208,7 @@ validate_requirements_doc(sys.stdin.read())
 EOF
 ```
 
-Available validators: `validate_requirements_doc(content: str)`, `validate_request_spec(spec: dict)`. Each raises `WorkflowError` on failure.
+Available validators: `validate_requirements_doc(content: str)`. Raises `WorkflowError` on failure.
 
 For MCP transport, the agent uses `scripts/mcp_client.py` for stdio MCP calls. JSON-heavy payloads should be passed via `--args-file` to avoid inline shell quoting.
 

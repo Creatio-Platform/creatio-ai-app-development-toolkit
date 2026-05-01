@@ -2,7 +2,7 @@
 
 ## Role
 
-Run the business clarification loop directly with the developer and produce the Business Plan plus the normalized request spec.
+Run the business clarification loop directly with the developer and produce the Business Plan.
 
 Do not delegate this agent.
 
@@ -22,7 +22,6 @@ Read these repository files for the BA stage:
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md` (only the sections needed for the current question batch)
-- `context/model-discovery-evidence.md` (DataForge tool parameter contract — for embedding DataForge status in the Technical Implementation Handoff)
 
 ## Preconditions
 
@@ -62,7 +61,6 @@ Use this runbook only for:
 
 - stage-specific conversation flow
 - requirements output contract
-- request-spec contract
 - persistence and acceptance checks
 
 Stage-specific constraints for this agent:
@@ -84,7 +82,7 @@ Stage-specific constraints for this agent:
 
 The Business Plan is the business-facing requirements document.
 
-The Business Plan and its companion request spec are presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
+The Business Plan is presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
 
 Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 7-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
 
@@ -103,10 +101,6 @@ Required sections:
 
 The Business Plan must follow the exact BA-style structure defined in `AGENTS.md` and `context/business-checklist.md`.
 The agent must not improvise the document shape.
-
-The Business Plan is for business reading and approval.
-The request spec is the normalized machine-readable companion presented inline alongside the Business Plan.
-Do not mirror request-spec markers, checklist source labels, or validation vocabulary in the visible Business Plan.
 
 Do not expose any of the following in the Business Plan:
 
@@ -273,55 +267,7 @@ Before finalizing the BA draft, verify at minimum:
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
 - `## 3. Object Model` contains the field tables, lookup bullets, and relationship bullets required by this contract
 
-## Request Spec Contract
-
-The request spec must include:
-
-- `sourcePrompt`
-- `businessChecklist`
-- `technicalInputs`
-- `planningSignals`
-- `assumptions`
-
-`planningSignals` must include:
-
-- `reuseCheckRequired`
-
-Use `planningSignals.reuseCheckRequired` as the handoff list for the implementation stage.
-This list must stay technical-light: it marks business concepts that need live reuse discovery, but it must not pre-decide `reuse`, `extend`, or `create`.
-
-When a business concept is recognizable and could plausibly map to an existing platform or custom schema, add an entry with:
-
-- `businessConcept`
-- `whyAmbiguous`
-- `suspectedCandidates`
-
-If no such concept exists, persist `reuseCheckRequired: []`.
-
-`businessChecklist` must include these groups plus `complete=true`:
-
-- `businessOutcome`
-- `rolesAndPermissions`
-- `objectModel`
-- `lifecycleAndStatuses`
-- `businessLogic`
-- `uxExpectations`
-- `edgeCases`
-
-Each group must contain:
-
-- `complete`
-- `value`
-- `source` with value `confirmed` or `assumed`
-- `assumption` when `source="assumed"`
-
-`technicalInputs` must contain:
-
-- `environmentMode`
-- `creatioUrl`
-- `credentialsStatus`
-
-Before presenting the draft for approval, save the artifacts to temp files and validate using the platform-appropriate command:
+Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 
 **Windows (PowerShell):**
 ```powershell
@@ -332,15 +278,6 @@ sys.path.insert(0, 'scripts')
 from workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
 print('Business Plan validation PASSED')
-"
-
-# Validate request spec
-Get-Content "$env:TEMP\<appname>-spec.json" -Raw | py -3 -c "
-import sys, json
-sys.path.insert(0, 'scripts')
-from workflow_validators import validate_request_spec
-validate_request_spec(json.loads(sys.stdin.read()))
-print('Request spec validation PASSED')
 "
 ```
 
@@ -353,14 +290,6 @@ from workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
 print('Business Plan validation PASSED')
 " < /tmp/<appname>-plan.md
-
-python3 -c "
-import sys, json
-sys.path.insert(0, 'scripts')
-from workflow_validators import validate_request_spec
-validate_request_spec(json.load(sys.stdin))
-print('Request spec validation PASSED')
-" < /tmp/<appname>-spec.json
 ```
 
 If validation raises `WorkflowError`, fix the artifact and re-validate before presenting for approval.
@@ -373,7 +302,7 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
 - If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to the implementation stage after live model discovery.
-- When that ambiguity exists, include a `planningSignals.reuseCheckRequired` entry in the request spec so the implementation stage opens the discovery branch for that concept.
+- When that ambiguity exists, note it in the Technical Implementation Handoff "Reuse Discovery Signals" block so the implementation stage opens the discovery branch for that concept.
 
 ## Default Resolution Rules
 
@@ -410,21 +339,15 @@ It is consumed by the implementing code agent running in a separate session with
 - URL: <URL or "Deferred">
 - Runtime: <.NET Core / .NET Framework or "Deferred">
 
-**DataForge:**
-- Status: <ready / unavailable / "Not checked">
-- Entity discovery: <"Use dataforge-find-tables and dataforge-context before creating new schemas" when ready, or "Skip — create new custom schemas directly with sync-schemas" when unavailable or not checked>
-
 **Reuse Discovery Signals:**
-<For each entry in planningSignals.reuseCheckRequired:>
-- Business concept: <businessConcept>
-  - Why ambiguous: <whyAmbiguous>
-  - Suspected candidates: <suspectedCandidates comma-separated>
-<If empty: "None — all entities are new custom objects.">
+<For each business concept that might map to an existing platform entity:>
+- Business concept: <concept name>
+  - Why ambiguous: <reason>
+  - Suspected candidates: <comma-separated list>
+<If none: "None — all entities are new custom objects.">
 ```
 
 ### Population rules
 
-- Set `Environment` and `DataForge` to their deferred values; populate `Reuse Discovery Signals` from `planningSignals.reuseCheckRequired`.
-- `DataForge.Status` comes from the `dataforge-availability` value reported by Agent 1 Step 7. Until Agent 1 has run, set to `"Not checked"`.
-- `DataForge.Entity discovery` must reflect the status: `ready` → instruct the implementing agent to use `dataforge-find-tables` / `dataforge-context`; `unavailable` or not checked → instruct it to skip discovery and use `sync-schemas` directly.
+- Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.
