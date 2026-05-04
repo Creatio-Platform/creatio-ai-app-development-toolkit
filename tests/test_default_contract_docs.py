@@ -13,40 +13,22 @@ AUTHORITY_DOCS = existing([
     ROOT / "README.md",
     ROOT / "context/essentials.md",
     ROOT / "context/INDEX.md",
-    ROOT / "context/data-bindings-reference.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
-    ROOT / "skills/README.md",
-    ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / "skills/data-bindings-creation/SKILL.md",
-    ROOT / "skills/page-schema-editing/SKILL.md",
 ])
 
 WORKFLOW_ONLY_SCHEMA_DOCS = existing([
     ROOT / "context/INDEX.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/schema-reference.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "skills/entity-creation/SKILL.md",
 ])
 
 ACTIVE_CONTRACT_SURFACE_DOCS = existing([
     ROOT / "README.md",
     ROOT / "context/INDEX.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/data-bindings-reference.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
-    ROOT / "skills/entity-creation/SKILL.md",
-    ROOT / "skills/data-bindings-creation/SKILL.md",
-    ROOT / "skills/page-schema-editing/SKILL.md",
 ])
 
 DOC_PATHS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/02-requirements-gathering.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
     ROOT / "context/essentials.md",
 ]
 
@@ -55,33 +37,17 @@ CANONICAL_FLOW_DOCS = [
     ROOT / "README.md",
     ROOT / "context/essentials.md",
     ROOT / "context/INDEX.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
 ]
 
 FALLBACK_DOCS = [
+    ROOT / "AGENTS.md",
     ROOT / "context/essentials.md",
-    ROOT / "README.md",
-    ROOT / "agents/04-implementation.md",
 ]
 
 CHECKLIST_SOURCE_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "agents/02-requirements-gathering.md",
     ROOT / "context/business-checklist.md",
-    ROOT / "README.md",
-]
-
-EVIDENCE_STATUS_DOCS = [
-    ROOT / "AGENTS.md",
-    ROOT / "agents/04-implementation.md",
-    ROOT / "README.md",
-]
-
-PAGE_SYNC_PLAN_DOCS = [
-    ROOT / "AGENTS.md",
-    ROOT / "agents/03-implementation-plan.md",
-    ROOT / "agents/04-implementation.md",
     ROOT / "README.md",
 ]
 
@@ -112,12 +78,8 @@ STDIO_ONLY_DOCS = existing([
 DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "README.md",
-    ROOT / "agents/04-implementation.md",
     ROOT / "context/business-checklist.md",
     ROOT / "context/essentials.md",
-    ROOT / "context/data-bindings-reference.md",
-    ROOT / "skills/README.md",
-    ROOT / "skills/entity-creation/SKILL.md",
 ]
 
 
@@ -168,12 +130,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             content = read_text(path)
             if "docs://mcp/guides/app-modeling" in content or "docs://mcp/guides/existing-app-maintenance" in content:
                 delegation_hits += 1
-        self.assertGreaterEqual(delegation_hits, 5)
-
-    def test_docs_keep_seed_data_separate_from_default_rules(self):
-        plan_doc = read_text(ROOT / "agents/03-implementation-plan.md")
-        self.assertTrue(contains_all(plan_doc, ["Seed data", "default requirement"]))
-        self.assertTrue(contains_all(plan_doc, ["defaults to", "incomplete"]))
+        self.assertGreaterEqual(delegation_hits, 3)
 
     def test_active_docs_do_not_restate_clio_owned_field_level_contract_details(self):
         disallowed_markers = [
@@ -195,17 +152,6 @@ class DefaultContractDocsTests(unittest.TestCase):
             content = read_text(path)
             self.assertIn("confirmed", content, str(path))
             self.assertIn("assumed", content, str(path))
-
-    def test_docs_define_evidence_status_buckets(self):
-        for path in EVIDENCE_STATUS_DOCS:
-            content = read_text(path)
-            self.assertIn("machineChecked", content, str(path))
-            self.assertIn("manualCheckPending", content, str(path))
-
-    def test_docs_define_machine_readable_page_sync_contract(self):
-        for path in PAGE_SYNC_PLAN_DOCS:
-            content = read_text(path)
-            self.assertIn("PAGE_SYNC_PLAN_JSON_START", content, str(path))
 
     def test_docs_require_pre_analysis_before_ba_draft(self):
         for path in PRE_ANALYSIS_DOCS:
@@ -304,19 +250,9 @@ class DefaultContractDocsTests(unittest.TestCase):
             "Users, access and ownership" in agents_doc
             or "Roles and Permissions" in agents_doc
         )
-        self.assertIn("Targeted changes", agents_doc)
-        self.assertIn("do **not** generate a BA Business Plan", agents_doc)
         self.assertIn("orchestration", agents_doc.lower())
         self.assertIn("approvals", agents_doc.lower())
         self.assertIn("business invariants", agents_doc.lower())
-        readme = read_text(ROOT / "README.md")
-        self.assertIn("targeted change", readme.lower())
-        self.assertIn("machineChecked", readme)
-        self.assertIn("manualCheckPending", readme)
-        ui_reference = read_text(ROOT / "context/ui-reference.md").lower()
-        self.assertIn("page sync", ui_reference)
-        viewconfig_reference = read_text(ROOT / "context/viewconfig-reference.md").lower()
-        self.assertIn("sync-pages", viewconfig_reference)
 
     def test_schema_docs_delegate_entity_and_schema_semantics_to_clio(self):
         disallowed_markers = [
@@ -344,8 +280,6 @@ class DefaultContractDocsTests(unittest.TestCase):
             ROOT / "README.md",
             ROOT / "context/INDEX.md",
             ROOT / "context/essentials.md",
-            ROOT / "agents/03-implementation-plan.md",
-            ROOT / "agents/04-implementation.md",
         ]
         for path in scoped_docs:
             content = read_text(path)

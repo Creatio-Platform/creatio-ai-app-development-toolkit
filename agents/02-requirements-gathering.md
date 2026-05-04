@@ -2,14 +2,14 @@
 
 ## Role
 
-Run the business clarification loop directly with the developer and produce the Business Plan plus the normalized request spec.
+Run the business clarification loop directly with the developer and produce the Business Plan.
 
 Do not delegate this agent.
 
 This agent is for full app generation or business-shaped feature work only.
 Do not invoke Agent 2 for targeted changes such as adding a concrete object, column, page element, handler, or lookup row when the request is already implementation-ready.
 
-Operate as a Business Analyst Requirements Agent. The approved artifact from this stage is the business contract that Agent 3 will translate into the implementation plan.
+Operate as a Business Analyst Requirements Agent. The approved artifact from this stage is the business contract that drives the implementation plan.
 
 ## Input
 
@@ -23,27 +23,26 @@ Read these repository files for the BA stage:
 - `context/business-checklist.md`
 - `context/essentials.md` (only the sections needed for the current question batch)
 
-Do not pre-load executable MCP rules in this stage. Agent 2 produces the business contract; transport, branching, and execution mechanics belong to Agent 3 and Agent 4 and are sourced from the clio MCP guides on demand.
-
 ## Preconditions
 
 - Gate P is approved.
-- If routing is `planning-first`, environment inputs may remain deferred.
+- Environment inputs are deferred until after Gate R approval.
 
 ## Conversation Contract
 
 1. Parse the free-form prompt.
 2. Apply first-turn latency rules from `AGENTS.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
-3. On the first turn, ask the routing question plus the main 3-5 business discovery questions together.
+3. On the first turn, ask the main 3-5 business discovery questions.
 4. Do not read large repository files or run heavy setup steps before the first clarification round completes.
 5. Ask additional business questions in the next small themed batch.
 6. Show "What still needs clarification" only after the first clarification round if it still adds value.
 7. Ask technical questions only for true blockers.
 8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round.
 9. Resolve any material contradictions or missing carriers before showing the draft.
-10. Present the full BA-style Business Plan.
-11. Ask for natural-language approval.
-12. After approval, validate the documents inline and proceed to Agent 3.
+10. Present the full BA-style Business Plan followed immediately by the Technical Implementation Handoff in the same message.
+11. Ask for natural-language approval using this exact closing line:
+    > "Does this Business Plan look good? If yes, provide your Creatio URL and credentials to proceed with implementation."
+12. After approval, validate the documents inline, collect runtime inputs, run Agent 1 to set up the environment, then implement using clio MCP tools.
 
 ## Checklist Authority
 
@@ -62,7 +61,6 @@ Use this runbook only for:
 
 - stage-specific conversation flow
 - requirements output contract
-- request-spec contract
 - persistence and acceptance checks
 
 Stage-specific constraints for this agent:
@@ -75,7 +73,7 @@ Stage-specific constraints for this agent:
 - Before presenting the Business Plan, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
-- In `planning-first`, defer runtime questions such as URL and credentials until implementation is requested.
+- Defer runtime questions such as URL and credentials until after Gate R approval.
 - Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `AGENTS.md`.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in BA dialogue unless the developer explicitly asks about the internal mechanics.
 - Do not surface workflow-state collisions, stale artifacts, or similar internal repository details in BA dialogue unless they create a genuine product-level ambiguity.
@@ -84,7 +82,7 @@ Stage-specific constraints for this agent:
 
 The Business Plan is the business-facing requirements document.
 
-The Business Plan and its companion request spec are presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
+The Business Plan is presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
 
 Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 7-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
 
@@ -103,10 +101,6 @@ Required sections:
 
 The Business Plan must follow the exact BA-style structure defined in `AGENTS.md` and `context/business-checklist.md`.
 The agent must not improvise the document shape.
-
-The Business Plan is for business reading and approval.
-The request spec is the normalized machine-readable companion presented inline alongside the Business Plan.
-Do not mirror request-spec markers, checklist source labels, or validation vocabulary in the visible Business Plan.
 
 Do not expose any of the following in the Business Plan:
 
@@ -150,12 +144,12 @@ Rules for the output:
 - Restate the request in business terms.
 - Explain the likely business intent of the application.
 - Include the resolved clarification decisions that drove the draft.
-- Reflect the result of the pre-analysis pass; do not leave hidden contradictions for Agent 3 to discover later.
+- Reflect the result of the pre-analysis pass; do not leave hidden contradictions for the implementation stage to discover later.
 - Use domain-aware BA judgment. If the domain is recognizable, include standard baseline attributes and behaviors that a domain expert would expect unless they are explicitly out of scope.
 - Keep the document compact, structured, and business-focused.
 - Use business language rather than technical implementation language.
-- Technical choreography, exact MCP execution steps, and payload mechanics belong to Agent 3, not here.
-- Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery in Agent 3.
+- Technical choreography, exact MCP execution steps, and payload mechanics belong to the implementation stage, not here.
+- Keep business concepts and technical schema decisions separate. Agent 2 may name a likely business object or platform concept, but must not lock `reuse`, `extend`, or `create` as a final technical decision when that choice may depend on live discovery during implementation.
 - When the BA draft shows a likely schema code or custom lookup name, treat it as a planning placeholder rather than a binding implementation commitment.
 - If the host environment requires a wrapper such as `<proposed_plan>`, keep the wrapper only as a container. The visible body must still use the BA-style headings defined here.
 - Do not substitute generic sections such as `Summary`, `Key Changes`, `Test Plan`, or other implementation-plan headings for the BA requirements structure.
@@ -248,13 +242,17 @@ Each relationship bullet must state:
 - a short business rationale when the role of the secondary entity is not obvious
 
 `## 6. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
-Its bullets must cover:
 
-- default list columns
-- default filters
-- main form groups
-- default sort for time-based records when they exist
-- visibility of overdue or open work items when they exist
+Its bullets **must use these exact text labels** (colon included) — the validator checks for them verbatim:
+
+- `default list columns:` — followed by comma-separated field Titles, e.g. `default list columns: Title, Status, Priority`
+- `default filters:` — followed by the filter field Title, e.g. `default filters: Status`
+- `main form groups:` — followed by a description, e.g. `main form groups: Details (Title, Description), Assignment (Status, Assignee)`
+
+Also include when applicable:
+
+- default sort for time-based records
+- visibility of overdue or open work items
 
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
@@ -269,74 +267,29 @@ Before finalizing the BA draft, verify at minimum:
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
 - `## 3. Object Model` contains the field tables, lookup bullets, and relationship bullets required by this contract
 
-## Request Spec Contract
+Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 
-The request spec must include:
-
-- `sourcePrompt`
-- `businessChecklist`
-- `technicalInputs`
-- `planningSignals`
-- `assumptions`
-
-`planningSignals` must include:
-
-- `reuseCheckRequired`
-
-Use `planningSignals.reuseCheckRequired` as the Agent 2 handoff list for Agent 3.
-This list must stay technical-light: it marks business concepts that need live reuse discovery, but it must not pre-decide `reuse`, `extend`, or `create`.
-
-When a business concept is recognizable and could plausibly map to an existing platform or custom schema, add an entry with:
-
-- `businessConcept`
-- `whyAmbiguous`
-- `suspectedCandidates`
-
-If no such concept exists, persist `reuseCheckRequired: []`.
-
-`businessChecklist` must include these groups plus `complete=true`:
-
-- `businessOutcome`
-- `rolesAndPermissions`
-- `objectModel`
-- `lifecycleAndStatuses`
-- `businessLogic`
-- `uxExpectations`
-- `edgeCases`
-
-Each group must contain:
-
-- `complete`
-- `value`
-- `source` with value `confirmed` or `assumed`
-- `assumption` when `source="assumed"`
-
-`technicalInputs` must contain:
-
-- `environmentMode`
-- `creatioUrl`
-- `credentialsStatus`
-
-Before presenting the draft for approval, run both inline validation checks:
-
-```bash
-python3 -c "
-import sys, json
+**Windows (PowerShell):**
+```powershell
+# Validate Business Plan
+Get-Content "$env:TEMP\<appname>-plan.md" -Raw | py -3 -c "
+import sys
 sys.path.insert(0, 'scripts')
 from workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
-" << 'EOF'
-<Business Plan content>
-EOF
+print('Business Plan validation PASSED')
+"
+```
 
+**macOS / Linux (bash):**
+```bash
 python3 -c "
-import sys, json
+import sys
 sys.path.insert(0, 'scripts')
-from workflow_validators import validate_request_spec
-validate_request_spec(json.load(sys.stdin))
-" << 'EOF'
-<request spec content>
-EOF
+from workflow_validators import validate_requirements_doc
+validate_requirements_doc(sys.stdin.read())
+print('Business Plan validation PASSED')
+" < /tmp/<appname>-plan.md
 ```
 
 If validation raises `WorkflowError`, fix the artifact and re-validate before presenting for approval.
@@ -348,8 +301,8 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 - Enum-like fields must be separate lookup entities.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
-- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to Agent 3 after live model discovery.
-- When that ambiguity exists, include a `planningSignals.reuseCheckRequired` entry in the request spec so Agent 3 must open the discovery branch for that concept.
+- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to the implementation stage after live model discovery.
+- When that ambiguity exists, note it in the Technical Implementation Handoff "Reuse Discovery Signals" block so the implementation stage opens the discovery branch for that concept.
 
 ## Default Resolution Rules
 
@@ -366,3 +319,35 @@ The BA draft is incomplete if any of the following is true:
 - a pipeline, funnel, or stages are mentioned without clarifying where lifecycle state lives
 - a secondary entity is listed without explaining its business purpose
 - the `businessLogic` group does not cover or explicitly assume minimum create fields, duplicate handling, archive/close posture, and ownership/editing posture
+
+## Technical Implementation Handoff
+
+Present the Technical Implementation Handoff immediately after the 7-section Business Plan in the same message, before asking for approval.
+
+This block is **not** a BA section. It is not numbered and not subject to BA format rules.
+It is consumed by the implementing code agent running in a separate session with clio MCP tools.
+
+### Format
+
+```
+---
+
+## Technical Implementation Handoff
+
+**Environment:**
+- Name: <env_name or "Not yet configured">
+- URL: <URL or "Deferred">
+- Runtime: <.NET Core / .NET Framework or "Deferred">
+
+**Reuse Discovery Signals:**
+<For each business concept that might map to an existing platform entity:>
+- Business concept: <concept name>
+  - Why ambiguous: <reason>
+  - Suspected candidates: <comma-separated list>
+<If none: "None — all entities are new custom objects.">
+```
+
+### Population rules
+
+- Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
+- Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.

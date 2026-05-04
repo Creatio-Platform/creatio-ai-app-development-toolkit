@@ -189,12 +189,12 @@ The pre-analysis must check for:
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the object model section
 - checklist-source language leaking into the visible BA draft
-- recognizable business concepts that may map to existing schemas but are not marked for Agent 3 in `planningSignals.reuseCheckRequired`
+- recognizable business concepts that may map to existing schemas but are not noted in the Technical Implementation Handoff
 
 If pre-analysis finds a material issue:
 - ask a targeted follow-up question when the issue changes business intent or acceptance
 - otherwise resolve it as an explicit assumption before showing the draft
-- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, add a `planningSignals.reuseCheckRequired` handoff entry in the request spec
+- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, note it in the Technical Implementation Handoff "Reuse Discovery Signals" block
 
 Do not present the BA draft while known cross-section contradictions or missing carriers still exist.
 
@@ -231,7 +231,7 @@ If not complete, continue clarification and do not proceed to implementation pla
 Technical questions are allowed only for:
 - execution blockers (URL, access, credentials)
 
-In `planning-first`, those runtime inputs may remain deferred until implementation is requested.
+Runtime inputs such as URL and credentials are execution blockers after Gate R approval and may remain deferred until then.
 
 All other technical values should use deterministic defaults and be documented later in plan artifacts.
 

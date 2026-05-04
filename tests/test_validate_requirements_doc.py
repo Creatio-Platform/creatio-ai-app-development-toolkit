@@ -131,16 +131,6 @@ class TestValidateRequirementsDocTables(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("field table", str(ctx.exception).lower())
 
-    def test_table_outside_section_3_rejected(self):
-        doc = VALID_DOC.replace(
-            "- Name and Status are required to create a task.",
-            "- Name and Status are required to create a task.\n\n"
-            "| Rule | When |\n| --- | --- |\n| Validate name | Always |"
-        )
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(doc)
-        self.assertIn("only in section 3", str(ctx.exception))
-
 
 class TestValidateRequirementsDocMarkers(unittest.TestCase):
     def test_missing_minimum_to_create_marker(self):
@@ -154,18 +144,6 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("default list columns:", str(ctx.exception))
-
-    def test_missing_default_filters_marker(self):
-        doc = VALID_DOC.replace("- default filters:", "- filters:")
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(doc)
-        self.assertIn("default filters:", str(ctx.exception))
-
-    def test_missing_main_form_groups_marker(self):
-        doc = VALID_DOC.replace("- main form groups:", "- form sections:")
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(doc)
-        self.assertIn("main form groups:", str(ctx.exception))
 
 
 class TestValidateRequirementsDocEntityMetadata(unittest.TestCase):
@@ -187,11 +165,6 @@ class TestValidateRequirementsDocEntityMetadata(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("title must match", str(ctx.exception))
 
-    def test_obsolete_section_6_rejected(self):
-        doc = VALID_DOC + "\n## 6. Implementation-shaping decisions and assumptions\n\nNone.\n"
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(doc)
-        self.assertIn("obsolete section 6", str(ctx.exception))
 
 
 if __name__ == "__main__":

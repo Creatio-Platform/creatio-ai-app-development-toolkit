@@ -1,6 +1,8 @@
-# No-Code Assistant for Creatio
+# Business Plan Generator for Creatio
 
-Self-contained toolkit for AI-driven generation and deployment of Creatio composable apps from natural-language requests.
+AI-driven toolkit for generating BA-style Business Plans for Creatio composable apps from natural-language requests.
+The Business Plan and Technical Implementation Handoff are the final deliverables.
+A separate implementing code agent uses the Business Plan output to build the app via clio MCP tools.
 
 Supported agents: GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code.
 
@@ -12,16 +14,11 @@ Use these files as canonical:
 - `context/business-checklist.md`
 - `context/essentials.md`
 - `context/naming-conventions.md`
-- `context/package-structure.md`
 - `context/clio-cli-reference.md`
-- `context/schema-reference.md`
-- `context/ui-reference.md`
-- `context/data-bindings-reference.md`
-- `context/bindings-lookup.json`
-- `templates/**`
+- `context/model-discovery-evidence.md`
 
 Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
-This repository is authoritative for orchestration, approvals, BA structure, evidence policy, page-editing policy, and business invariants.
+This repository is authoritative for orchestration, approvals, BA structure, and business invariants.
 
 ## Developer UX
 
@@ -29,16 +26,12 @@ Primary workflow is natural language:
 
 1. Developer sends one free-form prompt.
 2. Agent returns a short "What I understood".
-3. Agent classifies the task as either full app generation / business-shaped feature work or a targeted change.
-4. On the first turn, the agent responds directly from the prompt instead of doing a long repo preflight.
-5. For full app generation or business-shaped feature work, the agent asks a routing question first: `site-ready-now` or `planning-first`.
-6. For full app generation or business-shaped feature work, the agent runs a compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
-7. For full app generation or business-shaped feature work, the routing question and the main discovery questions appear in that same first user-facing response.
-8. For full app generation or business-shaped feature work, the agent persists a fresh Gate P for the current request after natural-language confirmation; `planning-first` may defer runtime endpoints until implementation.
-9. For targeted changes, the agent skips BA planning and executes the focused change directly, asking questions only for missing blockers.
-10. Agent asks minimal technical questions only for blockers.
-11. Agent runs the remaining pipeline and returns final artifacts/results inline in the conversation.
-12. Internal gate names and scripts stay hidden from developer-facing dialogue unless they are real blockers.
+3. Agent runs compact BA-style discovery with 3-7 critical questions focused on business goal, core problem, users/roles, MVP scope, and success criteria.
+4. The main discovery questions appear in that same first user-facing response.
+5. Agent asks minimal technical questions only for blockers.
+6. Agent produces the BA-style Business Plan (7 sections) and Technical Implementation Handoff.
+7. Developer approves the Business Plan. After approval, agent collects runtime inputs and implements the plan with clio MCP tools.
+8. Internal gate names and scripts stay hidden from developer-facing dialogue unless they are real blockers.
 
 Each business checklist group must persist `source=confirmed|assumed`. When a group is `assumed`, the exact assumption text must also be recorded and carried into the final approval context.
 
@@ -97,9 +90,6 @@ Category decision matrix:
 - `instruction_issue`: guidance or expected-pattern defects, including incorrect generated/edit strategies.
 - `orchestration_tool_failure`: caller or wrapper invocation faults such as args shape, adapter, or normalizer issues.
 - `environment_issue`: auth, network, runtime reachability, or preflight failures.
-- Page-sync validation rule:
-  - classify as `instruction_issue` when failure is caused by generated/edit strategy or known binding rules;
-  - classify as `clio_mcp_issue` only when tool/backend behavior violates advertised contract semantics.
 
 Canonical failure record:
 
@@ -141,7 +131,7 @@ CLIO-focused reporting rules:
 
 Noise control:
 
-- Prefer phase checkpoints only: `env`, `gates`, `schema`, `pages`, `final`.
+- Prefer phase checkpoints only: `env`, `gates`, `schema`, `final`.
 - Emit interim status only when timeout thresholds are crossed or recovery path changes.
 
 Fail-fast decision evidence:
@@ -165,15 +155,7 @@ CLIO mismatch rule:
 ### Copy-Paste Examples
 
 ```text
-Add print button on the page. Support mode on.
-```
-
-```text
-Hide obsolete field from the form page. Support mode on.
-```
-
-```text
-Analyze why the sync-pages step did not update the list page. Support mode on.
+Create a Business Plan for a customer feedback tracking app. Support mode on.
 ```
 
 ```text
@@ -206,20 +188,10 @@ Support mode is on. Please share this session with support for analysis.
 
 Orchestrator flow:
 
-1. Planning start: routing choice, understanding summary, assumptions/risks, and natural-language confirmation. Gate P is satisfied when the developer confirms in conversation.
-2. If the route is `site-ready-now`, Agent 1 resolves the environment name and reports it in conversation; if the route is `planning-first`, this step waits until implementation is requested.
-3. Agent 2 produces a BA-style Business Plan and request spec inline in the conversation. The approval artifact is the BA-style requirements draft itself, even if the host UI wraps it in a container such as `<proposed_plan>`. Gate R is satisfied when the developer explicitly approves the plan.
-4. Agent 3 presents the technical annex and implementation plan inline in the conversation when implementation is explicitly requested.
-5. Agent 4 runs synchronously, resolves executable contract metadata through `get-tool-contract`, and executes the current `clio`-owned entity and page flows referenced by `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`. Tool execution evidence is reported inline.
-6. Existing-app branching remains explicit in the workflow, but the canonical discover/inspect/mutate path and fallback tool guidance are owned by `clio` rather than this repository.
-
-Targeted-change flow:
-
-1. Confirm that the task is precise and implementation-ready.
-2. Skip Gate P, Gate R, Agent 2, and Agent 3.
-3. Load only the relevant targeted-change guidance from `context/INDEX.md`.
-4. Execute the focused mutation path directly.
-5. Verify the result and return evidence-based status.
+1. Planning start: understanding summary, assumptions/risks, and natural-language confirmation. Gate P is satisfied when the developer confirms in conversation.
+2. Agent 2 produces a BA-style Business Plan (7 sections) and Technical Implementation Handoff inline in the conversation. Gate R is satisfied when the developer explicitly approves the plan.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to resolve the environment name and DataForge availability, then implement the plan with clio MCP tools.
+4. Session complete. The implemented app is the final deliverable.
 
 ## Runtime Scripts
 
@@ -236,26 +208,22 @@ validate_requirements_doc(sys.stdin.read())
 EOF
 ```
 
-Available validators: `validate_requirements_doc(content: str)`, `validate_request_spec(spec: dict)`, `validate_implementation_plan_doc(content: str)`. Each raises `WorkflowError` on failure.
+Available validators: `validate_requirements_doc(content: str)`. Raises `WorkflowError` on failure.
 
 For MCP transport, the agent uses `scripts/mcp_client.py` for stdio MCP calls. JSON-heavy payloads should be passed via `--args-file` to avoid inline shell quoting.
 
 ### Bash
 
 ```bash
-python3 scripts/mcp_client.py list-apps --args-file ./args.json --timeout 30
+python3 scripts/mcp_client.py dataforge-status --args-file ./args.json --timeout 30
 ```
 
 ### PowerShell
 
 ```powershell
 $env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
-& $env:PYTHON_CMD .\scripts\mcp_client.py list-apps --args-file .\args.json --timeout 30
+& $env:PYTHON_CMD .\scripts\mcp_client.py dataforge-status --args-file .\args.json --timeout 30
 ```
-
-Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation. Final user-facing status must be derived from that evidence rather than handwritten summaries, and page/report statuses must distinguish `implemented`, `machineChecked`, and `manualCheckPending`.
-
-When page sync is required, the implementation plan presented in the conversation must contain an embedded machine-readable page sync contract between `<!-- PAGE_SYNC_PLAN_JSON_START -->` and `<!-- PAGE_SYNC_PLAN_JSON_END -->`. Resolve page-write and verification semantics through the current `clio` guidance resources; this repository no longer owns a custom page executor or fallback save flow.
 
 ## Architecture
 
@@ -263,11 +231,9 @@ The entire workflow runs in a single AI session. State lives in conversation con
 
 ```text
 Orchestrator (AGENTS.md)
-|-- Agent 1: Environment Setup           -> env name reported in conversation
-|-- Agent 2: Requirements (interactive)  -> BA-style Business Plan + spec inline
-|-- Agent 3: Implementation Plan         -> technical annex + plan inline
-|-- Agent 4: Implementation              -> tool execution evidence + summary inline
-|   `-- clio stdio MCP via scripts/mcp_client.py
+|-- Agent 1: Environment Setup           -> env name + DataForge status reported in conversation
+|-- Agent 2: Requirements (interactive)  -> BA-style Business Plan (7 sections) + Technical Implementation Handoff inline
+|   `-- clio stdio MCP via scripts/mcp_client.py (DataForge status check only)
 ```
 
 ## Repository Structure
@@ -277,8 +243,6 @@ AGENTS.md
 agents/
   01-environment-setup.md
   02-requirements-gathering.md
-  03-implementation-plan.md
-  04-implementation.md
 scripts/
   workflow_validators.py     # pure validation functions (no file I/O)
   mcp_client.py              # stdio MCP client
@@ -287,18 +251,12 @@ context/
   business-checklist.md
   essentials.md
   naming-conventions.md
-  package-structure.md
   clio-cli-reference.md
-  schema-reference.md
-  ui-reference.md
-  data-bindings-reference.md
-  bindings-lookup.json
-templates/
+  model-discovery-evidence.md
 ```
 
 ## Prerequisites
 
 - AI code agent
 - [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
-- Access to a running Creatio instance
-
+- Access to a running Creatio instance (required after Business Plan approval)

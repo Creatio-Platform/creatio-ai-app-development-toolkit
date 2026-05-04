@@ -174,14 +174,37 @@ clio healthcheck -e <env_name>
 
 ### 6. Report resolved environment
 
-Report the resolved environment for use by subsequent agents in the conversation:
+Report the resolved environment using this exact block heading and format:
 
-- **Environment name:** `<env_name>`
-- **URL:** `<URL>`
-- **Runtime:** .NET Core (or .NET Framework if detected in Step 4)
-- **Custom clio path:** `<path>` (only if the developer provided one; omit otherwise)
+```
+**Runtime Environment**
+- Environment name: <env_name>
+- URL: <URL>
+- Runtime: .NET Core | .NET Framework
+- Custom clio path: <path>   ← omit this line when the developer did not provide a custom path
+```
 
-This information stays in the conversation context — Agents 3 and 4 read the environment name from the conversation, not from a file.
+This information stays in the conversation context — Agent 2 reads the environment name from the conversation, not from a file.
+
+### 7. DataForge availability check
+
+Run the DataForge status check against the resolved environment:
+
+```bash
+python3 scripts/mcp_client.py dataforge-status --args-file ./dataforge-status.args.json --timeout 30
+```
+
+Where `dataforge-status.args.json` contains:
+```json
+{ "environment-name": "<env_name>" }
+```
+
+Interpret the result and append one of these lines to the **Runtime Environment** block reported in Step 6:
+
+- `dataforge-availability: ready — use dataforge-find-tables / dataforge-context for entity discovery` — when `status.status` equals `"Ready"`
+- `dataforge-availability: unavailable — skip entity discovery, create new schemas directly` — any error, exception, or non-Ready status
+
+If the call throws or times out, record `dataforge-availability: unavailable`. Do not retry.
 
 ## Error Handling
 
@@ -201,4 +224,5 @@ This information stays in the conversation context — Agents 3 and 4 read the e
 
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ Resolved environment name, URL, and runtime are reported in the conversation  
+✅ DataForge availability status reported in the conversation (`dataforge-availability: ready` or `dataforge-availability: unavailable`)  
 ✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  
