@@ -383,3 +383,22 @@ Canonical repository references:
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
 Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
+Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
+
+<!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
+<!-- DO NOT EDIT THIS SECTION MANUALLY. -->
+<!-- Managed by https://creatio.ghe.com/engineering/agent-policy-sync -->
+
+## Required Workflow
+Before any substantial repository analysis, planning, implementation, refactoring, bug fixing, or file edits, use the `$ensure-ai-commit-attribution` skill.
+
+This is a mandatory attribution rule for all coding sessions in this repository.
+
+The agent must:
+1. Mark every file the agent creates or modifies with the skill marker helper.
+2. Allow the repository hooks to manage the `AI agents: ...` trailer automatically.
+3. Avoid all other attribution commands during normal work.
+
+For normal work, the only allowed attribution command is the file-marking command after a real file write. That single command must also handle any needed hook installation quietly.
+
+<!-- END MANAGED SECTION -->
