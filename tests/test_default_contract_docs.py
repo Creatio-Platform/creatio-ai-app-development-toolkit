@@ -28,7 +28,7 @@ ACTIVE_CONTRACT_SURFACE_DOCS = existing([
 
 DOC_PATHS = [
     ROOT / "AGENTS.md",
-    ROOT / "agents/02-requirements-gathering.md",
+    ROOT / "runbooks/02-requirements-gathering.md",
     ROOT / "context/essentials.md",
 ]
 
@@ -46,31 +46,31 @@ FALLBACK_DOCS = [
 
 CHECKLIST_SOURCE_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "agents/02-requirements-gathering.md",
+    ROOT / "runbooks/02-requirements-gathering.md",
     ROOT / "context/business-checklist.md",
     ROOT / "README.md",
 ]
 
 PRE_ANALYSIS_DOCS = [
-    ROOT / "agents/02-requirements-gathering.md",
+    ROOT / "runbooks/02-requirements-gathering.md",
     ROOT / "context/business-checklist.md",
 ]
 
 FIRST_TURN_LATENCY_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "agents/02-requirements-gathering.md",
+    ROOT / "runbooks/02-requirements-gathering.md",
 ]
 
 DOMAIN_EXPERTISE_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "agents/02-requirements-gathering.md",
+    ROOT / "runbooks/02-requirements-gathering.md",
     ROOT / "context/business-checklist.md",
 ]
 
 STDIO_ONLY_DOCS = existing([
     ROOT / "AGENTS.md",
-    ROOT / "agents/01-environment-setup.md",
-    ROOT / "agents/02-requirements-gathering.md",
+    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "runbooks/02-requirements-gathering.md",
     ROOT / "README.md",
     ROOT / "skills/README.md",
 ])
@@ -115,7 +115,7 @@ class DefaultContractDocsTests(unittest.TestCase):
                 ]) or "default requirement" in content.lower(),
                 str(path),
             )
-        requirements_doc = read_text(ROOT / "agents/02-requirements-gathering.md")
+        requirements_doc = read_text(ROOT / "runbooks/02-requirements-gathering.md")
         self.assertTrue(
             contains_all(requirements_doc, [
                 "`schema default`",
@@ -181,7 +181,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         agents_doc = read_text(ROOT / "AGENTS.md")
         self.assertTrue(contains_all(agents_doc, ["exact", "BA-style Business Plan structure"]))
 
-        agent_doc = read_text(ROOT / "agents/02-requirements-gathering.md")
+        agent_doc = read_text(ROOT / "runbooks/02-requirements-gathering.md")
         self.assertIn("Document Rendering Contract", agent_doc)
         self.assertIn("Hard Fail Conditions", agent_doc)
         self.assertTrue(contains_all(agent_doc, ["Use tables only", "## 3. Object Model"]))
@@ -203,7 +203,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         agents_doc = read_text(ROOT / "AGENTS.md").lower()
         self.assertIn("do not expose internal commands", agents_doc)
 
-        agent02_doc = read_text(ROOT / "agents/02-requirements-gathering.md").lower()
+        agent02_doc = read_text(ROOT / "runbooks/02-requirements-gathering.md").lower()
         self.assertIn("do not expose internal commands", agent02_doc)
 
     def test_docs_define_stdio_only_mcp_contract(self):

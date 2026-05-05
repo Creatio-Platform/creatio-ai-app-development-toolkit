@@ -1,5 +1,13 @@
 # Skills Directory
 
-This directory is reserved for future skill documents. No skills are currently active in this repository.
+This directory hosts the entrypoint skill(s) for ADAC.
 
-Implementation skills have been removed. The implementing code agent operates in a separate session using clio MCP tools directly, guided by the Business Plan output from this repository.
+## Active skills
+
+- **`creatio-app-orchestrator/`** — single entrypoint skill that routes the host coding agent into the ADAC workflow: Gate P → Business Plan (Agent 2) → Gate R → environment setup (Agent 1) → implementation via clio MCP. The skill defers all orchestration policy to `AGENTS.md` and all stage instructions to `runbooks/`.
+
+## Design notes
+
+- ADAC exposes **one skill on purpose**. The workflow is a single sequential contract; individual stages (environment setup, requirements gathering) are not independently triggerable and must not be promoted to standalone skills, as they would risk being invoked out of gate order.
+- Runbooks under `runbooks/` are stage playbooks loaded by the orchestrator at the right phase, not skill entrypoints.
+- Implementing code agents operate in a separate session using clio MCP tools directly, guided by the approved Business Plan and Technical Implementation Handoff produced through this skill.

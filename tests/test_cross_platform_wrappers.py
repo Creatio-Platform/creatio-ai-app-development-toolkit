@@ -12,11 +12,13 @@ class UnixWrapperSmokeTests(unittest.TestCase):
         if not BASH:
             raise unittest.SkipTest("bash is required")
         result = subprocess.run(
-            [BASH, "-lc", f"source '{ROOT / 'scripts' / 'find_python.sh'}' >/dev/null && test -n \"$PYTHON_CMD\" && \"$PYTHON_CMD\" --version"],
+            [BASH, "-lc", f"source '{ROOT / 'runtime' / 'scripts' / 'find_python.sh'}' >/dev/null && test -n \"$PYTHON_CMD\" && \"$PYTHON_CMD\" --version"],
             cwd=ROOT,
             text=True,
             capture_output=True,
         )
+        if result.returncode != 0 and "execvpe(/bin/bash) failed" in result.stderr:
+            raise unittest.SkipTest("bash shim is present, but WSL bash is unavailable")
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

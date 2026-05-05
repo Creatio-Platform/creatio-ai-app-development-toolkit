@@ -1,7 +1,7 @@
 # find_python.ps1 — Resolve Python 3 on Windows, auto-install if missing.
 #
 # Usage (dot-source to export into current session):
-#   . scripts\find_python.ps1
+#   . runtime\scripts\find_python.ps1
 #
 # Sets $env:PYTHON_CMD to the resolved Python executable command.
 # All subsequent python calls should use: & $env:PYTHON_CMD script.py ...

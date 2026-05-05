@@ -11,16 +11,16 @@ This file contains the high-level platform overview and the local MCP workflow s
 
 ## Platform Overview
 
-Creatio is a no-code/low-code platform for process management and CRM using a composable application architecture where functionality is delivered as packages.
+Creatio is a no-code/low-code platform for process management and CRM where app functionality is delivered through packages.
 
 ### Key Concepts
 
-**Composable Applications**
+**Creatio Applications**
 - Built from self-contained packages containing entity schemas, page schemas, data bindings, business processes, and source code
 - Packages can depend on other packages via `DependsOn` in `descriptor.json`
 
 **MCP-Orchestrated Runtime**
-- This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `scripts/mcp_client.py`
+- This repo invokes Creatio app generation and mutation through `clio` MCP, usually via `runtime/scripts/mcp_client.py`
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
 - The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
 - Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation rather than persisted to repo-local files

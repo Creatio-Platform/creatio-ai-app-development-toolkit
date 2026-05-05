@@ -8,16 +8,16 @@ This repository is authoritative for orchestration, approvals, BA structure, and
 
 ## Quick Capability Map
 
-This repository produces BA-style Business Plans for Creatio composable apps.
+This repository produces BA-style Business Plans for Creatio apps.
 
-Start with `AGENTS.md`, then follow the current stage runbook in `agents/`.
+Start with `AGENTS.md`, then follow the current stage runbook in `runbooks/`.
 
 ## Executable Contract
 
 When you need exact tool names, required fields, aliases, defaults, response shapes, or error codes:
 
 1. Call `tools/list` to confirm tool availability.
-2. Call `get-tool-contract` through `scripts/mcp_client.py`.
+2. Call `get-tool-contract` through `runtime/scripts/mcp_client.py`.
 3. Use `docs://mcp/guides/app-modeling` for app-modeling semantics.
 4. Treat repository docs as workflow and policy guidance only.
 
@@ -33,8 +33,8 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Phase | Must Read (repo) | clio MCP Guide (on-demand) | What It Covers |
 |------|------------------|----------------------------|----------------|
 | Gate P | `AGENTS.md` | — | UX contract, routing, Gate P, global invariants |
-| Agent 1 | `agents/01-environment-setup.md`, `context/essentials.md` | `docs://mcp/guides/agent-execution` | environment setup, local runtime rules, DataForge availability check |
-| Agent 2 | `agents/02-requirements-gathering.md`, `context/business-checklist.md`, `context/model-discovery-evidence.md` | — | BA discovery, pre-analysis, Gate R approval, Technical Implementation Handoff |
+| Agent 1 | `runbooks/01-environment-setup.md`, `context/essentials.md` | `docs://mcp/guides/agent-execution` | environment setup, local runtime rules, DataForge availability check |
+| Agent 2 | `runbooks/02-requirements-gathering.md`, `context/business-checklist.md`, `context/model-discovery-evidence.md` | — | BA discovery, pre-analysis, Gate R approval, Technical Implementation Handoff |
 | Support run | `AGENTS.md` (Support Mode sections) | `docs://mcp/guides/support-mode` | diagnostic-first behavior, severity routing, fail-fast evidence |
 
 Reading rules:
@@ -52,7 +52,7 @@ Reading rules:
 | `Usr` prefixes, casing, GUIDs, binding naming | `context/naming-conventions.md` | naming policy |
 | Local clio CLI commands | `context/clio-cli-reference.md` | environment setup, package management, dev tools |
 | DataForge tool parameter contract and response fields | `context/model-discovery-evidence.md` | DataForge tool reference for Agent 1 availability check |
-| MCP transport helper | `scripts/mcp_client.py` | stdio client wrapper |
+| MCP transport helper | `runtime/scripts/mcp_client.py` | stdio client wrapper |
 
 ## Canonical MCP Guidance
 

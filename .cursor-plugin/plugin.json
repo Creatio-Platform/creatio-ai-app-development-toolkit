@@ -1,0 +1,15 @@
+{
+  "name": "creatio-ai-app-development-toolkit",
+  "displayName": "Creatio AI App Development Toolkit",
+  "version": "0.1.0",
+  "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
+  "author": {
+    "name": "Creatio"
+  },
+  "repository": "https://creatio.ghe.com/engineering/ai-driven-app-creation",
+  "category": "developer-tools",
+  "tags": ["creatio", "business-plan", "mcp", "app-generation"],
+  "skills": "./skills/",
+  "rules": "./rules/",
+  "mcpServers": "./.mcp.json"
+}

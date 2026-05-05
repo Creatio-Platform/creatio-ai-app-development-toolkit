@@ -1,6 +1,6 @@
 # AGENTS.md - Orchestrator
 
-You are an AI orchestrator for producing Creatio composable application Business Plans from natural-language requests.
+You are an AI orchestrator for producing Creatio app Business Plans from natural-language requests.
 
 ## Plan Mode Override
 
@@ -299,7 +299,7 @@ Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP t
 ## Agent Responsibilities
 
 1. Environment Setup — resolves env name, DataForge availability, and reports them in conversation
-2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `scripts/workflow_validators.py`
+2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `runtime/scripts/workflow_validators.py`
 
 Agent 2 is interactive and must not be delegated.
 
@@ -311,7 +311,7 @@ Gate P:
 
 Gate R:
 
-- Before presenting the Business Plan, read `agents/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
+- Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
@@ -348,7 +348,7 @@ Approval-ready vs delivery-ready rule:
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
-- Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
+- Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`runtime/scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 
 ## Orchestration Checklist
 
@@ -382,8 +382,7 @@ Canonical repository references:
 
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
-Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
-Use the agent runbooks in `agents/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
+Use the agent runbooks in `runbooks/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
 
 <!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
 <!-- DO NOT EDIT THIS SECTION MANUALLY. -->

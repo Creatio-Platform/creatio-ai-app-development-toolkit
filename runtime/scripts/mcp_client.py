@@ -3,16 +3,16 @@
 Reusable stdio MCP client for clio.
 
 Usage:
-    python3 scripts/mcp_client.py --check-clio-version [--timeout <seconds>]
-    python3 scripts/mcp_client.py <tool-name> <args-json> [timeout]
-    python3 scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
-    python3 scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
-    python3 scripts/mcp_client.py resources/list {} [timeout]
-    python3 scripts/mcp_client.py resources/read '{"uri":"docs://mcp/guides/app-modeling"}' [timeout]
+    python3 runtime/scripts/mcp_client.py --check-clio-version [--timeout <seconds>]
+    python3 runtime/scripts/mcp_client.py <tool-name> <args-json> [timeout]
+    python3 runtime/scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
+    python3 runtime/scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
+    python3 runtime/scripts/mcp_client.py resources/list {} [timeout]
+    python3 runtime/scripts/mcp_client.py resources/read '{"uri":"docs://mcp/guides/app-modeling"}' [timeout]
 
 clio resolution (first match wins):
     1. CLIO_CMD env var — custom clio path provided by user at startup
-       e.g. CLIO_CMD="dotnet /path/to/clio.dll" python3 scripts/mcp_client.py ...
+       e.g. CLIO_CMD="dotnet /path/to/clio.dll" python3 runtime/scripts/mcp_client.py ...
     2. `clio` in PATH  — standard global install (dotnet tool install clio -g)
     3. neither found   — raises RuntimeError with install instructions
 
@@ -63,7 +63,7 @@ def _resolve_clio_cmd():
         )
     raise RuntimeError(
         "clio not found. Install it with: dotnet tool install clio -g\n"
-        "Or provide a custom path: CLIO_CMD='dotnet /path/to/clio.dll' python3 scripts/mcp_client.py ..."
+        "Or provide a custom path: CLIO_CMD='dotnet /path/to/clio.dll' python3 runtime/scripts/mcp_client.py ..."
     )
 
 

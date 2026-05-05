@@ -88,7 +88,7 @@ Then wait for confirmation and retry.
 **Scenario 2 — clio installed globally (standard):**
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
-python3 scripts/mcp_client.py --check-clio-version
+python3 runtime/scripts/mcp_client.py --check-clio-version
 ```
 The released version must be `8.0.2.50` or newer.
 If the check fails, stop immediately and ask the developer to upgrade:
@@ -101,15 +101,15 @@ The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set 
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
 dotnet /full/path/to/clio.dll ver
-python3 scripts/mcp_client.py --check-clio-version
+python3 runtime/scripts/mcp_client.py --check-clio-version
 ```
-`scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
+`runtime/scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
 
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
-py -3 .\scripts\mcp_client.py --check-clio-version
-py -3 .\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
+py -3 .\runtime\scripts\mcp_client.py --check-clio-version
+py -3 .\runtime\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
 ### Environment Name Guardrail
@@ -191,7 +191,7 @@ This information stays in the conversation context — Agent 2 reads the environ
 Run the DataForge status check against the resolved environment:
 
 ```bash
-python3 scripts/mcp_client.py dataforge-status --args-file ./dataforge-status.args.json --timeout 30
+python3 runtime/scripts/mcp_client.py dataforge-status --args-file ./dataforge-status.args.json --timeout 30
 ```
 
 Where `dataforge-status.args.json` contains:

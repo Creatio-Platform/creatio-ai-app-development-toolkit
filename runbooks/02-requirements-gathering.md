@@ -274,8 +274,9 @@ Before presenting the draft for approval, save the Business Plan to a temp file 
 # Validate Business Plan
 Get-Content "$env:TEMP\<appname>-plan.md" -Raw | py -3 -c "
 import sys
-sys.path.insert(0, 'scripts')
-from workflow_validators import validate_requirements_doc
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd()))
+from runtime.scripts.workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
 print('Business Plan validation PASSED')
 "
@@ -285,8 +286,9 @@ print('Business Plan validation PASSED')
 ```bash
 python3 -c "
 import sys
-sys.path.insert(0, 'scripts')
-from workflow_validators import validate_requirements_doc
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd()))
+from runtime.scripts.workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
 print('Business Plan validation PASSED')
 " < /tmp/<appname>-plan.md

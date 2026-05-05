@@ -30,7 +30,7 @@ Section mapping rules:
 
 ## Goal
 
-Ensure business requirements are complete enough to generate a usable Creatio composable app without hidden product decisions.
+Ensure business requirements are complete enough to generate a usable Creatio app without hidden product decisions.
 
 Use a Business Analyst discovery style:
 

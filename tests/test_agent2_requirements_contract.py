@@ -17,7 +17,7 @@ def read_text(path: Path) -> str:
 
 class Agent2RequirementsContractTests(unittest.TestCase):
     def test_agent2_runbook_requires_reuse_discovery_in_handoff(self):
-        content = read_text(ROOT / "agents/02-requirements-gathering.md")
+        content = read_text(ROOT / "runbooks/02-requirements-gathering.md")
         for marker in REUSE_DISCOVERY_MARKERS:
             self.assertIn(marker, content)
         self.assertIn("`reuse`, `extend`, or `create`", content)

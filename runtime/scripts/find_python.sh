@@ -2,8 +2,8 @@
 # find_python.sh — Resolve Python 3 on macOS/Linux, auto-install if missing.
 #
 # Usage (source into current shell to export PYTHON_CMD):
-#   source scripts/find_python.sh
-#   # or:  . scripts/find_python.sh
+#   source runtime/scripts/find_python.sh
+#   # or:  . runtime/scripts/find_python.sh
 #
 # Exports PYTHON_CMD to the resolved Python 3 executable path.
 # All subsequent python calls should use: "$PYTHON_CMD" script.py ...
