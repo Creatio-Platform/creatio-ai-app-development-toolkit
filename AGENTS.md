@@ -342,7 +342,7 @@ Approval-ready vs delivery-ready rule:
 - For newly created entities and custom columns, derive code as `{activePrefix}` (the value returned by `get-schema-name-prefix`, or empty string) + PascalCase business tokens and derive title as human-readable Title Case from the same phrase.
   When `{activePrefix}` is empty, derive code as plain PascalCase with no prefix.
 - Acronym policy for derived names: preserve business acronym readability in title (for example `ID`, `VAT`, `CRM`) and use Pascalized acronym tokens in code (`Id`, `Vat`, `Crm`).
-- Semantic `Id` in business terms is allowed (for example `Tax ID` -> `UsrTaxId`).
+- Semantic `Id` in business terms is allowed (for example `Tax ID` -> `{activePrefix}TaxId`, i.e. `UsrTaxId` when prefix is `Usr`).
 - Treat physical FK/storage aliases (for example `E17`/`ColumnValueName` values like `...Id`) as storage aliases only, never as naming source for new entities or new custom columns.
 - Existing manually edited title/code divergence is allowed; this derivation contract applies to new creations only.
 - Do not add inherited base columns to requirements.

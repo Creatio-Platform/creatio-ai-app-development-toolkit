@@ -27,6 +27,7 @@ The active prefix is the `SchemaNamePrefix` system setting in the target Creatio
   use `<Prefix>` as a literal placeholder in schema codes (e.g., `<Prefix>TodoList`). The
   implementation agent resolves it from the `schema-name-prefix` field in the `create-app`
   response (for new apps) or the `get-app-info` response (for existing apps).
+  `<Prefix>` means the prefix is not yet determined — it is not a substitute for an empty prefix.
 
 ## Casing
 
