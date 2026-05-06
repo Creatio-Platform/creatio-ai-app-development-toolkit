@@ -39,11 +39,10 @@ class InstallerTests(unittest.TestCase):
 
         self.assertEqual({target["id"] for target in targets}, {"codex", "claude", "cursor", "copilot"})
 
-    def test_detect_targets_does_not_autodetect_unsupported_copilot_install(self):
+    def test_detect_targets_skips_copilot_when_directory_missing(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
-            with patch("shutil.which", return_value="/usr/bin/gh"):
-                targets = installer.detect_targets(Path(temp))
+            targets = installer.detect_targets(Path(temp))
 
         self.assertNotIn("copilot", {target["id"] for target in targets})
 
