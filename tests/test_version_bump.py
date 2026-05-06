@@ -10,6 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VersionBumpTests(unittest.TestCase):
+    def require_node(self):
+        node = shutil.which("node")
+        if not node:
+            raise unittest.SkipTest("node is required")
+        return node
+
     def test_version_bump_config_covers_release_version_fields(self):
         config = json.loads((ROOT / ".version-bump.json").read_text(encoding="utf-8"))
         configured = {(entry["path"], entry["field"]) for entry in config["files"]}
@@ -27,8 +33,9 @@ class VersionBumpTests(unittest.TestCase):
         )
 
     def test_repo_versions_are_in_sync(self):
+        node = self.require_node()
         result = subprocess.run(
-            ["node", "scripts/bump-version.js", "--check"],
+            [node, "scripts/bump-version.js", "--check"],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -36,6 +43,7 @@ class VersionBumpTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_check_detects_version_drift(self):
+        node = self.require_node()
         with tempfile.TemporaryDirectory() as temp:
             temp_root = Path(temp)
             shutil.copytree(ROOT / "scripts", temp_root / "scripts")
@@ -52,7 +60,7 @@ class VersionBumpTests(unittest.TestCase):
             (temp_root / "nested.json").write_text('{"plugins":[{"version":"1.0.1"}]}\n', encoding="utf-8")
 
             result = subprocess.run(
-                ["node", "scripts/bump-version.js", "--check"],
+                [node, "scripts/bump-version.js", "--check"],
                 cwd=temp_root,
                 text=True,
                 capture_output=True,
@@ -62,6 +70,7 @@ class VersionBumpTests(unittest.TestCase):
         self.assertIn("Version drift", result.stderr + result.stdout)
 
     def test_bump_updates_nested_fields(self):
+        node = self.require_node()
         with tempfile.TemporaryDirectory() as temp:
             temp_root = Path(temp)
             shutil.copytree(ROOT / "scripts", temp_root / "scripts")
@@ -78,7 +87,7 @@ class VersionBumpTests(unittest.TestCase):
             (temp_root / "nested.json").write_text('{"plugins":[{"version":"1.0.0"}]}\n', encoding="utf-8")
 
             result = subprocess.run(
-                ["node", "scripts/bump-version.js", "2.3.4"],
+                [node, "scripts/bump-version.js", "2.3.4"],
                 cwd=temp_root,
                 text=True,
                 capture_output=True,

@@ -15,6 +15,7 @@ from typing import Any
 DEFAULT_REPO_URL = "https://creatio.ghe.com/engineering/ai-driven-app-creation.git"
 DEFAULT_INSTALL_ROOT = Path.home() / ".creatio-ai-app-development-toolkit" / "repo"
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
+MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
@@ -29,11 +30,42 @@ REQUIRED_REFERENCE_PATHS = (
     "runtime/scripts/mcp_client.py",
     "runtime/scripts/workflow_validators.py",
 )
+PLUGIN_RUNTIME_PATHS = (
+    "AGENTS.md",
+    "plugin.json",
+    ".mcp.json",
+    ".agents",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".cursor-plugin",
+    "context",
+    "rules",
+    "runbooks",
+    "runtime",
+    "skills",
+)
 
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Expected JSON object in {path}")
+    return data
+
+
+def toml_quote(value: str) -> str:
+    return json.dumps(value)
+
+
+def toml_string_array(values: list[str]) -> str:
+    return "[" + ", ".join(toml_quote(value) for value in values) + "]"
 
 
 def run_checked(command: list[str], **kwargs: Any) -> None:
@@ -70,7 +102,8 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
 
 
 def clone_or_update_repo(repo_url: str, destination: Path, ref: str | None = None) -> Path:
-    if (destination / ".git").exists():
+    existing_checkout = (destination / ".git").exists()
+    if existing_checkout:
         run_checked(["git", "fetch", "--all", "--tags"], cwd=destination)
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -78,6 +111,8 @@ def clone_or_update_repo(repo_url: str, destination: Path, ref: str | None = Non
 
     if ref:
         run_checked(["git", "checkout", ref], cwd=destination)
+    elif existing_checkout:
+        run_checked(["git", "pull", "--ff-only"], cwd=destination)
 
     return destination
 
@@ -120,6 +155,17 @@ def copy_mcp_config(repo_root: Path, target_path: Path) -> None:
     shutil.copyfile(source, target_path)
 
 
+def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
+    source = repo_root / ".mcp.json"
+    if not source.exists():
+        raise RuntimeError(f"MCP config not found: {source}")
+    config = json.loads(source.read_text(encoding="utf-8"))
+    servers = config.get("mcpServers") or config.get("mcp_servers") or config
+    if not isinstance(servers, dict):
+        raise RuntimeError(f"MCP config must contain a server map: {source}")
+    return servers
+
+
 def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
     source_skills_dir = repo_root / "skills"
     if not source_skills_dir.exists():
@@ -139,6 +185,27 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
         )
 
 
+def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
+    """Copy only the files needed by installed agent plugins."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for relative_path in PLUGIN_RUNTIME_PATHS:
+        source = repo_root / relative_path
+        if not source.exists():
+            continue
+        target = target_dir / relative_path
+        if source.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(
+                source,
+                target,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+
+
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
     """Merge mcpServers from the plugin's .mcp.json into a shared MCP config file."""
     source = repo_root / ".mcp.json"
@@ -154,9 +221,70 @@ def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
         existing = {}
 
     existing_servers = existing.get("mcpServers", {}) or {}
-    existing_servers.update(incoming_servers)
+    for server_name, server_config in incoming_servers.items():
+        if server_name in existing_servers:
+            print(f"Skipped existing MCP server '{server_name}' in {target_path}")
+            continue
+        existing_servers[server_name] = server_config
     existing["mcpServers"] = existing_servers
     write_json(target_path, existing)
+
+
+def codex_mcp_server_exists(config_text: str, server_name: str) -> bool:
+    table_names = [
+        f"[mcp_servers.{server_name}]",
+        f"[mcp_servers.{toml_quote(server_name)}]",
+    ]
+    return any(table_name in config_text for table_name in table_names)
+
+
+def merge_codex_mcp_config(repo_root: Path, target_path: Path) -> None:
+    servers = load_mcp_servers(repo_root)
+    clio = servers.get("clio")
+    if not isinstance(clio, dict):
+        raise RuntimeError("MCP config is missing the 'clio' server")
+    command = clio.get("command")
+    if not isinstance(command, str) or not command:
+        raise RuntimeError("MCP config for 'clio' must define a command")
+    args = clio.get("args", [])
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise RuntimeError("MCP config for 'clio' args must be a string array")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+    if codex_mcp_server_exists(existing, "clio"):
+        print(f"Skipped existing Codex MCP server 'clio' in {target_path}")
+        return
+
+    block = (
+        "\n"
+        "# Added by ADAC installer.\n"
+        "[mcp_servers.clio]\n"
+        f"command = {toml_quote(command)}\n"
+        f"args = {toml_string_array(args)}\n"
+        "enabled = true\n"
+    )
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    target_path.write_text(existing + separator + block, encoding="utf-8")
+
+
+def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> None:
+    settings = read_json_file(target_path)
+    extra_marketplaces = settings.setdefault("extraKnownMarketplaces", {})
+    if not isinstance(extra_marketplaces, dict):
+        raise RuntimeError(f"extraKnownMarketplaces must be an object in {target_path}")
+    extra_marketplaces[MARKETPLACE_NAME] = {
+        "source": {
+            "source": "directory",
+            "path": str(marketplace_dir),
+        }
+    }
+
+    enabled_plugins = settings.setdefault("enabledPlugins", {})
+    if not isinstance(enabled_plugins, dict):
+        raise RuntimeError(f"enabledPlugins must be an object in {target_path}")
+    enabled_plugins[f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"] = True
+    write_json(target_path, settings)
 
 
 def repo_file(repo_root: Path, relative_path: str) -> Path:
@@ -203,7 +331,7 @@ def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
-def render_cursor_rule(repo_root: Path) -> str:
+def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     """Build a Cursor .mdc rule body that points at the installed repo."""
     return (
         "---\n"
@@ -226,7 +354,7 @@ def render_cursor_rule(repo_root: Path) -> str:
         "\n"
         "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
-        "- The `clio` MCP server is registered in `~/.cursor/mcp.json`.\n"
+        f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
 
 
@@ -234,20 +362,21 @@ def install_codex(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
     target_skills_dir = home / ".codex" / "skills"
     copy_skill_directories(repo_root, target_skills_dir)
-    mcp_config_path = home / ".codex" / "adac.mcp.json"
+    mcp_config_path = home / ".codex" / "config.toml"
     (target_skills_dir / SKILL_NAME / "SKILL.md").write_text(
         render_codex_skill(repo_root, mcp_config_path),
         encoding="utf-8",
     )
-    copy_mcp_config(repo_root, mcp_config_path)
+    merge_codex_mcp_config(repo_root, mcp_config_path)
 
 
 def install_claude(repo_root: Path, home: Path) -> None:
-    marketplace_dir = home / ".claude" / "plugins" / "marketplaces" / PLUGIN_NAME
+    marketplace_dir = home / ".claude" / "plugins" / "marketplaces" / MARKETPLACE_NAME
     if marketplace_dir.exists():
         shutil.rmtree(marketplace_dir)
-    shutil.copytree(repo_root, marketplace_dir, ignore=shutil.ignore_patterns(".git"))
+    copy_plugin_runtime_surface(repo_root, marketplace_dir)
     copy_mcp_config(repo_root, home / ".claude" / "adac.mcp.json")
+    merge_claude_plugin_settings(marketplace_dir, home / ".claude" / "settings.json")
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
@@ -255,16 +384,13 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
     if local_plugin_dir.exists():
         shutil.rmtree(local_plugin_dir)
-    shutil.copytree(
-        repo_root,
-        local_plugin_dir,
-        ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
-    )
-    merge_mcp_config(repo_root, cursor_home / "mcp.json")
+    copy_plugin_runtime_surface(repo_root, local_plugin_dir)
+    mcp_config_path = cursor_home / "mcp.json"
+    merge_mcp_config(repo_root, mcp_config_path)
     rules_dir = cursor_home / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
-    rule_path.write_text(render_cursor_rule(repo_root), encoding="utf-8")
+    rule_path.write_text(render_cursor_rule(repo_root, mcp_config_path), encoding="utf-8")
 
 
 def install_copilot(repo_root: Path) -> None:

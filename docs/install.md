@@ -28,8 +28,8 @@ The coding agent owns the process lifecycle.
 
 The installer detects and configures these locally:
 
-- **Codex CLI/Desktop** (`~/.codex/`) — copies ADAC skills into `~/.codex/skills/` and installs the `clio` MCP config into `~/.codex/adac.mcp.json`. Current Codex Desktop plugin browsing is limited to OpenAI-curated plugins, so ADAC is not expected to appear in that UI.
-- **Claude Code** (`~/.claude/`)
+- **Codex CLI/Desktop** (`~/.codex/`) — copies ADAC skills into `~/.codex/skills/` and registers the `clio` MCP server in `~/.codex/config.toml`. Current Codex Desktop plugin browsing is limited to OpenAI-curated plugins, so ADAC is not expected to appear in that UI.
+- **Claude Code** (`~/.claude/`) — copies the ADAC marketplace into `~/.claude/plugins/marketplaces/creatio/`, registers it in `~/.claude/settings.json`, and enables `creatio-ai-app-development-toolkit@creatio`.
 - **Cursor** (`~/.cursor/`) — copies the plugin into `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into `~/.cursor/mcp.json` (merging with any existing servers), and writes a `creatio-app-orchestrator.mdc` rule into `~/.cursor/rules/`.
 
 GitHub Copilot CLI remains a compatible manual target through the root `plugin.json`, but the v1 installer does not call a Copilot plugin install command because no stable CLI subcommand is verified.

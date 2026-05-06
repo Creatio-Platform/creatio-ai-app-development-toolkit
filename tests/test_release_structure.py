@@ -73,13 +73,13 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertEqual(cursor_version, root_version)
 
         self.assertEqual(claude["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(claude["plugins"][0]["source"], ".")
+        self.assertEqual(claude["plugins"][0]["source"], "./")
         self.assertEqual(claude["plugins"][0]["version"], root_version)
 
         plugin = codex["plugins"][0]
         self.assertEqual(plugin["name"], "creatio-ai-app-development-toolkit")
         self.assertEqual(plugin["version"], root_version)
-        self.assertEqual(plugin["source"]["path"], ".")
+        self.assertEqual(plugin["source"]["path"], "./")
 
     def test_main_skill_frontmatter_and_references_are_valid(self):
         skill = ROOT / "skills/creatio-app-orchestrator/SKILL.md"

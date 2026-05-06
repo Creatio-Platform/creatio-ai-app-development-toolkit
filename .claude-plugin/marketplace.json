@@ -9,7 +9,7 @@
     {
       "name": "creatio-ai-app-development-toolkit",
       "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
-      "source": ".",
+      "source": "./",
       "category": "development",
       "version": "0.1.0"
     }
