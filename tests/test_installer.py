@@ -103,6 +103,62 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
                 installer.install_copilot(repo_root, Path(temp) / "home")
 
+    def test_install_copilot_preserves_existing_clio_mcp_server(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
+                encoding="utf-8",
+            )
+            (repo_root / ".mcp.json").write_text(
+                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+                encoding="utf-8",
+            )
+            write_required_references(installer, repo_root)
+            home = Path(temp) / "home"
+            copilot_home = home / ".copilot"
+            copilot_home.mkdir(parents=True)
+            (copilot_home / "mcp-config.json").write_text(
+                '{"mcpServers":{"clio":{"command":"custom-clio","args":["custom"]}}}\n',
+                encoding="utf-8",
+            )
+
+            with patch("builtins.print") as printed:
+                installer.install_copilot(repo_root, home)
+
+            merged = json.loads((copilot_home / "mcp-config.json").read_text(encoding="utf-8"))
+            self.assertEqual(merged["mcpServers"]["clio"]["command"], "custom-clio")
+            self.assertEqual(merged["mcpServers"]["clio"]["args"], ["custom"])
+            printed.assert_called_once()
+
+    def test_install_for_targets_routes_to_copilot(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
+                encoding="utf-8",
+            )
+            (repo_root / ".mcp.json").write_text(
+                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+                encoding="utf-8",
+            )
+            write_required_references(installer, repo_root)
+            home = Path(temp) / "home"
+            copilot_home = home / ".copilot"
+            copilot_home.mkdir(parents=True)
+
+            targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home}]
+            installed = installer.install_for_targets(repo_root, targets)
+
+            self.assertEqual(installed, ["copilot"])
+            self.assertTrue((copilot_home / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
+
     def test_install_cursor_merges_mcp_config_and_writes_rule(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

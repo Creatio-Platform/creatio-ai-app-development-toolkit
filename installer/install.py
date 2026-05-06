@@ -307,8 +307,8 @@ def render_load_order(repo_root: Path) -> str:
     )
 
 
-def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    """Build the installed Codex skill with absolute paths back to the plugin checkout."""
+def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
+    """Shared skill body for Codex and Copilot targets."""
     return (
         "---\n"
         f"name: {SKILL_NAME}\n"
@@ -334,35 +334,16 @@ def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
         "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
+
+
+def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
+    """Build the installed Codex skill with absolute paths back to the plugin checkout."""
+    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_copilot_skill(repo_root: Path, mcp_config_path: Path) -> str:
     """Build the installed Copilot CLI skill with absolute paths back to the plugin checkout."""
-    return (
-        "---\n"
-        f"name: {SKILL_NAME}\n"
-        "description: Use when creating Creatio app Business Plans, "
-        "technical implementation handoffs, or applying the approved plan through clio MCP.\n"
-        "---\n"
-        "\n"
-        "# Creatio App Orchestrator\n"
-        "\n"
-        "Use this skill as the entrypoint for ADAC workflows.\n"
-        "\n"
-        f"Toolkit repository is installed at: `{repo_root}`\n"
-        "\n"
-        "## Load Order\n"
-        "\n"
-        f"{render_load_order(repo_root)}"
-        "\n"
-        "## Core Rules\n"
-        "\n"
-        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
-        "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
-        "- Use `context/business-checklist.md`, `context/essentials.md`, `context/naming-conventions.md`, "
-        "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
-        f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
-    )
+    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
