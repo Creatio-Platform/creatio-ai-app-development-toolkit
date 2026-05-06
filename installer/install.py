@@ -37,6 +37,7 @@ PLUGIN_RUNTIME_PATHS = (
     ".agents",
     ".claude-plugin",
     ".codex-plugin",
+    ".copilot-plugin",
     ".cursor-plugin",
     "context",
     "rules",
@@ -97,6 +98,10 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     cursor_home = home / ".cursor"
     if cursor_home.exists():
         targets.append({"id": "cursor", "name": "Cursor", "home": cursor_home})
+
+    copilot_home = home / ".copilot"
+    if copilot_home.exists():
+        targets.append({"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home})
 
     return targets
 
@@ -302,8 +307,8 @@ def render_load_order(repo_root: Path) -> str:
     )
 
 
-def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    """Build the installed Codex skill with absolute paths back to the plugin checkout."""
+def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
+    """Shared skill body for Codex and Copilot targets."""
     return (
         "---\n"
         f"name: {SKILL_NAME}\n"
@@ -329,6 +334,16 @@ def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
         "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
+
+
+def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
+    """Build the installed Codex skill with absolute paths back to the plugin checkout."""
+    return _render_skill_body(repo_root, mcp_config_path)
+
+
+def render_copilot_skill(repo_root: Path, mcp_config_path: Path) -> str:
+    """Build the installed Copilot CLI skill with absolute paths back to the plugin checkout."""
+    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
@@ -393,11 +408,17 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rule_path.write_text(render_cursor_rule(repo_root, mcp_config_path), encoding="utf-8")
 
 
-def install_copilot(repo_root: Path) -> None:
-    raise RuntimeError(
-        "GitHub Copilot CLI plugin installation is not supported by this v1 installer yet. "
-        f"Use the root plugin manifest at {repo_root / 'plugin.json'} for manual configuration."
+def install_copilot(repo_root: Path, home: Path) -> None:
+    ensure_required_references(repo_root)
+    copilot_home = home / ".copilot"
+    target_skills_dir = copilot_home / "skills"
+    copy_skill_directories(repo_root, target_skills_dir)
+    mcp_config_path = copilot_home / "mcp-config.json"
+    (target_skills_dir / SKILL_NAME / "SKILL.md").write_text(
+        render_copilot_skill(repo_root, mcp_config_path),
+        encoding="utf-8",
     )
+    merge_mcp_config(repo_root, mcp_config_path)
 
 
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:
@@ -405,7 +426,7 @@ def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected
     for target in targets:
         if selected and target["id"] != selected:
             continue
-        home = target["home"].parent if target["id"] in {"codex", "claude", "cursor"} else target["home"]
+        home = target["home"].parent if target["id"] in {"codex", "claude", "cursor", "copilot"} else target["home"]
         if target["id"] == "codex":
             install_codex(repo_root, home)
         elif target["id"] == "claude":
@@ -413,7 +434,7 @@ def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected
         elif target["id"] == "cursor":
             install_cursor(repo_root, home)
         elif target["id"] == "copilot":
-            install_copilot(repo_root)
+            install_copilot(repo_root, home)
         installed.append(target["id"])
     return installed
 
@@ -422,7 +443,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install Creatio AI App Development Toolkit plugin.")
     parser.add_argument("--repo-url", default=DEFAULT_REPO_URL)
     parser.add_argument("--ref", help="Git tag, branch, or commit to checkout before installing.")
-    parser.add_argument("--target", choices=["codex", "claude", "cursor"], help="Install only one target.")
+    parser.add_argument(
+        "--target",
+        choices=["codex", "claude", "cursor", "copilot"],
+        help="Install only one target.",
+    )
     parser.add_argument(
         "--install-root",
         type=Path,
