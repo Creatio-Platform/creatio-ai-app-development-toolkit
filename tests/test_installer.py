@@ -78,6 +78,8 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(installed_skill.exists())
             installed_skill_body = installed_skill.read_text(encoding="utf-8")
             self.assertIn(str(repo_root / "AGENTS.md"), installed_skill_body)
+            self.assertIn(str(repo_root / "runbooks" / "02-requirements-gathering.md"), installed_skill_body)
+            self.assertIn(str(repo_root / "runtime" / "scripts" / "workflow_validators.py"), installed_skill_body)
             self.assertIn(str(copilot_home / "mcp-config.json"), installed_skill_body)
 
             merged = json.loads((copilot_home / "mcp-config.json").read_text(encoding="utf-8"))
