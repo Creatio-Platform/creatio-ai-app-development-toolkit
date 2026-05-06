@@ -158,6 +158,11 @@ class InstallerTests(unittest.TestCase):
 
             self.assertEqual(installed, ["copilot"])
             self.assertTrue((copilot_home / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
+            mcp_config = copilot_home / "mcp-config.json"
+            self.assertTrue(mcp_config.exists())
+            merged = json.loads(mcp_config.read_text(encoding="utf-8"))
+            self.assertIn("clio", merged["mcpServers"])
+            self.assertEqual(merged["mcpServers"]["clio"]["args"], ["mcp-server"])
 
     def test_install_cursor_merges_mcp_config_and_writes_rule(self):
         installer = load_installer()
