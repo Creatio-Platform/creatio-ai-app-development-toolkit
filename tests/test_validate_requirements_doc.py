@@ -3,9 +3,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from workflow_validators import validate_requirements_doc, WorkflowError
+from runtime.scripts.workflow_validators import validate_requirements_doc, WorkflowError
 
 
 VALID_DOC = """# TestApp - Requirements

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.mcp_client import (
+from runtime.scripts.mcp_client import (
     PersistentMcpClient,
     _get_tool_contract_index,
     _normalize_tool_contract_index,
@@ -136,31 +136,31 @@ CREATE_DATA_BINDING_CONTRACT = build_contract(
 
 class McpClientTests(unittest.TestCase):
     def setUp(self):
-        cache_patcher = patch("scripts.mcp_client._TOOL_CONTRACT_CACHE", {"key": None, "contracts": None})
+        cache_patcher = patch("runtime.scripts.mcp_client._TOOL_CONTRACT_CACHE", {"key": None, "contracts": None})
         self.addCleanup(cache_patcher.stop)
         cache_patcher.start()
 
     def test_validate_clio_version_rejects_older_release(self):
         with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-old.dll"}, clear=False), patch(
-            "scripts.mcp_client.subprocess.run",
+            "runtime.scripts.mcp_client.subprocess.run",
             return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.49\n", stderr=""),
-        ), patch("scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
+        ), patch("runtime.scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
             with self.assertRaisesRegex(RuntimeError, "Minimum supported released version is 8.0.2.50"):
                 validate_clio_version()
 
     def test_validate_clio_version_accepts_minimum_release(self):
         with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-min.dll"}, clear=False), patch(
-            "scripts.mcp_client.subprocess.run",
+            "runtime.scripts.mcp_client.subprocess.run",
             return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.50\n", stderr=""),
-        ), patch("scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
+        ), patch("runtime.scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
             info = validate_clio_version()
         self.assertEqual(info["version"], "8.0.2.50")
 
     def test_check_clio_version_returns_structured_result(self):
         with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-min.dll"}, clear=False), patch(
-            "scripts.mcp_client.subprocess.run",
+            "runtime.scripts.mcp_client.subprocess.run",
             return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.50\n", stderr=""),
-        ), patch("scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
+        ), patch("runtime.scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
             result = check_clio_version()
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["version"], "8.0.2.50")
@@ -252,8 +252,8 @@ class McpClientTests(unittest.TestCase):
                 "raw": "{}",
             })
         )
-        with patch("scripts.mcp_client._current_clio_resolution_key", return_value=("custom", "/usr/local/bin/clio")), patch(
-            "scripts.mcp_client._get_shared_client",
+        with patch("runtime.scripts.mcp_client._current_clio_resolution_key", return_value=("custom", "/usr/local/bin/clio")), patch(
+            "runtime.scripts.mcp_client._get_shared_client",
             return_value=fake_client,
         ):
             first = _get_tool_contract_index(timeout=10)
@@ -270,15 +270,15 @@ class McpClientTests(unittest.TestCase):
 
     def test_call_mcp_tool_routes_tools_list_to_list_helper(self):
         expected = {"success": True, "data": {"tools": [{"name": "sync-pages"}]}, "raw": "{}"}
-        with patch("scripts.mcp_client.list_mcp_tools", return_value=expected) as mocked:
+        with patch("runtime.scripts.mcp_client.list_mcp_tools", return_value=expected) as mocked:
             result = call_mcp_tool("tools/list", {})
         self.assertEqual(result, expected)
         mocked.assert_called_once()
 
     def test_call_mcp_tool_bypasses_contract_lookup_for_tool_contract_get(self):
         fake_client = SimpleNamespace(call_tool=Mock(return_value={"success": True, "data": {"success": True}, "raw": "{}"}))
-        with patch("scripts.mcp_client._get_shared_client", return_value=fake_client), patch(
-            "scripts.mcp_client._get_tool_contract_index",
+        with patch("runtime.scripts.mcp_client._get_shared_client", return_value=fake_client), patch(
+            "runtime.scripts.mcp_client._get_tool_contract_index",
             side_effect=AssertionError("should not be called"),
         ):
             result = call_mcp_tool("get-tool-contract", {})
@@ -287,8 +287,8 @@ class McpClientTests(unittest.TestCase):
 
     def test_call_mcp_tool_returns_structured_unknown_tool_error(self):
         contract_index = build_contract_index(PAGE_SYNC_CONTRACT, PAGE_LIST_CONTRACT)
-        with patch("scripts.mcp_client._get_tool_contract_index", return_value=contract_index), \
-             patch("scripts.mcp_client._load_explicit_tool_contract", return_value=None):
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", return_value=contract_index), \
+             patch("runtime.scripts.mcp_client._load_explicit_tool_contract", return_value=None):
             result = call_mcp_tool("sync-page", {})
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "tool-not-found")
@@ -296,7 +296,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_call_mcp_tool_returns_validation_error_from_metadata(self):
         contract_index = build_contract_index(CREATE_DATA_BINDING_CONTRACT)
-        with patch("scripts.mcp_client._get_tool_contract_index", return_value=contract_index):
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", return_value=contract_index):
             result = call_mcp_tool("create-data-binding-db", {})
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "invalid-request")
@@ -305,8 +305,8 @@ class McpClientTests(unittest.TestCase):
     def test_call_mcp_tool_rejects_unknown_parameter_before_execution(self):
         contract_index = build_contract_index(PAGE_LIST_CONTRACT)
         fake_client = SimpleNamespace(call_tool=Mock(side_effect=AssertionError("should not execute tool")))
-        with patch("scripts.mcp_client._get_tool_contract_index", return_value=contract_index), patch(
-            "scripts.mcp_client._get_shared_client",
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", return_value=contract_index), patch(
+            "runtime.scripts.mcp_client._get_shared_client",
             return_value=fake_client,
         ):
             result = call_mcp_tool("list-pages", {"environment-name": "local", "app-code": "UsrTest"})
@@ -316,7 +316,7 @@ class McpClientTests(unittest.TestCase):
         fake_client.call_tool.assert_not_called()
 
     def test_call_mcp_tool_returns_tool_contract_unavailable(self):
-        with patch("scripts.mcp_client._get_tool_contract_index", side_effect=RuntimeError("metadata unavailable")):
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", side_effect=RuntimeError("metadata unavailable")):
             result = call_mcp_tool("sync-schemas", {"environment-name": "local"})
         self.assertFalse(result["success"])
         self.assertEqual(result["data"]["error"]["code"], "tool-contract-unavailable")
@@ -324,7 +324,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_list_mcp_resources_uses_shared_client(self):
         fake_client = SimpleNamespace(list_resources=Mock(return_value={"success": True, "data": {"resources": []}, "raw": "{}"}))
-        with patch("scripts.mcp_client._get_shared_client", return_value=fake_client):
+        with patch("runtime.scripts.mcp_client._get_shared_client", return_value=fake_client):
             result = list_mcp_resources(timeout=20)
         self.assertTrue(result["success"])
         fake_client.list_resources.assert_called_once_with(20)
@@ -337,7 +337,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_read_mcp_resource_uses_shared_client(self):
         fake_client = SimpleNamespace(read_resource=Mock(return_value={"success": True, "data": {"contents": []}, "raw": "{}"}))
-        with patch("scripts.mcp_client._get_shared_client", return_value=fake_client):
+        with patch("runtime.scripts.mcp_client._get_shared_client", return_value=fake_client):
             result = read_mcp_resource("docs://mcp/guides/app-modeling", timeout=20)
         self.assertTrue(result["success"])
         fake_client.read_resource.assert_called_once_with("docs://mcp/guides/app-modeling", 20)

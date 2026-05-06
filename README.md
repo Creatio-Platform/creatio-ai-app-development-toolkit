@@ -1,10 +1,11 @@
 # Business Plan Generator for Creatio
 
-AI-driven toolkit for generating BA-style Business Plans for Creatio composable apps from natural-language requests.
+AI-driven toolkit for generating BA-style Business Plans for Creatio apps from natural-language requests.
 The Business Plan and Technical Implementation Handoff are the final deliverables.
 A separate implementing code agent uses the Business Plan output to build the app via clio MCP tools.
 
-Supported agents: GitHub Copilot CLI, VS Code Copilot, Codex CLI, Claude Code.
+First-class supported agents: Codex CLI/Desktop, Claude Code, Cursor.
+Compatible/manual targets: GitHub Copilot CLI, VS Code Copilot, and other MCP-capable coding agents.
 
 ## Source of Truth
 
@@ -195,13 +196,14 @@ Orchestrator flow:
 
 ## Runtime Scripts
 
-Validation logic lives in `scripts/workflow_validators.py` and is called inline from Python with content passed as a string/dict (no file I/O):
+Validation logic lives in `runtime/scripts/workflow_validators.py` and is called inline from Python with content passed as a string/dict (no file I/O):
 
 ```bash
 python3 -c "
 import sys
-sys.path.insert(0, 'scripts')
-from workflow_validators import validate_requirements_doc
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd()))
+from runtime.scripts.workflow_validators import validate_requirements_doc
 validate_requirements_doc(sys.stdin.read())
 " << 'EOF'
 <requirements.md content>
@@ -210,19 +212,19 @@ EOF
 
 Available validators: `validate_requirements_doc(content: str)`. Raises `WorkflowError` on failure.
 
-For MCP transport, the agent uses `scripts/mcp_client.py` for stdio MCP calls. JSON-heavy payloads should be passed via `--args-file` to avoid inline shell quoting.
+For MCP transport, the agent uses `runtime/scripts/mcp_client.py` for stdio MCP calls. JSON-heavy payloads should be passed via `--args-file` to avoid inline shell quoting.
 
 ### Bash
 
 ```bash
-python3 scripts/mcp_client.py dataforge-status --args-file ./args.json --timeout 30
+python3 runtime/scripts/mcp_client.py dataforge-status --args-file ./args.json --timeout 30
 ```
 
 ### PowerShell
 
 ```powershell
-$env:PYTHON_CMD = & { . .\scripts\find_python.ps1; $env:PYTHON_CMD }
-& $env:PYTHON_CMD .\scripts\mcp_client.py dataforge-status --args-file .\args.json --timeout 30
+$env:PYTHON_CMD = & { . .\runtime\scripts\find_python.ps1; $env:PYTHON_CMD }
+& $env:PYTHON_CMD .\runtime\scripts\mcp_client.py dataforge-status --args-file .\args.json --timeout 30
 ```
 
 ## Architecture
@@ -233,17 +235,17 @@ The entire workflow runs in a single AI session. State lives in conversation con
 Orchestrator (AGENTS.md)
 |-- Agent 1: Environment Setup           -> env name + DataForge status reported in conversation
 |-- Agent 2: Requirements (interactive)  -> BA-style Business Plan (7 sections) + Technical Implementation Handoff inline
-|   `-- clio stdio MCP via scripts/mcp_client.py (DataForge status check only)
+|   `-- clio stdio MCP via runtime/scripts/mcp_client.py (DataForge status check only)
 ```
 
 ## Repository Structure
 
 ```text
 AGENTS.md
-agents/
+runbooks/
   01-environment-setup.md
   02-requirements-gathering.md
-scripts/
+runtime/scripts/
   workflow_validators.py     # pure validation functions (no file I/O)
   mcp_client.py              # stdio MCP client
   find_python.{sh,ps1}       # python resolver
@@ -260,3 +262,19 @@ context/
 - AI code agent
 - [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
 - Access to a running Creatio instance (required after Business Plan approval)
+
+## Install
+
+After the hosted ADAC installer URL is published:
+
+```bash
+curl -fsSL <hosted-adac-install-url>/install.py | python3
+```
+
+Until then, from a local checkout:
+
+```bash
+python installer/install.py
+```
+
+When launched from `installer/install.py` inside a plugin checkout, the installer uses that checkout as the install source.

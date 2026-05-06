@@ -4,7 +4,7 @@ Use this guide when Agent 1 must check DataForge availability and report the sta
 
 ## DataForge Tool Parameter Contract
 
-Use this table when invoking `dataforge-*` tools through `scripts/mcp_client.py`.
+Use this table when invoking `dataforge-*` tools through `runtime/scripts/mcp_client.py`.
 Parameter names are exact — past sessions burned several minutes on `term` vs `query` and `lookup-name` vs `schema-name` retries.
 
 | Tool | Required params | Optional params | Notes |

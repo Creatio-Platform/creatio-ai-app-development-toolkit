@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PlatformSafetyTests(unittest.TestCase):
     def test_scripts_avoid_gnu_only_grep_p(self):
-        for path in sorted((ROOT / "scripts").glob("*.sh")) + sorted((ROOT / "scripts").glob("*.py")):
+        for path in sorted((ROOT / "runtime" / "scripts").glob("*.sh")) + sorted((ROOT / "runtime" / "scripts").glob("*.py")):
             content = path.read_text(encoding="utf-8")
             self.assertNotIn("grep -P", content, str(path))
 
