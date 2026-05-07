@@ -334,7 +334,7 @@ Approval-ready vs delivery-ready rule:
 ## Global Invariants
 
 - All package, page, entity, and custom column names use the active `SchemaNamePrefix` prefix.
-  Call `get-schema-name-prefix` with the environment name before the first naming decision.
+  Call `get-schema-name-prefix` with the environment name before the first naming decision and store the result as `{activePrefix}`.
   If `SchemaNamePrefix` is empty, use no prefix (plain PascalCase codes).
   Note: default Creatio environments ship with `SchemaNamePrefix = "Usr"`, which is resolved normally by `get-schema-name-prefix`.
   If the prefix could not be read at BA time, the Business Plan uses `<Prefix>` as a placeholder.
