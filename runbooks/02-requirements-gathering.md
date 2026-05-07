@@ -298,7 +298,12 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 
 ## Business Modeling Rules
 
-- All custom names start with `Usr`.
+- All custom names start with the active `SchemaNamePrefix`. If the clio environment name is
+  known at BA time, call `get-schema-name-prefix` to resolve it before writing schema codes in
+  the Business Plan. If empty, use no prefix. If the env name is not yet known, or if the call
+  returns `success: false`, use the literal token `<Prefix>` in all schema codes (e.g.,
+  `<Prefix>TodoList`, `<Prefix>Status`). Do not assume `Usr`. Note in Section 1 that the prefix
+  is a placeholder the implementation agent will resolve once the environment is known.
 - Do not add inherited base columns to requirements.
 - Enum-like fields must be separate lookup entities.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
