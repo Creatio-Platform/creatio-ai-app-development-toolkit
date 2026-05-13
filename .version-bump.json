@@ -1,10 +1,11 @@
 {
   "files": [
-    { "path": "plugin.json", "field": "version" },
+    { "path": ".claude-plugin/plugin.json", "field": "version" },
     { "path": ".codex-plugin/plugin.json", "field": "version" },
     { "path": ".cursor-plugin/plugin.json", "field": "version" },
-    { "path": ".claude-plugin/plugin.json", "field": "version" },
+    { "path": ".github/plugin/plugin.json", "field": "version" },
     { "path": ".agents/plugins/marketplace.json", "field": "plugins.0.version" },
-    { "path": ".claude-plugin/marketplace.json", "field": "plugins.0.version" }
+    { "path": ".claude-plugin/marketplace.json", "field": "plugins.0.version" },
+    { "path": ".github/plugin/marketplace.json", "field": "plugins.0.version" }
   ]
 }

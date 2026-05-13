@@ -231,7 +231,7 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
-            (repo_root / "plugin.json").write_text("{}\n", encoding="utf-8")
+            (repo_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
             (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
             (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")

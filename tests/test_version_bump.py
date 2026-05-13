@@ -23,12 +23,13 @@ class VersionBumpTests(unittest.TestCase):
         self.assertEqual(
             configured,
             {
-                ("plugin.json", "version"),
+                (".claude-plugin/plugin.json", "version"),
                 (".codex-plugin/plugin.json", "version"),
                 (".cursor-plugin/plugin.json", "version"),
-                (".claude-plugin/plugin.json", "version"),
+                (".github/plugin/plugin.json", "version"),
                 (".agents/plugins/marketplace.json", "plugins.0.version"),
                 (".claude-plugin/marketplace.json", "plugins.0.version"),
+                (".github/plugin/marketplace.json", "plugins.0.version"),
             },
         )
 

@@ -32,13 +32,12 @@ REQUIRED_REFERENCE_PATHS = (
 )
 PLUGIN_RUNTIME_PATHS = (
     "AGENTS.md",
-    "plugin.json",
     ".mcp.json",
     ".agents",
     ".claude-plugin",
     ".codex-plugin",
-    ".copilot-plugin",
     ".cursor-plugin",
+    ".github",
     "context",
     "rules",
     "runbooks",
@@ -123,7 +122,11 @@ def clone_or_update_repo(repo_url: str, destination: Path, ref: str | None = Non
 
 
 def is_plugin_checkout(path: Path) -> bool:
-    return (path / "plugin.json").exists() and (path / ".mcp.json").exists() and (path / "skills").is_dir()
+    return (
+        (path / ".claude-plugin" / "plugin.json").exists()
+        and (path / ".mcp.json").exists()
+        and (path / "skills").is_dir()
+    )
 
 
 def current_checkout_root() -> Path | None:
