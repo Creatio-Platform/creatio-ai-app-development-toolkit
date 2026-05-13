@@ -233,6 +233,13 @@ class InstallerTests(unittest.TestCase):
             )
             (repo_root / "plugin.json").write_text("{}\n", encoding="utf-8")
             (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
+            write_required_references(installer, repo_root)
+            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
+                encoding="utf-8",
+            )
             (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "docs" / "install.md").write_text("dev\n", encoding="utf-8")
@@ -248,15 +255,34 @@ class InstallerTests(unittest.TestCase):
             installer.install_claude(repo_root, home)
 
             marketplace_dir = home / ".claude" / "plugins" / "marketplaces" / "creatio"
+            cache_dir = (
+                home
+                / ".claude"
+                / "plugins"
+                / "cache"
+                / "creatio"
+                / "creatio-ai-app-development-toolkit"
+                / installer.PLUGIN_VERSION
+            )
             self.assertTrue((marketplace_dir / "runbooks").exists())
             self.assertTrue((marketplace_dir / "context").exists())
             self.assertTrue((marketplace_dir / "skills").exists())
             self.assertTrue((marketplace_dir / "runtime").exists())
             self.assertTrue((marketplace_dir / ".mcp.json").exists())
+            self.assertTrue((cache_dir / "skills").exists())
             self.assertFalse((marketplace_dir / "tests").exists())
             self.assertFalse((marketplace_dir / "installer").exists())
             self.assertFalse((marketplace_dir / "docs").exists())
             self.assertTrue((claude_home / "adac.mcp.json").exists())
+            self.assertTrue(
+                (
+                    home
+                    / ".agents"
+                    / "skills"
+                    / "creatio-app-orchestrator"
+                    / "SKILL.md"
+                ).exists()
+            )
 
             settings = json.loads((claude_home / "settings.json").read_text(encoding="utf-8"))
             self.assertTrue(settings["enabledPlugins"]["existing@tools"])
@@ -265,6 +291,22 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(
                 settings["extraKnownMarketplaces"]["creatio"]["source"],
                 {"source": "directory", "path": str(marketplace_dir)},
+            )
+            known_marketplaces = json.loads(
+                (claude_home / "plugins" / "known_marketplaces.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                known_marketplaces["creatio"]["installLocation"],
+                str(marketplace_dir),
+            )
+            installed_plugins = json.loads(
+                (claude_home / "plugins" / "installed_plugins.json").read_text(encoding="utf-8")
+            )
+            plugin_key = "creatio-ai-app-development-toolkit@creatio"
+            self.assertEqual(installed_plugins["version"], 2)
+            self.assertEqual(
+                installed_plugins["plugins"][plugin_key][0]["installPath"],
+                str(cache_dir),
             )
 
     def test_preflight_clio_reports_missing_path(self):

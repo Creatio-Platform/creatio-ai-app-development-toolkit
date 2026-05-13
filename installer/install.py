@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ DEFAULT_INSTALL_ROOT = Path.home() / ".creatio-ai-app-development-toolkit" / "re
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
+PLUGIN_VERSION = "0.1.0"
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
     "context/INDEX.md",
@@ -50,6 +52,10 @@ PLUGIN_RUNTIME_PATHS = (
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def read_json_file(path: Path) -> dict[str, Any]:
@@ -292,6 +298,43 @@ def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> No
     write_json(target_path, settings)
 
 
+def register_claude_known_marketplace(marketplace_dir: Path, target_path: Path) -> None:
+    known = read_json_file(target_path)
+    known[MARKETPLACE_NAME] = {
+        "source": {
+            "source": "directory",
+            "path": str(marketplace_dir),
+        },
+        "installLocation": str(marketplace_dir),
+    }
+    write_json(target_path, known)
+
+
+def register_claude_installed_plugin(cache_dir: Path, target_path: Path) -> None:
+    installed = read_json_file(target_path)
+    plugin_key = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
+
+    if installed.get("version") != 2:
+        installed = {"version": 2, "plugins": {}}
+
+    plugins = installed.setdefault("plugins", {})
+    existing_entries = plugins.get(plugin_key, [{}])
+    installed_at = now_iso()
+    if existing_entries and isinstance(existing_entries, list):
+        installed_at = existing_entries[0].get("installedAt", installed_at)
+
+    plugins[plugin_key] = [
+        {
+            "scope": "user",
+            "installPath": str(cache_dir),
+            "version": PLUGIN_VERSION,
+            "installedAt": installed_at,
+            "lastUpdated": now_iso(),
+        }
+    ]
+    write_json(target_path, installed)
+
+
 def repo_file(repo_root: Path, relative_path: str) -> Path:
     return repo_root / relative_path
 
@@ -386,12 +429,27 @@ def install_codex(repo_root: Path, home: Path) -> None:
 
 
 def install_claude(repo_root: Path, home: Path) -> None:
-    marketplace_dir = home / ".claude" / "plugins" / "marketplaces" / MARKETPLACE_NAME
+    ensure_required_references(repo_root)
+    claude_home = home / ".claude"
+    marketplace_dir = claude_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
+    cache_dir = claude_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / PLUGIN_VERSION
     if marketplace_dir.exists():
         shutil.rmtree(marketplace_dir)
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
     copy_plugin_runtime_surface(repo_root, marketplace_dir)
-    copy_mcp_config(repo_root, home / ".claude" / "adac.mcp.json")
-    merge_claude_plugin_settings(marketplace_dir, home / ".claude" / "settings.json")
+    copy_plugin_runtime_surface(repo_root, cache_dir)
+    copy_skill_directories(repo_root, home / ".agents" / "skills")
+    copy_mcp_config(repo_root, claude_home / "adac.mcp.json")
+    merge_claude_plugin_settings(marketplace_dir, claude_home / "settings.json")
+    register_claude_known_marketplace(
+        marketplace_dir,
+        claude_home / "plugins" / "known_marketplaces.json",
+    )
+    register_claude_installed_plugin(
+        cache_dir,
+        claude_home / "plugins" / "installed_plugins.json",
+    )
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
