@@ -279,6 +279,87 @@ def merge_codex_mcp_config(repo_root: Path, target_path: Path) -> None:
     target_path.write_text(existing + separator + block, encoding="utf-8")
 
 
+def merge_personal_marketplace_catalog(repo_root: Path, home: Path) -> None:
+    target_path = home / ".agents" / "plugins" / "marketplace.json"
+    source_path = repo_root / ".agents" / "plugins" / "marketplace.json"
+    if not source_path.exists():
+        return
+
+    existing = read_json_file(target_path)
+    source = read_json_file(source_path)
+
+    plugins = existing.setdefault("plugins", [])
+    if not isinstance(plugins, list):
+        raise RuntimeError(f"plugins must be an array in {target_path}")
+    existing_by_name = {
+        plugin.get("name"): plugin
+        for plugin in plugins
+        if isinstance(plugin, dict) and isinstance(plugin.get("name"), str)
+    }
+
+    for plugin in source.get("plugins", []):
+        if not isinstance(plugin, dict):
+            continue
+        plugin_name = plugin.get("name")
+        if not isinstance(plugin_name, str):
+            continue
+        # Home-local Codex marketplaces expect plugin paths under ~/.agents/plugins/<plugin-name>.
+        plugin_copy = json.loads(json.dumps(plugin))
+        source_config = plugin_copy.get("source")
+        if isinstance(source_config, dict) and source_config.get("source") == "local":
+            source_config["path"] = f"./plugins/{plugin_name}"
+        if plugin_name in existing_by_name:
+            existing_plugin = existing_by_name[plugin_name]
+            if isinstance(existing_plugin, dict):
+                existing_plugin.clear()
+                existing_plugin.update(plugin_copy)
+        else:
+            plugins.append(plugin_copy)
+            existing_by_name[plugin_name] = plugin_copy
+
+    if not isinstance(existing.get("name"), str) or not existing["name"]:
+        existing["name"] = source.get("name") or "personal-marketplace"
+    if not isinstance(existing.get("interface"), dict):
+        existing["interface"] = source.get("interface") or {"displayName": "Personal Marketplace"}
+
+    write_json(target_path, existing)
+
+
+def merge_codex_marketplace_config(
+    marketplace_name: str,
+    marketplace_dir: Path,
+    plugin_name: str,
+    target_path: Path,
+) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+
+    marketplace_marker = f"[marketplaces.{marketplace_name}]"
+    if marketplace_marker not in existing:
+        block = (
+            "\n"
+            f"{marketplace_marker}\n"
+            'last_updated = "installed-by-adac"\n'
+            'source_type = "local"\n'
+            f"source = {toml_quote('\\\\?\\\\' + str(marketplace_dir))}\n"
+        )
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        existing = existing + separator + block
+
+    plugin_key = f'{plugin_name}@{marketplace_name}'
+    plugin_marker = f'[plugins.{toml_quote(plugin_key)}]'
+    if plugin_marker not in existing:
+        block = (
+            "\n"
+            f"{plugin_marker}\n"
+            "enabled = true\n"
+        )
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        existing = existing + separator + block
+
+    target_path.write_text(existing, encoding="utf-8")
+
+
 def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> None:
     settings = read_json_file(target_path)
     extra_marketplaces = settings.setdefault("extraKnownMarketplaces", {})
@@ -418,14 +499,26 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
 
 def install_codex(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
-    target_skills_dir = home / ".codex" / "skills"
-    copy_skill_directories(repo_root, target_skills_dir)
-    mcp_config_path = home / ".codex" / "config.toml"
-    (target_skills_dir / SKILL_NAME / "SKILL.md").write_text(
-        render_codex_skill(repo_root, mcp_config_path),
-        encoding="utf-8",
-    )
+    codex_home = home / ".codex"
+    agents_plugin_dir = home / ".agents" / "plugins" / PLUGIN_NAME
+    marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
+    cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / PLUGIN_VERSION
+    standalone_skill_dir = codex_home / "skills" / SKILL_NAME
+    if marketplace_dir.exists():
+        shutil.rmtree(marketplace_dir)
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+    if agents_plugin_dir.exists():
+        shutil.rmtree(agents_plugin_dir)
+    if standalone_skill_dir.exists():
+        shutil.rmtree(standalone_skill_dir)
+    copy_plugin_runtime_surface(repo_root, marketplace_dir)
+    copy_plugin_runtime_surface(repo_root, cache_dir)
+    copy_plugin_runtime_surface(repo_root, agents_plugin_dir)
+    mcp_config_path = codex_home / "config.toml"
     merge_codex_mcp_config(repo_root, mcp_config_path)
+    merge_codex_marketplace_config(MARKETPLACE_NAME, marketplace_dir, PLUGIN_NAME, mcp_config_path)
+    merge_personal_marketplace_catalog(repo_root, home)
 
 
 def install_claude(repo_root: Path, home: Path) -> None:

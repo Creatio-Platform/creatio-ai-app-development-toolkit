@@ -355,7 +355,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(merged["mcpServers"]["adac"]["command"], "adac")
         printed.assert_called_once()
 
-    def test_install_codex_copies_skills_and_registers_mcp_in_config_toml(self):
+    def test_install_codex_copies_plugin_runtime_surface_and_registers_mcp_in_config_toml(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -369,35 +369,82 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
+            (repo_root / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
+            (repo_root / ".codex-plugin").mkdir()
+            (repo_root / ".codex-plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
+                encoding="utf-8",
+            )
+            (repo_root / ".agents" / "plugins").mkdir(parents=True)
+            (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
+                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
+                encoding="utf-8",
+            )
             write_required_references(installer, repo_root)
             home = Path(temp) / "home"
             codex_home = home / ".codex"
             codex_home.mkdir(parents=True)
             (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+            personal_marketplace_dir = home / ".agents" / "plugins"
+            personal_marketplace_dir.mkdir(parents=True)
+            (personal_marketplace_dir / "marketplace.json").write_text(
+                '{"name":"personal-marketplace","interface":{"displayName":"Personal Marketplace"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.0.1","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
+                encoding="utf-8",
+            )
 
             installer.install_codex(repo_root, home)
 
-            installed_skill = (
+            marketplace_dir = codex_home / "plugins" / "marketplaces" / "creatio"
+            cache_dir = (
+                codex_home
+                / "plugins"
+                / "cache"
+                / "creatio"
+                / "creatio-ai-app-development-toolkit"
+                / "0.1.0"
+            )
+            agents_plugin_dir = (
                 home
-                / ".codex"
-                / "skills"
-                / "creatio-app-orchestrator"
-                / "SKILL.md"
+                / ".agents"
+                / "plugins"
+                / "creatio-ai-app-development-toolkit"
             )
-            self.assertTrue(
-                installed_skill.exists()
-            )
-            installed_skill_body = installed_skill.read_text(encoding="utf-8")
-            self.assertIn(str(repo_root / "AGENTS.md"), installed_skill_body)
-            self.assertIn(str(repo_root / "runbooks" / "02-requirements-gathering.md"), installed_skill_body)
-            self.assertIn(str(repo_root / "runtime" / "scripts" / "workflow_validators.py"), installed_skill_body)
+            self.assertTrue((marketplace_dir / "runbooks").exists())
+            self.assertTrue((marketplace_dir / "context").exists())
+            self.assertTrue((marketplace_dir / "skills").exists())
+            self.assertTrue((marketplace_dir / ".mcp.json").exists())
+            self.assertTrue((marketplace_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
+            self.assertFalse((marketplace_dir / "tests").exists())
+            self.assertFalse((marketplace_dir / "installer").exists())
+            self.assertTrue((cache_dir / "runbooks").exists())
+            self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertTrue((agents_plugin_dir / "runbooks").exists())
+            self.assertTrue((agents_plugin_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertFalse((codex_home / "skills" / "creatio-app-orchestrator").exists())
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
             self.assertIn('model = "gpt-5.4"', config_body)
+            self.assertIn("[marketplaces.creatio]", config_body)
+            self.assertIn('source_type = "local"', config_body)
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            self.assertIn("enabled = true", config_body)
             self.assertIn("[mcp_servers.clio]", config_body)
             self.assertIn('command = "clio"', config_body)
             self.assertIn('args = ["mcp-server"]', config_body)
-            self.assertIn(str(codex_home / "config.toml"), installed_skill_body)
-            self.assertFalse((home / ".agents" / "plugins" / "marketplace.json").exists())
+            personal_marketplace = json.loads(
+                (home / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                personal_marketplace["plugins"][-1]["name"],
+                "creatio-ai-app-development-toolkit",
+            )
+            self.assertEqual(
+                personal_marketplace["plugins"][-1]["source"]["path"],
+                "./plugins/creatio-ai-app-development-toolkit",
+            )
 
     def test_install_codex_preserves_existing_clio_mcp_server(self):
         installer = load_installer()
@@ -411,6 +458,11 @@ class InstallerTests(unittest.TestCase):
             )
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+                encoding="utf-8",
+            )
+            (repo_root / ".agents" / "plugins").mkdir(parents=True)
+            (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
+                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
@@ -428,6 +480,8 @@ class InstallerTests(unittest.TestCase):
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
             self.assertIn('command = "custom-clio"', config_body)
             self.assertNotIn('command = "clio"\nargs = ["mcp-server"]', config_body)
+            self.assertIn("[marketplaces.creatio]", config_body)
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
             printed.assert_called_once()
 
     def test_install_codex_rejects_checkout_without_required_references(self):
