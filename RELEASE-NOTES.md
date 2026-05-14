@@ -21,7 +21,8 @@ the body of the GitHub Release.
   trigger.
 - `scripts/bump-version.js --audit` mode added to catch hardcoded version
   strings in files outside `.version-bump.json` sync list.
-- `.copilot-plugin/plugin.json` added to version sync list (was drifting).
+- `.github/plugin/plugin.json` and `.github/plugin/marketplace.json` added
+  to the version sync list for GitHub Copilot CLI packaging.
 
 ### clio coupling
 

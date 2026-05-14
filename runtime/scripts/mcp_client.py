@@ -30,7 +30,6 @@ import difflib
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import shutil
 import subprocess
@@ -38,7 +37,6 @@ import sys
 import threading
 import time
 
-_CLIO_VERSION_CACHE = {"key": None, "info": None}
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
 SCHEMA_SYNC_ALLOWED_OPERATION_TYPES = {"create-lookup", "create-entity", "update-entity"}
 
@@ -70,41 +68,6 @@ def _build_clio_cmd():
 
 def _current_clio_resolution_key():
     return (os.environ.get("CLIO_CMD", "").strip(), shutil.which("clio") or "")
-
-
-def _parse_version_tuple(raw_version):
-    if not isinstance(raw_version, str):
-        raise RuntimeError("Unable to parse clio version output")
-    match = re.search(r"(\d+\.\d+\.\d+\.\d+)", raw_version)
-    if not match:
-        match = re.search(r"(\d+\.\d+\.\d+)", raw_version)
-    if not match:
-        raise RuntimeError(f"Unable to parse clio version from output: {raw_version.strip() or raw_version!r}")
-    parts = tuple(int(part) for part in match.group(1).split("."))
-    if len(parts) == 3:
-        parts = parts + (0,)
-    return match.group(1), parts
-
-
-def get_clio_version(timeout=30):
-    cache_key = _current_clio_resolution_key()
-    if _CLIO_VERSION_CACHE["key"] == cache_key and _CLIO_VERSION_CACHE["info"] is not None:
-        return dict(_CLIO_VERSION_CACHE["info"])
-    cmd = _resolve_clio_cmd() + ["ver"]
-    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
-    output = completed.stdout.strip() or completed.stderr.strip()
-    if completed.returncode != 0:
-        raise RuntimeError(output or "clio ver failed")
-    version_text, version_tuple = _parse_version_tuple(output)
-    info = {
-        "version": version_text,
-        "version_tuple": version_tuple,
-        "raw": output,
-        "command": cmd,
-    }
-    _CLIO_VERSION_CACHE["key"] = cache_key
-    _CLIO_VERSION_CACHE["info"] = dict(info)
-    return info
 
 
 def _parse_rpc_result(message_id, collected, expect_tool_result):
