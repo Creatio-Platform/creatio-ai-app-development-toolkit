@@ -61,7 +61,7 @@ def now_iso() -> str:
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise RuntimeError(f"Expected JSON object in {path}")
     return data
@@ -227,7 +227,7 @@ def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
     incoming_servers = incoming.get("mcpServers", {}) or {}
 
     if target_path.exists():
-        existing = json.loads(target_path.read_text(encoding="utf-8")) or {}
+        existing = json.loads(target_path.read_text(encoding="utf-8-sig")) or {}
     else:
         existing = {}
 

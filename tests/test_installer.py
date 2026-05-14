@@ -355,6 +355,28 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(merged["mcpServers"]["adac"]["command"], "adac")
         printed.assert_called_once()
 
+    def test_merge_mcp_config_accepts_utf8_bom_json(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            root.mkdir()
+            (root / ".mcp.json").write_text(
+                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+                encoding="utf-8",
+            )
+            target = Path(temp) / "target" / "mcp-config.json"
+            target.parent.mkdir()
+            target.write_text(
+                '\ufeff{"mcpServers":{"existing":{"command":"existing"}}}\n',
+                encoding="utf-8",
+            )
+
+            installer.merge_mcp_config(root, target)
+            merged = json.loads(target.read_text(encoding="utf-8-sig"))
+
+        self.assertEqual(merged["mcpServers"]["existing"]["command"], "existing")
+        self.assertEqual(merged["mcpServers"]["clio"]["command"], "clio")
+
     def test_install_codex_copies_plugin_runtime_surface_and_registers_mcp_in_config_toml(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
