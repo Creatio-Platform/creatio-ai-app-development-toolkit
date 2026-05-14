@@ -260,7 +260,10 @@ context/
 ## Prerequisites
 
 - AI code agent
-- [clio](https://github.com/Advance-Technologies-Foundation/clio): `dotnet tool install clio -g`
+- [clio](https://github.com/Advance-Technologies-Foundation/clio) — install the latest version:
+  - **Recommended:** install the Creatio AI App Development Toolkit via the [Setup Wizard](https://github.com/<org>/adac-setup-wizard); it installs/updates clio automatically.
+  - **Manual** (advanced / CLI / Linux): `dotnet tool install clio -g` (or `dotnet tool update clio -g` if already installed).
+  - Verify: `clio --version`
 - Access to a running Creatio instance (required after Business Plan approval)
 
 ## Install
