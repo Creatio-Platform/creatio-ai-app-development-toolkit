@@ -14,10 +14,10 @@ def read_json(relative_path):
 class ReleaseStructureTests(unittest.TestCase):
     def test_root_plugin_manifests_exist_and_share_identity(self):
         manifests = [
-            read_json("plugin.json"),
+            read_json(".claude-plugin/plugin.json"),
             read_json(".codex-plugin/plugin.json"),
             read_json(".cursor-plugin/plugin.json"),
-            read_json(".claude-plugin/plugin.json"),
+            read_json(".github/plugin/plugin.json"),
         ]
 
         for manifest in manifests:
@@ -35,11 +35,12 @@ class ReleaseStructureTests(unittest.TestCase):
 
     def test_public_trigger_text_uses_general_creatio_app_wording(self):
         public_text_paths = [
-            "plugin.json",
+            ".claude-plugin/plugin.json",
             ".codex-plugin/plugin.json",
             ".cursor-plugin/plugin.json",
-            ".claude-plugin/plugin.json",
+            ".github/plugin/plugin.json",
             ".claude-plugin/marketplace.json",
+            ".github/plugin/marketplace.json",
             "skills/creatio-app-orchestrator/SKILL.md",
             "rules/creatio-app-orchestrator.mdc",
         ]
@@ -65,21 +66,26 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertIn("Creatio App Orchestrator", rule)
         self.assertIn("runbooks/02-requirements-gathering.md", rule)
 
-    def test_marketplace_catalogs_point_to_root_plugin(self):
+    def test_marketplace_catalogs_point_to_plugin(self):
         claude = read_json(".claude-plugin/marketplace.json")
         codex = read_json(".agents/plugins/marketplace.json")
-        root_version = read_json("plugin.json")["version"]
+        copilot = read_json(".github/plugin/marketplace.json")
+        canonical_version = read_json(".claude-plugin/plugin.json")["version"]
         cursor_version = read_json(".cursor-plugin/plugin.json")["version"]
-        self.assertEqual(cursor_version, root_version)
+        self.assertEqual(cursor_version, canonical_version)
 
         self.assertEqual(claude["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
         self.assertEqual(claude["plugins"][0]["source"], "./")
-        self.assertEqual(claude["plugins"][0]["version"], root_version)
+        self.assertEqual(claude["plugins"][0]["version"], canonical_version)
 
         plugin = codex["plugins"][0]
         self.assertEqual(plugin["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(plugin["version"], root_version)
+        self.assertEqual(plugin["version"], canonical_version)
         self.assertEqual(plugin["source"]["path"], "./")
+
+        self.assertEqual(copilot["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
+        self.assertEqual(copilot["plugins"][0]["source"], "./")
+        self.assertEqual(copilot["plugins"][0]["version"], canonical_version)
 
     def test_main_skill_frontmatter_and_references_are_valid(self):
         skill = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
