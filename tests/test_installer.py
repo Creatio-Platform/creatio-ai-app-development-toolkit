@@ -231,7 +231,7 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
-            (repo_root / "plugin.json").write_text(
+            (repo_root / ".claude-plugin" / "plugin.json").write_text(
                 '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
                 encoding="utf-8",
             )
@@ -399,10 +399,6 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
-            (repo_root / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
-                encoding="utf-8",
-            )
             (repo_root / ".codex-plugin").mkdir()
             (repo_root / ".codex-plugin" / "plugin.json").write_text(
                 '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
@@ -490,8 +486,9 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
-            (repo_root / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+            (repo_root / ".codex-plugin").mkdir()
+            (repo_root / ".codex-plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
                 encoding="utf-8",
             )
             (repo_root / ".agents" / "plugins").mkdir(parents=True)

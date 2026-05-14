@@ -4,14 +4,14 @@ V1 ships as a single root-level plugin. All ADAC skills belong to the root plugi
 
 Included release files:
 
-- `plugin.json` for Copilot CLI.
-- `.codex-plugin/plugin.json` for Codex-compatible plugin metadata.
+- `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` for Claude Code.
+- `.codex-plugin/plugin.json` for Codex CLI plugin metadata.
 - `.cursor-plugin/plugin.json` for Cursor plugin installation.
-- `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` for Claude.
-- `.agents/plugins/marketplace.json` for forward-compatible local marketplace metadata.
+- `.github/plugin/plugin.json` and `.github/plugin/marketplace.json` for GitHub Copilot CLI.
+- `.agents/plugins/marketplace.json` for the Codex CLI marketplace catalog.
 - `.mcp.json` for global clio MCP server configuration.
 - `rules/creatio-app-orchestrator.mdc` for Cursor plugin rule support.
-- `.version-bump.json` plus `scripts/bump-version.js` for version synchronization.
+- `.version-bump.json` plus `scripts/bump-version.js` for version synchronization across every plugin and marketplace manifest. `.version-bump.json` is the single source of truth for which fields hold the plugin version; `.claude-plugin/plugin.json` is the canonical reference used by `--check` drift detection (listed first).
 
 Deferred from v1:
 

@@ -32,7 +32,7 @@ The installer detects and configures these locally:
 - **Claude Code** (`~/.claude/`) — copies the ADAC marketplace into `~/.claude/plugins/marketplaces/creatio/`, copies the plugin cache into `~/.claude/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`, copies ADAC skills into `~/.agents/skills/`, copies MCP config into `~/.claude/adac.mcp.json`, registers the marketplace in `~/.claude/plugins/known_marketplaces.json`, registers the installed plugin in `~/.claude/plugins/installed_plugins.json`, and enables `creatio-ai-app-development-toolkit@creatio` in `~/.claude/settings.json`.
 - **Cursor** (`~/.cursor/`) — copies the plugin into `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into `~/.cursor/mcp.json` (merging with any existing servers), and writes a `creatio-app-orchestrator.mdc` rule into `~/.cursor/rules/`.
 
-GitHub Copilot CLI remains a compatible manual target through the root `plugin.json`, but the v1 installer does not call a Copilot plugin install command because no stable CLI subcommand is verified.
+GitHub Copilot CLI remains a compatible manual target through `.github/plugin/plugin.json` and `.github/plugin/marketplace.json`, but the v1 installer does not call a Copilot plugin install command because no stable CLI subcommand is verified.
 
 ## Simple Installer
 
