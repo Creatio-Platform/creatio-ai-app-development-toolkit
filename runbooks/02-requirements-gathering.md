@@ -298,12 +298,7 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 
 ## Business Modeling Rules
 
-- All custom names start with the active `SchemaNamePrefix`. If the clio environment name is
-  known at BA time, call `get-schema-name-prefix` to resolve it before writing schema codes in
-  the Business Plan. If empty, use no prefix. If the env name is not yet known, or if the call
-  returns `success: false`, use the literal token `<Prefix>` in all schema codes (e.g.,
-  `<Prefix>TodoList`, `<Prefix>Status`). Do not assume `Usr`. Note in Section 1 that the prefix
-  is a placeholder the implementation agent will resolve once the environment is known.
+- Business Plan codes are plain PascalCase without any prefix (e.g., `TodoList`, `Status`). Do not add or assume a prefix — clio MCP applies it during implementation.
 - Do not add inherited base columns to requirements.
 - Enum-like fields must be separate lookup entities.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
@@ -346,11 +341,13 @@ It is consumed by the implementing code agent running in a separate session with
 - URL: <URL or "Deferred">
 - Runtime: <.NET Core / .NET Framework or "Deferred">
 
+**Schema naming note:** Business Plan codes (e.g., `TodoTask`) are prefix-free base names. During implementation, clio MCP applies the environment's SchemaNamePrefix — actual schema codes in Creatio will reflect that prefix (e.g., `UsrTodoTask` if the prefix is `Usr`).
+
 **Reuse Discovery Signals:**
 <For each business concept that might map to an existing platform entity:>
 - Business concept: <concept name>
   - Why ambiguous: <reason>
-  - Suspected candidates: <comma-separated list>
+  - Suspected candidates: <comma-separated list of prefix-free base names>
 <If none: "None — all entities are new custom objects.">
 ```
 
