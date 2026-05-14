@@ -354,6 +354,23 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(plugin_entry["installPath"], str(cache_dir))
         self.assertEqual(plugin_entry["version"], "0.1.0")
 
+    def test_register_claude_installed_plugin_creates_registry_when_file_is_missing(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            target_path = Path(temp) / "installed_plugins.json"
+            cache_dir = Path(temp) / "cache" / "creatio" / "creatio-ai-app-development-toolkit" / "0.1.0"
+
+            installer.register_claude_installed_plugin(cache_dir, target_path, "0.1.0")
+            installed = json.loads(target_path.read_text(encoding="utf-8"))
+
+        plugin_entry = installed["plugins"]["creatio-ai-app-development-toolkit@creatio"][0]
+        self.assertEqual(installed["version"], 2)
+        self.assertEqual(plugin_entry["installPath"], str(cache_dir))
+        self.assertEqual(plugin_entry["version"], "0.1.0")
+        self.assertEqual(plugin_entry["scope"], "user")
+        self.assertIsInstance(plugin_entry["installedAt"], str)
+        self.assertIsInstance(plugin_entry["lastUpdated"], str)
+
     def test_register_claude_installed_plugin_rejects_unknown_registry_version(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

@@ -488,7 +488,7 @@ def register_claude_installed_plugin(cache_dir: Path, target_path: Path, version
     plugin_key = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 
     installed_version = installed.get("version")
-    if installed and installed_version != 2:
+    if installed and installed_version is not None and installed_version != 2:
         raise RuntimeError(
             f"Unsupported Claude installed_plugins.json version in {target_path}: {installed_version!r}. "
             "Expected version 2."
