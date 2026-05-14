@@ -326,6 +326,7 @@ class InstallerTests(unittest.TestCase):
                 known_marketplaces["creatio"]["installLocation"],
                 str(marketplace_dir),
             )
+            self.assertIsInstance(known_marketplaces["creatio"]["lastUpdated"], str)
             installed_plugins = json.loads(
                 (claude_home / "plugins" / "installed_plugins.json").read_text(encoding="utf-8")
             )
@@ -457,18 +458,20 @@ class InstallerTests(unittest.TestCase):
                 / "plugins"
                 / "creatio-ai-app-development-toolkit"
             )
-            self.assertTrue((marketplace_dir / "runbooks").exists())
-            self.assertTrue((marketplace_dir / "context").exists())
-            self.assertTrue((marketplace_dir / "skills").exists())
-            self.assertTrue((marketplace_dir / ".mcp.json").exists())
-            self.assertTrue((marketplace_dir / ".codex-plugin" / "plugin.json").exists())
+            marketplace_plugin_dir = marketplace_dir / "plugins" / "creatio-ai-app-development-toolkit"
+            self.assertTrue((marketplace_plugin_dir / "runbooks").exists())
+            self.assertTrue((marketplace_plugin_dir / "context").exists())
+            self.assertTrue((marketplace_plugin_dir / "skills").exists())
+            self.assertTrue((marketplace_plugin_dir / ".mcp.json").exists())
+            self.assertTrue((marketplace_plugin_dir / ".codex-plugin" / "plugin.json").exists())
             self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
-            self.assertFalse((marketplace_dir / "tests").exists())
-            self.assertFalse((marketplace_dir / "installer").exists())
+            self.assertFalse((marketplace_plugin_dir / "tests").exists())
+            self.assertFalse((marketplace_plugin_dir / "installer").exists())
             self.assertTrue((cache_dir / "runbooks").exists())
             self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
             self.assertTrue((agents_plugin_dir / "runbooks").exists())
             self.assertTrue((agents_plugin_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertTrue((home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
             self.assertFalse((codex_home / "skills" / "creatio-app-orchestrator").exists())
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
             self.assertIn('model = "gpt-5.4"', config_body)
@@ -490,6 +493,10 @@ class InstallerTests(unittest.TestCase):
                 personal_marketplace["plugins"][-1]["source"]["path"],
                 "./plugins/creatio-ai-app-development-toolkit",
             )
+            codex_marketplace = json.loads(
+                (marketplace_dir / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(codex_marketplace["plugins"][0]["source"]["path"], "./plugins/creatio-ai-app-development-toolkit")
 
     def test_install_codex_preserves_existing_clio_mcp_server(self):
         installer = load_installer()

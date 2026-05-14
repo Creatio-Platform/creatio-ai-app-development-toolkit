@@ -363,6 +363,37 @@ def merge_personal_marketplace_catalog(repo_root: Path, home: Path) -> None:
     write_json(target_path, existing)
 
 
+def write_codex_marketplace_catalog(repo_root: Path, marketplace_root: Path) -> None:
+    source_path = repo_root / ".agents" / "plugins" / "marketplace.json"
+    if not source_path.exists():
+        return
+
+    source = read_json_file(source_path)
+    plugins = source.get("plugins", [])
+    if not isinstance(plugins, list):
+        raise RuntimeError(f"plugins must be an array in {source_path}")
+
+    catalog_plugins = []
+    for plugin in plugins:
+        if not isinstance(plugin, dict):
+            continue
+        plugin_name = plugin.get("name")
+        if not isinstance(plugin_name, str) or not plugin_name:
+            continue
+        plugin_copy = json.loads(json.dumps(plugin))
+        source_config = plugin_copy.get("source")
+        if isinstance(source_config, dict) and source_config.get("source") == "local":
+            source_config["path"] = f"./plugins/{plugin_name}"
+        catalog_plugins.append(plugin_copy)
+
+    catalog = {
+        "name": source.get("name") or MARKETPLACE_NAME,
+        "interface": source.get("interface") or {"displayName": MARKETPLACE_NAME.title()},
+        "plugins": catalog_plugins,
+    }
+    write_json(marketplace_root / ".agents" / "plugins" / "marketplace.json", catalog)
+
+
 def merge_codex_marketplace_config(
     marketplace_name: str,
     marketplace_dir: Path,
@@ -428,6 +459,7 @@ def register_claude_known_marketplace(marketplace_dir: Path, target_path: Path) 
             "path": str(marketplace_dir),
         },
         "installLocation": str(marketplace_dir),
+        "lastUpdated": now_iso(),
     }
     write_json(target_path, known)
 
@@ -543,7 +575,9 @@ def install_codex(repo_root: Path, home: Path) -> None:
     version = plugin_version(repo_root)
     codex_home = home / ".codex"
     agents_plugin_dir = home / ".agents" / "plugins" / PLUGIN_NAME
+    agents_skills_dir = home / ".agents" / "skills"
     marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
+    marketplace_plugin_dir = marketplace_dir / "plugins" / PLUGIN_NAME
     cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
     standalone_skill_dir = codex_home / "skills" / SKILL_NAME
     if marketplace_dir.exists():
@@ -554,9 +588,11 @@ def install_codex(repo_root: Path, home: Path) -> None:
         shutil.rmtree(agents_plugin_dir)
     if standalone_skill_dir.exists():
         shutil.rmtree(standalone_skill_dir)
-    copy_plugin_runtime_surface(repo_root, marketplace_dir)
+    copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
+    write_codex_marketplace_catalog(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
     copy_plugin_runtime_surface(repo_root, agents_plugin_dir)
+    copy_skill_directories(repo_root, agents_skills_dir)
     mcp_config_path = codex_home / "config.toml"
     merge_codex_mcp_config(repo_root, mcp_config_path)
     merge_codex_marketplace_config(MARKETPLACE_NAME, marketplace_dir, PLUGIN_NAME, mcp_config_path)
