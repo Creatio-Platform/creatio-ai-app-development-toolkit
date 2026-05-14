@@ -106,6 +106,23 @@ def preflight_clio() -> str:
     return clio
 
 
+def preflight_copilot() -> str:
+    copilot = shutil.which("copilot")
+    if not copilot:
+        raise RuntimeError(
+            "copilot was not found in PATH. Install GitHub Copilot CLI or add it to PATH before installing ADAC."
+        )
+    return copilot
+
+
+def resolve_copilot_command() -> list[str]:
+    copilot = preflight_copilot()
+    copilot_path = Path(copilot)
+    if copilot_path.suffix.lower() == ".ps1":
+        return ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(copilot_path)]
+    return [copilot]
+
+
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     home = home or Path.home()
     targets: list[dict[str, Any]] = []
@@ -588,15 +605,14 @@ def install_cursor(repo_root: Path, home: Path) -> None:
 
 def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
-    copilot_home = home / ".copilot"
-    target_skills_dir = copilot_home / "skills"
-    copy_skill_directories(repo_root, target_skills_dir)
-    mcp_config_path = copilot_home / "mcp-config.json"
-    (target_skills_dir / SKILL_NAME / "SKILL.md").write_text(
-        render_copilot_skill(repo_root, mcp_config_path),
-        encoding="utf-8",
-    )
-    merge_mcp_config(repo_root, mcp_config_path)
+    copilot_command = resolve_copilot_command()
+    plugin_source = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
+    try:
+        run_checked([*copilot_command, "plugin", "marketplace", "add", str(repo_root)], cwd=repo_root)
+    except RuntimeError as error:
+        if f'Marketplace "{MARKETPLACE_NAME}" already registered' not in str(error):
+            raise
+    run_checked([*copilot_command, "plugin", "install", plugin_source], cwd=repo_root)
 
 
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:

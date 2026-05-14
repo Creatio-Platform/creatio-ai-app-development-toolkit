@@ -46,45 +46,33 @@ class InstallerTests(unittest.TestCase):
 
         self.assertNotIn("copilot", {target["id"] for target in targets})
 
-    def test_install_copilot_copies_skills_and_merges_mcp_config(self):
+    def test_install_copilot_registers_marketplace_and_installs_plugin(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
+            repo_root.mkdir(parents=True)
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
-            home = Path(temp) / "home"
-            copilot_home = home / ".copilot"
-            copilot_home.mkdir(parents=True)
-            (copilot_home / "mcp-config.json").write_text(
-                '{"mcpServers":{"other":{"command":"other","args":[]}}}\n',
-                encoding="utf-8",
-            )
+            commands = []
 
-            installer.install_copilot(repo_root, home)
+            def fake_run(command, **_kwargs):
+                commands.append(command)
 
-            installed_skill = (
-                copilot_home / "skills" / "creatio-app-orchestrator" / "SKILL.md"
-            )
-            self.assertTrue(installed_skill.exists())
-            installed_skill_body = installed_skill.read_text(encoding="utf-8")
-            self.assertIn(str(repo_root / "AGENTS.md"), installed_skill_body)
-            self.assertIn(str(repo_root / "runbooks" / "02-requirements-gathering.md"), installed_skill_body)
-            self.assertIn(str(repo_root / "runtime" / "scripts" / "workflow_validators.py"), installed_skill_body)
-            self.assertIn(str(copilot_home / "mcp-config.json"), installed_skill_body)
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ):
+                installer.install_copilot(repo_root, Path(temp) / "home")
 
-            merged = json.loads((copilot_home / "mcp-config.json").read_text(encoding="utf-8"))
-            self.assertIn("clio", merged["mcpServers"])
-            self.assertIn("other", merged["mcpServers"])
-            self.assertEqual(merged["mcpServers"]["clio"]["args"], ["mcp-server"])
+        self.assertEqual(
+            commands,
+            [
+                ["copilot", "plugin", "marketplace", "add", str(repo_root)],
+                ["copilot", "plugin", "install", "creatio-ai-app-development-toolkit@creatio"],
+            ],
+        )
 
     def test_install_copilot_rejects_checkout_without_required_references(self):
         installer = load_installer()
@@ -104,47 +92,80 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
                 installer.install_copilot(repo_root, Path(temp) / "home")
 
-    def test_install_copilot_preserves_existing_clio_mcp_server(self):
+    def test_install_copilot_ignores_existing_marketplace_registration(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
+            repo_root.mkdir(parents=True)
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
-            home = Path(temp) / "home"
-            copilot_home = home / ".copilot"
-            copilot_home.mkdir(parents=True)
-            (copilot_home / "mcp-config.json").write_text(
-                '{"mcpServers":{"clio":{"command":"custom-clio","args":["custom"]}}}\n',
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                if command[:4] == ["copilot", "plugin", "marketplace", "add"]:
+                    raise RuntimeError(
+                        'copilot plugin marketplace add failed: Failed to add marketplace: Marketplace "creatio" already registered'
+                    )
+
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ):
+                installer.install_copilot(repo_root, Path(temp) / "home")
+
+        self.assertEqual(
+            commands,
+            [
+                ["copilot", "plugin", "marketplace", "add", str(repo_root)],
+                ["copilot", "plugin", "install", "creatio-ai-app-development-toolkit@creatio"],
+            ],
+        )
+
+    def test_install_copilot_raises_for_unexpected_marketplace_add_error(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir(parents=True)
+            (repo_root / ".mcp.json").write_text(
+                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
+            write_required_references(installer, repo_root)
 
-            with patch("builtins.print") as printed:
-                installer.install_copilot(repo_root, home)
+            def fake_run(command, **_kwargs):
+                if command[:4] == ["copilot", "plugin", "marketplace", "add"]:
+                    raise RuntimeError("copilot plugin marketplace add failed: permission denied")
 
-            merged = json.loads((copilot_home / "mcp-config.json").read_text(encoding="utf-8"))
-            self.assertEqual(merged["mcpServers"]["clio"]["command"], "custom-clio")
-            self.assertEqual(merged["mcpServers"]["clio"]["args"], ["custom"])
-            printed.assert_called_once()
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ):
+                with self.assertRaisesRegex(RuntimeError, "permission denied"):
+                    installer.install_copilot(repo_root, Path(temp) / "home")
+
+    def test_preflight_copilot_reports_missing_path(self):
+        installer = load_installer()
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
+                installer.preflight_copilot()
+
+    def test_resolve_copilot_command_wraps_powershell_shim_on_windows(self):
+        installer = load_installer()
+        with patch.object(installer, "preflight_copilot", return_value=r"C:\nvm4w\nodejs\copilot.ps1"):
+            command = installer.resolve_copilot_command()
+
+        self.assertEqual(
+            command,
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", r"C:\nvm4w\nodejs\copilot.ps1"],
+        )
 
     def test_install_for_targets_routes_to_copilot(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
+            repo_root.mkdir(parents=True)
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
@@ -155,15 +176,13 @@ class InstallerTests(unittest.TestCase):
             copilot_home.mkdir(parents=True)
 
             targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home}]
-            installed = installer.install_for_targets(repo_root, targets)
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked"
+            ) as run_checked:
+                installed = installer.install_for_targets(repo_root, targets)
 
             self.assertEqual(installed, ["copilot"])
-            self.assertTrue((copilot_home / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
-            mcp_config = copilot_home / "mcp-config.json"
-            self.assertTrue(mcp_config.exists())
-            merged = json.loads(mcp_config.read_text(encoding="utf-8"))
-            self.assertIn("clio", merged["mcpServers"])
-            self.assertEqual(merged["mcpServers"]["clio"]["args"], ["mcp-server"])
+            self.assertEqual(run_checked.call_count, 2)
 
     def test_install_cursor_merges_mcp_config_and_writes_rule(self):
         installer = load_installer()
