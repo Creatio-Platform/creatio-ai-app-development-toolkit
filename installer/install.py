@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +20,7 @@ DEFAULT_INSTALL_ROOT = Path.home() / ".creatio-ai-app-development-toolkit" / "re
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
+SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
     "context/INDEX.md",
@@ -67,10 +70,10 @@ def plugin_version(repo_root: Path) -> str:
             continue
         manifest = read_json_file(manifest_path)
         version = manifest.get("version")
-        if isinstance(version, str) and version:
+        if isinstance(version, str) and version and SEMVER_PATTERN.match(version):
             return version
     raise RuntimeError(
-        "No plugin manifest with a non-empty version was found in "
+        "No plugin manifest with a valid semantic version was found in "
         ".github/plugin/plugin.json, .claude-plugin/plugin.json, or .codex-plugin/plugin.json"
     )
 
@@ -104,6 +107,18 @@ def preflight_clio() -> str:
     if not clio:
         raise RuntimeError("clio was not found in PATH. Install clio or add it to PATH before installing ADAC.")
     return clio
+
+
+def remove_tree_if_exists(path: Path, owner_name: str) -> None:
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+    except PermissionError as error:
+        raise RuntimeError(
+            f"Could not replace {path} because it is currently in use. "
+            f"Close {owner_name} and retry the installation."
+        ) from error
 
 
 def preflight_copilot() -> str:
@@ -342,23 +357,27 @@ def merge_personal_marketplace_catalog(repo_root: Path, home: Path) -> None:
         if not isinstance(plugin_name, str):
             continue
         # Home-local Codex marketplaces expect plugin paths under ~/.agents/plugins/<plugin-name>.
-        plugin_copy = json.loads(json.dumps(plugin))
+        plugin_copy = copy.deepcopy(plugin)
         source_config = plugin_copy.get("source")
         if isinstance(source_config, dict) and source_config.get("source") == "local":
             source_config["path"] = f"./plugins/{plugin_name}"
         if plugin_name in existing_by_name:
             existing_plugin = existing_by_name[plugin_name]
-            if isinstance(existing_plugin, dict):
-                existing_plugin.clear()
-                existing_plugin.update(plugin_copy)
+            existing_plugin.clear()
+            existing_plugin.update(plugin_copy)
         else:
             plugins.append(plugin_copy)
             existing_by_name[plugin_name] = plugin_copy
 
-    if not isinstance(existing.get("name"), str) or not existing["name"]:
+    if not isinstance(existing.get("name"), str) or not existing["name"].strip():
         existing["name"] = source.get("name") or "personal-marketplace"
-    if not isinstance(existing.get("interface"), dict):
+    existing_interface = existing.get("interface")
+    if not isinstance(existing_interface, dict):
         existing["interface"] = source.get("interface") or {"displayName": "Personal Marketplace"}
+    elif not isinstance(existing_interface.get("displayName"), str) or not existing_interface["displayName"].strip():
+        source_interface = source.get("interface")
+        if isinstance(source_interface, dict) and isinstance(source_interface.get("displayName"), str):
+            existing_interface["displayName"] = source_interface["displayName"]
 
     write_json(target_path, existing)
 
@@ -380,7 +399,7 @@ def write_codex_marketplace_catalog(repo_root: Path, marketplace_root: Path) -> 
         plugin_name = plugin.get("name")
         if not isinstance(plugin_name, str) or not plugin_name:
             continue
-        plugin_copy = json.loads(json.dumps(plugin))
+        plugin_copy = copy.deepcopy(plugin)
         source_config = plugin_copy.get("source")
         if isinstance(source_config, dict) and source_config.get("source") == "local":
             source_config["path"] = f"./plugins/{plugin_name}"
@@ -405,7 +424,7 @@ def merge_codex_marketplace_config(
 
     marketplace_marker = f"[marketplaces.{marketplace_name}]"
     if marketplace_marker not in existing:
-        source_path = str(marketplace_dir)
+        source_path = str(marketplace_dir.resolve())
         if sys.platform.startswith("win"):
             source_path = "\\\\?\\" + source_path
         block = (
@@ -468,14 +487,22 @@ def register_claude_installed_plugin(cache_dir: Path, target_path: Path, version
     installed = read_json_file(target_path)
     plugin_key = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 
-    if installed.get("version") != 2:
+    installed_version = installed.get("version")
+    if installed and installed_version != 2:
+        raise RuntimeError(
+            f"Unsupported Claude installed_plugins.json version in {target_path}: {installed_version!r}. "
+            "Expected version 2."
+        )
+    if installed_version != 2:
         installed = {"version": 2, "plugins": {}}
 
     plugins = installed.setdefault("plugins", {})
-    existing_entries = plugins.get(plugin_key, [{}])
+    existing_entries = plugins.get(plugin_key, [])
     installed_at = now_iso()
     if existing_entries and isinstance(existing_entries, list) and len(existing_entries) > 0:
-        installed_at = existing_entries[0].get("installedAt", installed_at)
+        first_entry = existing_entries[0]
+        if isinstance(first_entry, dict):
+            installed_at = first_entry.get("installedAt", installed_at)
 
     plugins[plugin_key] = [
         {
@@ -580,14 +607,10 @@ def install_codex(repo_root: Path, home: Path) -> None:
     marketplace_plugin_dir = marketplace_dir / "plugins" / PLUGIN_NAME
     cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
     standalone_skill_dir = codex_home / "skills" / SKILL_NAME
-    if marketplace_dir.exists():
-        shutil.rmtree(marketplace_dir)
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
-    if agents_plugin_dir.exists():
-        shutil.rmtree(agents_plugin_dir)
-    if standalone_skill_dir.exists():
-        shutil.rmtree(standalone_skill_dir)
+    remove_tree_if_exists(marketplace_dir, "Codex")
+    remove_tree_if_exists(cache_dir, "Codex")
+    remove_tree_if_exists(agents_plugin_dir, "Codex")
+    remove_tree_if_exists(standalone_skill_dir, "Codex")
     copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
     write_codex_marketplace_catalog(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
@@ -605,10 +628,8 @@ def install_claude(repo_root: Path, home: Path) -> None:
     claude_home = home / ".claude"
     marketplace_dir = claude_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
     cache_dir = claude_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
-    if marketplace_dir.exists():
-        shutil.rmtree(marketplace_dir)
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
+    remove_tree_if_exists(marketplace_dir, "Claude Code")
+    remove_tree_if_exists(cache_dir, "Claude Code")
     copy_plugin_runtime_surface(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
     copy_skill_directories(repo_root, home / ".agents" / "skills")
@@ -628,8 +649,7 @@ def install_claude(repo_root: Path, home: Path) -> None:
 def install_cursor(repo_root: Path, home: Path) -> None:
     cursor_home = home / ".cursor"
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
-    if local_plugin_dir.exists():
-        shutil.rmtree(local_plugin_dir)
+    remove_tree_if_exists(local_plugin_dir, "Cursor")
     copy_plugin_runtime_surface(repo_root, local_plugin_dir)
     mcp_config_path = cursor_home / "mcp.json"
     merge_mcp_config(repo_root, mcp_config_path)

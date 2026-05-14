@@ -337,6 +337,33 @@ class InstallerTests(unittest.TestCase):
                 str(cache_dir),
             )
 
+    def test_register_claude_installed_plugin_ignores_non_dict_first_entry(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            target_path = Path(temp) / "installed_plugins.json"
+            target_path.write_text(
+                '{"version":2,"plugins":{"creatio-ai-app-development-toolkit@creatio":["broken"]}}\n',
+                encoding="utf-8",
+            )
+            cache_dir = Path(temp) / "cache" / "creatio" / "creatio-ai-app-development-toolkit" / "0.1.0"
+
+            installer.register_claude_installed_plugin(cache_dir, target_path, "0.1.0")
+            installed = json.loads(target_path.read_text(encoding="utf-8"))
+
+        plugin_entry = installed["plugins"]["creatio-ai-app-development-toolkit@creatio"][0]
+        self.assertEqual(plugin_entry["installPath"], str(cache_dir))
+        self.assertEqual(plugin_entry["version"], "0.1.0")
+
+    def test_register_claude_installed_plugin_rejects_unknown_registry_version(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            target_path = Path(temp) / "installed_plugins.json"
+            target_path.write_text('{"version":1,"plugins":{"other@market":[]}}\n', encoding="utf-8")
+            cache_dir = Path(temp) / "cache" / "creatio" / "creatio-ai-app-development-toolkit" / "0.1.0"
+
+            with self.assertRaisesRegex(RuntimeError, "Expected version 2"):
+                installer.register_claude_installed_plugin(cache_dir, target_path, "0.1.0")
+
     def test_preflight_clio_reports_missing_path(self):
         installer = load_installer()
         with patch("shutil.which", return_value=None):
@@ -497,6 +524,57 @@ class InstallerTests(unittest.TestCase):
                 (marketplace_dir / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
             )
             self.assertEqual(codex_marketplace["plugins"][0]["source"]["path"], "./plugins/creatio-ai-app-development-toolkit")
+
+    def test_merge_personal_marketplace_catalog_fills_missing_display_name_without_overwriting_name(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            source_dir = repo_root / ".agents" / "plugins"
+            source_dir.mkdir(parents=True)
+            (source_dir / "marketplace.json").write_text(
+                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","source":{"source":"local","path":"./"}}]}\n',
+                encoding="utf-8",
+            )
+            home = Path(temp) / "home"
+            target_dir = home / ".agents" / "plugins"
+            target_dir.mkdir(parents=True)
+            (target_dir / "marketplace.json").write_text(
+                '{"name":"custom-marketplace","interface":{},"plugins":[]}\n',
+                encoding="utf-8",
+            )
+
+            installer.merge_personal_marketplace_catalog(repo_root, home)
+            merged = json.loads((target_dir / "marketplace.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(merged["name"], "custom-marketplace")
+        self.assertEqual(merged["interface"]["displayName"], "Creatio")
+        self.assertEqual(
+            merged["plugins"][0]["source"]["path"],
+            "./plugins/creatio-ai-app-development-toolkit",
+        )
+
+    def test_plugin_version_rejects_invalid_semver(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            manifest_dir = repo_root / ".github" / "plugin"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"latest"}\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "valid semantic version"):
+                installer.plugin_version(repo_root)
+
+    def test_remove_tree_if_exists_wraps_permission_error_with_host_hint(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "busy"
+            target.mkdir()
+            with patch("shutil.rmtree", side_effect=PermissionError("busy")):
+                with self.assertRaisesRegex(RuntimeError, "Close Claude Code and retry"):
+                    installer.remove_tree_if_exists(target, "Claude Code")
 
     def test_install_codex_preserves_existing_clio_mcp_server(self):
         installer = load_installer()
