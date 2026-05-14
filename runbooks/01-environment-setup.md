@@ -88,27 +88,25 @@ Then wait for confirmation and retry.
 **Scenario 2 — clio installed globally (standard):**
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
-python3 runtime/scripts/mcp_client.py --check-clio-version
 ```
-The released version must be `8.0.2.50` or newer.
-If the check fails, stop immediately and ask the developer to upgrade:
+Use the latest released clio. The Creatio AI App Development Toolkit Setup Wizard handles this automatically; for manual installs, run:
 ```bash
-dotnet tool update clio -g
+dotnet tool install clio -g       # first install
+dotnet tool update clio -g        # if already installed
 ```
+ADAC does not pin a specific clio version. If clio is missing a tool ADAC needs, runtime `get-tool-contract` will fail fast with an actionable error.
 
 **Scenario 3 — user provided a custom clio path:**
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
 ```bash
 export CLIO_CMD="dotnet /full/path/to/clio.dll"
 dotnet /full/path/to/clio.dll ver
-python3 runtime/scripts/mcp_client.py --check-clio-version
 ```
 `runtime/scripts/mcp_client.py` will pick up `CLIO_CMD` automatically.
 
 Windows PowerShell peer:
 ```powershell
 $env:CLIO_CMD = "dotnet C:\full\path\to\clio.dll"
-py -3 .\runtime\scripts\mcp_client.py --check-clio-version
 py -3 .\runtime\scripts\mcp_client.py list-apps --args-file .\list-apps.args.json --timeout 30
 ```
 
@@ -212,7 +210,6 @@ If the call throws or times out, record `dataforge-availability: unavailable`. D
 |-------|--------|
 | `dotnet` not found | Stop. Tell developer to install .NET SDK from https://dotnet.microsoft.com/download, then restart terminal |
 | `clio ver` fails | Stop. Tell developer to install clio: `dotnet tool install clio -g` |
-| `clio` version is older than `8.0.2.50` | Stop. Tell developer to upgrade clio: `dotnet tool update clio -g` |
 | Executor preflight fails | Stop immediately. Report the expected executor, the actually available or failing executor, and that execution did not start because preflight failed |
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |

@@ -16,13 +16,10 @@ from runtime.scripts.mcp_client import (
     _parse_rpc_result,
     _validate_params,
     call_mcp_tool,
-    check_clio_version,
     load_cli_arguments,
     list_mcp_resources,
-    parse_clio_version_check_request,
     parse_cli_request,
     read_mcp_resource,
-    validate_clio_version,
 )
 
 
@@ -139,36 +136,6 @@ class McpClientTests(unittest.TestCase):
         cache_patcher = patch("runtime.scripts.mcp_client._TOOL_CONTRACT_CACHE", {"key": None, "contracts": None})
         self.addCleanup(cache_patcher.stop)
         cache_patcher.start()
-
-    def test_validate_clio_version_rejects_older_release(self):
-        with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-old.dll"}, clear=False), patch(
-            "runtime.scripts.mcp_client.subprocess.run",
-            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.49\n", stderr=""),
-        ), patch("runtime.scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
-            with self.assertRaisesRegex(RuntimeError, "Minimum supported released version is 8.0.2.50"):
-                validate_clio_version()
-
-    def test_validate_clio_version_accepts_minimum_release(self):
-        with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-min.dll"}, clear=False), patch(
-            "runtime.scripts.mcp_client.subprocess.run",
-            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.50\n", stderr=""),
-        ), patch("runtime.scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
-            info = validate_clio_version()
-        self.assertEqual(info["version"], "8.0.2.50")
-
-    def test_check_clio_version_returns_structured_result(self):
-        with patch.dict(os.environ, {"CLIO_CMD": "dotnet /tmp/clio-min.dll"}, clear=False), patch(
-            "runtime.scripts.mcp_client.subprocess.run",
-            return_value=SimpleNamespace(returncode=0, stdout="clio: 8.0.2.50\n", stderr=""),
-        ), patch("runtime.scripts.mcp_client.shutil.which", return_value="/usr/local/bin/clio"):
-            result = check_clio_version()
-        self.assertTrue(result["success"])
-        self.assertEqual(result["data"]["version"], "8.0.2.50")
-        self.assertEqual(result["data"]["minimum-supported-version"], "8.0.2.50")
-
-    def test_parse_clio_version_check_request_accepts_timeout(self):
-        parsed = parse_clio_version_check_request(["--check-clio-version", "--timeout", "45"])
-        self.assertEqual(parsed["timeout"], 45)
 
     def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
         client = PersistentMcpClient()
