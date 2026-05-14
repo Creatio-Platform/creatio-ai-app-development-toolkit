@@ -89,7 +89,7 @@ Then wait for confirmation and retry.
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
 ```
-Use the latest released clio. The Creatio AI App Development Toolkit Setup Wizard handles this automatically; for manual installs, run:
+Use the latest released clio:
 ```bash
 dotnet tool install clio -g       # first install
 dotnet tool update clio -g        # if already installed

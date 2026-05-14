@@ -391,10 +391,7 @@ Use the agent runbooks in `runbooks/*.md` as stage-specific execution instructio
 
 ## clio Coupling
 
-ADAC does not pin a specific clio version. Two install paths ensure users have a working clio:
-
-- **Primary:** ADAC Setup Wizard runs `dotnet tool install clio -g` (always latest) before delivering the toolkit.
-- **Secondary:** `installer/install.py` checks `clio` is on PATH (presence only, no version check). Users following this path are expected to install latest clio themselves (`dotnet tool install clio -g`).
+ADAC does not pin a specific clio version. Users are expected to have the latest clio on PATH (`dotnet tool install clio -g` or `dotnet tool update clio -g`). `installer/install.py::preflight_clio()` only verifies that `clio` is on PATH; it does not check the version.
 
 The actual coupling point between ADAC and clio is **MCP tool contracts**, which are resolved at runtime via `get-tool-contract`. If a tool ADAC depends on is missing or has changed signature, ADAC fails fast at session start with an actionable error (`Tool X not found in clio MCP — update clio or report ADAC bug`). No version pin needed.
 

@@ -30,8 +30,9 @@ the body of the GitHub Release.
 - Coupling between ADAC and clio is now handled at runtime via
   `get-tool-contract`, which fails fast with an actionable error if a
   tool ADAC depends on is missing or has changed signature.
-- Two install paths: ADAC Setup Wizard (primary, always latest clio) and
-  `installer/install.py` (secondary, PATH-presence check only).
+- `installer/install.py::preflight_clio()` checks only that `clio` is
+  on PATH; no version check. Users are expected to keep clio current
+  via `dotnet tool install/update clio -g`.
 
 ### Documentation
 
