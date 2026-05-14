@@ -11,7 +11,9 @@ Included release files:
 - `.agents/plugins/marketplace.json` for the Codex CLI marketplace catalog.
 - `.mcp.json` for global clio MCP server configuration.
 - `rules/creatio-app-orchestrator.mdc` for Cursor plugin rule support.
-- `.version-bump.json` plus `scripts/bump-version.js` for version synchronization across every plugin and marketplace manifest. `.version-bump.json` is the single source of truth for which fields hold the plugin version; `.claude-plugin/plugin.json` is the canonical reference used by `--check` drift detection (listed first).
+- `.version-bump.json` plus `scripts/bump-version.js` for version synchronization across every plugin and marketplace manifest (includes `--audit` mode). `.version-bump.json` is the single source of truth for which fields hold the plugin version; `.claude-plugin/plugin.json` is the canonical reference used by `--check` drift detection (listed first).
+- `.github/workflows/pr.yml` and `.github/workflows/release.yml` for CI and release automation.
+- `RELEASE-NOTES.md` for canonical release notes consumed by the release workflow.
 
 Deferred from v1:
 

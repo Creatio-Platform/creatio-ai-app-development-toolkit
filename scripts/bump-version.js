@@ -105,12 +105,178 @@ function bumpVersion(version) {
   console.log(`Updated configured versions to ${version}`);
 }
 
+// === Audit support ===
+
+function globToRegex(pattern) {
+  // Convert a glob pattern into a RegExp matched against POSIX-style
+  // repository-relative paths.
+  //   **  -> any chars including /
+  //   *   -> any chars except /
+  //   ?   -> single char except /
+  //   trailing / -> match anything under this directory
+  let regex = "^";
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        regex += ".*";
+        i += 2;
+      } else {
+        regex += "[^/]*";
+        i += 1;
+      }
+    } else if (c === "?") {
+      regex += "[^/]";
+      i += 1;
+    } else if (".+^$|()[]{}\\".includes(c)) {
+      regex += "\\" + c;
+      i += 1;
+    } else {
+      regex += c;
+      i += 1;
+    }
+  }
+  if (regex.endsWith("/")) {
+    regex += ".*";
+  }
+  regex += "$";
+  return new RegExp(regex);
+}
+
+function loadAuditExcludes() {
+  const config = loadConfig();
+  const excludes =
+    config.audit && Array.isArray(config.audit.exclude) ? config.audit.exclude : [];
+  return excludes.map(globToRegex);
+}
+
+const ALWAYS_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+]);
+
+const BINARY_EXTS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+  ".pdf", ".zip", ".tar", ".gz", ".bz2", ".7z",
+  ".exe", ".dll", ".so", ".dylib", ".class", ".jar",
+  ".pyc", ".pyo",
+  ".woff", ".woff2", ".ttf", ".otf",
+  ".mp3", ".mp4", ".mov", ".wav",
+  ".pptx", ".docx", ".xlsx",
+]);
+
+function* walkRepo(rootDir) {
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_e) {
+      continue;
+    }
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (ALWAYS_SKIP_DIRS.has(entry.name)) continue;
+        stack.push(abs);
+      } else if (entry.isFile()) {
+        yield abs;
+      }
+    }
+  }
+}
+
+function relPosix(absPath) {
+  return path.relative(ROOT, absPath).split(path.sep).join("/");
+}
+
+function auditVersions() {
+  const declaredPaths = new Set(configuredFiles().map((entry) => entry.path));
+  const excludeRegexes = loadAuditExcludes();
+
+  // Pick the most common version across declared files as the audit target.
+  const versions = [];
+  for (const entry of configuredFiles()) {
+    const filePath = path.join(ROOT, entry.path);
+    if (!fs.existsSync(filePath)) continue;
+    const data = readJson(filePath);
+    versions.push(getField(data, entry.field));
+  }
+  if (versions.length === 0) {
+    fail("No declared files exist; cannot determine current version for audit.");
+  }
+  const counts = new Map();
+  for (const v of versions) counts.set(v, (counts.get(v) || 0) + 1);
+  const currentVersion = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+
+  console.log(`Audit: scanning repo for '${currentVersion}' in undeclared files...`);
+  console.log("");
+
+  const hits = [];
+  for (const abs of walkRepo(ROOT)) {
+    const rel = relPosix(abs);
+    if (declaredPaths.has(rel)) continue;
+    if (excludeRegexes.some((re) => re.test(rel))) continue;
+    const ext = path.extname(rel).toLowerCase();
+    if (BINARY_EXTS.has(ext)) continue;
+
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch (_e) {
+      continue;
+    }
+    if (stat.size > 5 * 1024 * 1024) continue;
+
+    let content;
+    try {
+      content = fs.readFileSync(abs, "utf8");
+    } catch (_e) {
+      continue;
+    }
+    if (!content.includes(currentVersion)) continue;
+
+    const lines = content.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(currentVersion)) {
+        hits.push({ path: rel, line: i + 1, text: lines[i].trim() });
+      }
+    }
+  }
+
+  if (hits.length === 0) {
+    console.log(`No undeclared files contain the version string '${currentVersion}'. All clear.`);
+    return;
+  }
+
+  console.log(`UNDECLARED files containing '${currentVersion}':`);
+  for (const hit of hits) {
+    console.log(`  ${hit.path}:${hit.line}: ${hit.text}`);
+  }
+  console.log("");
+  console.log("Review the above:");
+  console.log("- If they should be bumped, add to .version-bump.json files[]");
+  console.log("- If they should be skipped, add a pattern to .version-bump.json audit.exclude[]");
+  // Soft warning: do not block CI.
+}
+
 function main(argv) {
   if (argv.length !== 1) {
-    fail("Usage: node scripts/bump-version.js --check | <version>");
+    fail("Usage: node scripts/bump-version.js --check | --audit | <version>");
   }
   if (argv[0] === "--check") {
     checkVersions();
+    return;
+  }
+  if (argv[0] === "--audit") {
+    auditVersions();
     return;
   }
   bumpVersion(argv[0]);

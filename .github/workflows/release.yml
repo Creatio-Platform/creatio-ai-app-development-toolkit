@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver X.Y.Z (must have matching `## X.Y.Z (date)` section in RELEASE-NOTES.md)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Release Gate + execute
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # === Release Gate (pre-release validations) ===
+
+      - name: Gate 1 — validate version format X.Y.Z (no v prefix, no pre-release)
+        run: |
+          echo "$RELEASE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "ERROR: Version must be X.Y.Z (no 'v' prefix, no pre-release suffixes)."; exit 1; }
+
+      - name: Gate 2 — extract release notes section from RELEASE-NOTES.md
+        run: |
+          awk -v ver="$RELEASE_VERSION" '
+            /^## / {
+              if ($0 ~ "^## " ver " \\(") { found = 1; next }
+              else if (found) { exit }
+            }
+            found { print }
+          ' RELEASE-NOTES.md > /tmp/release_notes.md
+
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "ERROR: No section '## $RELEASE_VERSION (...)' found in RELEASE-NOTES.md, or section is empty."
+            echo "       Add the section in a separate PR before triggering release."
+            exit 1
+          fi
+
+      - name: Gate 3 — manifests in sync (pre-bump check)
+        run: node scripts/bump-version.js --check
+
+      - name: Gate 4 — run tests
+        run: |
+          pip install pytest
+          pytest tests/
+
+      # === Release execution ===
+
+      - name: Bump versions in all configured manifests
+        run: node scripts/bump-version.js "$RELEASE_VERSION"
+
+      - name: Audit — warn on undeclared files containing the new version
+        run: node scripts/bump-version.js --audit
+        # Soft warning, does not block. Flags hardcoded version stragglers
+        # in files outside .version-bump.json (new plugin manifests of CAs
+        # forgotten in sync list, hardcoded constants in code, etc.).
+
+      - name: Gate 5 — re-check sync after bump (tag === canonical manifest)
+        run: |
+          node scripts/bump-version.js --check
+          PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)
+          if [ "$PJ_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "ERROR: .claude-plugin/plugin.json version ($PJ_VERSION) != input ($RELEASE_VERSION)"
+            exit 1
+          fi
+
+      - name: Commit, tag, push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Release $RELEASE_VERSION"
+          git tag "$RELEASE_VERSION"
+          git push origin main --tags
+
+      - name: Create GitHub Release
+        run: gh release create "$RELEASE_VERSION" --notes-file /tmp/release_notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -7,5 +7,15 @@
     { "path": ".agents/plugins/marketplace.json", "field": "plugins.0.version" },
     { "path": ".claude-plugin/marketplace.json", "field": "plugins.0.version" },
     { "path": ".github/plugin/marketplace.json", "field": "plugins.0.version" }
-  ]
+  ],
+  "audit": {
+    "exclude": [
+      "RELEASE-NOTES.md",
+      "CHANGELOG.md",
+      "tests/**",
+      "docs/**",
+      "runbooks/**",
+      ".github/**"
+    ]
+  }
 }

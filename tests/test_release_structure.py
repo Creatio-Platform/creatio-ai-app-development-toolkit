@@ -143,6 +143,28 @@ class ReleaseStructureTests(unittest.TestCase):
             install_doc.index("Advanced users"),
         )
 
+    def test_release_workflow_uses_canonical_manifest_and_safe_input_variable(self):
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("RELEASE_VERSION: ${{ inputs.version }}", workflow)
+        direct_input_lines = [
+            line
+            for line in workflow.splitlines()
+            if "${{ inputs.version }}" in line
+            and "RELEASE_VERSION:" not in line
+            and "description:" not in line
+        ]
+        self.assertEqual(direct_input_lines, [])
+        self.assertIn("PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)", workflow)
+        self.assertNotIn("jq -r .version plugin.json", workflow)
+        self.assertEqual(re.findall(r"- name: Gate (\d+) ", workflow), ["1", "2", "3", "4", "5"])
+
+    def test_release_notes_do_not_reference_removed_copilot_manifest_path(self):
+        release_notes = (ROOT / "RELEASE-NOTES.md").read_text(encoding="utf-8")
+
+        self.assertNotIn(".copilot-plugin/plugin.json", release_notes)
+        self.assertIn(".github/plugin/plugin.json", release_notes)
+
 
 if __name__ == "__main__":
     unittest.main()

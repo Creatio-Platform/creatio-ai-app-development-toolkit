@@ -3,7 +3,6 @@
 Reusable stdio MCP client for clio.
 
 Usage:
-    python3 runtime/scripts/mcp_client.py --check-clio-version [--timeout <seconds>]
     python3 runtime/scripts/mcp_client.py <tool-name> <args-json> [timeout]
     python3 runtime/scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
     python3 runtime/scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
@@ -31,7 +30,6 @@ import difflib
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import shutil
 import subprocess
@@ -39,9 +37,6 @@ import sys
 import threading
 import time
 
-MIN_SUPPORTED_CLIO_VERSION = (8, 0, 2, 50)
-MIN_SUPPORTED_CLIO_VERSION_TEXT = ".".join(str(part) for part in MIN_SUPPORTED_CLIO_VERSION)
-_CLIO_VERSION_CACHE = {"key": None, "info": None}
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
 SCHEMA_SYNC_ALLOWED_OPERATION_TYPES = {"create-lookup", "create-entity", "update-entity"}
 
@@ -73,70 +68,6 @@ def _build_clio_cmd():
 
 def _current_clio_resolution_key():
     return (os.environ.get("CLIO_CMD", "").strip(), shutil.which("clio") or "")
-
-
-def _parse_version_tuple(raw_version):
-    if not isinstance(raw_version, str):
-        raise RuntimeError("Unable to parse clio version output")
-    match = re.search(r"(\d+\.\d+\.\d+\.\d+)", raw_version)
-    if not match:
-        match = re.search(r"(\d+\.\d+\.\d+)", raw_version)
-    if not match:
-        raise RuntimeError(f"Unable to parse clio version from output: {raw_version.strip() or raw_version!r}")
-    parts = tuple(int(part) for part in match.group(1).split("."))
-    if len(parts) == 3:
-        parts = parts + (0,)
-    return match.group(1), parts
-
-
-def get_clio_version(timeout=30):
-    cache_key = _current_clio_resolution_key()
-    if _CLIO_VERSION_CACHE["key"] == cache_key and _CLIO_VERSION_CACHE["info"] is not None:
-        return dict(_CLIO_VERSION_CACHE["info"])
-    cmd = _resolve_clio_cmd() + ["ver"]
-    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
-    output = completed.stdout.strip() or completed.stderr.strip()
-    if completed.returncode != 0:
-        raise RuntimeError(output or "clio ver failed")
-    version_text, version_tuple = _parse_version_tuple(output)
-    info = {
-        "version": version_text,
-        "version_tuple": version_tuple,
-        "raw": output,
-        "command": cmd,
-    }
-    _CLIO_VERSION_CACHE["key"] = cache_key
-    _CLIO_VERSION_CACHE["info"] = dict(info)
-    return info
-
-
-def validate_clio_version(min_version=MIN_SUPPORTED_CLIO_VERSION, timeout=30):
-    info = get_clio_version(timeout=timeout)
-    if info["version_tuple"] < min_version:
-        minimum = ".".join(str(part) for part in min_version)
-        raise RuntimeError(
-            f"Unsupported clio version {info['version']}. Minimum supported released version is {minimum}. "
-            "Upgrade clio or point CLIO_CMD to a compatible released build. "
-            "CLIO_CMD is only a path override, not a separate compatibility target."
-        )
-    return info
-
-
-def ensure_supported_clio_version(timeout=30):
-    return validate_clio_version(timeout=timeout)
-
-
-def check_clio_version(timeout=30):
-    info = validate_clio_version(timeout=timeout)
-    return {
-        "success": True,
-        "data": {
-            "version": info["version"],
-            "minimum-supported-version": MIN_SUPPORTED_CLIO_VERSION_TEXT,
-            "command": info["command"],
-        },
-        "raw": info["raw"],
-    }
 
 
 def _parse_rpc_result(message_id, collected, expect_tool_result):
@@ -192,7 +123,6 @@ class PersistentMcpClient:
     def _ensure_started(self):
         if self._proc is not None and self._proc.poll() is None:
             return
-        ensure_supported_clio_version(timeout=min(self._timeout, 30))
         clio_cmd = _build_clio_cmd()
         self._proc = subprocess.Popen(
             clio_cmd,
@@ -787,8 +717,7 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
 def parse_cli_request(argv):
     if not argv:
         raise ValueError(
-            "Usage: mcp_client.py --check-clio-version [--timeout <seconds>]\n"
-            "   or: mcp_client.py <tool-name> <args-json> [timeout]\n"
+            "Usage: mcp_client.py <tool-name> <args-json> [timeout]\n"
             "   or: mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
             "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]\n"
             "   or: mcp_client.py resources/list {} [timeout]\n"
@@ -828,27 +757,8 @@ def parse_cli_request(argv):
     }
 
 
-def parse_clio_version_check_request(argv):
-    if not argv or argv[0] != "--check-clio-version":
-        return None
-    parser = argparse.ArgumentParser(prog="mcp_client.py", add_help=True)
-    parser.add_argument("--check-clio-version", action="store_true")
-    parser.add_argument("--timeout", type=int, default=30)
-    parsed = parser.parse_args(argv)
-    return {"timeout": parsed.timeout}
-
-
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    version_check = parse_clio_version_check_request(argv)
-    if version_check is not None:
-        try:
-            result = check_clio_version(timeout=version_check["timeout"])
-        except (ValueError, json.JSONDecodeError, OSError, RuntimeError) as error:
-            print(str(error), file=sys.stderr)
-            return 1
-        print(json.dumps(result, indent=2))
-        return 0
     try:
         request = parse_cli_request(argv)
     except (ValueError, json.JSONDecodeError, OSError) as error:

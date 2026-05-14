@@ -384,6 +384,43 @@ Read `context/INDEX.md` first so each phase can load only the relevant sections 
 
 Use the agent runbooks in `runbooks/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
 
+## clio Coupling
+
+ADAC does not pin a specific clio version. Users are expected to have the latest clio on PATH (`dotnet tool install clio -g` or `dotnet tool update clio -g`). `installer/install.py::preflight_clio()` only verifies that `clio` is on PATH; it does not check the version.
+
+The actual coupling point between ADAC and clio is **MCP tool contracts**, which are resolved at runtime via `get-tool-contract`. If a tool ADAC depends on is missing or has changed signature, ADAC fails fast at session start with an actionable error (`Tool X not found in clio MCP — update clio or report ADAC bug`). No version pin needed.
+
+## Versioning Policy (semver)
+
+ADAC ships as a single versioned product (one number for plugin metadata, skills, rules, runtime scripts, docs, installer, MCP config). Canonical tag: `X.Y.Z` (without `v` prefix; e.g. `0.2.0`, not `v0.2.0`). Pre-release tags (`-rc`, `-beta`) are not used in v1.
+
+**MAJOR (X.0.0)** — incompatible changes that require user action:
+- Breaking change in workflow contracts (Business Plan format, gate flow).
+- Breaking change in installed skill contract.
+- Installer CLI breaking change (renamed/removed flags, changed install paths).
+- Removal of a supported agent target (Codex / Claude / Cursor / Copilot).
+- Removal of a runbook or required gate.
+
+**MINOR (0.X.0)** — backward-compatible capabilities:
+- New runbook or new optional gate.
+- New supported agent.
+- New clio MCP capability adopted (ADAC starts calling a tool that wasn't used before).
+- New workflow capability without breaking existing contracts.
+
+**PATCH (0.0.X)** — compatible fixes:
+- Instruction text fix.
+- Runtime script bugfix without behavior change.
+- Installer fix that does not change CLI.
+- Documentation update.
+
+**Support policy:** Latest stable only. Patches are not backported to older minor branches.
+
+## Release Flow
+
+Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_dispatch`). Maintainer enters the target version `X.Y.Z`; the workflow runs the Release Gate (5 checks: version format, RELEASE-NOTES.md section present, manifests synced, tests pass, post-bump consistency) then bumps versions, tags, and creates a GitHub Release with body extracted from `RELEASE-NOTES.md`.
+
+Notes for each release live in `RELEASE-NOTES.md` (canonical file at the repo root). Add a `## X.Y.Z (YYYY-MM-DD)` section at the top of the file in a separate PR before triggering the release workflow. Subsections (`###`) are free-form per release (Features, Bug Fixes, Migration Notes, etc.).
+
 <!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
 <!-- DO NOT EDIT THIS SECTION MANUALLY. -->
 <!-- Managed by https://creatio.ghe.com/engineering/agent-policy-sync -->
