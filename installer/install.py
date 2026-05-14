@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,7 @@ DEFAULT_INSTALL_ROOT = Path.home() / ".creatio-ai-app-development-toolkit" / "re
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
+SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
     "context/INDEX.md",
@@ -51,10 +55,33 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def plugin_version(repo_root: Path) -> str:
+    manifest_candidates = (
+        repo_root / ".github" / "plugin" / "plugin.json",
+        repo_root / ".claude-plugin" / "plugin.json",
+        repo_root / ".codex-plugin" / "plugin.json",
+    )
+    for manifest_path in manifest_candidates:
+        if not manifest_path.exists():
+            continue
+        manifest = read_json_file(manifest_path)
+        version = manifest.get("version")
+        if isinstance(version, str) and version and SEMVER_PATTERN.match(version):
+            return version
+    raise RuntimeError(
+        "No plugin manifest with a valid semantic version was found in "
+        ".github/plugin/plugin.json, .claude-plugin/plugin.json, or .codex-plugin/plugin.json"
+    )
+
+
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise RuntimeError(f"Expected JSON object in {path}")
     return data
@@ -80,6 +107,35 @@ def preflight_clio() -> str:
     if not clio:
         raise RuntimeError("clio was not found in PATH. Install clio or add it to PATH before installing ADAC.")
     return clio
+
+
+def remove_tree_if_exists(path: Path, owner_name: str) -> None:
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+    except PermissionError as error:
+        raise RuntimeError(
+            f"Could not replace {path} because it is currently in use. "
+            f"Close {owner_name} and retry the installation."
+        ) from error
+
+
+def preflight_copilot() -> str:
+    copilot = shutil.which("copilot")
+    if not copilot:
+        raise RuntimeError(
+            "copilot was not found in PATH. Install GitHub Copilot CLI or add it to PATH before installing ADAC."
+        )
+    return copilot
+
+
+def resolve_copilot_command() -> list[str]:
+    copilot = preflight_copilot()
+    copilot_path = Path(copilot)
+    if copilot_path.suffix.lower() == ".ps1":
+        return ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(copilot_path)]
+    return [copilot]
 
 
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
@@ -224,7 +280,7 @@ def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
     incoming_servers = incoming.get("mcpServers", {}) or {}
 
     if target_path.exists():
-        existing = json.loads(target_path.read_text(encoding="utf-8")) or {}
+        existing = json.loads(target_path.read_text(encoding="utf-8-sig")) or {}
     else:
         existing = {}
 
@@ -276,6 +332,125 @@ def merge_codex_mcp_config(repo_root: Path, target_path: Path) -> None:
     target_path.write_text(existing + separator + block, encoding="utf-8")
 
 
+def merge_personal_marketplace_catalog(repo_root: Path, home: Path) -> None:
+    target_path = home / ".agents" / "plugins" / "marketplace.json"
+    source_path = repo_root / ".agents" / "plugins" / "marketplace.json"
+    if not source_path.exists():
+        return
+
+    existing = read_json_file(target_path)
+    source = read_json_file(source_path)
+
+    plugins = existing.setdefault("plugins", [])
+    if not isinstance(plugins, list):
+        raise RuntimeError(f"plugins must be an array in {target_path}")
+    existing_by_name = {
+        plugin.get("name"): plugin
+        for plugin in plugins
+        if isinstance(plugin, dict) and isinstance(plugin.get("name"), str)
+    }
+
+    for plugin in source.get("plugins", []):
+        if not isinstance(plugin, dict):
+            continue
+        plugin_name = plugin.get("name")
+        if not isinstance(plugin_name, str):
+            continue
+        # Home-local Codex marketplaces expect plugin paths under ~/.agents/plugins/<plugin-name>.
+        plugin_copy = copy.deepcopy(plugin)
+        source_config = plugin_copy.get("source")
+        if isinstance(source_config, dict) and source_config.get("source") == "local":
+            source_config["path"] = f"./plugins/{plugin_name}"
+        if plugin_name in existing_by_name:
+            existing_plugin = existing_by_name[plugin_name]
+            existing_plugin.clear()
+            existing_plugin.update(plugin_copy)
+        else:
+            plugins.append(plugin_copy)
+            existing_by_name[plugin_name] = plugin_copy
+
+    if not isinstance(existing.get("name"), str) or not existing["name"].strip():
+        existing["name"] = source.get("name") or "personal-marketplace"
+    existing_interface = existing.get("interface")
+    if not isinstance(existing_interface, dict):
+        existing["interface"] = source.get("interface") or {"displayName": "Personal Marketplace"}
+    elif not isinstance(existing_interface.get("displayName"), str) or not existing_interface["displayName"].strip():
+        source_interface = source.get("interface")
+        if isinstance(source_interface, dict) and isinstance(source_interface.get("displayName"), str):
+            existing_interface["displayName"] = source_interface["displayName"]
+
+    write_json(target_path, existing)
+
+
+def write_codex_marketplace_catalog(repo_root: Path, marketplace_root: Path) -> None:
+    source_path = repo_root / ".agents" / "plugins" / "marketplace.json"
+    if not source_path.exists():
+        return
+
+    source = read_json_file(source_path)
+    plugins = source.get("plugins", [])
+    if not isinstance(plugins, list):
+        raise RuntimeError(f"plugins must be an array in {source_path}")
+
+    catalog_plugins = []
+    for plugin in plugins:
+        if not isinstance(plugin, dict):
+            continue
+        plugin_name = plugin.get("name")
+        if not isinstance(plugin_name, str) or not plugin_name:
+            continue
+        plugin_copy = copy.deepcopy(plugin)
+        source_config = plugin_copy.get("source")
+        if isinstance(source_config, dict) and source_config.get("source") == "local":
+            source_config["path"] = f"./plugins/{plugin_name}"
+        catalog_plugins.append(plugin_copy)
+
+    catalog = {
+        "name": source.get("name") or MARKETPLACE_NAME,
+        "interface": source.get("interface") or {"displayName": MARKETPLACE_NAME.title()},
+        "plugins": catalog_plugins,
+    }
+    write_json(marketplace_root / ".agents" / "plugins" / "marketplace.json", catalog)
+
+
+def merge_codex_marketplace_config(
+    marketplace_name: str,
+    marketplace_dir: Path,
+    plugin_name: str,
+    target_path: Path,
+) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+
+    marketplace_marker = f"[marketplaces.{marketplace_name}]"
+    if marketplace_marker not in existing:
+        source_path = str(marketplace_dir.resolve())
+        if sys.platform.startswith("win"):
+            source_path = "\\\\?\\" + source_path
+        block = (
+            "\n"
+            f"{marketplace_marker}\n"
+            'last_updated = "installed-by-adac"\n'
+            'source_type = "local"\n'
+            f"source = {toml_quote(source_path)}\n"
+        )
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        existing = existing + separator + block
+
+    plugin_key = f'{plugin_name}@{marketplace_name}'
+    plugin_marker = f'[plugins.{toml_quote(plugin_key)}]'
+    if plugin_marker not in existing:
+        block = (
+            "\n"
+            f"{plugin_marker}\n"
+            "enabled = true\n"
+        )
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        existing = existing + separator + block
+
+    target_path.write_text(existing, encoding="utf-8")
+
+
 def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> None:
     settings = read_json_file(target_path)
     extra_marketplaces = settings.setdefault("extraKnownMarketplaces", {})
@@ -293,6 +468,52 @@ def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> No
         raise RuntimeError(f"enabledPlugins must be an object in {target_path}")
     enabled_plugins[f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"] = True
     write_json(target_path, settings)
+
+
+def register_claude_known_marketplace(marketplace_dir: Path, target_path: Path) -> None:
+    known = read_json_file(target_path)
+    known[MARKETPLACE_NAME] = {
+        "source": {
+            "source": "directory",
+            "path": str(marketplace_dir),
+        },
+        "installLocation": str(marketplace_dir),
+        "lastUpdated": now_iso(),
+    }
+    write_json(target_path, known)
+
+
+def register_claude_installed_plugin(cache_dir: Path, target_path: Path, version: str) -> None:
+    installed = read_json_file(target_path)
+    plugin_key = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
+
+    installed_version = installed.get("version")
+    if installed and installed_version is not None and installed_version != 2:
+        raise RuntimeError(
+            f"Unsupported Claude installed_plugins.json version in {target_path}: {installed_version!r}. "
+            "Expected version 2."
+        )
+    if installed_version != 2:
+        installed = {"version": 2, "plugins": {}}
+
+    plugins = installed.setdefault("plugins", {})
+    existing_entries = plugins.get(plugin_key, [])
+    installed_at = now_iso()
+    if existing_entries and isinstance(existing_entries, list) and len(existing_entries) > 0:
+        first_entry = existing_entries[0]
+        if isinstance(first_entry, dict):
+            installed_at = first_entry.get("installedAt", installed_at)
+
+    plugins[plugin_key] = [
+        {
+            "scope": "user",
+            "installPath": str(cache_dir),
+            "version": version,
+            "installedAt": installed_at,
+            "lastUpdated": now_iso(),
+        }
+    ]
+    write_json(target_path, installed)
 
 
 def repo_file(repo_root: Path, relative_path: str) -> Path:
@@ -378,30 +599,57 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
 
 def install_codex(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
-    target_skills_dir = home / ".codex" / "skills"
-    copy_skill_directories(repo_root, target_skills_dir)
-    mcp_config_path = home / ".codex" / "config.toml"
-    (target_skills_dir / SKILL_NAME / "SKILL.md").write_text(
-        render_codex_skill(repo_root, mcp_config_path),
-        encoding="utf-8",
-    )
+    version = plugin_version(repo_root)
+    codex_home = home / ".codex"
+    agents_plugin_dir = home / ".agents" / "plugins" / PLUGIN_NAME
+    agents_skills_dir = home / ".agents" / "skills"
+    marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
+    marketplace_plugin_dir = marketplace_dir / "plugins" / PLUGIN_NAME
+    cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
+    standalone_skill_dir = codex_home / "skills" / SKILL_NAME
+    remove_tree_if_exists(marketplace_dir, "Codex")
+    remove_tree_if_exists(cache_dir, "Codex")
+    remove_tree_if_exists(agents_plugin_dir, "Codex")
+    remove_tree_if_exists(standalone_skill_dir, "Codex")
+    copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
+    write_codex_marketplace_catalog(repo_root, marketplace_dir)
+    copy_plugin_runtime_surface(repo_root, cache_dir)
+    copy_plugin_runtime_surface(repo_root, agents_plugin_dir)
+    copy_skill_directories(repo_root, agents_skills_dir)
+    mcp_config_path = codex_home / "config.toml"
     merge_codex_mcp_config(repo_root, mcp_config_path)
+    merge_codex_marketplace_config(MARKETPLACE_NAME, marketplace_dir, PLUGIN_NAME, mcp_config_path)
+    merge_personal_marketplace_catalog(repo_root, home)
 
 
 def install_claude(repo_root: Path, home: Path) -> None:
-    marketplace_dir = home / ".claude" / "plugins" / "marketplaces" / MARKETPLACE_NAME
-    if marketplace_dir.exists():
-        shutil.rmtree(marketplace_dir)
+    ensure_required_references(repo_root)
+    version = plugin_version(repo_root)
+    claude_home = home / ".claude"
+    marketplace_dir = claude_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
+    cache_dir = claude_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
+    remove_tree_if_exists(marketplace_dir, "Claude Code")
+    remove_tree_if_exists(cache_dir, "Claude Code")
     copy_plugin_runtime_surface(repo_root, marketplace_dir)
-    copy_mcp_config(repo_root, home / ".claude" / "adac.mcp.json")
-    merge_claude_plugin_settings(marketplace_dir, home / ".claude" / "settings.json")
+    copy_plugin_runtime_surface(repo_root, cache_dir)
+    copy_skill_directories(repo_root, home / ".agents" / "skills")
+    copy_mcp_config(repo_root, claude_home / "adac.mcp.json")
+    merge_claude_plugin_settings(marketplace_dir, claude_home / "settings.json")
+    register_claude_known_marketplace(
+        marketplace_dir,
+        claude_home / "plugins" / "known_marketplaces.json",
+    )
+    register_claude_installed_plugin(
+        cache_dir,
+        claude_home / "plugins" / "installed_plugins.json",
+        version,
+    )
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
     cursor_home = home / ".cursor"
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
-    if local_plugin_dir.exists():
-        shutil.rmtree(local_plugin_dir)
+    remove_tree_if_exists(local_plugin_dir, "Cursor")
     copy_plugin_runtime_surface(repo_root, local_plugin_dir)
     mcp_config_path = cursor_home / "mcp.json"
     merge_mcp_config(repo_root, mcp_config_path)
@@ -413,15 +661,14 @@ def install_cursor(repo_root: Path, home: Path) -> None:
 
 def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
-    copilot_home = home / ".copilot"
-    target_skills_dir = copilot_home / "skills"
-    copy_skill_directories(repo_root, target_skills_dir)
-    mcp_config_path = copilot_home / "mcp-config.json"
-    (target_skills_dir / SKILL_NAME / "SKILL.md").write_text(
-        render_copilot_skill(repo_root, mcp_config_path),
-        encoding="utf-8",
-    )
-    merge_mcp_config(repo_root, mcp_config_path)
+    copilot_command = resolve_copilot_command()
+    plugin_source = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
+    try:
+        run_checked([*copilot_command, "plugin", "marketplace", "add", str(repo_root)], cwd=repo_root)
+    except RuntimeError as error:
+        if f'Marketplace "{MARKETPLACE_NAME}" already registered' not in str(error):
+            raise
+    run_checked([*copilot_command, "plugin", "install", plugin_source], cwd=repo_root)
 
 
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:

@@ -1,0 +1,5 @@
+---
+display_name: "Creatio App Orchestrator"
+short_description: "Create Creatio app Business Plans and implementation handoffs"
+default_prompt: "Use $creatio-app-orchestrator to create Creatio app Business Plans, technical implementation handoffs, or apply the approved plan through clio MCP."
+---

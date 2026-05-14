@@ -28,11 +28,11 @@ The coding agent owns the process lifecycle.
 
 The installer detects and configures these locally:
 
-- **Codex CLI/Desktop** (`~/.codex/`) — copies ADAC skills into `~/.codex/skills/` and registers the `clio` MCP server in `~/.codex/config.toml`. Current Codex Desktop plugin browsing is limited to OpenAI-curated plugins, so ADAC is not expected to appear in that UI.
-- **Claude Code** (`~/.claude/`) — copies the ADAC marketplace into `~/.claude/plugins/marketplaces/creatio/`, registers it in `~/.claude/settings.json`, and enables `creatio-ai-app-development-toolkit@creatio`.
+- **Codex CLI/Desktop** (`~/.codex/`) — copies the ADAC plugin runtime into `~/.codex/plugins/marketplaces/creatio/` and `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`, installs the local plugin surface into `~/.agents/plugins/creatio-ai-app-development-toolkit/`, registers the personal marketplace entry, and registers the `clio` MCP server in `~/.codex/config.toml`.
+- **Claude Code** (`~/.claude/`) — copies the ADAC marketplace into `~/.claude/plugins/marketplaces/creatio/`, copies the plugin cache into `~/.claude/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`, copies ADAC skills into `~/.agents/skills/`, copies MCP config into `~/.claude/adac.mcp.json`, registers the marketplace in `~/.claude/plugins/known_marketplaces.json`, registers the installed plugin in `~/.claude/plugins/installed_plugins.json`, and enables `creatio-ai-app-development-toolkit@creatio` in `~/.claude/settings.json`.
 - **Cursor** (`~/.cursor/`) — copies the plugin into `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into `~/.cursor/mcp.json` (merging with any existing servers), and writes a `creatio-app-orchestrator.mdc` rule into `~/.cursor/rules/`.
 
-GitHub Copilot CLI remains a compatible manual target through `.github/plugin/plugin.json` and `.github/plugin/marketplace.json`, but the v1 installer does not call a Copilot plugin install command because no stable CLI subcommand is verified.
+- **GitHub Copilot CLI** (`~/.copilot/`) — registers this checkout as a local Copilot marketplace with `copilot plugin marketplace add <repo-root>` and installs `creatio-ai-app-development-toolkit@creatio` through the native Copilot plugin flow. Copilot then materializes the installed plugin under `~/.copilot/installed-plugins/`, exposes the skill automatically, and keeps `clio` MCP available through the plugin install.
 
 ## Simple Installer
 
@@ -51,6 +51,6 @@ python installer/install.py
 
 When launched from `installer/install.py` inside a plugin checkout, the installer uses that checkout as the install source. Use `--install-root <path>` only when you want to install from another checkout directory.
 
-Advanced users can install for only one agent with `--target <codex|claude|cursor>`.
+Advanced users can install for only one agent with `--target <codex|claude|cursor|copilot>`.
 
 The installer does not use a registry, release tarballs, checksums, or scheduled auto-update in v1.
