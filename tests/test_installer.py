@@ -231,7 +231,10 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
-            (repo_root / "plugin.json").write_text("{}\n", encoding="utf-8")
+            (repo_root / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
             (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
             write_required_references(installer, repo_root)
             skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
@@ -251,6 +254,11 @@ class InstallerTests(unittest.TestCase):
                 '{"enabledPlugins":{"existing@tools":true},"extraKnownMarketplaces":{"existing":{"source":{"source":"github","repo":"org/repo"}}}}\n',
                 encoding="utf-8",
             )
+            (claude_home / "plugins").mkdir(parents=True)
+            (claude_home / "plugins" / "installed_plugins.json").write_text(
+                '{"version":2,"plugins":{"creatio-ai-app-development-toolkit@creatio":[]}}\n',
+                encoding="utf-8",
+            )
 
             installer.install_claude(repo_root, home)
 
@@ -262,7 +270,7 @@ class InstallerTests(unittest.TestCase):
                 / "cache"
                 / "creatio"
                 / "creatio-ai-app-development-toolkit"
-                / installer.PLUGIN_VERSION
+                / "0.1.0"
             )
             self.assertTrue((marketplace_dir / "runbooks").exists())
             self.assertTrue((marketplace_dir / "context").exists())
@@ -480,6 +488,10 @@ class InstallerTests(unittest.TestCase):
             )
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+                encoding="utf-8",
+            )
+            (repo_root / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
                 encoding="utf-8",
             )
             (repo_root / ".agents" / "plugins").mkdir(parents=True)

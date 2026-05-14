@@ -18,7 +18,6 @@ DEFAULT_INSTALL_ROOT = Path.home() / ".creatio-ai-app-development-toolkit" / "re
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
-PLUGIN_VERSION = "0.1.0"
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
     "context/INDEX.md",
@@ -56,6 +55,15 @@ def write_json(path: Path, data: Any) -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def plugin_version(repo_root: Path) -> str:
+    manifest_path = repo_root / "plugin.json"
+    manifest = read_json_file(manifest_path)
+    version = manifest.get("version")
+    if not isinstance(version, str) or not version:
+        raise RuntimeError(f"plugin.json must define a non-empty version: {manifest_path}")
+    return version
 
 
 def read_json_file(path: Path) -> dict[str, Any]:
@@ -336,12 +344,15 @@ def merge_codex_marketplace_config(
 
     marketplace_marker = f"[marketplaces.{marketplace_name}]"
     if marketplace_marker not in existing:
+        source_path = str(marketplace_dir)
+        if sys.platform.startswith("win"):
+            source_path = "\\\\?\\" + source_path
         block = (
             "\n"
             f"{marketplace_marker}\n"
             'last_updated = "installed-by-adac"\n'
             'source_type = "local"\n'
-            f"source = {toml_quote('\\\\?\\\\' + str(marketplace_dir))}\n"
+            f"source = {toml_quote(source_path)}\n"
         )
         separator = "" if not existing or existing.endswith("\n") else "\n"
         existing = existing + separator + block
@@ -391,7 +402,7 @@ def register_claude_known_marketplace(marketplace_dir: Path, target_path: Path) 
     write_json(target_path, known)
 
 
-def register_claude_installed_plugin(cache_dir: Path, target_path: Path) -> None:
+def register_claude_installed_plugin(cache_dir: Path, target_path: Path, version: str) -> None:
     installed = read_json_file(target_path)
     plugin_key = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 
@@ -401,14 +412,14 @@ def register_claude_installed_plugin(cache_dir: Path, target_path: Path) -> None
     plugins = installed.setdefault("plugins", {})
     existing_entries = plugins.get(plugin_key, [{}])
     installed_at = now_iso()
-    if existing_entries and isinstance(existing_entries, list):
+    if existing_entries and isinstance(existing_entries, list) and len(existing_entries) > 0:
         installed_at = existing_entries[0].get("installedAt", installed_at)
 
     plugins[plugin_key] = [
         {
             "scope": "user",
             "installPath": str(cache_dir),
-            "version": PLUGIN_VERSION,
+            "version": version,
             "installedAt": installed_at,
             "lastUpdated": now_iso(),
         }
@@ -499,10 +510,11 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
 
 def install_codex(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
+    version = plugin_version(repo_root)
     codex_home = home / ".codex"
     agents_plugin_dir = home / ".agents" / "plugins" / PLUGIN_NAME
     marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
-    cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / PLUGIN_VERSION
+    cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
     standalone_skill_dir = codex_home / "skills" / SKILL_NAME
     if marketplace_dir.exists():
         shutil.rmtree(marketplace_dir)
@@ -523,9 +535,10 @@ def install_codex(repo_root: Path, home: Path) -> None:
 
 def install_claude(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
+    version = plugin_version(repo_root)
     claude_home = home / ".claude"
     marketplace_dir = claude_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
-    cache_dir = claude_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / PLUGIN_VERSION
+    cache_dir = claude_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
     if marketplace_dir.exists():
         shutil.rmtree(marketplace_dir)
     if cache_dir.exists():
@@ -542,6 +555,7 @@ def install_claude(repo_root: Path, home: Path) -> None:
     register_claude_installed_plugin(
         cache_dir,
         claude_home / "plugins" / "installed_plugins.json",
+        version,
     )
 
 
