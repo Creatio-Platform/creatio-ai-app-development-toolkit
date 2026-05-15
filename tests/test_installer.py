@@ -91,17 +91,22 @@ class InstallerTests(unittest.TestCase):
             with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ):
+                installed_plugin_dir = (
+                    Path(temp)
+                    / "home"
+                    / ".copilot"
+                    / "installed-plugins"
+                    / "creatio"
+                    / "creatio-ai-app-development-toolkit"
+                )
+                installed_plugin_dir.mkdir(parents=True, exist_ok=True)
+                (installed_plugin_dir / "stale.txt").write_text("old\n", encoding="utf-8")
+                (installed_plugin_dir / "docs").mkdir()
+                (installed_plugin_dir / "docs" / "old.md").write_text("old\n", encoding="utf-8")
+                skill_target_dir = Path(temp) / "home" / ".copilot" / "skills" / "creatio-app-orchestrator"
+                skill_target_dir.mkdir(parents=True, exist_ok=True)
+                (skill_target_dir / "obsolete.md").write_text("old\n", encoding="utf-8")
                 installer.install_copilot(repo_root, Path(temp) / "home")
-
-            installed_plugin_dir = (
-                Path(temp)
-                / "home"
-                / ".copilot"
-                / "installed-plugins"
-                / "creatio"
-                / "creatio-ai-app-development-toolkit"
-            )
-            skill_target_dir = Path(temp) / "home" / ".copilot" / "skills" / "creatio-app-orchestrator"
 
             self.assertTrue((installed_plugin_dir / "runbooks").exists())
             self.assertTrue((installed_plugin_dir / "context").exists())
@@ -109,10 +114,12 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue((installed_plugin_dir / "runtime").exists())
             self.assertTrue((installed_plugin_dir / ".mcp.json").exists())
             self.assertTrue((installed_plugin_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertFalse((installed_plugin_dir / "stale.txt").exists())
             self.assertFalse((installed_plugin_dir / "tests").exists())
             self.assertFalse((installed_plugin_dir / "installer").exists())
             self.assertFalse((installed_plugin_dir / "docs").exists())
             self.assertTrue((skill_target_dir / "agents" / "openai.yaml").exists())
+            self.assertFalse((skill_target_dir / "obsolete.md").exists())
             skill_body = (skill_target_dir / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn(str(installed_plugin_dir), skill_body)
             self.assertIn(str(Path(temp) / "home" / ".copilot" / "mcp-config.json"), skill_body)
