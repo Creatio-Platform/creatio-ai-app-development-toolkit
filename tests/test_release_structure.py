@@ -132,10 +132,9 @@ class ReleaseStructureTests(unittest.TestCase):
             for stale_path in stale_paths:
                 self.assertIsNone(re.search(stale_path, content), f"{path}: {stale_path}")
 
-    def test_install_docs_lead_with_no_flag_installer_command(self):
+    def test_install_docs_lead_with_local_install_command(self):
         install_doc = (ROOT / "docs/install.md").read_text(encoding="utf-8")
 
-        self.assertIn("curl -fsSL <hosted-adac-install-url>/install.py | python3", install_doc)
         self.assertIn("python installer/install.py", install_doc)
         self.assertIn("Advanced users", install_doc)
         self.assertLess(
@@ -158,12 +157,71 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertIn("PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)", workflow)
         self.assertNotIn("jq -r .version plugin.json", workflow)
         self.assertEqual(re.findall(r"- name: Gate (\d+) ", workflow), ["1", "2", "3", "4", "5"])
+        self.assertNotIn('node scripts/bump-version.js "$RELEASE_VERSION"', workflow)
+        self.assertNotIn("git commit", workflow)
+        self.assertNotIn("git push origin main", workflow)
+        self.assertIn('git push origin "refs/tags/$RELEASE_VERSION"', workflow)
 
     def test_release_notes_do_not_reference_removed_copilot_manifest_path(self):
         release_notes = (ROOT / "RELEASE-NOTES.md").read_text(encoding="utf-8")
 
         self.assertNotIn(".copilot-plugin/plugin.json", release_notes)
         self.assertIn(".github/plugin/plugin.json", release_notes)
+
+    def test_release_manifest_has_required_sections(self):
+        manifest = read_json(".release-manifest.json")
+        self.assertIn("plugin_runtime", manifest)
+        self.assertIn("release_extras", manifest)
+        self.assertIsInstance(manifest["plugin_runtime"], list)
+        self.assertIsInstance(manifest["release_extras"], list)
+        self.assertGreater(len(manifest["plugin_runtime"]), 0)
+        self.assertGreater(len(manifest["release_extras"]), 0)
+
+    def test_release_manifest_paths_exist(self):
+        manifest = read_json(".release-manifest.json")
+        for relative_path in [*manifest["plugin_runtime"], *manifest["release_extras"]]:
+            self.assertTrue(
+                (ROOT / relative_path).exists(),
+                f"{relative_path} listed in .release-manifest.json but does not exist",
+            )
+
+    def test_release_manifest_no_duplicates(self):
+        manifest = read_json(".release-manifest.json")
+        combined = [*manifest["plugin_runtime"], *manifest["release_extras"]]
+        self.assertEqual(len(combined), len(set(combined)),
+                         "Duplicate path between plugin_runtime and release_extras")
+        self.assertEqual(len(manifest["plugin_runtime"]), len(set(manifest["plugin_runtime"])))
+        self.assertEqual(len(manifest["release_extras"]), len(set(manifest["release_extras"])))
+
+    def test_plugin_runtime_excludes_dev_artifacts(self):
+        manifest = read_json(".release-manifest.json")
+        forbidden_prefixes = (
+            "tests",
+            "docs",
+            "tmp",
+            "installer",
+            ".github/workflows",
+            ".pytest_cache",
+            ".git",
+            "node_modules",
+        )
+        for relative_path in manifest["plugin_runtime"]:
+            for prefix in forbidden_prefixes:
+                self.assertFalse(
+                    relative_path == prefix or relative_path.startswith(prefix + "/"),
+                    f"plugin_runtime must not include dev artifact: {relative_path}",
+                )
+
+    def test_release_manifest_covers_installer_and_release_notes(self):
+        manifest = read_json(".release-manifest.json")
+        self.assertIn("installer", manifest["release_extras"])
+        self.assertIn("RELEASE-NOTES.md", manifest["release_extras"])
+
+    def test_release_workflow_builds_and_uploads_curated_asset(self):
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn(".release-manifest.json", workflow)
+        self.assertIn("gh release upload", workflow)
+        self.assertIn("adac-${RELEASE_VERSION}.zip", workflow)
 
 
 if __name__ == "__main__":

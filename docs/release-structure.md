@@ -2,7 +2,14 @@
 
 V1 ships as a single root-level plugin. All ADAC skills belong to the root plugin package.
 
-Included release files:
+The canonical list of files that ship in the release zip and that `install.py` copies into agent homes is defined in [`.release-manifest.json`](../.release-manifest.json) at the repository root. Two sections:
+
+- `plugin_runtime[]` — paths that `install.py` copies into each agent's plugin destination. `copy_plugin_runtime_surface` reads this list directly; there is no parallel hardcoded list in the installer.
+- `release_extras[]` — additional paths bundled into the release zip but not installed into agent homes (e.g. `installer/`, `RELEASE-NOTES.md`).
+
+The release workflow (`.github/workflows/release.yml`) builds `adac-<version>.zip` from `plugin_runtime + release_extras + .release-manifest.json` itself and attaches it to the GitHub Release via `gh release upload`. The installation wizard downloads this asset.
+
+Included release files (full list lives in `.release-manifest.json`):
 
 - `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` for Claude Code.
 - `.codex-plugin/plugin.json` for Codex CLI plugin metadata.
