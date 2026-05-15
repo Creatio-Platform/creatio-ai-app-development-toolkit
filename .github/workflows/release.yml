@@ -84,7 +84,7 @@ jobs:
       - name: Build release asset from .release-manifest.json
         run: |
           set -euo pipefail
-          OUT="/tmp/adac-${RELEASE_VERSION}"
+          OUT="/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}"
           rm -rf "$OUT"
           mkdir -p "$OUT"
           jq -r '.plugin_runtime[], .release_extras[]' .release-manifest.json | while read -r src; do
@@ -104,8 +104,8 @@ jobs:
             cp -r "$src" "$OUT/$src"
           done
           cp .release-manifest.json "$OUT/"
-          (cd /tmp && zip -r "adac-${RELEASE_VERSION}.zip" "adac-${RELEASE_VERSION}" >/dev/null)
-          ls -la "/tmp/adac-${RELEASE_VERSION}.zip"
+          (cd /tmp && zip -r "creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" "creatio-ai-app-development-toolkit-${RELEASE_VERSION}" >/dev/null)
+          ls -la "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
 
       - name: Tag and push release
         run: |
@@ -120,6 +120,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Upload release asset
-        run: gh release upload "$RELEASE_VERSION" "/tmp/adac-${RELEASE_VERSION}.zip"
+        run: gh release upload "$RELEASE_VERSION" "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
         env:
           GH_TOKEN: ${{ github.token }}

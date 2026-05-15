@@ -33,7 +33,7 @@ GitHub Release.
 - GitHub Actions workflows (`pr.yml`, `release.yml`) introduce a Release
   Gate (5 pre-release checks) and a manual `workflow_dispatch` release
   trigger that tags and publishes an already-prepared main branch.
-- Release workflow now builds an `adac-<version>.zip` asset from
+- Release workflow now builds a `creatio-ai-app-development-toolkit-<version>.zip` asset from
   `.release-manifest.json` (`plugin_runtime[]` + `release_extras[]`) and
   attaches it to the GitHub Release via `gh release upload`.
 - `.release-manifest.json` added as the canonical list of paths shipped

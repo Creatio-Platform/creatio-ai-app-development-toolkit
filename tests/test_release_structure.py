@@ -221,7 +221,7 @@ class ReleaseStructureTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn(".release-manifest.json", workflow)
         self.assertIn("gh release upload", workflow)
-        self.assertIn("adac-${RELEASE_VERSION}.zip", workflow)
+        self.assertIn("creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip", workflow)
 
 
 if __name__ == "__main__":

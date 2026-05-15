@@ -44,7 +44,7 @@ Recommended path: use the Creatio installation wizard, which downloads the lates
 
 To do this manually:
 
-1. Download `adac-<version>.zip` from the [latest release](https://creatio.ghe.com/engineering/ai-driven-app-creation/releases/latest) (asset attached by the release workflow).
+1. Download `creatio-ai-app-development-toolkit-<version>.zip` from the [latest release](https://creatio.ghe.com/engineering/ai-driven-app-creation/releases/latest) (asset attached by the release workflow).
 2. Extract it to a temporary folder.
 3. From the extracted folder, run:
 
