@@ -58,6 +58,7 @@ class InstallerTests(unittest.TestCase):
             (repo_root / "skills").mkdir()
             (repo_root / "runtime").mkdir()
             (repo_root / ".github").mkdir()
+            (repo_root / ".github" / "plugin").mkdir()
             (repo_root / ".claude-plugin").mkdir()
             (repo_root / ".codex-plugin").mkdir()
             (repo_root / ".cursor-plugin").mkdir()
@@ -67,7 +68,10 @@ class InstallerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
-            (repo_root / ".github" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
+            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
             (repo_root / ".claude-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
             (repo_root / ".codex-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
             (repo_root / ".cursor-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")

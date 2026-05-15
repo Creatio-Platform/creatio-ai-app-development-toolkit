@@ -270,13 +270,15 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
             shutil.copyfile(source, target)
 
 
-def prune_directory_entries(target_dir: Path, allowed_names: set[str]) -> None:
+def prune_directory_entries(target_dir: Path, allowed_names: set[str], label: str | None = None) -> None:
     """Remove top-level entries that are not part of the managed installation surface."""
     if not target_dir.exists():
         return
     for entry in target_dir.iterdir():
         if entry.name in allowed_names:
             continue
+        if label:
+            print(f"Pruned {entry} from {label}")
         if entry.is_dir():
             shutil.rmtree(entry)
         else:
@@ -687,7 +689,11 @@ def install_copilot(repo_root: Path, home: Path) -> None:
             raise
     run_checked([*copilot_command, "plugin", "install", plugin_source], cwd=repo_root)
     copy_plugin_runtime_surface(repo_root, installed_plugin_dir)
-    prune_directory_entries(installed_plugin_dir, {Path(relative_path).parts[0] for relative_path in PLUGIN_RUNTIME_PATHS})
+    prune_directory_entries(
+        installed_plugin_dir,
+        {Path(relative_path).parts[0] for relative_path in PLUGIN_RUNTIME_PATHS},
+        "GitHub Copilot CLI plugin runtime",
+    )
 
     skill_target_dir.mkdir(parents=True, exist_ok=True)
     agents_source_dir = skill_source_dir / "agents"
@@ -702,7 +708,10 @@ def install_copilot(repo_root: Path, home: Path) -> None:
         )
     skill_body = render_copilot_skill(installed_plugin_dir, copilot_home / "mcp-config.json")
     (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
-    prune_directory_entries(skill_target_dir, {"SKILL.md", "agents"})
+    allowed_skill_entries = {"SKILL.md"}
+    if agents_source_dir.exists():
+        allowed_skill_entries.add("agents")
+    prune_directory_entries(skill_target_dir, allowed_skill_entries, "GitHub Copilot CLI skill")
 
 
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:
