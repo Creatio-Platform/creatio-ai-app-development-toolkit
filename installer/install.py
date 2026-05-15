@@ -566,7 +566,7 @@ def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
 
 
 def render_copilot_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    """Build the installed Copilot CLI skill with absolute paths back to the plugin checkout."""
+    """Build the installed Copilot CLI skill against the self-contained installed plugin."""
     return _render_skill_body(repo_root, mcp_config_path)
 
 
@@ -661,6 +661,10 @@ def install_cursor(repo_root: Path, home: Path) -> None:
 
 def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
+    copilot_home = home / ".copilot"
+    installed_plugin_dir = copilot_home / "installed-plugins" / MARKETPLACE_NAME / PLUGIN_NAME
+    skill_source_dir = repo_root / "skills" / SKILL_NAME
+    skill_target_dir = copilot_home / "skills" / SKILL_NAME
     copilot_command = resolve_copilot_command()
     plugin_source = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
     try:
@@ -669,6 +673,21 @@ def install_copilot(repo_root: Path, home: Path) -> None:
         if f'Marketplace "{MARKETPLACE_NAME}" already registered' not in str(error):
             raise
     run_checked([*copilot_command, "plugin", "install", plugin_source], cwd=repo_root)
+    copy_plugin_runtime_surface(repo_root, installed_plugin_dir)
+
+    skill_target_dir.mkdir(parents=True, exist_ok=True)
+    agents_source_dir = skill_source_dir / "agents"
+    if agents_source_dir.exists():
+        agents_target_dir = skill_target_dir / "agents"
+        if agents_target_dir.exists():
+            shutil.rmtree(agents_target_dir)
+        shutil.copytree(
+            agents_source_dir,
+            agents_target_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    skill_body = render_copilot_skill(installed_plugin_dir, copilot_home / "mcp-config.json")
+    (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
 
 
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:
