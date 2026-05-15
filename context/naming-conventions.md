@@ -33,3 +33,14 @@
 
 > `<Code>` is the entity schema base name as written in the Business Plan (no prefix).
 > clio MCP applies the environment prefix at implementation time.
+
+## Mobile Page Naming
+
+When `create-app-section` generates mobile pages automatically (requires `UseMobilePageDesigner` enabled), Creatio assigns names following this convention:
+
+| Page type | Pattern | Example (prefix applied at runtime) |
+|-----------|---------|-------------------------------------|
+| Mobile form (record) page | `<Entity>_MobileFormPage` | `UsrTodoTask_MobileFormPage` |
+| Mobile list (section) page | `<Entity>_MobileListPage` | `UsrTodoTask_MobileListPage` |
+
+> Business Plan codes carry no prefix. clio MCP applies the environment's SchemaNamePrefix at implementation time — write `TodoTask_MobileFormPage` in the plan, not `UsrTodoTask_MobileFormPage`.
