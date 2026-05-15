@@ -46,16 +46,47 @@ class InstallerTests(unittest.TestCase):
 
         self.assertNotIn("copilot", {target["id"] for target in targets})
 
-    def test_install_copilot_registers_marketplace_and_installs_plugin(self):
+    def test_install_copilot_registers_marketplace_installs_plugin_and_copies_runtime_surface(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            repo_root.mkdir(parents=True)
+            (repo_root / "tests").mkdir(parents=True)
+            (repo_root / "installer").mkdir()
+            (repo_root / "docs").mkdir()
+            (repo_root / "runbooks").mkdir()
+            (repo_root / "context").mkdir()
+            (repo_root / "skills").mkdir()
+            (repo_root / "runtime").mkdir()
+            (repo_root / ".github").mkdir()
+            (repo_root / ".github" / "plugin").mkdir()
+            (repo_root / ".claude-plugin").mkdir()
+            (repo_root / ".codex-plugin").mkdir()
+            (repo_root / ".cursor-plugin").mkdir()
+            (repo_root / ".agents").mkdir()
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
+            (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
+            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
+            (repo_root / ".claude-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
+            (repo_root / ".codex-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
+            (repo_root / ".cursor-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
             write_required_references(installer, repo_root)
+            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
+                encoding="utf-8",
+            )
+            (skill_dir / "agents").mkdir()
+            (skill_dir / "agents" / "openai.yaml").write_text("display_name: test\n", encoding="utf-8")
+            (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
+            (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")
+            (repo_root / "docs" / "install.md").write_text("dev\n", encoding="utf-8")
             commands = []
 
             def fake_run(command, **_kwargs):
@@ -64,7 +95,39 @@ class InstallerTests(unittest.TestCase):
             with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ):
+                installed_plugin_dir = (
+                    Path(temp)
+                    / "home"
+                    / ".copilot"
+                    / "installed-plugins"
+                    / "creatio"
+                    / "creatio-ai-app-development-toolkit"
+                )
+                installed_plugin_dir.mkdir(parents=True, exist_ok=True)
+                (installed_plugin_dir / "stale.txt").write_text("old\n", encoding="utf-8")
+                (installed_plugin_dir / "docs").mkdir()
+                (installed_plugin_dir / "docs" / "old.md").write_text("old\n", encoding="utf-8")
+                skill_target_dir = Path(temp) / "home" / ".copilot" / "skills" / "creatio-app-orchestrator"
+                skill_target_dir.mkdir(parents=True, exist_ok=True)
+                (skill_target_dir / "obsolete.md").write_text("old\n", encoding="utf-8")
                 installer.install_copilot(repo_root, Path(temp) / "home")
+
+            self.assertTrue((installed_plugin_dir / "runbooks").exists())
+            self.assertTrue((installed_plugin_dir / "context").exists())
+            self.assertTrue((installed_plugin_dir / "skills").exists())
+            self.assertTrue((installed_plugin_dir / "runtime").exists())
+            self.assertTrue((installed_plugin_dir / ".mcp.json").exists())
+            self.assertTrue((installed_plugin_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertFalse((installed_plugin_dir / "stale.txt").exists())
+            self.assertFalse((installed_plugin_dir / "tests").exists())
+            self.assertFalse((installed_plugin_dir / "installer").exists())
+            self.assertFalse((installed_plugin_dir / "docs").exists())
+            self.assertTrue((skill_target_dir / "agents" / "openai.yaml").exists())
+            self.assertFalse((skill_target_dir / "obsolete.md").exists())
+            skill_body = (skill_target_dir / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn(str(installed_plugin_dir), skill_body)
+            self.assertIn(str(Path(temp) / "home" / ".copilot" / "mcp-config.json"), skill_body)
+            self.assertNotIn(str(repo_root), skill_body)
 
         self.assertEqual(
             commands,
