@@ -771,7 +771,7 @@ def write_setup_wizard_manifest(
 
 
 def should_write_setup_wizard_manifest(env: dict[str, str] | None = None) -> bool:
-    env = env or os.environ
+    env = os.environ if env is None else env
     value = env.get(SETUP_WIZARD_MANIFEST_ENV_VAR, "")
     return value.strip().lower() in {"1", "true", "yes"}
 

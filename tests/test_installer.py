@@ -959,7 +959,8 @@ class InstallerTests(unittest.TestCase):
     def test_setup_wizard_manifest_is_opt_in(self):
         installer = load_installer()
 
-        self.assertFalse(installer.should_write_setup_wizard_manifest({}))
+        with patch.dict(os.environ, {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "1"}, clear=False):
+            self.assertFalse(installer.should_write_setup_wizard_manifest({}))
         self.assertFalse(
             installer.should_write_setup_wizard_manifest(
                 {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "0"}
