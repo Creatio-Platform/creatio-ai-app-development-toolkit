@@ -212,10 +212,10 @@ class ReleaseStructureTests(unittest.TestCase):
                     f"plugin_runtime must not include dev artifact: {relative_path}",
                 )
 
-    def test_release_manifest_covers_installer_and_release_notes(self):
+    def test_release_manifest_covers_installer_and_excludes_release_notes(self):
         manifest = read_json(".release-manifest.json")
         self.assertIn("installer", manifest["release_extras"])
-        self.assertIn("RELEASE-NOTES.md", manifest["release_extras"])
+        self.assertNotIn("RELEASE-NOTES.md", manifest["release_extras"])
 
     def test_release_workflow_builds_and_uploads_curated_asset(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
