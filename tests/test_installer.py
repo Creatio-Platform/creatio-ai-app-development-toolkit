@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -834,6 +836,51 @@ class InstallerTests(unittest.TestCase):
                         self.fail(
                             f"Cursor rule contains absolute path under deleted source: {token}"
                         )
+
+    def test_prune_directory_entries_clears_readonly_flag(self):
+        """Regression for ENG-89390: `copilot plugin install` leaves a .git tree
+        with read-only pack objects under installed-plugins/. On Windows, default
+        shutil.rmtree raises PermissionError on those files and aborts pruning
+        mid-iteration, leaving disallowed entries (docs/, installer/, tests/, .git)
+        behind and preventing the post-prune SKILL.md write."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_dir = Path(temp) / "installed-plugins" / "plugin"
+            plugin_dir.mkdir(parents=True)
+
+            # Allowed entry — must survive prune
+            (plugin_dir / "AGENTS.md").write_text("keep me\n", encoding="utf-8")
+
+            # Read-only directory mimicking git pack objects
+            git_pack_dir = plugin_dir / ".git" / "objects" / "pack"
+            git_pack_dir.mkdir(parents=True)
+            pack_file = git_pack_dir / "pack-abc.pack"
+            pack_file.write_bytes(b"binary pack data")
+            os.chmod(pack_file, stat.S_IREAD)
+
+            # Read-only top-level file that's also disallowed
+            readonly_file = plugin_dir / ".gitattributes"
+            readonly_file.write_text("* text=auto\n", encoding="utf-8")
+            os.chmod(readonly_file, stat.S_IREAD)
+
+            # A plain disallowed dir
+            (plugin_dir / "docs").mkdir()
+            (plugin_dir / "docs" / "index.md").write_text("doc\n", encoding="utf-8")
+
+            try:
+                installer.prune_directory_entries(plugin_dir, {"AGENTS.md"}, "test prune")
+
+                self.assertTrue((plugin_dir / "AGENTS.md").exists())
+                self.assertFalse((plugin_dir / ".git").exists())
+                self.assertFalse((plugin_dir / ".gitattributes").exists())
+                self.assertFalse((plugin_dir / "docs").exists())
+            finally:
+                # Best-effort cleanup if the test itself fails before pruning
+                for path in plugin_dir.rglob("*"):
+                    try:
+                        os.chmod(path, stat.S_IWRITE)
+                    except OSError:
+                        pass
 
 
 if __name__ == "__main__":

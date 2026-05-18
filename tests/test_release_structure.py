@@ -220,8 +220,16 @@ class ReleaseStructureTests(unittest.TestCase):
     def test_release_workflow_builds_and_uploads_curated_asset(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn(".release-manifest.json", workflow)
-        self.assertIn("gh release upload", workflow)
         self.assertIn("creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip", workflow)
+        # Asset is attached via `gh release create` (draft → upload → publish in
+        # one call) so a transient upload failure leaves a draft instead of a
+        # published release whose asset 404s. A separate `gh release upload`
+        # step must NOT exist — it would re-introduce the partial-state window.
+        self.assertNotIn("gh release upload", workflow)
+        self.assertRegex(
+            workflow,
+            r'gh release create "\$RELEASE_VERSION"[^\n]*(?:\n[ \t]+[^\n]+)*\n[ \t]+"/tmp/creatio-ai-app-development-toolkit-\$\{RELEASE_VERSION\}\.zip"',
+        )
 
 
 if __name__ == "__main__":

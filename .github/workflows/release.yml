@@ -114,12 +114,14 @@ jobs:
           git tag "$RELEASE_VERSION"
           git push origin "refs/tags/$RELEASE_VERSION"
 
-      - name: Create GitHub Release
-        run: gh release create "$RELEASE_VERSION" --notes-file /tmp/release_notes.md
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Upload release asset
-        run: gh release upload "$RELEASE_VERSION" "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
+      - name: Create GitHub Release with asset
+        # gh release create with asset paths performs draft → upload → publish.
+        # If asset upload fails, the release stays as a draft (not visible as
+        # "latest"), so the installation wizard never sees a release whose
+        # asset 404s. Single step keeps tag/release/asset state coherent.
+        run: |
+          gh release create "$RELEASE_VERSION" \
+            --notes-file /tmp/release_notes.md \
+            "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
         env:
           GH_TOKEN: ${{ github.token }}

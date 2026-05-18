@@ -7,8 +7,10 @@ import argparse
 import copy
 import functools
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -115,11 +117,30 @@ def preflight_clio() -> str:
     return clio
 
 
+def _clear_readonly_and_retry(func, path, _exc_info):
+    """shutil.rmtree onerror callback: clear the read-only flag and retry.
+
+    Required on Windows because `copilot plugin install` clones the marketplace
+    into ~/.copilot/installed-plugins/, leaving git-packed objects (.git/objects/pack/*.idx/.pack)
+    marked read-only. Default shutil.rmtree raises PermissionError on those files.
+    """
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        raise
+    func(path)
+
+
+def rmtree_force(path: Path) -> None:
+    """Recursively remove path, clearing read-only flags as needed (Windows-safe)."""
+    shutil.rmtree(path, onerror=_clear_readonly_and_retry)
+
+
 def remove_tree_if_exists(path: Path, owner_name: str) -> None:
     if not path.exists():
         return
     try:
-        shutil.rmtree(path)
+        rmtree_force(path)
     except PermissionError as error:
         raise RuntimeError(
             f"Could not replace {path} because it is currently in use. "
@@ -272,9 +293,14 @@ def prune_directory_entries(target_dir: Path, allowed_names: set[str], label: st
         if label:
             print(f"Pruned {entry} from {label}")
         if entry.is_dir():
-            shutil.rmtree(entry)
+            rmtree_force(entry)
         else:
-            entry.unlink()
+            try:
+                entry.unlink()
+            except PermissionError:
+                # Read-only file (e.g. from a git clone on Windows)
+                os.chmod(entry, stat.S_IWRITE)
+                entry.unlink()
 
 
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
