@@ -806,6 +806,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    installed: list[str] = []
+    manifest_path: Path | None = None
     try:
         preflight_clio()
         repo_root = resolve_repo_root()

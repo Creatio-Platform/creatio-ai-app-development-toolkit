@@ -1017,6 +1017,13 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result, 0)
             write_manifest.assert_called_once_with(repo_root, ["codex"])
 
+    def test_main_returns_error_when_preflight_fails_before_install(self):
+        installer = load_installer()
+        with patch.object(installer, "preflight_clio", side_effect=RuntimeError("boom")):
+            result = installer.main([])
+
+        self.assertEqual(result, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
