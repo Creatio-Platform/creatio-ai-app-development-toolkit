@@ -238,12 +238,17 @@ class ReleaseStructureTests(unittest.TestCase):
         GH_HOST to be set explicitly. Derive it from GITHUB_SERVER_URL so the
         workflow remains host-agnostic."""
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-        # Every step that invokes `gh` must export GH_HOST in the same block.
-        # Simplest invariant: if `gh ` appears in a step body, then
-        # `GH_HOST=` (or `export GH_HOST`) must appear in the same workflow.
-        if "gh release" in workflow or re.search(r"\bgh\s", workflow):
-            self.assertIn("GH_HOST=", workflow)
-            self.assertIn("GITHUB_SERVER_URL", workflow)
+        release_step = re.search(
+            r"- name: Create GitHub Release with asset\n"
+            r"(?P<body>(?:[ \t]+.*\n)+?)(?=\n[ \t]{6}- name:|\Z)",
+            workflow,
+        )
+        self.assertIsNotNone(release_step, "release workflow must create the GitHub Release")
+        step_body = release_step.group("body")
+        self.assertIn('gh release create "$RELEASE_VERSION"', step_body)
+        self.assertIn('export GH_HOST="${GITHUB_SERVER_URL#http://}"', step_body)
+        self.assertIn('export GH_HOST="${GH_HOST#https://}"', step_body)
+        self.assertIn('export GH_HOST="${GH_HOST%/}"', step_body)
 
 
 if __name__ == "__main__":
