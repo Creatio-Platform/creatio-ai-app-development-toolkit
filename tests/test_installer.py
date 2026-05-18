@@ -930,6 +930,32 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(payload["agents"], [])
             self.assertEqual(payload["version"], "0.0.1")
 
+    def test_write_setup_wizard_manifest_filters_unknown_target_ids(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            (repo_root / ".github" / "plugin").mkdir(parents=True)
+            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"1.2.3"}\n',
+                encoding="utf-8",
+            )
+            home = Path(temp) / "home"
+
+            manifest_path = installer.write_setup_wizard_manifest(
+                repo_root,
+                ["codex", "unknown-agent", "claude"],
+                home=home,
+            )
+
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["agents"],
+                [
+                    {"id": "codex", "displayName": "Codex"},
+                    {"id": "claude-code", "displayName": "Claude Code"},
+                ],
+            )
+
     def test_setup_wizard_manifest_is_opt_in(self):
         installer = load_installer()
 
@@ -944,6 +970,13 @@ class InstallerTests(unittest.TestCase):
                 {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "1"}
             )
         )
+        for value in ["true", "TRUE", "yes", "YES"]:
+            with self.subTest(value=value):
+                self.assertTrue(
+                    installer.should_write_setup_wizard_manifest(
+                        {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: value}
+                    )
+                )
 
     def test_main_does_not_write_setup_wizard_manifest_by_default(self):
         installer = load_installer()
