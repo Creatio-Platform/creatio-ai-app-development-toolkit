@@ -51,7 +51,7 @@ jobs:
             exit 1
           fi
 
-      - name: Gate 3 — manifests in sync (pre-bump check)
+      - name: Gate 3 — manifests already prepared and in sync
         run: node scripts/bump-version.js --check
 
       - name: Gate 4 — run tests
@@ -59,36 +59,67 @@ jobs:
           pip install pytest
           pytest tests/
 
-      # === Release execution ===
-
-      - name: Bump versions in all configured manifests
-        run: node scripts/bump-version.js "$RELEASE_VERSION"
-
       - name: Audit — warn on undeclared files containing the new version
         run: node scripts/bump-version.js --audit
         # Soft warning, does not block. Flags hardcoded version stragglers
         # in files outside .version-bump.json (new plugin manifests of CAs
         # forgotten in sync list, hardcoded constants in code, etc.).
 
-      - name: Gate 5 — re-check sync after bump (tag === canonical manifest)
+      - name: Gate 5 — canonical manifest matches input and tag is free
         run: |
           node scripts/bump-version.js --check
           PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)
           if [ "$PJ_VERSION" != "$RELEASE_VERSION" ]; then
             echo "ERROR: .claude-plugin/plugin.json version ($PJ_VERSION) != input ($RELEASE_VERSION)"
+            echo "       Prepare and merge a release PR that runs: node scripts/bump-version.js $RELEASE_VERSION"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "ERROR: Remote tag $RELEASE_VERSION already exists."
             exit 1
           fi
 
-      - name: Commit, tag, push
+      # === Release execution ===
+
+      - name: Build release asset from .release-manifest.json
+        run: |
+          set -euo pipefail
+          OUT="/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          jq -r '.plugin_runtime[], .release_extras[]' .release-manifest.json | while read -r src; do
+            if [ -z "$src" ]; then continue; fi
+            case "$src" in
+              /*|*..*)
+                echo "ERROR: .release-manifest.json contains unsafe path: $src"
+                exit 1
+                ;;
+            esac
+            if [ ! -e "$src" ]; then
+              echo "ERROR: .release-manifest.json references missing path: $src"
+              exit 1
+            fi
+            dest_parent="$OUT/$(dirname "$src")"
+            mkdir -p "$dest_parent"
+            cp -r "$src" "$OUT/$src"
+          done
+          cp .release-manifest.json "$OUT/"
+          (cd /tmp && zip -r "creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" "creatio-ai-app-development-toolkit-${RELEASE_VERSION}" >/dev/null)
+          ls -la "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
+
+      - name: Tag and push release
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Release $RELEASE_VERSION"
           git tag "$RELEASE_VERSION"
-          git push origin main --tags
+          git push origin "refs/tags/$RELEASE_VERSION"
 
       - name: Create GitHub Release
         run: gh release create "$RELEASE_VERSION" --notes-file /tmp/release_notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload release asset
+        run: gh release upload "$RELEASE_VERSION" "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
         env:
           GH_TOKEN: ${{ github.token }}

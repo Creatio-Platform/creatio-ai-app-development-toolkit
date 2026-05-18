@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import functools
 import json
 import re
 import shutil
@@ -15,12 +16,11 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_REPO_URL = "https://creatio.ghe.com/engineering/ai-driven-app-creation.git"
-DEFAULT_INSTALL_ROOT = Path.home() / ".creatio-ai-app-development-toolkit" / "repo"
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
     "context/INDEX.md",
@@ -34,20 +34,26 @@ REQUIRED_REFERENCE_PATHS = (
     "runtime/scripts/mcp_client.py",
     "runtime/scripts/workflow_validators.py",
 )
-PLUGIN_RUNTIME_PATHS = (
-    "AGENTS.md",
-    ".mcp.json",
-    ".agents",
-    ".claude-plugin",
-    ".codex-plugin",
-    ".cursor-plugin",
-    ".github",
-    "context",
-    "rules",
-    "runbooks",
-    "runtime",
-    "skills",
-)
+
+
+@functools.lru_cache(maxsize=None)
+def _load_plugin_runtime_paths_cached(manifest_path: Path) -> tuple[str, ...]:
+    if not manifest_path.exists():
+        raise RuntimeError(
+            f"Plugin checkout is missing {RELEASE_MANIFEST_FILENAME} at {manifest_path}. "
+            "This file is the canonical list of paths to install."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    paths = manifest.get("plugin_runtime")
+    if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
+        raise RuntimeError(
+            f"{RELEASE_MANIFEST_FILENAME} must contain 'plugin_runtime' as an array of strings"
+        )
+    return tuple(paths)
+
+
+def load_plugin_runtime_paths(repo_root: Path) -> list[str]:
+    return list(_load_plugin_runtime_paths_cached(repo_root / RELEASE_MANIFEST_FILENAME))
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -161,22 +167,6 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     return targets
 
 
-def clone_or_update_repo(repo_url: str, destination: Path, ref: str | None = None) -> Path:
-    existing_checkout = (destination / ".git").exists()
-    if existing_checkout:
-        run_checked(["git", "fetch", "--all", "--tags"], cwd=destination)
-    else:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        run_checked(["git", "clone", repo_url, str(destination)])
-
-    if ref:
-        run_checked(["git", "checkout", ref], cwd=destination)
-    elif existing_checkout:
-        run_checked(["git", "pull", "--ff-only"], cwd=destination)
-
-    return destination
-
-
 def is_plugin_checkout(path: Path) -> bool:
     return (
         (path / ".claude-plugin" / "plugin.json").exists()
@@ -196,13 +186,15 @@ def current_checkout_root() -> Path | None:
     return None
 
 
-def resolve_repo_root(repo_url: str, install_root: Path | None, ref: str | None = None) -> Path:
-    if install_root is None and ref is None:
-        checkout_root = current_checkout_root()
-        if checkout_root:
-            return checkout_root
-
-    return clone_or_update_repo(repo_url, install_root or DEFAULT_INSTALL_ROOT, ref)
+def resolve_repo_root() -> Path:
+    checkout_root = current_checkout_root()
+    if checkout_root is None:
+        raise RuntimeError(
+            "install.py must be run from a plugin checkout. "
+            "Either clone the repository and run `python installer/install.py`, "
+            "or extract a release zip and run `python <extracted-root>/installer/install.py`."
+        )
+    return checkout_root
 
 
 def ensure_required_references(repo_root: Path) -> None:
@@ -252,7 +244,7 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
 def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
     """Copy only the files needed by installed agent plugins."""
     target_dir.mkdir(parents=True, exist_ok=True)
-    for relative_path in PLUGIN_RUNTIME_PATHS:
+    for relative_path in load_plugin_runtime_paths(repo_root):
         source = repo_root / relative_path
         if not source.exists():
             continue
@@ -268,6 +260,21 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+
+
+def prune_directory_entries(target_dir: Path, allowed_names: set[str], label: str | None = None) -> None:
+    """Remove top-level entries that are not part of the managed installation surface."""
+    if not target_dir.exists():
+        return
+    for entry in target_dir.iterdir():
+        if entry.name in allowed_names:
+            continue
+        if label:
+            print(f"Pruned {entry} from {label}")
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
 
 
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
@@ -560,13 +567,8 @@ def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
-def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    """Build the installed Codex skill with absolute paths back to the plugin checkout."""
-    return _render_skill_body(repo_root, mcp_config_path)
-
-
 def render_copilot_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    """Build the installed Copilot CLI skill with absolute paths back to the plugin checkout."""
+    """Build the installed Copilot CLI skill against the self-contained installed plugin."""
     return _render_skill_body(repo_root, mcp_config_path)
 
 
@@ -656,11 +658,15 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rules_dir = cursor_home / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
-    rule_path.write_text(render_cursor_rule(repo_root, mcp_config_path), encoding="utf-8")
+    rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
+    copilot_home = home / ".copilot"
+    installed_plugin_dir = copilot_home / "installed-plugins" / MARKETPLACE_NAME / PLUGIN_NAME
+    skill_source_dir = repo_root / "skills" / SKILL_NAME
+    skill_target_dir = copilot_home / "skills" / SKILL_NAME
     copilot_command = resolve_copilot_command()
     plugin_source = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
     try:
@@ -669,6 +675,31 @@ def install_copilot(repo_root: Path, home: Path) -> None:
         if f'Marketplace "{MARKETPLACE_NAME}" already registered' not in str(error):
             raise
     run_checked([*copilot_command, "plugin", "install", plugin_source], cwd=repo_root)
+    plugin_runtime_paths = load_plugin_runtime_paths(repo_root)
+    copy_plugin_runtime_surface(repo_root, installed_plugin_dir)
+    prune_directory_entries(
+        installed_plugin_dir,
+        {Path(relative_path).parts[0] for relative_path in plugin_runtime_paths},
+        "GitHub Copilot CLI plugin runtime",
+    )
+
+    skill_target_dir.mkdir(parents=True, exist_ok=True)
+    agents_source_dir = skill_source_dir / "agents"
+    if agents_source_dir.exists():
+        agents_target_dir = skill_target_dir / "agents"
+        if agents_target_dir.exists():
+            shutil.rmtree(agents_target_dir)
+        shutil.copytree(
+            agents_source_dir,
+            agents_target_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    skill_body = render_copilot_skill(installed_plugin_dir, copilot_home / "mcp-config.json")
+    (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
+    allowed_skill_entries = {"SKILL.md"}
+    if agents_source_dir.exists():
+        allowed_skill_entries.add("agents")
+    prune_directory_entries(skill_target_dir, allowed_skill_entries, "GitHub Copilot CLI skill")
 
 
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:
@@ -691,18 +722,10 @@ def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install Creatio AI App Development Toolkit plugin.")
-    parser.add_argument("--repo-url", default=DEFAULT_REPO_URL)
-    parser.add_argument("--ref", help="Git tag, branch, or commit to checkout before installing.")
     parser.add_argument(
         "--target",
         choices=["codex", "claude", "cursor", "copilot"],
         help="Install only one target.",
-    )
-    parser.add_argument(
-        "--install-root",
-        type=Path,
-        default=None,
-        help="Local checkout directory for the toolkit repository. Defaults to the current checkout when run from one.",
     )
     return parser.parse_args(argv)
 
@@ -711,7 +734,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         preflight_clio()
-        repo_root = resolve_repo_root(args.repo_url, args.install_root, args.ref)
+        repo_root = resolve_repo_root()
         targets = detect_targets()
         installed = install_for_targets(repo_root, targets, args.target)
     except RuntimeError as error:
