@@ -68,4 +68,6 @@ The installer detects the current checkout as the install source via `.release-m
 
 Advanced users can install for only one agent with `--target <codex|claude|cursor|copilot>`.
 
+When launched by the Creatio installation wizard, the wizard sets `CAADT_SETUP_WIZARD_MANIFEST=1`. In that mode, `install.py` writes a one-shot `~/.caadt/install-state.json` handoff file so the wizard can display which coding agents were configured, then the wizard deletes it. Manual `python installer/install.py` runs do not create that handoff file by default.
+
 The installer does not use a registry, checksums, or scheduled auto-update in v1.
