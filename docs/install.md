@@ -34,23 +34,38 @@ The installer detects and configures these locally:
 
 - **GitHub Copilot CLI** (`~/.copilot/`) — registers this checkout as a local Copilot marketplace with `copilot plugin marketplace add <repo-root>` and installs `creatio-ai-app-development-toolkit@creatio` through the native Copilot plugin flow. The installer then overlays the self-contained ADAC runtime into `~/.copilot/installed-plugins/creatio/creatio-ai-app-development-toolkit/` and rewrites the Copilot skill entry under `~/.copilot/skills/creatio-app-orchestrator/` so it points to the installed plugin copy instead of the source checkout. This keeps the Copilot installation usable after the original ADAC repository checkout is deleted.
 
-## Simple Installer
+## Installation
 
-The v1 installer clones or downloads this repository and configures supported local agents.
-After the installer is published at the hosted ADAC installer URL, users should run the no-flag bootstrap command:
+`install.py` runs from a plugin checkout — either a local clone or an extracted release zip. It does not clone the repository on its own.
+
+### For end users — install from a release
+
+Recommended path: use the Creatio installation wizard, which downloads the latest release asset, extracts it, runs `install.py`, and cleans up the temporary folder.
+
+To do this manually:
+
+1. Download `creatio-ai-app-development-toolkit-<version>.zip` from the [latest release](https://creatio.ghe.com/engineering/ai-driven-app-creation/releases/latest) (asset attached by the release workflow).
+2. Extract it to a temporary folder.
+3. From the extracted folder, run:
+
+   ```bash
+   python installer/install.py
+   ```
+
+4. The extracted folder can be deleted after `install.py` completes — installed plugin copies are self-contained under each agent's home directory.
+
+### For developers — install from a local checkout
 
 ```bash
-curl -fsSL <hosted-adac-install-url>/install.py | python3
-```
-
-Until that hosted URL is available, run the installer from a local checkout:
-
-```bash
+git clone https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+cd ai-driven-app-creation
 python installer/install.py
 ```
 
-When launched from `installer/install.py` inside a plugin checkout, the installer uses that checkout as the install source. Use `--install-root <path>` only when you want to install from another checkout directory.
+The installer detects the current checkout as the install source via `.release-manifest.json` and the plugin manifests at the repository root.
+
+### Common flags
 
 Advanced users can install for only one agent with `--target <codex|claude|cursor|copilot>`.
 
-The installer does not use a registry, release tarballs, checksums, or scheduled auto-update in v1.
+The installer does not use a registry, checksums, or scheduled auto-update in v1.

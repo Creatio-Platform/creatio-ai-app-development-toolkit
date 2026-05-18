@@ -8,7 +8,12 @@
   },
   "repository": "https://creatio.ghe.com/engineering/ai-driven-app-creation",
   "category": "developer-tools",
-  "tags": ["creatio", "business-plan", "mcp", "app-generation"],
+  "tags": [
+    "creatio",
+    "business-plan",
+    "mcp",
+    "app-generation"
+  ],
   "skills": "./skills/",
   "rules": "./rules/",
   "mcpServers": "./.mcp.json"

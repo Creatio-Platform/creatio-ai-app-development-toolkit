@@ -267,13 +267,7 @@ context/
 
 ## Install
 
-After the hosted ADAC installer URL is published:
-
-```bash
-curl -fsSL <hosted-adac-install-url>/install.py | python3
-```
-
-Until then, from a local checkout:
+From a local checkout:
 
 ```bash
 python installer/install.py

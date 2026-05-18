@@ -24,6 +24,29 @@ def write_required_references(installer, repo_root):
         path.write_text("reference\n", encoding="utf-8")
 
 
+def write_release_manifest(repo_root, plugin_runtime=None):
+    paths = plugin_runtime if plugin_runtime is not None else [
+        "AGENTS.md",
+        ".mcp.json",
+        ".agents",
+        ".claude-plugin",
+        ".codex-plugin",
+        ".cursor-plugin",
+        ".github/plugin",
+        "context",
+        "rules",
+        "runbooks",
+        "runtime",
+        "skills",
+    ]
+    manifest_path = repo_root / ".release-manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"plugin_runtime": paths, "release_extras": ["installer", "RELEASE-NOTES.md"]}) + "\n",
+        encoding="utf-8",
+    )
+
+
 class InstallerTests(unittest.TestCase):
     def test_detect_targets_uses_mocked_home_directories(self):
         installer = load_installer()
@@ -76,6 +99,7 @@ class InstallerTests(unittest.TestCase):
             (repo_root / ".codex-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
             (repo_root / ".cursor-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
             write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
             skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
             skill_dir.mkdir(parents=True, exist_ok=True)
             (skill_dir / "SKILL.md").write_text(
@@ -165,6 +189,7 @@ class InstallerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
             commands = []
 
             def fake_run(command, **_kwargs):
@@ -234,6 +259,7 @@ class InstallerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
+            write_release_manifest(repo_root, plugin_runtime=[".mcp.json"])
             home = Path(temp) / "home"
             copilot_home = home / ".copilot"
             copilot_home.mkdir(parents=True)
@@ -261,6 +287,7 @@ class InstallerTests(unittest.TestCase):
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
+            write_release_manifest(repo_root, plugin_runtime=[".mcp.json", ".cursor-plugin"])
 
             home = Path(temp) / "home"
             cursor_home = home / ".cursor"
@@ -277,25 +304,25 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("other", merged["mcpServers"])
             self.assertEqual(merged["mcpServers"]["clio"]["args"], ["mcp-server"])
 
+            local_plugin_dir = (
+                cursor_home
+                / "plugins"
+                / "local"
+                / "creatio-ai-app-development-toolkit"
+            )
             rule_path = cursor_home / "rules" / "creatio-app-orchestrator.mdc"
             self.assertTrue(rule_path.exists())
             rule_body = rule_path.read_text(encoding="utf-8")
             self.assertIn("description:", rule_body)
             self.assertIn("Creatio App Orchestrator", rule_body)
-            self.assertIn(str(repo_root), rule_body)
+            self.assertIn(str(local_plugin_dir), rule_body)
+            self.assertNotIn(str(repo_root), rule_body)
             self.assertIn(str(cursor_home / "mcp.json"), rule_body)
 
-            local_plugin_manifest = (
-                cursor_home
-                / "plugins"
-                / "local"
-                / "creatio-ai-app-development-toolkit"
-                / ".cursor-plugin"
-                / "plugin.json"
-            )
+            local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())
-            self.assertFalse((local_plugin_manifest.parents[1] / "tests").exists())
-            self.assertFalse((local_plugin_manifest.parents[1] / "installer").exists())
+            self.assertFalse((local_plugin_dir / "tests").exists())
+            self.assertFalse((local_plugin_dir / "installer").exists())
 
     def test_install_claude_registers_marketplace_and_copies_only_runtime_plugin_surface(self):
         installer = load_installer()
@@ -328,6 +355,7 @@ class InstallerTests(unittest.TestCase):
             (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "docs" / "install.md").write_text("dev\n", encoding="utf-8")
+            write_release_manifest(repo_root)
 
             home = Path(temp) / "home"
             claude_home = home / ".claude"
@@ -537,6 +565,7 @@ class InstallerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
             home = Path(temp) / "home"
             codex_home = home / ".codex"
             codex_home.mkdir(parents=True)
@@ -681,6 +710,7 @@ class InstallerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
             home = Path(temp) / "home"
             codex_home = home / ".codex"
             codex_home.mkdir(parents=True)
@@ -717,76 +747,93 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
                 installer.install_codex(repo_root, Path(temp) / "home")
 
-    def test_clone_command_includes_optional_ref_checkout(self):
+    def test_resolve_repo_root_returns_current_checkout(self):
         installer = load_installer()
-        commands = []
-
-        def fake_run(command, **_kwargs):
-            commands.append(command)
-
-        with tempfile.TemporaryDirectory() as temp, patch.object(installer, "run_checked", side_effect=fake_run):
-            installer.clone_or_update_repo(
-                "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
-                Path(temp) / "repo",
-                ref="v0.1.0",
-            )
-
-        self.assertEqual(commands[0][:2], ["git", "clone"])
-        self.assertEqual(commands[-1], ["git", "checkout", "v0.1.0"])
-
-    def test_existing_checkout_without_ref_fast_forwards_worktree(self):
-        installer = load_installer()
-        commands = []
-
-        def fake_run(command, **_kwargs):
-            commands.append(command)
-
-        with tempfile.TemporaryDirectory() as temp, patch.object(installer, "run_checked", side_effect=fake_run):
-            repo = Path(temp) / "repo"
-            (repo / ".git").mkdir(parents=True)
-
-            installer.clone_or_update_repo(
-                "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
-                repo,
-            )
-
-        self.assertEqual(commands, [["git", "fetch", "--all", "--tags"], ["git", "pull", "--ff-only"]])
-
-    def test_resolve_repo_root_prefers_current_checkout_without_ref(self):
-        installer = load_installer()
-
-        with patch.object(installer, "current_checkout_root", return_value=ROOT), patch.object(
-            installer,
-            "clone_or_update_repo",
-            side_effect=AssertionError("clone should not run for local checkout installs"),
-        ):
-            resolved = installer.resolve_repo_root(
-                "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
-                None,
-                None,
-            )
-
+        with patch.object(installer, "current_checkout_root", return_value=ROOT):
+            resolved = installer.resolve_repo_root()
         self.assertEqual(resolved, ROOT)
 
-    def test_resolve_repo_root_uses_default_checkout_when_ref_is_requested(self):
+    def test_resolve_repo_root_raises_outside_checkout(self):
         installer = load_installer()
-        with patch.object(installer, "current_checkout_root", return_value=ROOT), patch.object(
-            installer,
-            "clone_or_update_repo",
-            return_value=Path("resolved"),
-        ) as clone:
-            resolved = installer.resolve_repo_root(
-                "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
-                None,
-                "v0.1.0",
-            )
+        with patch.object(installer, "current_checkout_root", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "must be run from a plugin checkout"):
+                installer.resolve_repo_root()
 
-        self.assertEqual(resolved, Path("resolved"))
-        clone.assert_called_once_with(
-            "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
-            installer.DEFAULT_INSTALL_ROOT,
-            "v0.1.0",
-        )
+    def test_install_py_has_no_git_or_repo_url_constants(self):
+        installer = load_installer()
+        self.assertFalse(hasattr(installer, "DEFAULT_REPO_URL"))
+        self.assertFalse(hasattr(installer, "DEFAULT_INSTALL_ROOT"))
+        self.assertFalse(hasattr(installer, "clone_or_update_repo"))
+        self.assertFalse(hasattr(installer, "render_codex_skill"))
+
+    def test_parse_args_only_exposes_target_flag(self):
+        installer = load_installer()
+        namespace = installer.parse_args([])
+        self.assertIsNone(namespace.target)
+        self.assertFalse(hasattr(namespace, "repo_url"))
+        self.assertFalse(hasattr(namespace, "ref"))
+        self.assertFalse(hasattr(namespace, "install_root"))
+
+    def test_load_plugin_runtime_paths_reads_release_manifest(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            (repo_root / ".release-manifest.json").write_text(
+                '{"plugin_runtime":["AGENTS.md",".mcp.json"],"release_extras":["installer"]}\n',
+                encoding="utf-8",
+            )
+            paths = installer.load_plugin_runtime_paths(repo_root)
+        self.assertEqual(paths, ["AGENTS.md", ".mcp.json"])
+
+    def test_load_plugin_runtime_paths_raises_when_manifest_missing(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "release-manifest.json"):
+                installer.load_plugin_runtime_paths(repo_root)
+
+    def test_install_cursor_rule_survives_source_deletion(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            (repo_root / ".cursor-plugin").mkdir()
+            (repo_root / ".cursor-plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
+            (repo_root / ".mcp.json").write_text(
+                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+                encoding="utf-8",
+            )
+            write_release_manifest(repo_root, plugin_runtime=[".mcp.json", ".cursor-plugin"])
+
+            home = Path(temp) / "home"
+            cursor_home = home / ".cursor"
+            cursor_home.mkdir(parents=True)
+
+            installer.install_cursor(repo_root, home)
+
+            rule_body = (cursor_home / "rules" / "creatio-app-orchestrator.mdc").read_text(encoding="utf-8")
+            self.assertNotIn(str(repo_root), rule_body)
+
+            shutil_module = __import__("shutil")
+            shutil_module.rmtree(repo_root)
+            self.assertFalse(repo_root.exists())
+
+            for line in rule_body.splitlines():
+                if "`" not in line:
+                    continue
+                for token in line.split("`"):
+                    candidate = Path(token)
+                    if not candidate.is_absolute():
+                        continue
+                    if candidate.is_relative_to(repo_root):
+                        self.fail(
+                            f"Cursor rule contains absolute path under deleted source: {token}"
+                        )
 
 
 if __name__ == "__main__":
