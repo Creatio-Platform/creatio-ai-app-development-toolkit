@@ -231,6 +231,20 @@ class ReleaseStructureTests(unittest.TestCase):
             r'gh release create "\$RELEASE_VERSION"[^\n]*(?:\n[ \t]+[^\n]+)*\n[ \t]+"/tmp/creatio-ai-app-development-toolkit-\$\{RELEASE_VERSION\}\.zip"',
         )
 
+    def test_gh_steps_set_gh_host_for_ghe(self):
+        """Regression: gh CLI on GHE refuses commands when it cannot identify
+        the API host. `GH_TOKEN` alone is not enough — gh only auto-detects
+        github.com from git remotes; custom hostnames (creatio.ghe.com) require
+        GH_HOST to be set explicitly. Derive it from GITHUB_SERVER_URL so the
+        workflow remains host-agnostic."""
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        # Every step that invokes `gh` must export GH_HOST in the same block.
+        # Simplest invariant: if `gh ` appears in a step body, then
+        # `GH_HOST=` (or `export GH_HOST`) must appear in the same workflow.
+        if "gh release" in workflow or re.search(r"\bgh\s", workflow):
+            self.assertIn("GH_HOST=", workflow)
+            self.assertIn("GITHUB_SERVER_URL", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
