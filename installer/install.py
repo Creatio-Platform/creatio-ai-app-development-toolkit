@@ -23,6 +23,15 @@ MARKETPLACE_NAME = "creatio"
 SKILL_NAME = "creatio-app-orchestrator"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
+SETUP_WIZARD_MANIFEST_DIR = ".caadt"
+SETUP_WIZARD_MANIFEST_FILENAME = "install-state.json"
+SETUP_WIZARD_MANIFEST_ENV_VAR = "CAADT_SETUP_WIZARD_MANIFEST"
+SETUP_WIZARD_AGENT_DISPLAY_NAMES = {
+    "codex": ("codex", "Codex"),
+    "claude": ("claude-code", "Claude Code"),
+    "cursor": ("cursor", "Cursor"),
+    "copilot": ("copilot", "GitHub Copilot CLI"),
+}
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
     "context/INDEX.md",
@@ -728,6 +737,45 @@ def install_copilot(repo_root: Path, home: Path) -> None:
     prune_directory_entries(skill_target_dir, allowed_skill_entries, "GitHub Copilot CLI skill")
 
 
+def write_setup_wizard_manifest(
+    repo_root: Path,
+    installed_target_ids: list[str],
+    home: Path | None = None,
+) -> Path:
+    """Write the handoff manifest that the CAADT Setup Wizard reads on success.
+
+    The wizard opts into this handoff with CAADT_SETUP_WIZARD_MANIFEST=1,
+    reads ~/.caadt/install-state.json to learn which coding agents install.py
+    registered with, then deletes the file. The manifest is a one-shot
+    handoff, not persistent state.
+    """
+    home = home or Path.home()
+    manifest_dir = home / SETUP_WIZARD_MANIFEST_DIR
+    manifest_path = manifest_dir / SETUP_WIZARD_MANIFEST_FILENAME
+
+    agents = []
+    for target_id in installed_target_ids:
+        mapping = SETUP_WIZARD_AGENT_DISPLAY_NAMES.get(target_id)
+        if mapping is None:
+            continue
+        manifest_id, display_name = mapping
+        agents.append({"id": manifest_id, "displayName": display_name})
+
+    payload: dict[str, Any] = {
+        "version": plugin_version(repo_root),
+        "installedAt": now_iso(),
+        "agents": agents,
+    }
+    write_json(manifest_path, payload)
+    return manifest_path
+
+
+def should_write_setup_wizard_manifest(env: dict[str, str] | None = None) -> bool:
+    env = env or os.environ
+    value = env.get(SETUP_WIZARD_MANIFEST_ENV_VAR, "")
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
 def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:
     installed = []
     for target in targets:
@@ -763,6 +811,11 @@ def main(argv: list[str] | None = None) -> int:
         repo_root = resolve_repo_root()
         targets = detect_targets()
         installed = install_for_targets(repo_root, targets, args.target)
+        manifest_path = (
+            write_setup_wizard_manifest(repo_root, installed)
+            if should_write_setup_wizard_manifest()
+            else None
+        )
     except RuntimeError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
@@ -771,6 +824,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Installed {PLUGIN_NAME} for: {', '.join(installed)}")
     else:
         print("No supported local coding agents were detected.")
+    if manifest_path is not None:
+        print(f"Wrote setup wizard manifest: {manifest_path}")
     return 0
 
 

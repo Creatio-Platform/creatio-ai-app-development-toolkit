@@ -883,5 +883,106 @@ class InstallerTests(unittest.TestCase):
                         pass
 
 
+    def test_write_setup_wizard_manifest_maps_target_ids_and_writes_to_caadt_dir(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            (repo_root / ".github" / "plugin").mkdir(parents=True)
+            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"1.2.3"}\n',
+                encoding="utf-8",
+            )
+            home = Path(temp) / "home"
+
+            manifest_path = installer.write_setup_wizard_manifest(
+                repo_root,
+                ["claude", "codex"],
+                home=home,
+            )
+
+            self.assertEqual(manifest_path, home / ".caadt" / "install-state.json")
+            self.assertTrue(manifest_path.exists())
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["version"], "1.2.3")
+            self.assertIn("installedAt", payload)
+            self.assertEqual(
+                payload["agents"],
+                [
+                    {"id": "claude-code", "displayName": "Claude Code"},
+                    {"id": "codex", "displayName": "Codex"},
+                ],
+            )
+
+    def test_write_setup_wizard_manifest_handles_empty_install_list(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            (repo_root / ".github" / "plugin").mkdir(parents=True)
+            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.0.1"}\n',
+                encoding="utf-8",
+            )
+            home = Path(temp) / "home"
+
+            manifest_path = installer.write_setup_wizard_manifest(repo_root, [], home=home)
+
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["agents"], [])
+            self.assertEqual(payload["version"], "0.0.1")
+
+    def test_setup_wizard_manifest_is_opt_in(self):
+        installer = load_installer()
+
+        self.assertFalse(installer.should_write_setup_wizard_manifest({}))
+        self.assertFalse(
+            installer.should_write_setup_wizard_manifest(
+                {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "0"}
+            )
+        )
+        self.assertTrue(
+            installer.should_write_setup_wizard_manifest(
+                {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "1"}
+            )
+        )
+
+    def test_main_does_not_write_setup_wizard_manifest_by_default(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(installer.SETUP_WIZARD_MANIFEST_ENV_VAR, None)
+                with (
+                    patch.object(installer, "preflight_clio"),
+                    patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                    patch.object(installer, "detect_targets", return_value=[]),
+                    patch.object(installer, "install_for_targets", return_value=["codex"]),
+                    patch.object(installer, "write_setup_wizard_manifest") as write_manifest,
+                ):
+                    result = installer.main([])
+
+            self.assertEqual(result, 0)
+            write_manifest.assert_not_called()
+
+    def test_main_writes_setup_wizard_manifest_when_requested(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            manifest_path = Path(temp) / "home" / ".caadt" / "install-state.json"
+            with patch.dict(os.environ, {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "1"}, clear=False):
+                with (
+                    patch.object(installer, "preflight_clio"),
+                    patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                    patch.object(installer, "detect_targets", return_value=[]),
+                    patch.object(installer, "install_for_targets", return_value=["codex"]),
+                    patch.object(installer, "write_setup_wizard_manifest", return_value=manifest_path) as write_manifest,
+                ):
+                    result = installer.main([])
+
+            self.assertEqual(result, 0)
+            write_manifest.assert_called_once_with(repo_root, ["codex"])
+
+
 if __name__ == "__main__":
     unittest.main()
