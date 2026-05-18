@@ -212,16 +212,43 @@ class ReleaseStructureTests(unittest.TestCase):
                     f"plugin_runtime must not include dev artifact: {relative_path}",
                 )
 
-    def test_release_manifest_covers_installer_and_release_notes(self):
+    def test_release_manifest_covers_installer_and_excludes_release_notes(self):
         manifest = read_json(".release-manifest.json")
         self.assertIn("installer", manifest["release_extras"])
-        self.assertIn("RELEASE-NOTES.md", manifest["release_extras"])
+        self.assertNotIn("RELEASE-NOTES.md", manifest["release_extras"])
 
     def test_release_workflow_builds_and_uploads_curated_asset(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn(".release-manifest.json", workflow)
-        self.assertIn("gh release upload", workflow)
         self.assertIn("creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip", workflow)
+        # Asset is attached via `gh release create` (draft → upload → publish in
+        # one call) so a transient upload failure leaves a draft instead of a
+        # published release whose asset 404s. A separate `gh release upload`
+        # step must NOT exist — it would re-introduce the partial-state window.
+        self.assertNotIn("gh release upload", workflow)
+        self.assertRegex(
+            workflow,
+            r'gh release create "\$RELEASE_VERSION"[^\n]*(?:\n[ \t]+[^\n]+)*\n[ \t]+"/tmp/creatio-ai-app-development-toolkit-\$\{RELEASE_VERSION\}\.zip"',
+        )
+
+    def test_gh_steps_set_gh_host_for_ghe(self):
+        """Regression: gh CLI on GHE refuses commands when it cannot identify
+        the API host. `GH_TOKEN` alone is not enough — gh only auto-detects
+        github.com from git remotes; custom hostnames (creatio.ghe.com) require
+        GH_HOST to be set explicitly. Derive it from GITHUB_SERVER_URL so the
+        workflow remains host-agnostic."""
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        release_step = re.search(
+            r"- name: Create GitHub Release with asset\n"
+            r"(?P<body>(?:[ \t]+.*\n)+?)(?=\n[ \t]{6}- name:|\Z)",
+            workflow,
+        )
+        self.assertIsNotNone(release_step, "release workflow must create the GitHub Release")
+        step_body = release_step.group("body")
+        self.assertIn('gh release create "$RELEASE_VERSION"', step_body)
+        self.assertIn('export GH_HOST="${GITHUB_SERVER_URL#http://}"', step_body)
+        self.assertIn('export GH_HOST="${GH_HOST#https://}"', step_body)
+        self.assertIn('export GH_HOST="${GH_HOST%/}"', step_body)
 
 
 if __name__ == "__main__":
