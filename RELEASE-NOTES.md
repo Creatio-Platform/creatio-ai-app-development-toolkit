@@ -35,7 +35,9 @@ GitHub Release.
   trigger that tags and publishes an already-prepared main branch.
 - Release workflow now builds a `creatio-ai-app-development-toolkit-<version>.zip` asset from
   `.release-manifest.json` (`plugin_runtime[]` + `release_extras[]`) and
-  attaches it to the GitHub Release via `gh release upload`.
+  attaches it to the GitHub Release in a single `gh release create` call
+  (draft → upload → publish). A transient asset-upload failure leaves a
+  draft instead of a published release whose asset 404s.
 - `.release-manifest.json` added as the canonical list of paths shipped
   in the release zip and copied into agent homes by `install.py`. The
   installer reads `plugin_runtime[]` from this file instead of a
