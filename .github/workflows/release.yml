@@ -119,7 +119,16 @@ jobs:
         # If asset upload fails, the release stays as a draft (not visible as
         # "latest"), so the installation wizard never sees a release whose
         # asset 404s. Single step keeps tag/release/asset state coherent.
+        #
+        # GH_HOST is required on GHE: `gh` only auto-detects the API host from
+        # git remotes for github.com. For custom hostnames it bails with
+        # "none of the git remotes ... point to a known GitHub host" unless
+        # GH_HOST is set explicitly. Derive only the hostname from
+        # GITHUB_SERVER_URL so the workflow is host-agnostic.
         run: |
+          export GH_HOST="${GITHUB_SERVER_URL#http://}"
+          export GH_HOST="${GH_HOST#https://}"
+          export GH_HOST="${GH_HOST%/}"
           gh release create "$RELEASE_VERSION" \
             --notes-file /tmp/release_notes.md \
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
