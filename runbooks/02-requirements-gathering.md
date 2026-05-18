@@ -51,7 +51,7 @@ Apply this guidance when the developer mentions mobile access, a mobile-first UX
 - **Clarify scope**: ask which sections (entities) need mobile pages — mobile and web pages are separate schemas with different component registries and body formats.
 - **Record constraints in the Business Plan**: mobile pages cannot use custom validators, custom handlers, or custom converters. Only 7 OOTB converters may be referenced as inline binding expressions (`crt.ToObjectProp`, `crt.InvertBooleanValue`, `crt.IsEqual`, `crt.AndBooleanValue`, `crt.IsInArray`, `crt.Concat`, `crt.ToCollectionFilters`). If the user requires complex client-side logic (custom validators, converters, or handlers), flag this as out-of-scope for AI generation and note it requires a separate non-AI implementation path.
 - **Provisioning**: mobile pages are created automatically by `create-app-section` when the `UseMobilePageDesigner` feature flag is enabled. No separate mobile page creation tool is needed. Note the flag dependency explicitly in the Business Plan.
-- **Discovery**: `list-pages` and `get-app-info` return `schema-type: "mobile"` for mobile pages; use this label rather than comparing numeric `schemaType` values.
+- **Discovery**: `get-page` returns `schema-type: "mobile"` for mobile pages. In `list-pages` and `get-app-info`, identify mobile pages by their naming suffix (`_MobileFormPage` / `_MobileListPage`) or parent template name.
 
 ## Checklist Authority
 

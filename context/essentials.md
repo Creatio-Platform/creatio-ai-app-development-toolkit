@@ -73,7 +73,7 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `validate-page` validates a page body client-side without saving to Creatio
 
 **Freedom UI — Mobile Pages**
-- Mobile pages have `schema-type: "mobile"` in `list-pages` / `get-page` / `get-app-info` responses; numeric `schemaType` is `10`
+- Mobile pages have `schema-type: "mobile"` in `get-page` responses; numeric `schemaType` is `10`. In `list-pages` and `get-app-info`, identify mobile pages by naming suffix (`_MobileFormPage` / `_MobileListPage`) or parent template (`MobilePageWithTabsFreedomTemplate`, `BaseMobileListTemplate`)
 - Body format is **plain JSON** (not an AMD `define(...)` module) with top-level keys `viewConfigDiff`, `viewModelConfigDiff`, `modelConfigDiff` only
 - `handlers`, `validators`, and custom `converters` sections are web/AMD-only — do not include them in mobile page bodies; `update-page` and `sync-pages` actively reject them
 - Use `get-component-info` with `schema-type: "mobile"` for mobile component metadata; the mobile component registry is separate from the web registry
