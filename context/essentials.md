@@ -72,6 +72,15 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
 - `validate-page` validates a page body client-side without saving to Creatio
 
+**Freedom UI — Mobile Pages**
+- Mobile pages have `schema-type: "mobile"` in `get-page` responses; numeric `schemaType` is `10`. In `list-pages` and `get-app-info`, identify mobile pages by naming suffix (`_MobileFormPage` / `_MobileListPage`) or parent template (`MobilePageWithTabsFreedomTemplate`, `BaseMobileListTemplate`)
+- Body format is **plain JSON** (not an AMD `define(...)` module) with top-level keys `viewConfigDiff`, `viewModelConfigDiff`, `modelConfigDiff` only
+- `handlers`, `validators`, and custom `converters` sections are web/AMD-only — do not include them in mobile page bodies; `update-page` and `sync-pages` actively reject them
+- Use `get-component-info` with `schema-type: "mobile"` for mobile component metadata; the mobile component registry is separate from the web registry
+- Call `get-guidance mobile-page-modification` before editing any mobile page body — mobile pages have different component registry, body constraints, and Scaffold inheritance rules
+- The `get-page → update-page` workflow applies identically to web and mobile pages
+- Mobile pages are provisioned automatically by `create-app-section` when the `UseMobilePageDesigner` feature flag is enabled on the target environment; discovery surfaces return no mobile pages when the flag is off
+
 **Page Creation (DB-first)**
 - `list-page-templates` discovers valid Freedom UI page templates per environment
 - `create-page` creates a new page from a template, assigning it to a package and optionally binding an entity schema
