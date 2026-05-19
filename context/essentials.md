@@ -1,6 +1,6 @@
 # Creatio Platform Essentials
 
-> **Scope note for this repository:** This file is platform reference material only. The active session produces a Business Plan only — no Creatio artifacts are created. Do not use this file as authorization to call clio MCP tools or create apps, schemas, or pages. All clio mutation tools (`create-app`, `sync-schemas`, `sync-pages`, etc.) are out of scope for this repository; implementation runs in a separate agent session.
+> **Scope note for this repository:** This file is platform reference material only. It does not override the gate order in `AGENTS.md`: draft and approve the Business Plan first, then collect runtime inputs, resolve the environment, and execute through clio MCP. Exact tool contracts still come from `get-tool-contract`.
 
 This file contains the high-level platform overview and the local MCP workflow shape. Use the topic-specific files below for naming conventions, package structure, and clio CLI commands. For the executable MCP contract (parameter names, response shapes, error codes), use `get-tool-contract` and the clio MCP guidance resources.
 
@@ -105,13 +105,13 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 ## Local MCP Workflow
 
 ```text
-MCP result -> normalize into repo-local context -> run approved helper orchestration -> persist evidence and reports
+Approved Business Plan -> clio MCP call -> source-backed execution evidence -> inline conversation report
 ```
 
 Local rule:
-- Keep the result file flat and source-backed
-- The normalized runtime document starts from the MCP response and adds local helper state such as `schemaSync`, `operationLog`, `pageEvidence`, `acceptanceEvidence`, and `editableContext`
-- Normalization is canonicalization plus strict validation; invalid local helper state must fail before persistence
+- Keep execution evidence source-backed and derived from MCP responses.
+- Report operation, page, and acceptance evidence inline in the conversation.
+- Resolve executable details through `get-tool-contract`; do not persist a separate repo-local runtime document as the source of truth.
 
 ---
 

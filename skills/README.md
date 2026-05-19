@@ -10,4 +10,4 @@ This directory hosts the entrypoint skill(s) for ADAC.
 
 - ADAC exposes **one skill on purpose**. The workflow is a single sequential contract; individual stages (environment setup, requirements gathering) are not independently triggerable and must not be promoted to standalone skills, as they would risk being invoked out of gate order.
 - Runbooks under `runbooks/` are stage playbooks loaded by the orchestrator at the right phase, not skill entrypoints.
-- Implementing code agents operate in a separate session using clio MCP tools directly, guided by the approved Business Plan and Technical Implementation Handoff produced through this skill.
+- The implementation stage uses clio MCP tools after Gate R approval, guided by the approved Business Plan and Technical Implementation Handoff produced through this skill.

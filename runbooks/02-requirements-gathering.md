@@ -327,7 +327,7 @@ The BA draft is incomplete if any of the following is true:
 Present the Technical Implementation Handoff immediately after the 7-section Business Plan in the same message, before asking for approval.
 
 This block is **not** a BA section. It is not numbered and not subject to BA format rules.
-It is consumed by the implementing code agent running in a separate session with clio MCP tools.
+It is consumed by the implementation stage that runs after Gate R approval with clio MCP tools.
 
 ### Format
 
