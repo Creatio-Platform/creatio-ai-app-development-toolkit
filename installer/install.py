@@ -493,6 +493,43 @@ def merge_codex_marketplace_config(
     target_path.write_text(existing, encoding="utf-8")
 
 
+def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> None:
+    """Drop explicit Codex skill enable/disable overrides for the ADAC skill.
+
+    Plugin installation should be the source of truth. Keeping a legacy
+    `enabled = false` block prevents Codex from indexing the freshly installed
+    plugin skill after reinstall.
+    """
+    if not target_path.exists():
+        return
+
+    lines = target_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    updated: list[str] = []
+    index = 0
+    changed = False
+    while index < len(lines):
+        if lines[index].strip() != "[[skills.config]]":
+            updated.append(lines[index])
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            end += 1
+        block = lines[index:end]
+        block_text = "".join(block)
+        if f'name = "{skill_name}"' in block_text:
+            changed = True
+        else:
+            updated.extend(block)
+        index = end
+
+    if not changed:
+        return
+
+    target_path.write_text("".join(updated), encoding="utf-8")
+
+
 def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> None:
     settings = read_json_file(target_path)
     extra_marketplaces = settings.setdefault("extraKnownMarketplaces", {})
@@ -574,7 +611,7 @@ def render_load_order(repo_root: Path) -> str:
 
 
 def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
-    """Shared skill body for Codex and Copilot targets."""
+    """Shared skill body for installed agent targets."""
     return (
         "---\n"
         f"name: {SKILL_NAME}\n"
@@ -600,6 +637,16 @@ def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
         "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
+
+
+def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
+    """Build the installed Codex skill with absolute paths back to the plugin checkout."""
+    return _render_skill_body(repo_root, mcp_config_path)
+
+
+def render_claude_skill(repo_root: Path, mcp_config_path: Path) -> str:
+    """Build the installed Claude Code skill with absolute paths back to the plugin checkout."""
+    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_copilot_skill(repo_root: Path, mcp_config_path: Path) -> str:
@@ -634,29 +681,55 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
+def write_rendered_skill(target_root: Path, skill_body: str, agents_source_dir: Path | None = None) -> None:
+    skill_target_dir = target_root / "skills" / SKILL_NAME
+    skill_target_dir.mkdir(parents=True, exist_ok=True)
+    (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
+    if agents_source_dir and agents_source_dir.exists():
+        agents_target_dir = skill_target_dir / "agents"
+        if agents_target_dir.exists():
+            shutil.rmtree(agents_target_dir)
+        shutil.copytree(
+            agents_source_dir,
+            agents_target_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
     version = plugin_version(repo_root)
     codex_home = home / ".codex"
-    agents_plugin_dir = home / ".agents" / "plugins" / PLUGIN_NAME
-    agents_skills_dir = home / ".agents" / "skills"
     marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
     marketplace_plugin_dir = marketplace_dir / "plugins" / PLUGIN_NAME
     cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
     standalone_skill_dir = codex_home / "skills" / SKILL_NAME
     remove_tree_if_exists(marketplace_dir, "Codex")
     remove_tree_if_exists(cache_dir, "Codex")
-    remove_tree_if_exists(agents_plugin_dir, "Codex")
+    remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "Codex")
+    remove_tree_if_exists(home / ".agents" / "skills" / SKILL_NAME, "Codex")
     remove_tree_if_exists(standalone_skill_dir, "Codex")
     copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
     write_codex_marketplace_catalog(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
-    copy_plugin_runtime_surface(repo_root, agents_plugin_dir)
-    copy_skill_directories(repo_root, agents_skills_dir)
     mcp_config_path = codex_home / "config.toml"
+    agents_source_dir = repo_root / "skills" / SKILL_NAME / "agents"
+    write_rendered_skill(
+        marketplace_plugin_dir,
+        render_codex_skill(marketplace_plugin_dir, mcp_config_path),
+        agents_source_dir,
+    )
+    write_rendered_skill(
+        cache_dir,
+        render_codex_skill(cache_dir, mcp_config_path),
+        agents_source_dir,
+    )
+    remove_codex_skill_config_override(
+        mcp_config_path,
+        f"{PLUGIN_NAME}:{SKILL_NAME}",
+    )
     merge_codex_mcp_config(repo_root, mcp_config_path)
     merge_codex_marketplace_config(MARKETPLACE_NAME, marketplace_dir, PLUGIN_NAME, mcp_config_path)
-    merge_personal_marketplace_catalog(repo_root, home)
 
 
 def install_claude(repo_root: Path, home: Path) -> None:
@@ -669,8 +742,18 @@ def install_claude(repo_root: Path, home: Path) -> None:
     remove_tree_if_exists(cache_dir, "Claude Code")
     copy_plugin_runtime_surface(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
-    copy_skill_directories(repo_root, home / ".agents" / "skills")
     copy_mcp_config(repo_root, claude_home / "adac.mcp.json")
+    agents_source_dir = repo_root / "skills" / SKILL_NAME / "agents"
+    write_rendered_skill(
+        marketplace_dir,
+        render_claude_skill(marketplace_dir, claude_home / "adac.mcp.json"),
+        agents_source_dir,
+    )
+    write_rendered_skill(
+        cache_dir,
+        render_claude_skill(cache_dir, claude_home / "adac.mcp.json"),
+        agents_source_dir,
+    )
     merge_claude_plugin_settings(marketplace_dir, claude_home / "settings.json")
     register_claude_known_marketplace(
         marketplace_dir,
@@ -702,6 +785,8 @@ def install_copilot(repo_root: Path, home: Path) -> None:
     installed_plugin_dir = copilot_home / "installed-plugins" / MARKETPLACE_NAME / PLUGIN_NAME
     skill_source_dir = repo_root / "skills" / SKILL_NAME
     skill_target_dir = copilot_home / "skills" / SKILL_NAME
+    remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "GitHub Copilot CLI")
+    remove_tree_if_exists(home / ".agents" / "skills" / SKILL_NAME, "GitHub Copilot CLI")
     copilot_command = resolve_copilot_command()
     plugin_source = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
     try:
@@ -714,7 +799,11 @@ def install_copilot(repo_root: Path, home: Path) -> None:
     copy_plugin_runtime_surface(repo_root, installed_plugin_dir)
     prune_directory_entries(
         installed_plugin_dir,
-        {Path(relative_path).parts[0] for relative_path in plugin_runtime_paths},
+        {
+            Path(relative_path).parts[0]
+            for relative_path in plugin_runtime_paths
+            if Path(relative_path).parts[0] != "skills"
+        },
         "GitHub Copilot CLI plugin runtime",
     )
 

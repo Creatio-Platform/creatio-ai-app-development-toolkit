@@ -272,7 +272,17 @@ Before presenting the draft for approval, save the Business Plan to a temp file 
 **Windows (PowerShell):**
 ```powershell
 # Validate Business Plan
-Get-Content "$env:TEMP\<appname>-plan.md" -Raw | py -3 -c "
+$python = @(
+  @{ cmd = "py"; args = @("-3", "-c") }
+  @{ cmd = "python"; args = @("-c") }
+  @{ cmd = "python3"; args = @("-c") }
+) | Where-Object { Get-Command $_.cmd -ErrorAction SilentlyContinue } | Select-Object -First 1
+
+if (-not $python) {
+  throw "No Python launcher found. Tried: py, python, python3."
+}
+
+Get-Content "$env:TEMP\<appname>-plan.md" -Raw | & $python.cmd @($python.args) "
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd()))
