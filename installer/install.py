@@ -712,15 +712,12 @@ def install_codex(repo_root: Path, home: Path) -> None:
     copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
     write_codex_marketplace_catalog(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
+    remove_tree_if_exists(marketplace_plugin_dir / "skills", "Codex")
+    remove_tree_if_exists(cache_dir / "skills", "Codex")
     mcp_config_path = codex_home / "config.toml"
     agents_source_dir = repo_root / "skills" / SKILL_NAME / "agents"
     write_rendered_skill(
-        marketplace_plugin_dir,
-        render_codex_skill(marketplace_plugin_dir, mcp_config_path),
-        agents_source_dir,
-    )
-    write_rendered_skill(
-        cache_dir,
+        codex_home,
         render_codex_skill(cache_dir, mcp_config_path),
         agents_source_dir,
     )

@@ -601,7 +601,7 @@ class InstallerTests(unittest.TestCase):
             marketplace_plugin_dir = marketplace_dir / "plugins" / "creatio-ai-app-development-toolkit"
             self.assertTrue((marketplace_plugin_dir / "runbooks").exists())
             self.assertTrue((marketplace_plugin_dir / "context").exists())
-            self.assertTrue((marketplace_plugin_dir / "skills").exists())
+            self.assertFalse((marketplace_plugin_dir / "skills").exists())
             self.assertTrue((marketplace_plugin_dir / ".mcp.json").exists())
             self.assertTrue((marketplace_plugin_dir / ".codex-plugin" / "plugin.json").exists())
             self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
@@ -609,14 +609,16 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse((marketplace_plugin_dir / "installer").exists())
             self.assertTrue((cache_dir / "runbooks").exists())
             self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertFalse((cache_dir / "skills").exists())
             self.assertFalse((home / ".agents" / "plugins" / "creatio-ai-app-development-toolkit").exists())
             self.assertFalse((home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
-            self.assertFalse((codex_home / "skills" / "creatio-app-orchestrator").exists())
-            marketplace_skill = (marketplace_plugin_dir / "skills" / "creatio-app-orchestrator" / "SKILL.md").read_text(
+            standalone_skill = codex_home / "skills" / "creatio-app-orchestrator" / "SKILL.md"
+            self.assertTrue(standalone_skill.exists())
+            marketplace_skill = standalone_skill.read_text(
                 encoding="utf-8"
             )
             self.assertIn(
-                f"Toolkit repository is installed at: `{marketplace_plugin_dir}`",
+                f"Toolkit repository is installed at: `{cache_dir}`",
                 marketplace_skill,
             )
             self.assertIn(
