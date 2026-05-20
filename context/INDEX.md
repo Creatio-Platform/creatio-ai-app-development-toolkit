@@ -8,7 +8,7 @@ This repository is authoritative for orchestration, approvals, BA structure, and
 
 ## Quick Capability Map
 
-This repository produces BA-style Business Plans for Creatio apps.
+This repository drives BA-style Business Plans for Creatio apps and the approved clio MCP implementation flow.
 
 Start with `AGENTS.md`, then follow the current stage runbook in `runbooks/`.
 

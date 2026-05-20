@@ -417,7 +417,7 @@ ADAC ships as a single versioned product (one number for plugin metadata, skills
 
 ## Release Flow
 
-Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_dispatch`). Maintainer enters the target version `X.Y.Z`; the workflow runs the Release Gate (5 checks: version format, RELEASE-NOTES.md section present, manifests synced, tests pass, post-bump consistency) then bumps versions, tags, and creates a GitHub Release with body extracted from `RELEASE-NOTES.md`.
+Releases are cut manually via the `Release` GitHub Actions workflow (`workflow_dispatch`) after a release preparation PR has already bumped versions and added the matching `RELEASE-NOTES.md` section. Maintainer enters the target version `X.Y.Z`; the workflow runs the Release Gate (5 gates: version format, release-notes section present, manifests already synced, tests pass, and canonical manifest match and tag availability), then tags and creates a GitHub Release with body extracted from `RELEASE-NOTES.md`.
 
 Notes for each release live in `RELEASE-NOTES.md` (canonical file at the repo root). Add a `## X.Y.Z (YYYY-MM-DD)` section at the top of the file in a separate PR before triggering the release workflow. Subsections (`###`) are free-form per release (Features, Bug Fixes, Migration Notes, etc.).
 
