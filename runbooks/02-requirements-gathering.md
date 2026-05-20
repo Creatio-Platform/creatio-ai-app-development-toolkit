@@ -282,7 +282,10 @@ if (-not $python) {
   throw "No Python launcher found. Tried: py, python, python3."
 }
 
-Get-Content "$env:TEMP\<appname>-plan.md" -Raw | & $python.cmd @($python.args) "
+$pythonCmd = $python.cmd
+$pythonArgs = $python.args
+
+Get-Content "$env:TEMP\<appname>-plan.md" -Raw | & $pythonCmd @pythonArgs "
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd()))
