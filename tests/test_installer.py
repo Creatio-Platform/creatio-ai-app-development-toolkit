@@ -49,6 +49,56 @@ def write_release_manifest(repo_root, plugin_runtime=None):
     )
 
 
+def build_minimal_copilot_test_repo(installer, temp_root):
+    """Build a minimal repo skeleton sufficient for ``install_copilot`` to run.
+
+    Creates the standard sub-directories, required plugin/manifest files, and
+    a minimal skill bundle. Returns the ``repo_root`` path. Callers can add
+    their own test-specific fixtures (e.g. stale install artifacts) after.
+    """
+    repo_root = temp_root / "repo"
+    for sub in (
+        "tests",
+        "installer",
+        "docs",
+        "runbooks",
+        "context",
+        "skills",
+        "runtime",
+        ".github/plugin",
+        ".claude-plugin",
+        ".codex-plugin",
+        ".cursor-plugin",
+        ".agents",
+    ):
+        (repo_root / sub).mkdir(parents=True, exist_ok=True)
+    (repo_root / ".mcp.json").write_text(
+        '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+        encoding="utf-8",
+    )
+    (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+        '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+        encoding="utf-8",
+    )
+    for plugin_dir in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
+        (repo_root / plugin_dir / "plugin.json").write_text(
+            '{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8"
+        )
+    write_required_references(installer, repo_root)
+    write_release_manifest(repo_root)
+    skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "agents").mkdir()
+    (skill_dir / "agents" / "openai.yaml").write_text(
+        "display_name: test\n", encoding="utf-8"
+    )
+    return repo_root
+
+
 class InstallerTests(unittest.TestCase):
     def test_detect_targets_uses_mocked_home_directories(self):
         installer = load_installer()
@@ -74,42 +124,7 @@ class InstallerTests(unittest.TestCase):
     def test_install_copilot_registers_marketplace_installs_plugin_and_copies_runtime_surface(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            (repo_root / "tests").mkdir(parents=True)
-            (repo_root / "installer").mkdir()
-            (repo_root / "docs").mkdir()
-            (repo_root / "runbooks").mkdir()
-            (repo_root / "context").mkdir()
-            (repo_root / "skills").mkdir()
-            (repo_root / "runtime").mkdir()
-            (repo_root / ".github").mkdir()
-            (repo_root / ".github" / "plugin").mkdir()
-            (repo_root / ".claude-plugin").mkdir()
-            (repo_root / ".codex-plugin").mkdir()
-            (repo_root / ".cursor-plugin").mkdir()
-            (repo_root / ".agents").mkdir()
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
-            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".claude-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
-            (repo_root / ".codex-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
-            (repo_root / ".cursor-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
-            write_required_references(installer, repo_root)
-            write_release_manifest(repo_root)
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (skill_dir / "agents").mkdir()
-            (skill_dir / "agents" / "openai.yaml").write_text("display_name: test\n", encoding="utf-8")
+            repo_root = build_minimal_copilot_test_repo(installer, Path(temp))
             (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")
             (repo_root / "docs" / "install.md").write_text("dev\n", encoding="utf-8")
@@ -170,6 +185,53 @@ class InstallerTests(unittest.TestCase):
                 ["copilot", "plugin", "install", "creatio-ai-app-development-toolkit@creatio"],
             ],
         )
+
+    def test_install_copilot_skill_references_resolve_to_installed_files(self):
+        """Regression guard for the SKILL.md path-rewriting fix that closes
+        ENG-89962 #18 (dangling SKILL.md references). The fix itself landed
+        earlier in `installer/install.py`; this test prevents re-introduction.
+        Asserts that every path referenced in the rendered SKILL.md Load Order
+        resolves to a file that actually exists in the installed plugin layout
+        (e.g., guards against the legacy ~/.agents/skills/<skill>/AGENTS.md
+        not-found errors)."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = build_minimal_copilot_test_repo(installer, Path(temp))
+
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked", side_effect=lambda *_a, **_k: None
+            ):
+                home = Path(temp) / "home"
+                installer.install_copilot(repo_root, home)
+
+            installed_plugin_dir = home / ".copilot" / "installed-plugins" / "creatio" / "creatio-ai-app-development-toolkit"
+            skill_target_dir = home / ".copilot" / "skills" / "creatio-app-orchestrator"
+            skill_body = (skill_target_dir / "SKILL.md").read_text(encoding="utf-8")
+
+            self.assertTrue(
+                installed_plugin_dir.exists(),
+                f"installer did not create the plugin install dir: {installed_plugin_dir}",
+            )
+
+            missing = []
+            for relative in installer.REQUIRED_REFERENCE_PATHS:
+                referenced_path = installed_plugin_dir / relative
+                if str(referenced_path) in skill_body and not referenced_path.exists():
+                    missing.append(str(referenced_path))
+            self.assertEqual(missing, [], f"SKILL.md references non-existent files: {missing}")
+
+            for must_have_relative in (
+                "AGENTS.md",
+                "context/INDEX.md",
+                "runbooks/01-environment-setup.md",
+                "runbooks/02-requirements-gathering.md",
+                "runtime/scripts/mcp_client.py",
+                "runtime/scripts/workflow_validators.py",
+            ):
+                referenced = installed_plugin_dir / must_have_relative
+                self.assertIn(str(referenced), skill_body)
+                self.assertTrue(referenced.exists(), f"missing on disk: {referenced}")
+            self.assertNotIn(str(repo_root), skill_body)
 
     def test_install_copilot_rejects_checkout_without_required_references(self):
         installer = load_installer()

@@ -94,141 +94,25 @@ Use full app generation or business-shaped feature work when the request is:
 
 Support mode is a policy overlay for end-user troubleshooting and session traceability.
 
-Activation phrases are case-insensitive:
+Activation phrases (case-insensitive):
 
 - `support mode on`
 - `turn on support mode`
 - `support mode off`
 
-Run-scoped behavior:
+Run-scoped state:
 
 - Maintain `support_mode_active` as a run-scoped state (non-persistent by default).
-- When support mode is on, forbid subagents, background tasks, and delegated execution by default.
-- When support mode is on, execute all tasks in the main thread/session first so evidence stays in the main thread.
-- If no main-thread equivalent exists for a required step, allow one unavoidable support-mode exception record and proceed with the minimal non-main-thread action.
-- When support mode is off, existing delegation and workflow rules remain unchanged.
-
-Recovery Budget Rule (support mode on):
-
-- Support mode is for diagnosis, not workaround completion.
-- Treat a stage-critical failure as any failure in the current active stage that blocks trustworthy continuation or trustworthy evidence for the current run.
-- On the first stage-critical failure, create a canonical failure record immediately.
-- Allow at most one confirmation probe, and only when it uses the same tool and the same contract path as the failed call.
-- Severity routing:
-  - `clio_mcp_issue` is the primary critical-by-default target defect category. Keep strict diagnostic handling: canonical incident record, one same-path confirmation probe, then fail-fast when blocking.
-  - `instruction_issue`, `environment_issue`, and `orchestration_tool_failure` are non-critical by default. Use bounded retry/workaround-first handling and fail-fast only when unresolvable.
-  - `orchestration_tool_failure` may run one canonicalization pass before fail-fast, limited to call-shape normalization (argument format, wrapper invocation shape, serialization wrapper shape) on the same tool path.
-  - Canonicalization is not a workaround branch switch and must not change business logic, target tool, or execution stage.
-  - Transient site reachability errors under `environment_issue` (for example DNS resolution failures, connect timeouts, temporary host-unreachable) must use a bounded reconnect budget before fail-fast classification: retry the same registration/healthcheck path up to 3 additional attempts with 15-second delays.
-  - Escalation rule: any non-critical category becomes fail-fast only when it prevents trustworthy CLIO MCP tool invocation or contract verification, or leaves evidence unreliable for the current run.
-- For `clio_mcp_issue` critical failures, do not switch to alternate workaround branches, fallback strategy changes, or different mutation paths after the first failed attempt.
-- For non-critical categories, bounded recovery is allowed on the same target path within the configured retry budget.
-- After escalation conditions are met, emit fail-fast evidence and stop the blocked stage.
-
-Precedence rule:
-
-- Support mode overrides delegation/background behavior only while active.
-- When support mode is on, its diagnostic policy overrides normal retry or fallback heuristics.
 - Support mode does not alter Gate P, Gate R, BA format contracts, or execution-stage order.
 
-## Support Mode Reporting Contract
+Mandatory behavior when `support_mode_active=true` (these rules apply without an extra fetch):
 
-When `support_mode_active=true`, reporting is mandatory and must stay concise.
+- Treat `clio_mcp_issue` as critical-by-default — fail-fast after one same-path confirmation probe. Other categories (`instruction_issue`, `environment_issue`, `orchestration_tool_failure`) allow bounded retry first.
+- Any final response (completion or final task result, not intermediate progress) MUST end with this exact handoff line, placed after the result and any evidence summary:
+  - `Support mode is on. Please share this session with support for analysis.`
+- The handoff line applies on both successful and failed task completions.
 
-Failure-only logging contract:
-
-- Log only actionable failures:
-  - `orchestration_tool_failure`
-  - `instruction_issue`
-  - `clio_mcp_issue`
-  - `environment_issue` (auth/network/runtime/preflight)
-- Category scope: use `orchestration_tool_failure` for caller/orchestration-side failures; use `clio_mcp_issue` for CLIO MCP/backend contract or transport failures.
-- Keep support reporting session-scoped in the conversation summary by default; do not require persisted support metrics artifacts.
-- Do not emit heartbeat/progress chatter for successful or unchanged steps.
-- Prefer phase checkpoints only: `env`, `gates`, `schema`, `pages`, `final`.
-- Emit interim status only when a timeout threshold is crossed or a recovery path changes.
-
-Category decision matrix:
-
-- `clio_mcp_issue`: CLIO MCP contract, transport, backend tool request/response faults.
-- `instruction_issue`: guidance or expected-pattern defects, including incorrect generated/edit strategies.
-- `orchestration_tool_failure`: caller or wrapper invocation faults such as args shape, adapter, or normalizer issues.
-- `environment_issue`: auth, network, runtime reachability, or preflight failures.
-- Page-sync validation rule:
-  - classify as `instruction_issue` when failure is caused by generated/edit strategy or known binding rules;
-  - classify as `clio_mcp_issue` only when tool/backend behavior violates advertised contract semantics.
-
-Canonical failure record format:
-
-- One canonical failure record is mandatory for every unique support-mode incident.
-- `category`
-- `what_failed`
-- `evidence`
-- `expected_behavior`
-- `fix_target` (`instructions|clio_mcp|tooling|environment`)
-- `next_recovery_attempt`
-- `error_signature` (short normalized signature)
-- `repeat_count`
-- `timestamps` (optional when `repeat_count > 1`)
-
-Deduplication:
-
-- Record one canonical failure per unique incident signature.
-- Treat incidents as identical when `error_signature` and tool/context match.
-- Repeats increment `repeat_count` and optionally append `timestamps` instead of repeating raw dumps.
-
-Final response must include (in this exact order):
-
-- `Confirmed failures`
-- `Unresolved blockers`
-- `Next recovery attempts`
-- `Support-mode exceptions`
-- `Non-target friction` (resolved or temporary `orchestration_tool_failure` / `instruction_issue` items that did not block CLIO MCP diagnosis)
-
-Zero-state rule:
-
-- When a required section has no items, include the section and set its value to `None` instead of omitting it.
-- Missing any required final section is a support-mode reporting failure.
-
-CLIO-focused reporting rules:
-
-- Keep `Confirmed failures` focused on unresolved blockers and target defects.
-- Do not list resolved or temporary instruction/tooling friction in `Confirmed failures`; place it in `Non-target friction` when needed.
-- For CLIO-focused support runs, attempt at least one real MCP tool invocation before concluding, unless blocked by an unresolvable environment failure after the bounded retry budget.
-- In final reporting, prioritize categories in this order: `clio_mcp_issue`, `environment_issue`, `orchestration_tool_failure`, `instruction_issue`.
-- If transient site reachability recovers within the reconnect budget, do not treat it as a confirmed blocker; optionally record it as `Non-target friction`.
-
-Fail-fast evidence:
-
-- Before blocker summary, include:
-  - `exit_decision=fail_fast`
-  - `blocked_stage=<current_active_stage_label>`
-  - `why_continue_is_unsafe=<reason>`
-
-Support-mode exception record (when unavoidable):
-
-- `attempted_action`
-- `no_main_thread_equivalent_reason`
-- `main_thread_evidence_captured`
-- When an unavoidable non-main-thread action completes, its result must be surfaced in the main-thread support output before proceeding or stopping.
-
-CLIO mismatch rule:
-
-- Contract/transport mismatches must be tagged `category=clio_mcp_issue` with normalized `error_signature` (for example `html_instead_of_json_response`).
-
-Private internal chain-of-thought is non-contractual and must not be required for support mode.
-
-## Support Mode Completion Hook
-
-When `support_mode_active=true` and the response is a completion/final task result (not an intermediate progress update), append this handoff line after the result and evidence summary:
-
-`Support mode is on. Please share this session with support for analysis.`
-
-Completion hook behavior:
-
-- applies on both successful and failed task completions
-- remains mandatory even when support-mode exceptions occurred
-- does not require disclosure of private internal chain-of-thought
+For the full diagnostic policy — exact severity routing, canonical failure record format, reporting contract sections, fail-fast evidence shape, and support-mode exception record — fetch `get-guidance name="support-mode"` from clio MCP at first activation.
 
 ## UX Contract
 
@@ -371,6 +255,13 @@ Authority model:
 - Human-readable MCP guidance for entity/page flows and DataForge status context must come from `docs://mcp/guides/app-modeling` and `docs://mcp/guides/existing-app-maintenance`.
 - Diagnostic-first behavior under support mode (severity routing, confirmation probes, fail-fast evidence, reporting sections) must come from `docs://mcp/guides/support-mode` rather than re-stated inline in repository agent runbooks.
 
+Tool surface preference (clio MCP vs CLI):
+
+- Prefer clio MCP tools for any operation that has an MCP equivalent. Resolve the available set via `get-tool-contract`.
+- Spawn the local `clio` CLI binary through a shell only when no MCP equivalent exists for the required operation.
+- After any MCP or environment failure has been resolved, return to MCP-first on the next call — do not stay on CLI fallback by default.
+- Do not parse CLI text output as a substitute for an MCP tool that returns the same data as structured fields. If parsing CLI output is required, that is a signal to switch back to the MCP equivalent.
+
 Canonical repository references:
 
 - `context/INDEX.md`
@@ -382,7 +273,7 @@ Canonical repository references:
 
 Read `context/INDEX.md` first so each phase can load only the relevant sections instead of full files.
 
-Use the agent runbooks in `runbooks/*.md` as stage-specific execution instructions. Keep page-editing patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
+Use the agent runbooks in `runbooks/*.md` as stage-specific execution instructions. Keep page modification patterns and workflow policy in repository docs, and resolve the executable MCP contract through `get-tool-contract` instead of duplicating payload rules in agent prompts.
 
 ## clio Coupling
 

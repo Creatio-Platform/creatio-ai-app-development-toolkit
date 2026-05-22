@@ -11,6 +11,8 @@ if str(ROOT) not in sys.path:
 
 from runtime.scripts.mcp_client import (
     PersistentMcpClient,
+    USAGE,
+    _HelpRequested,
     _get_tool_contract_index,
     _normalize_tool_contract_index,
     _parse_rpc_result,
@@ -18,6 +20,7 @@ from runtime.scripts.mcp_client import (
     call_mcp_tool,
     load_cli_arguments,
     list_mcp_resources,
+    main,
     parse_cli_request,
     read_mcp_resource,
 )
@@ -191,6 +194,37 @@ class McpClientTests(unittest.TestCase):
     def test_load_cli_arguments_rejects_multiple_sources(self):
         with self.assertRaisesRegex(ValueError, "exactly one argument source"):
             load_cli_arguments(args_json="{}", args_file="args.json")
+
+    def test_load_cli_arguments_error_points_to_help(self):
+        with self.assertRaisesRegex(ValueError, "--help"):
+            load_cli_arguments()
+
+    def test_parse_cli_request_raises_help_for_help_flag(self):
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(_HelpRequested):
+                    parse_cli_request([flag])
+
+    def test_parse_cli_request_treats_bare_help_word_as_tool_name(self):
+        # `help` without a leading dash must NOT be treated as the help flag —
+        # it has to fall through to normal tool-name parsing so that a future
+        # clio MCP tool named "help" would still be reachable.
+        with self.assertRaises(ValueError):
+            parse_cli_request(["help"])
+
+    def test_main_prints_usage_and_exits_zero_on_help_flag(self):
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            exit_code = main(["--help"])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Usage:", buffer.getvalue())
+
+    def test_usage_documents_windows_safe_stdin_example(self):
+        self.assertIn("--args-stdin", USAGE)
+        self.assertIn("echo '{}' | py -3 mcp_client.py", USAGE)
+        self.assertIn("PowerShell", USAGE)
 
     def test_parse_rpc_result_marks_nonzero_exit_code_as_failure(self):
         collected = [

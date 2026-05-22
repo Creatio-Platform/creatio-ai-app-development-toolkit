@@ -2,26 +2,7 @@
 """
 Reusable stdio MCP client for clio.
 
-Usage:
-    python3 runtime/scripts/mcp_client.py <tool-name> <args-json> [timeout]
-    python3 runtime/scripts/mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]
-    python3 runtime/scripts/mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]
-    python3 runtime/scripts/mcp_client.py resources/list {} [timeout]
-    python3 runtime/scripts/mcp_client.py resources/read '{"uri":"docs://mcp/guides/app-modeling"}' [timeout]
-
-clio resolution (first match wins):
-    1. CLIO_CMD env var — custom clio path provided by user at startup
-       e.g. CLIO_CMD="dotnet /path/to/clio.dll" python3 runtime/scripts/mcp_client.py ...
-    2. `clio` in PATH  — standard global install (dotnet tool install clio -g)
-    3. neither found   — raises RuntimeError with install instructions
-
-Notes:
-    - clio MCP uses stdio transport (NOT HTTP/SSE)
-    - Tool names use dashes: create-app, create-lookup, update-page, delete-app-section (NOT dots)
-    - All parameters are wrapped in an "args" object
-    - clio does not support notifications/initialized — it is omitted
-    - NEVER pass -e flag to mcp-server — it is not supported
-    - NEVER use shell variable expansion ($VAR) in pipes to mcp-server — use this script instead
+Run `python3 runtime/scripts/mcp_client.py --help` for usage.
 
 Returns JSON: {"success": bool, "data": dict|None, "raw": str}
 """
@@ -37,8 +18,40 @@ import sys
 import threading
 import time
 
+USAGE = (
+    "Usage:\n"
+    "  python3 mcp_client.py <tool-name> <args-json> [timeout]\n"
+    "  python3 mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
+    "  python3 mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]\n"
+    "  python3 mcp_client.py resources/list {} [timeout]\n"
+    "  python3 mcp_client.py resources/read '{\"uri\":\"docs://mcp/guides/app-modeling\"}' [timeout]\n"
+    "\n"
+    "PowerShell (Windows): pass JSON via the positional form or pipe it into --args-stdin.\n"
+    "The shell-redirect form (`< file` / `< NUL`) is not supported by PowerShell.\n"
+    "  py -3 mcp_client.py get-tool-contract '{}'\n"
+    "  echo '{}' | py -3 mcp_client.py get-tool-contract --args-stdin\n"
+    "\n"
+    "clio resolution (first match wins):\n"
+    "  1. CLIO_CMD env var (e.g. CLIO_CMD=\"dotnet /path/to/clio.dll\")\n"
+    "  2. `clio` in PATH (dotnet tool install clio -g)\n"
+    "  3. neither found -> RuntimeError with install instructions\n"
+    "\n"
+    "Notes:\n"
+    "  - clio MCP uses stdio transport (NOT HTTP/SSE)\n"
+    "  - Tool names use dashes: create-app, update-page (NOT dots)\n"
+    "  - All parameters are wrapped in an \"args\" object\n"
+    "  - clio does not support notifications/initialized - it is omitted\n"
+    "  - NEVER pass -e flag to mcp-server - it is not supported\n"
+    "  - NEVER use shell variable expansion ($VAR) in pipes - use this script instead"
+)
+
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
 SCHEMA_SYNC_ALLOWED_OPERATION_TYPES = {"create-lookup", "create-entity", "update-entity"}
+
+
+class _HelpRequested(Exception):
+    """Raised by parse_cli_request when the user passes -h or --help."""
+
 
 def _resolve_clio_cmd():
     env_cmd = os.environ.get("CLIO_CMD", "").strip()
@@ -703,7 +716,10 @@ def read_mcp_resource(uri: str, timeout: int = 120) -> dict:
 def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_text=None):
     sources = sum(1 for source in (args_json is not None, args_file is not None, args_stdin) if source)
     if sources != 1:
-        raise ValueError("Provide exactly one argument source: <args-json>, --args-file, or --args-stdin")
+        raise ValueError(
+            "Provide exactly one argument source: <args-json>, --args-file, or --args-stdin. "
+            "Run with --help for full usage."
+        )
     if args_json is not None:
         return json.loads(args_json)
     if args_file is not None:
@@ -716,13 +732,9 @@ def load_cli_arguments(args_json=None, args_file=None, args_stdin=False, stdin_t
 
 def parse_cli_request(argv):
     if not argv:
-        raise ValueError(
-            "Usage: mcp_client.py <tool-name> <args-json> [timeout]\n"
-            "   or: mcp_client.py <tool-name> --args-file <path> [--timeout <seconds>]\n"
-            "   or: mcp_client.py <tool-name> --args-stdin [--timeout <seconds>]\n"
-            "   or: mcp_client.py resources/list {} [timeout]\n"
-            "   or: mcp_client.py resources/read '{\"uri\":\"docs://mcp/guides/app-modeling\"}' [timeout]"
-        )
+        raise ValueError(USAGE)
+    if argv[0] in ("-h", "--help"):
+        raise _HelpRequested()
     tool_name = argv[0]
     remainder = argv[1:]
     if remainder and not remainder[0].startswith("-"):
@@ -761,6 +773,9 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
         request = parse_cli_request(argv)
+    except _HelpRequested:
+        print(USAGE)
+        return 0
     except (ValueError, json.JSONDecodeError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 1
