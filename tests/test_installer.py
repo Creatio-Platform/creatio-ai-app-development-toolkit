@@ -699,7 +699,7 @@ class McpConfigMergeTests(unittest.TestCase):
             target = Path(temp) / "target" / "mcp-config.json"
             target.parent.mkdir()
             target.write_text(
-                '﻿{"mcpServers":{"existing":{"command":"existing"}}}\n',
+                '\ufeff{"mcpServers":{"existing":{"command":"existing"}}}\n',
                 encoding="utf-8",
             )
 

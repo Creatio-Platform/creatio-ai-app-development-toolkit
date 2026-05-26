@@ -202,8 +202,10 @@ def register_remote_marketplace_and_install_plugin(
 ) -> None:
     """Register the remote marketplace and install the plugin via the host CLI.
 
+    Used by Claude and Copilot only; Codex stays on the local file-copy install.
+
     Tolerates re-runs:
-    - Claude and Codex update the marketplace source in place on re-add.
+    - Claude updates the marketplace source in place on re-add.
     - Copilot rejects re-add with "already registered" and keeps the old source.
       For Copilot we remove first (with --force to detach installed plugins) and re-add.
     """
