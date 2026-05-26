@@ -536,6 +536,36 @@ def enable_claude_marketplace_auto_update(settings_path: Path) -> None:
     write_json(settings_path, settings)
 
 
+def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> None:
+    """Drop explicit Codex skill overrides for the ADAC skill."""
+    if not target_path.exists():
+        return
+
+    lines = target_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    updated: list[str] = []
+    index = 0
+    changed = False
+    while index < len(lines):
+        if lines[index].strip() != "[[skills.config]]":
+            updated.append(lines[index])
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            end += 1
+        block = lines[index:end]
+        block_text = "".join(block)
+        if f'name = "{skill_name}"' in block_text:
+            changed = True
+        else:
+            updated.extend(block)
+        index = end
+
+    if changed:
+        target_path.write_text("".join(updated), encoding="utf-8")
+
+
 def repo_file(repo_root: Path, relative_path: str) -> Path:
     return repo_root / relative_path
 
@@ -549,6 +579,38 @@ def render_load_order(repo_root: Path) -> str:
         f"5. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
+
+
+def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
+    return (
+        "---\n"
+        f"name: {SKILL_NAME}\n"
+        "description: Use when creating Creatio app Business Plans, "
+        "technical implementation handoffs, or applying the approved plan through clio MCP.\n"
+        "---\n"
+        "\n"
+        "# Creatio App Orchestrator\n"
+        "\n"
+        "Use this skill as the entrypoint for ADAC workflows.\n"
+        "\n"
+        f"Toolkit repository is installed at: `{repo_root}`\n"
+        "\n"
+        "## Load Order\n"
+        "\n"
+        f"{render_load_order(repo_root)}"
+        "\n"
+        "## Core Rules\n"
+        "\n"
+        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
+        "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
+        "- Use `context/business-checklist.md`, `context/essentials.md`, `context/naming-conventions.md`, "
+        "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
+        f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
+    )
+
+
+def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
+    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
@@ -578,27 +640,51 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
+def write_rendered_skill(target_root: Path, skill_body: str, agents_source_dir: Path | None = None) -> None:
+    skill_target_dir = target_root / "skills" / SKILL_NAME
+    skill_target_dir.mkdir(parents=True, exist_ok=True)
+    (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
+    if agents_source_dir and agents_source_dir.exists():
+        agents_target_dir = skill_target_dir / "agents"
+        if agents_target_dir.exists():
+            shutil.rmtree(agents_target_dir)
+        shutil.copytree(
+            agents_source_dir,
+            agents_target_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
     """Codex stays on local file-copy install — see docs/install.md for rationale."""
     ensure_required_references(repo_root)
     version = plugin_version(repo_root)
     codex_home = home / ".codex"
-    agents_plugin_dir = home / ".agents" / "plugins" / PLUGIN_NAME
-    agents_skills_dir = home / ".agents" / "skills"
     marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
     marketplace_plugin_dir = marketplace_dir / "plugins" / PLUGIN_NAME
     cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
     standalone_skill_dir = codex_home / "skills" / SKILL_NAME
     remove_tree_if_exists(marketplace_dir, "Codex")
     remove_tree_if_exists(cache_dir, "Codex")
-    remove_tree_if_exists(agents_plugin_dir, "Codex")
+    remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "Codex")
+    remove_tree_if_exists(home / ".agents" / "skills" / SKILL_NAME, "Codex")
     remove_tree_if_exists(standalone_skill_dir, "Codex")
     copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
     write_codex_marketplace_catalog(repo_root, marketplace_dir)
     copy_plugin_runtime_surface(repo_root, cache_dir)
-    copy_plugin_runtime_surface(repo_root, agents_plugin_dir)
-    copy_skill_directories(repo_root, agents_skills_dir)
+    remove_tree_if_exists(marketplace_plugin_dir / "skills", "Codex")
+    remove_tree_if_exists(cache_dir / "skills", "Codex")
     mcp_config_path = codex_home / "config.toml"
+    agents_source_dir = repo_root / "skills" / SKILL_NAME / "agents"
+    write_rendered_skill(
+        codex_home,
+        render_codex_skill(cache_dir, mcp_config_path),
+        agents_source_dir,
+    )
+    remove_codex_skill_config_override(
+        mcp_config_path,
+        f"{PLUGIN_NAME}:{SKILL_NAME}",
+    )
     merge_codex_mcp_config(repo_root, mcp_config_path)
     merge_codex_marketplace_config(MARKETPLACE_NAME, marketplace_dir, PLUGIN_NAME, mcp_config_path)
     merge_personal_marketplace_catalog(repo_root, home)
@@ -628,6 +714,8 @@ def install_cursor(repo_root: Path, home: Path) -> None:
 
 def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
+    remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "GitHub Copilot CLI")
+    remove_tree_if_exists(home / ".agents" / "skills" / SKILL_NAME, "GitHub Copilot CLI")
     copilot_command = resolve_copilot_command()
     register_remote_marketplace_and_install_plugin(
         copilot_command,

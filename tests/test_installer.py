@@ -88,7 +88,6 @@ class ConstantsTests(unittest.TestCase):
             "DEFAULT_REPO_URL",
             "DEFAULT_INSTALL_ROOT",
             "clone_or_update_repo",
-            "render_codex_skill",
             "render_copilot_skill",
             "copy_mcp_config",
             "copy_plugin_runtime_surface_for_claude",
@@ -406,15 +405,22 @@ class InstallCodexTests(unittest.TestCase):
                 codex_home / "plugins" / "cache" / "creatio"
                 / "creatio-ai-app-development-toolkit" / "0.1.0"
             )
-            agents_plugin_dir = home / ".agents" / "plugins" / "creatio-ai-app-development-toolkit"
             marketplace_plugin_dir = marketplace_dir / "plugins" / "creatio-ai-app-development-toolkit"
             self.assertTrue((marketplace_plugin_dir / ".codex-plugin" / "plugin.json").exists())
             self.assertTrue((marketplace_plugin_dir / ".mcp.json").exists())
             self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
             self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertTrue((agents_plugin_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertTrue(
-                (home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
+            self.assertFalse((marketplace_plugin_dir / "skills").exists())
+            self.assertFalse((cache_dir / "skills").exists())
+            self.assertFalse((home / ".agents" / "plugins" / "creatio-ai-app-development-toolkit").exists())
+            self.assertFalse((home / ".agents" / "skills" / "creatio-app-orchestrator").exists())
+            standalone_skill = codex_home / "skills" / "creatio-app-orchestrator" / "SKILL.md"
+            self.assertTrue(standalone_skill.exists())
+            skill_body = standalone_skill.read_text(encoding="utf-8")
+            self.assertIn(f"Toolkit repository is installed at: `{cache_dir}`", skill_body)
+            self.assertIn(
+                f"The `clio` MCP server is registered in `{codex_home / 'config.toml'}`.",
+                skill_body,
             )
 
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
@@ -422,7 +428,15 @@ class InstallCodexTests(unittest.TestCase):
             self.assertIn("[marketplaces.creatio]", config_body)
             self.assertIn('source_type = "local"', config_body)
             self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            self.assertIn("enabled = true", config_body)
             self.assertIn("[mcp_servers.clio]", config_body)
+            personal_marketplace = json.loads(
+                (home / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                personal_marketplace["plugins"][0]["source"]["path"],
+                "./plugins/creatio-ai-app-development-toolkit",
+            )
 
     def test_preserves_existing_clio_mcp_server(self):
         installer = load_installer()
@@ -445,6 +459,27 @@ class InstallCodexTests(unittest.TestCase):
             self.assertIn('command = "custom-clio"', config_body)
             self.assertNotIn('command = "clio"\nargs = ["mcp-server"]', config_body)
             printed.assert_called_once()
+
+    def test_removes_legacy_disabled_skill_override(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            self._write_codex_checkout(installer, repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.4"\n\n[[skills.config]]\nname = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"\nenabled = false\n',
+                encoding="utf-8",
+            )
+
+            installer.install_codex(repo_root, home)
+
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[[skills.config]]", config_body)
+            self.assertNotIn('name = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"', config_body)
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
 
     def test_rejects_checkout_without_required_references(self):
         installer = load_installer()
