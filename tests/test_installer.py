@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import os
-import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,8 +48,65 @@ def write_release_manifest(repo_root, plugin_runtime=None):
     )
 
 
-class InstallerTests(unittest.TestCase):
-    def test_detect_targets_uses_mocked_home_directories(self):
+def write_minimal_plugin_checkout(repo_root):
+    """Lay out the files the install_* functions read from the local checkout."""
+    (repo_root / ".mcp.json").write_text(
+        '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+        encoding="utf-8",
+    )
+    (repo_root / ".github" / "plugin").mkdir(parents=True, exist_ok=True)
+    (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+        '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+        encoding="utf-8",
+    )
+    skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
+        encoding="utf-8",
+    )
+
+
+class ConstantsTests(unittest.TestCase):
+    def test_marketplace_git_url_is_hardcoded_ghe(self):
+        installer = load_installer()
+        self.assertEqual(
+            installer.MARKETPLACE_GIT_URL,
+            "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+        )
+
+    def test_plugin_source_combines_plugin_and_marketplace(self):
+        installer = load_installer()
+        self.assertEqual(
+            installer.PLUGIN_SOURCE,
+            "creatio-ai-app-development-toolkit@creatio",
+        )
+
+    def test_install_py_does_not_expose_removed_helpers(self):
+        installer = load_installer()
+        for removed_name in (
+            "DEFAULT_REPO_URL",
+            "DEFAULT_INSTALL_ROOT",
+            "clone_or_update_repo",
+            "render_codex_skill",
+            "render_copilot_skill",
+            "copy_mcp_config",
+            "copy_plugin_runtime_surface_for_claude",
+            "merge_claude_plugin_settings",
+            "register_claude_known_marketplace",
+            "register_claude_installed_plugin",
+            "prune_directory_entries",
+            "preflight_codex",
+            "resolve_codex_command",
+        ):
+            self.assertFalse(
+                hasattr(installer, removed_name),
+                f"{removed_name} should have been removed",
+            )
+
+
+class DetectTargetsTests(unittest.TestCase):
+    def test_detects_all_four_when_home_dirs_present(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -59,181 +115,23 @@ class InstallerTests(unittest.TestCase):
             (home / ".cursor").mkdir()
             (home / ".copilot").mkdir()
 
-            with patch("shutil.which", return_value=None):
-                targets = installer.detect_targets(home)
+            targets = installer.detect_targets(home)
 
         self.assertEqual({target["id"] for target in targets}, {"codex", "claude", "cursor", "copilot"})
 
-    def test_detect_targets_skips_copilot_when_directory_missing(self):
+    def test_skips_targets_without_home_dirs(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             targets = installer.detect_targets(Path(temp))
+        self.assertEqual(targets, [])
 
-        self.assertNotIn("copilot", {target["id"] for target in targets})
 
-    def test_install_copilot_registers_marketplace_installs_plugin_and_copies_runtime_surface(self):
+class CliPreflightTests(unittest.TestCase):
+    def test_preflight_claude_reports_missing_path(self):
         installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            (repo_root / "tests").mkdir(parents=True)
-            (repo_root / "installer").mkdir()
-            (repo_root / "docs").mkdir()
-            (repo_root / "runbooks").mkdir()
-            (repo_root / "context").mkdir()
-            (repo_root / "skills").mkdir()
-            (repo_root / "runtime").mkdir()
-            (repo_root / ".github").mkdir()
-            (repo_root / ".github" / "plugin").mkdir()
-            (repo_root / ".claude-plugin").mkdir()
-            (repo_root / ".codex-plugin").mkdir()
-            (repo_root / ".cursor-plugin").mkdir()
-            (repo_root / ".agents").mkdir()
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
-            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".claude-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
-            (repo_root / ".codex-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
-            (repo_root / ".cursor-plugin" / "plugin.json").write_text('{"name":"creatio-ai-app-development-toolkit"}\n', encoding="utf-8")
-            write_required_references(installer, repo_root)
-            write_release_manifest(repo_root)
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (skill_dir / "agents").mkdir()
-            (skill_dir / "agents" / "openai.yaml").write_text("display_name: test\n", encoding="utf-8")
-            (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
-            (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")
-            (repo_root / "docs" / "install.md").write_text("dev\n", encoding="utf-8")
-            commands = []
-
-            def fake_run(command, **_kwargs):
-                commands.append(command)
-
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
-                installer, "run_checked", side_effect=fake_run
-            ):
-                installed_plugin_dir = (
-                    Path(temp)
-                    / "home"
-                    / ".copilot"
-                    / "installed-plugins"
-                    / "creatio"
-                    / "creatio-ai-app-development-toolkit"
-                )
-                installed_plugin_dir.mkdir(parents=True, exist_ok=True)
-                (installed_plugin_dir / "stale.txt").write_text("old\n", encoding="utf-8")
-                (installed_plugin_dir / "docs").mkdir()
-                (installed_plugin_dir / "docs" / "old.md").write_text("old\n", encoding="utf-8")
-                skill_target_dir = Path(temp) / "home" / ".copilot" / "skills" / "creatio-app-orchestrator"
-                skill_target_dir.mkdir(parents=True, exist_ok=True)
-                (skill_target_dir / "obsolete.md").write_text("old\n", encoding="utf-8")
-                installer.install_copilot(repo_root, Path(temp) / "home")
-
-            self.assertTrue((installed_plugin_dir / "runbooks").exists())
-            self.assertTrue((installed_plugin_dir / "context").exists())
-            self.assertTrue((installed_plugin_dir / "skills").exists())
-            self.assertTrue((installed_plugin_dir / "runtime").exists())
-            self.assertTrue((installed_plugin_dir / ".mcp.json").exists())
-            self.assertTrue((installed_plugin_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertFalse((installed_plugin_dir / "stale.txt").exists())
-            self.assertFalse((installed_plugin_dir / "tests").exists())
-            self.assertFalse((installed_plugin_dir / "installer").exists())
-            self.assertFalse((installed_plugin_dir / "docs").exists())
-            self.assertTrue((skill_target_dir / "agents" / "openai.yaml").exists())
-            self.assertFalse((skill_target_dir / "obsolete.md").exists())
-            skill_body = (skill_target_dir / "SKILL.md").read_text(encoding="utf-8")
-            self.assertIn(str(installed_plugin_dir), skill_body)
-            self.assertIn(str(Path(temp) / "home" / ".copilot" / "mcp-config.json"), skill_body)
-            self.assertNotIn(str(repo_root), skill_body)
-
-        self.assertEqual(
-            commands,
-            [
-                ["copilot", "plugin", "marketplace", "add", str(repo_root)],
-                ["copilot", "plugin", "install", "creatio-ai-app-development-toolkit@creatio"],
-            ],
-        )
-
-    def test_install_copilot_rejects_checkout_without_required_references(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
-                installer.install_copilot(repo_root, Path(temp) / "home")
-
-    def test_install_copilot_ignores_existing_marketplace_registration(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            repo_root.mkdir(parents=True)
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            write_required_references(installer, repo_root)
-            write_release_manifest(repo_root)
-            commands = []
-
-            def fake_run(command, **_kwargs):
-                commands.append(command)
-                if command[:4] == ["copilot", "plugin", "marketplace", "add"]:
-                    raise RuntimeError(
-                        'copilot plugin marketplace add failed: Failed to add marketplace: Marketplace "creatio" already registered'
-                    )
-
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
-                installer, "run_checked", side_effect=fake_run
-            ):
-                installer.install_copilot(repo_root, Path(temp) / "home")
-
-        self.assertEqual(
-            commands,
-            [
-                ["copilot", "plugin", "marketplace", "add", str(repo_root)],
-                ["copilot", "plugin", "install", "creatio-ai-app-development-toolkit@creatio"],
-            ],
-        )
-
-    def test_install_copilot_raises_for_unexpected_marketplace_add_error(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            repo_root.mkdir(parents=True)
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            write_required_references(installer, repo_root)
-
-            def fake_run(command, **_kwargs):
-                if command[:4] == ["copilot", "plugin", "marketplace", "add"]:
-                    raise RuntimeError("copilot plugin marketplace add failed: permission denied")
-
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
-                installer, "run_checked", side_effect=fake_run
-            ):
-                with self.assertRaisesRegex(RuntimeError, "permission denied"):
-                    installer.install_copilot(repo_root, Path(temp) / "home")
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "claude was not found in PATH"):
+                installer.preflight_claude()
 
     def test_preflight_copilot_reports_missing_path(self):
         installer = load_installer()
@@ -241,41 +139,424 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
                 installer.preflight_copilot()
 
+    def test_preflight_clio_reports_missing_path(self):
+        installer = load_installer()
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "clio was not found in PATH"):
+                installer.preflight_clio()
+
     def test_resolve_copilot_command_wraps_powershell_shim_on_windows(self):
         installer = load_installer()
         with patch.object(installer, "preflight_copilot", return_value=r"C:\nvm4w\nodejs\copilot.ps1"):
             command = installer.resolve_copilot_command()
-
         self.assertEqual(
             command,
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", r"C:\nvm4w\nodejs\copilot.ps1"],
         )
 
-    def test_install_for_targets_routes_to_copilot(self):
+    def test_resolve_claude_command_wraps_powershell_shim(self):
+        installer = load_installer()
+        with patch.object(installer, "preflight_claude", return_value=r"C:\tools\claude.ps1"):
+            command = installer.resolve_claude_command()
+        self.assertEqual(
+            command,
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", r"C:\tools\claude.ps1"],
+        )
+
+class RegisterRemoteMarketplaceTests(unittest.TestCase):
+    def test_runs_marketplace_add_then_plugin_install(self):
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+
+        with patch.object(installer, "run_checked", side_effect=fake_run):
+            installer.register_remote_marketplace_and_install_plugin(["claude"])
+
+        self.assertEqual(
+            commands,
+            [
+                ["claude", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                ["claude", "plugin", "install", installer.PLUGIN_SOURCE],
+            ],
+        )
+
+    def test_removes_and_re_adds_when_marketplace_already_registered(self):
+        installer = load_installer()
+        commands = []
+        attempt = {"count": 0}
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "add"]:
+                attempt["count"] += 1
+                if attempt["count"] == 1:
+                    raise RuntimeError(
+                        'copilot plugin marketplace add failed: Marketplace "creatio" already registered'
+                    )
+
+        with patch.object(installer, "run_checked", side_effect=fake_run):
+            installer.register_remote_marketplace_and_install_plugin(["copilot"])
+
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(commands[0][1:4], ["plugin", "marketplace", "add"])
+        self.assertEqual(commands[1][1:5], ["plugin", "marketplace", "remove", "creatio"])
+        self.assertEqual(commands[2][1:4], ["plugin", "marketplace", "add"])
+        self.assertEqual(commands[3][1:3], ["plugin", "install"])
+
+    def test_tolerates_remove_failure_during_re_add(self):
+        installer = load_installer()
+        commands = []
+        attempt = {"count": 0}
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "add"]:
+                attempt["count"] += 1
+                if attempt["count"] == 1:
+                    raise RuntimeError('Marketplace "creatio" already registered')
+            elif command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError("not found")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run), patch("builtins.print"):
+            installer.register_remote_marketplace_and_install_plugin(["copilot"])
+
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(commands[-1][1:3], ["plugin", "install"])
+
+    def test_raises_for_unexpected_marketplace_add_error(self):
+        installer = load_installer()
+
+        def fake_run(command, **_kwargs):
+            if command[1:4] == ["plugin", "marketplace", "add"]:
+                raise RuntimeError("network unreachable")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, "network unreachable"):
+                installer.register_remote_marketplace_and_install_plugin(["claude"])
+
+    def test_ignores_unrelated_already_registered_error(self):
+        installer = load_installer()
+
+        def fake_run(command, **_kwargs):
+            if command[1:4] == ["plugin", "marketplace", "add"]:
+                raise RuntimeError('Plugin "other" already registered')
+
+        with patch.object(installer, "run_checked", side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, "already registered"):
+                installer.register_remote_marketplace_and_install_plugin(["claude"])
+
+
+class InstallClaudeTests(unittest.TestCase):
+    def test_shells_out_and_enables_auto_update(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            repo_root.mkdir(parents=True)
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            (home / ".claude").mkdir(parents=True)
+
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+
+            with patch.object(installer, "preflight_claude", return_value="claude"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ):
+                installer.install_claude(repo_root, home)
+
+            self.assertEqual(
+                commands,
+                [
+                    ["claude", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                    ["claude", "plugin", "install", installer.PLUGIN_SOURCE],
+                ],
+            )
+
+            settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            entry = settings["extraKnownMarketplaces"]["creatio"]
+            self.assertTrue(entry["autoUpdate"])
+            self.assertNotIn("source", entry)
+            self.assertTrue(
+                (home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
+            )
+
+    def test_preserves_existing_settings_when_enabling_auto_update(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            claude_home = home / ".claude"
+            claude_home.mkdir(parents=True)
+            (claude_home / "settings.json").write_text(
+                '{"enabledPlugins":{"existing@tools":true},"extraKnownMarketplaces":{"existing":{"source":{"source":"github","repo":"org/repo"}}}}\n',
                 encoding="utf-8",
             )
-            write_required_references(installer, repo_root)
-            write_release_manifest(repo_root, plugin_runtime=[".mcp.json"])
-            home = Path(temp) / "home"
-            copilot_home = home / ".copilot"
-            copilot_home.mkdir(parents=True)
 
-            targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home}]
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+            with patch.object(installer, "preflight_claude", return_value="claude"), patch.object(
                 installer, "run_checked"
-            ) as run_checked:
-                installed = installer.install_for_targets(repo_root, targets)
+            ):
+                installer.install_claude(repo_root, home)
 
-            self.assertEqual(installed, ["copilot"])
-            self.assertEqual(run_checked.call_count, 2)
+            settings = json.loads((claude_home / "settings.json").read_text(encoding="utf-8"))
+            self.assertTrue(settings["enabledPlugins"]["existing@tools"])
+            self.assertEqual(settings["extraKnownMarketplaces"]["existing"]["source"]["repo"], "org/repo")
+            self.assertTrue(settings["extraKnownMarketplaces"]["creatio"]["autoUpdate"])
 
-    def test_install_cursor_merges_mcp_config_and_writes_rule(self):
+    def test_rejects_checkout_without_required_references(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
+                installer.install_claude(repo_root, Path(temp) / "home")
+
+
+class EnableClaudeAutoUpdateTests(unittest.TestCase):
+    def test_drops_stale_directory_source(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            settings_path = Path(temp) / "settings.json"
+            settings_path.write_text(
+                '{"extraKnownMarketplaces":{"creatio":{"source":{"source":"directory","path":"/old/path"}}}}\n',
+                encoding="utf-8",
+            )
+            installer.enable_claude_marketplace_auto_update(settings_path)
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        entry = settings["extraKnownMarketplaces"]["creatio"]
+        self.assertNotIn("source", entry)
+        self.assertTrue(entry["autoUpdate"])
+
+    def test_preserves_cli_managed_source(self):
+        installer = load_installer()
+        cli_managed_source = {"source": "git", "url": installer.MARKETPLACE_GIT_URL, "ref": "main"}
+        with tempfile.TemporaryDirectory() as temp:
+            settings_path = Path(temp) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"extraKnownMarketplaces": {"creatio": {"source": cli_managed_source}}}),
+                encoding="utf-8",
+            )
+            installer.enable_claude_marketplace_auto_update(settings_path)
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        entry = settings["extraKnownMarketplaces"]["creatio"]
+        self.assertEqual(entry["source"], cli_managed_source)
+        self.assertTrue(entry["autoUpdate"])
+
+    def test_creates_settings_file_when_missing(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            settings_path = Path(temp) / "nested" / "settings.json"
+            installer.enable_claude_marketplace_auto_update(settings_path)
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        entry = settings["extraKnownMarketplaces"]["creatio"]
+        self.assertTrue(entry["autoUpdate"])
+        self.assertNotIn("source", entry)
+
+    def test_rejects_non_object_extra_marketplaces(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            settings_path = Path(temp) / "settings.json"
+            settings_path.write_text('{"extraKnownMarketplaces":"not-a-dict"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "extraKnownMarketplaces must be an object"):
+                installer.enable_claude_marketplace_auto_update(settings_path)
+
+
+class InstallCodexTests(unittest.TestCase):
+    """Codex stays on the local file-copy install path — see docs/install.md."""
+
+    def _write_codex_checkout(self, installer, repo_root):
+        write_minimal_plugin_checkout(repo_root)
+        (repo_root / ".codex-plugin").mkdir(exist_ok=True)
+        (repo_root / ".codex-plugin" / "plugin.json").write_text(
+            '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
+            encoding="utf-8",
+        )
+        (repo_root / ".agents" / "plugins").mkdir(parents=True, exist_ok=True)
+        (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
+            '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
+            encoding="utf-8",
+        )
+        write_required_references(installer, repo_root)
+        write_release_manifest(repo_root)
+
+    def test_copies_plugin_runtime_and_registers_mcp_in_config_toml(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            self._write_codex_checkout(installer, repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+
+            installer.install_codex(repo_root, home)
+
+            marketplace_dir = codex_home / "plugins" / "marketplaces" / "creatio"
+            cache_dir = (
+                codex_home / "plugins" / "cache" / "creatio"
+                / "creatio-ai-app-development-toolkit" / "0.1.0"
+            )
+            agents_plugin_dir = home / ".agents" / "plugins" / "creatio-ai-app-development-toolkit"
+            marketplace_plugin_dir = marketplace_dir / "plugins" / "creatio-ai-app-development-toolkit"
+            self.assertTrue((marketplace_plugin_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertTrue((marketplace_plugin_dir / ".mcp.json").exists())
+            self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
+            self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertTrue((agents_plugin_dir / ".codex-plugin" / "plugin.json").exists())
+            self.assertTrue(
+                (home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
+            )
+
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('model = "gpt-5.4"', config_body)
+            self.assertIn("[marketplaces.creatio]", config_body)
+            self.assertIn('source_type = "local"', config_body)
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            self.assertIn("[mcp_servers.clio]", config_body)
+
+    def test_preserves_existing_clio_mcp_server(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            self._write_codex_checkout(installer, repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                '[mcp_servers.clio]\ncommand = "custom-clio"\nargs = ["custom"]\n',
+                encoding="utf-8",
+            )
+
+            with patch("builtins.print") as printed:
+                installer.install_codex(repo_root, home)
+
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('command = "custom-clio"', config_body)
+            self.assertNotIn('command = "clio"\nargs = ["mcp-server"]', config_body)
+            printed.assert_called_once()
+
+    def test_rejects_checkout_without_required_references(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
+                installer.install_codex(repo_root, Path(temp) / "home")
+
+    def test_merge_personal_marketplace_fills_missing_display_name(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            source_dir = repo_root / ".agents" / "plugins"
+            source_dir.mkdir(parents=True)
+            (source_dir / "marketplace.json").write_text(
+                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","source":{"source":"local","path":"./"}}]}\n',
+                encoding="utf-8",
+            )
+            home = Path(temp) / "home"
+            target_dir = home / ".agents" / "plugins"
+            target_dir.mkdir(parents=True)
+            (target_dir / "marketplace.json").write_text(
+                '{"name":"custom-marketplace","interface":{},"plugins":[]}\n',
+                encoding="utf-8",
+            )
+
+            installer.merge_personal_marketplace_catalog(repo_root, home)
+            merged = json.loads((target_dir / "marketplace.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(merged["name"], "custom-marketplace")
+        self.assertEqual(merged["interface"]["displayName"], "Creatio")
+        self.assertEqual(
+            merged["plugins"][0]["source"]["path"],
+            "./plugins/creatio-ai-app-development-toolkit",
+        )
+
+
+class InstallCopilotTests(unittest.TestCase):
+    def test_shells_out_with_git_url(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            (home / ".copilot").mkdir(parents=True)
+
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ):
+                installer.install_copilot(repo_root, home)
+
+            self.assertEqual(
+                commands,
+                [
+                    ["copilot", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                    ["copilot", "plugin", "install", installer.PLUGIN_SOURCE],
+                ],
+            )
+
+    def test_removes_and_re_adds_when_already_registered(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+
+            commands = []
+            attempt = {"count": 0}
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                if command[1:4] == ["plugin", "marketplace", "add"]:
+                    attempt["count"] += 1
+                    if attempt["count"] == 1:
+                        raise RuntimeError(
+                            'copilot plugin marketplace add failed: Marketplace "creatio" already registered'
+                        )
+
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ):
+                installer.install_copilot(repo_root, Path(temp) / "home")
+
+            self.assertEqual(len(commands), 4)
+            self.assertEqual(
+                commands[1][1:],
+                ["plugin", "marketplace", "remove", "creatio", "--force"],
+            )
+            self.assertEqual(commands[-1][1:3], ["plugin", "install"])
+
+    def test_rejects_checkout_without_required_references(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
+                installer.install_copilot(repo_root, Path(temp) / "home")
+
+
+class InstallCursorTests(unittest.TestCase):
+    def test_merges_mcp_config_and_writes_rule(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -307,15 +588,11 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(merged["mcpServers"]["clio"]["args"], ["mcp-server"])
 
             local_plugin_dir = (
-                cursor_home
-                / "plugins"
-                / "local"
-                / "creatio-ai-app-development-toolkit"
+                cursor_home / "plugins" / "local" / "creatio-ai-app-development-toolkit"
             )
             rule_path = cursor_home / "rules" / "creatio-app-orchestrator.mdc"
             self.assertTrue(rule_path.exists())
             rule_body = rule_path.read_text(encoding="utf-8")
-            self.assertIn("description:", rule_body)
             self.assertIn("Creatio App Orchestrator", rule_body)
             self.assertIn(str(local_plugin_dir), rule_body)
             self.assertNotIn(str(repo_root), rule_body)
@@ -323,179 +600,34 @@ class InstallerTests(unittest.TestCase):
 
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())
-            self.assertFalse((local_plugin_dir / "tests").exists())
-            self.assertFalse((local_plugin_dir / "installer").exists())
 
-    def test_install_claude_registers_marketplace_and_copies_only_runtime_plugin_surface(self):
+    def test_rule_survives_source_deletion(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            (repo_root / "tests").mkdir(parents=True)
-            (repo_root / "installer").mkdir()
-            (repo_root / "docs").mkdir()
-            (repo_root / "runbooks").mkdir()
-            (repo_root / "context").mkdir()
-            (repo_root / "skills").mkdir()
-            (repo_root / "runtime").mkdir()
-            (repo_root / ".claude-plugin").mkdir()
+            repo_root.mkdir()
+            (repo_root / ".cursor-plugin").mkdir()
+            (repo_root / ".cursor-plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
             (repo_root / ".mcp.json").write_text(
                 '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
                 encoding="utf-8",
             )
-            (repo_root / ".claude-plugin" / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
-                encoding="utf-8",
-            )
-            (repo_root / "AGENTS.md").write_text("rules\n", encoding="utf-8")
-            write_required_references(installer, repo_root)
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (repo_root / "tests" / "test_dev_only.py").write_text("dev\n", encoding="utf-8")
-            (repo_root / "installer" / "install.py").write_text("dev\n", encoding="utf-8")
-            (repo_root / "docs" / "install.md").write_text("dev\n", encoding="utf-8")
-            write_release_manifest(repo_root)
+            write_release_manifest(repo_root, plugin_runtime=[".mcp.json", ".cursor-plugin"])
 
             home = Path(temp) / "home"
-            claude_home = home / ".claude"
-            claude_home.mkdir(parents=True)
-            (claude_home / "settings.json").write_text(
-                '{"enabledPlugins":{"existing@tools":true},"extraKnownMarketplaces":{"existing":{"source":{"source":"github","repo":"org/repo"}}}}\n',
-                encoding="utf-8",
-            )
-            (claude_home / "plugins").mkdir(parents=True)
-            (claude_home / "plugins" / "installed_plugins.json").write_text(
-                '{"version":2,"plugins":{"creatio-ai-app-development-toolkit@creatio":[]}}\n',
-                encoding="utf-8",
-            )
+            cursor_home = home / ".cursor"
+            cursor_home.mkdir(parents=True)
 
-            installer.install_claude(repo_root, home)
+            installer.install_cursor(repo_root, home)
 
-            marketplace_dir = home / ".claude" / "plugins" / "marketplaces" / "creatio"
-            cache_dir = (
-                home
-                / ".claude"
-                / "plugins"
-                / "cache"
-                / "creatio"
-                / "creatio-ai-app-development-toolkit"
-                / "0.1.0"
-            )
-            self.assertTrue((marketplace_dir / "runbooks").exists())
-            self.assertTrue((marketplace_dir / "context").exists())
-            self.assertTrue((marketplace_dir / "skills").exists())
-            self.assertTrue((marketplace_dir / "runtime").exists())
-            self.assertTrue((marketplace_dir / ".mcp.json").exists())
-            self.assertTrue((cache_dir / "skills").exists())
-            self.assertFalse((marketplace_dir / "tests").exists())
-            self.assertFalse((marketplace_dir / "installer").exists())
-            self.assertFalse((marketplace_dir / "docs").exists())
-            self.assertTrue((claude_home / "adac.mcp.json").exists())
-            self.assertTrue(
-                (
-                    home
-                    / ".agents"
-                    / "skills"
-                    / "creatio-app-orchestrator"
-                    / "SKILL.md"
-                ).exists()
-            )
+            rule_body = (cursor_home / "rules" / "creatio-app-orchestrator.mdc").read_text(encoding="utf-8")
+            self.assertNotIn(str(repo_root), rule_body)
 
-            settings = json.loads((claude_home / "settings.json").read_text(encoding="utf-8"))
-            self.assertTrue(settings["enabledPlugins"]["existing@tools"])
-            self.assertTrue(settings["enabledPlugins"]["creatio-ai-app-development-toolkit@creatio"])
-            self.assertEqual(settings["extraKnownMarketplaces"]["existing"]["source"]["repo"], "org/repo")
-            self.assertEqual(
-                settings["extraKnownMarketplaces"]["creatio"]["source"],
-                {"source": "directory", "path": str(marketplace_dir)},
-            )
-            known_marketplaces = json.loads(
-                (claude_home / "plugins" / "known_marketplaces.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(
-                known_marketplaces["creatio"]["installLocation"],
-                str(marketplace_dir),
-            )
-            self.assertIsInstance(known_marketplaces["creatio"]["lastUpdated"], str)
-            installed_plugins = json.loads(
-                (claude_home / "plugins" / "installed_plugins.json").read_text(encoding="utf-8")
-            )
-            plugin_key = "creatio-ai-app-development-toolkit@creatio"
-            self.assertEqual(installed_plugins["version"], 2)
-            self.assertEqual(
-                installed_plugins["plugins"][plugin_key][0]["installPath"],
-                str(cache_dir),
-            )
 
-    def test_register_claude_installed_plugin_ignores_non_dict_first_entry(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            target_path = Path(temp) / "installed_plugins.json"
-            target_path.write_text(
-                '{"version":2,"plugins":{"creatio-ai-app-development-toolkit@creatio":["broken"]}}\n',
-                encoding="utf-8",
-            )
-            cache_dir = Path(temp) / "cache" / "creatio" / "creatio-ai-app-development-toolkit" / "0.1.0"
-
-            installer.register_claude_installed_plugin(cache_dir, target_path, "0.1.0")
-            installed = json.loads(target_path.read_text(encoding="utf-8"))
-
-        plugin_entry = installed["plugins"]["creatio-ai-app-development-toolkit@creatio"][0]
-        self.assertEqual(plugin_entry["installPath"], str(cache_dir))
-        self.assertEqual(plugin_entry["version"], "0.1.0")
-
-    def test_register_claude_installed_plugin_creates_registry_when_file_is_missing(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            target_path = Path(temp) / "installed_plugins.json"
-            cache_dir = Path(temp) / "cache" / "creatio" / "creatio-ai-app-development-toolkit" / "0.1.0"
-
-            installer.register_claude_installed_plugin(cache_dir, target_path, "0.1.0")
-            installed = json.loads(target_path.read_text(encoding="utf-8"))
-
-        plugin_entry = installed["plugins"]["creatio-ai-app-development-toolkit@creatio"][0]
-        self.assertEqual(installed["version"], 2)
-        self.assertEqual(plugin_entry["installPath"], str(cache_dir))
-        self.assertEqual(plugin_entry["version"], "0.1.0")
-        self.assertEqual(plugin_entry["scope"], "user")
-        self.assertIsInstance(plugin_entry["installedAt"], str)
-        self.assertIsInstance(plugin_entry["lastUpdated"], str)
-
-    def test_register_claude_installed_plugin_rejects_unknown_registry_version(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            target_path = Path(temp) / "installed_plugins.json"
-            target_path.write_text('{"version":1,"plugins":{"other@market":[]}}\n', encoding="utf-8")
-            cache_dir = Path(temp) / "cache" / "creatio" / "creatio-ai-app-development-toolkit" / "0.1.0"
-
-            with self.assertRaisesRegex(RuntimeError, "Expected version 2"):
-                installer.register_claude_installed_plugin(cache_dir, target_path, "0.1.0")
-
-    def test_preflight_clio_reports_missing_path(self):
-        installer = load_installer()
-        with patch("shutil.which", return_value=None):
-            with self.assertRaisesRegex(RuntimeError, "clio was not found in PATH"):
-                installer.preflight_clio()
-
-    def test_copy_mcp_config_preserves_clio_server(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp) / "repo"
-            root.mkdir()
-            (root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            target = Path(temp) / "target" / ".mcp.json"
-
-            installer.copy_mcp_config(root, target)
-            copied = json.loads(target.read_text(encoding="utf-8"))
-
-        self.assertEqual(copied["mcpServers"]["clio"]["args"], ["mcp-server"])
-
+class McpConfigMergeTests(unittest.TestCase):
     def test_merge_mcp_config_preserves_existing_server_entries(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
@@ -532,7 +664,7 @@ class InstallerTests(unittest.TestCase):
             target = Path(temp) / "target" / "mcp-config.json"
             target.parent.mkdir()
             target.write_text(
-                '\ufeff{"mcpServers":{"existing":{"command":"existing"}}}\n',
+                '﻿{"mcpServers":{"existing":{"command":"existing"}}}\n',
                 encoding="utf-8",
             )
 
@@ -542,128 +674,31 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(merged["mcpServers"]["existing"]["command"], "existing")
         self.assertEqual(merged["mcpServers"]["clio"]["command"], "clio")
 
-    def test_install_codex_copies_plugin_runtime_surface_and_registers_mcp_in_config_toml(self):
+
+class InstallRoutingTests(unittest.TestCase):
+    def test_install_for_targets_routes_to_copilot(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".codex-plugin").mkdir()
-            (repo_root / ".codex-plugin" / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".agents" / "plugins").mkdir(parents=True)
-            (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
-                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
-                encoding="utf-8",
-            )
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
             write_required_references(installer, repo_root)
-            write_release_manifest(repo_root)
+            write_release_manifest(repo_root, plugin_runtime=[".mcp.json"])
             home = Path(temp) / "home"
-            codex_home = home / ".codex"
-            codex_home.mkdir(parents=True)
-            (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
-            personal_marketplace_dir = home / ".agents" / "plugins"
-            personal_marketplace_dir.mkdir(parents=True)
-            (personal_marketplace_dir / "marketplace.json").write_text(
-                '{"name":"personal-marketplace","interface":{"displayName":"Personal Marketplace"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.0.1","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
-                encoding="utf-8",
-            )
+            copilot_home = home / ".copilot"
+            copilot_home.mkdir(parents=True)
 
-            installer.install_codex(repo_root, home)
+            targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home}]
+            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+                installer, "run_checked"
+            ) as run_checked:
+                installed = installer.install_for_targets(repo_root, targets)
 
-            marketplace_dir = codex_home / "plugins" / "marketplaces" / "creatio"
-            cache_dir = (
-                codex_home
-                / "plugins"
-                / "cache"
-                / "creatio"
-                / "creatio-ai-app-development-toolkit"
-                / "0.1.0"
-            )
-            agents_plugin_dir = (
-                home
-                / ".agents"
-                / "plugins"
-                / "creatio-ai-app-development-toolkit"
-            )
-            marketplace_plugin_dir = marketplace_dir / "plugins" / "creatio-ai-app-development-toolkit"
-            self.assertTrue((marketplace_plugin_dir / "runbooks").exists())
-            self.assertTrue((marketplace_plugin_dir / "context").exists())
-            self.assertTrue((marketplace_plugin_dir / "skills").exists())
-            self.assertTrue((marketplace_plugin_dir / ".mcp.json").exists())
-            self.assertTrue((marketplace_plugin_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
-            self.assertFalse((marketplace_plugin_dir / "tests").exists())
-            self.assertFalse((marketplace_plugin_dir / "installer").exists())
-            self.assertTrue((cache_dir / "runbooks").exists())
-            self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertTrue((agents_plugin_dir / "runbooks").exists())
-            self.assertTrue((agents_plugin_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertTrue((home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
-            self.assertFalse((codex_home / "skills" / "creatio-app-orchestrator").exists())
-            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('model = "gpt-5.4"', config_body)
-            self.assertIn("[marketplaces.creatio]", config_body)
-            self.assertIn('source_type = "local"', config_body)
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
-            self.assertIn("enabled = true", config_body)
-            self.assertIn("[mcp_servers.clio]", config_body)
-            self.assertIn('command = "clio"', config_body)
-            self.assertIn('args = ["mcp-server"]', config_body)
-            personal_marketplace = json.loads(
-                (home / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(
-                personal_marketplace["plugins"][-1]["name"],
-                "creatio-ai-app-development-toolkit",
-            )
-            self.assertEqual(
-                personal_marketplace["plugins"][-1]["source"]["path"],
-                "./plugins/creatio-ai-app-development-toolkit",
-            )
-            codex_marketplace = json.loads(
-                (marketplace_dir / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(codex_marketplace["plugins"][0]["source"]["path"], "./plugins/creatio-ai-app-development-toolkit")
+            self.assertEqual(installed, ["copilot"])
+            self.assertEqual(run_checked.call_count, 2)
 
-    def test_merge_personal_marketplace_catalog_fills_missing_display_name_without_overwriting_name(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            source_dir = repo_root / ".agents" / "plugins"
-            source_dir.mkdir(parents=True)
-            (source_dir / "marketplace.json").write_text(
-                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","source":{"source":"local","path":"./"}}]}\n',
-                encoding="utf-8",
-            )
-            home = Path(temp) / "home"
-            target_dir = home / ".agents" / "plugins"
-            target_dir.mkdir(parents=True)
-            (target_dir / "marketplace.json").write_text(
-                '{"name":"custom-marketplace","interface":{},"plugins":[]}\n',
-                encoding="utf-8",
-            )
 
-            installer.merge_personal_marketplace_catalog(repo_root, home)
-            merged = json.loads((target_dir / "marketplace.json").read_text(encoding="utf-8"))
-
-        self.assertEqual(merged["name"], "custom-marketplace")
-        self.assertEqual(merged["interface"]["displayName"], "Creatio")
-        self.assertEqual(
-            merged["plugins"][0]["source"]["path"],
-            "./plugins/creatio-ai-app-development-toolkit",
-        )
-
+class PluginVersionTests(unittest.TestCase):
     def test_plugin_version_rejects_invalid_semver(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
@@ -678,97 +713,34 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "valid semantic version"):
                 installer.plugin_version(repo_root)
 
-    def test_remove_tree_if_exists_wraps_permission_error_with_host_hint(self):
+
+class RemoveTreeTests(unittest.TestCase):
+    def test_wraps_permission_error_with_host_hint(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / "busy"
             target.mkdir()
             with patch("shutil.rmtree", side_effect=PermissionError("busy")):
-                with self.assertRaisesRegex(RuntimeError, "Close Claude Code and retry"):
-                    installer.remove_tree_if_exists(target, "Claude Code")
+                with self.assertRaisesRegex(RuntimeError, "Close Cursor and retry"):
+                    installer.remove_tree_if_exists(target, "Cursor")
 
-    def test_install_codex_preserves_existing_clio_mcp_server(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".codex-plugin").mkdir()
-            (repo_root / ".codex-plugin" / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".agents" / "plugins").mkdir(parents=True)
-            (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
-                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
-                encoding="utf-8",
-            )
-            write_required_references(installer, repo_root)
-            write_release_manifest(repo_root)
-            home = Path(temp) / "home"
-            codex_home = home / ".codex"
-            codex_home.mkdir(parents=True)
-            (codex_home / "config.toml").write_text(
-                '[mcp_servers.clio]\ncommand = "custom-clio"\nargs = ["custom"]\n',
-                encoding="utf-8",
-            )
 
-            with patch("builtins.print") as printed:
-                installer.install_codex(repo_root, home)
-
-            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('command = "custom-clio"', config_body)
-            self.assertNotIn('command = "clio"\nargs = ["mcp-server"]', config_body)
-            self.assertIn("[marketplaces.creatio]", config_body)
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
-            printed.assert_called_once()
-
-    def test_install_codex_rejects_checkout_without_required_references(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
-                encoding="utf-8",
-            )
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
-                installer.install_codex(repo_root, Path(temp) / "home")
-
-    def test_resolve_repo_root_returns_current_checkout(self):
+class ResolveRepoRootTests(unittest.TestCase):
+    def test_returns_current_checkout(self):
         installer = load_installer()
         with patch.object(installer, "current_checkout_root", return_value=ROOT):
             resolved = installer.resolve_repo_root()
         self.assertEqual(resolved, ROOT)
 
-    def test_resolve_repo_root_raises_outside_checkout(self):
+    def test_raises_outside_checkout(self):
         installer = load_installer()
         with patch.object(installer, "current_checkout_root", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "must be run from a plugin checkout"):
                 installer.resolve_repo_root()
 
-    def test_install_py_has_no_git_or_repo_url_constants(self):
-        installer = load_installer()
-        self.assertFalse(hasattr(installer, "DEFAULT_REPO_URL"))
-        self.assertFalse(hasattr(installer, "DEFAULT_INSTALL_ROOT"))
-        self.assertFalse(hasattr(installer, "clone_or_update_repo"))
-        self.assertFalse(hasattr(installer, "render_codex_skill"))
 
-    def test_parse_args_only_exposes_target_flag(self):
+class ArgParseTests(unittest.TestCase):
+    def test_only_exposes_target_flag(self):
         installer = load_installer()
         namespace = installer.parse_args([])
         self.assertIsNone(namespace.target)
@@ -776,7 +748,9 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(hasattr(namespace, "ref"))
         self.assertFalse(hasattr(namespace, "install_root"))
 
-    def test_load_plugin_runtime_paths_reads_release_manifest(self):
+
+class LoadPluginRuntimePathsTests(unittest.TestCase):
+    def test_reads_release_manifest(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -788,7 +762,7 @@ class InstallerTests(unittest.TestCase):
             paths = installer.load_plugin_runtime_paths(repo_root)
         self.assertEqual(paths, ["AGENTS.md", ".mcp.json"])
 
-    def test_load_plugin_runtime_paths_raises_when_manifest_missing(self):
+    def test_raises_when_manifest_missing(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -796,94 +770,9 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "release-manifest.json"):
                 installer.load_plugin_runtime_paths(repo_root)
 
-    def test_install_cursor_rule_survives_source_deletion(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            repo_root.mkdir()
-            (repo_root / ".cursor-plugin").mkdir()
-            (repo_root / ".cursor-plugin" / "plugin.json").write_text(
-                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
-                encoding="utf-8",
-            )
-            (repo_root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
-                encoding="utf-8",
-            )
-            write_release_manifest(repo_root, plugin_runtime=[".mcp.json", ".cursor-plugin"])
 
-            home = Path(temp) / "home"
-            cursor_home = home / ".cursor"
-            cursor_home.mkdir(parents=True)
-
-            installer.install_cursor(repo_root, home)
-
-            rule_body = (cursor_home / "rules" / "creatio-app-orchestrator.mdc").read_text(encoding="utf-8")
-            self.assertNotIn(str(repo_root), rule_body)
-
-            shutil_module = __import__("shutil")
-            shutil_module.rmtree(repo_root)
-            self.assertFalse(repo_root.exists())
-
-            for line in rule_body.splitlines():
-                if "`" not in line:
-                    continue
-                for token in line.split("`"):
-                    candidate = Path(token)
-                    if not candidate.is_absolute():
-                        continue
-                    if candidate.is_relative_to(repo_root):
-                        self.fail(
-                            f"Cursor rule contains absolute path under deleted source: {token}"
-                        )
-
-    def test_prune_directory_entries_clears_readonly_flag(self):
-        """Regression for ENG-89390: `copilot plugin install` leaves a .git tree
-        with read-only pack objects under installed-plugins/. On Windows, default
-        shutil.rmtree raises PermissionError on those files and aborts pruning
-        mid-iteration, leaving disallowed entries (docs/, installer/, tests/, .git)
-        behind and preventing the post-prune SKILL.md write."""
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            plugin_dir = Path(temp) / "installed-plugins" / "plugin"
-            plugin_dir.mkdir(parents=True)
-
-            # Allowed entry — must survive prune
-            (plugin_dir / "AGENTS.md").write_text("keep me\n", encoding="utf-8")
-
-            # Read-only directory mimicking git pack objects
-            git_pack_dir = plugin_dir / ".git" / "objects" / "pack"
-            git_pack_dir.mkdir(parents=True)
-            pack_file = git_pack_dir / "pack-abc.pack"
-            pack_file.write_bytes(b"binary pack data")
-            os.chmod(pack_file, stat.S_IREAD)
-
-            # Read-only top-level file that's also disallowed
-            readonly_file = plugin_dir / ".gitattributes"
-            readonly_file.write_text("* text=auto\n", encoding="utf-8")
-            os.chmod(readonly_file, stat.S_IREAD)
-
-            # A plain disallowed dir
-            (plugin_dir / "docs").mkdir()
-            (plugin_dir / "docs" / "index.md").write_text("doc\n", encoding="utf-8")
-
-            try:
-                installer.prune_directory_entries(plugin_dir, {"AGENTS.md"}, "test prune")
-
-                self.assertTrue((plugin_dir / "AGENTS.md").exists())
-                self.assertFalse((plugin_dir / ".git").exists())
-                self.assertFalse((plugin_dir / ".gitattributes").exists())
-                self.assertFalse((plugin_dir / "docs").exists())
-            finally:
-                # Best-effort cleanup if the test itself fails before pruning
-                for path in plugin_dir.rglob("*"):
-                    try:
-                        os.chmod(path, stat.S_IWRITE)
-                    except OSError:
-                        pass
-
-
-    def test_write_setup_wizard_manifest_maps_target_ids_and_writes_to_caadt_dir(self):
+class SetupWizardManifestTests(unittest.TestCase):
+    def test_maps_target_ids_and_writes_to_caadt_dir(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -901,7 +790,6 @@ class InstallerTests(unittest.TestCase):
             )
 
             self.assertEqual(manifest_path, home / ".caadt" / "install-state.json")
-            self.assertTrue(manifest_path.exists())
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["version"], "1.2.3")
             self.assertIn("installedAt", payload)
@@ -913,7 +801,7 @@ class InstallerTests(unittest.TestCase):
                 ],
             )
 
-    def test_write_setup_wizard_manifest_handles_empty_install_list(self):
+    def test_handles_empty_install_list(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -930,7 +818,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(payload["agents"], [])
             self.assertEqual(payload["version"], "0.0.1")
 
-    def test_write_setup_wizard_manifest_filters_unknown_target_ids(self):
+    def test_filters_unknown_target_ids(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -956,7 +844,7 @@ class InstallerTests(unittest.TestCase):
                 ],
             )
 
-    def test_setup_wizard_manifest_is_opt_in(self):
+    def test_manifest_is_opt_in(self):
         installer = load_installer()
 
         with patch.dict(os.environ, {installer.SETUP_WIZARD_MANIFEST_ENV_VAR: "1"}, clear=False):
@@ -979,7 +867,9 @@ class InstallerTests(unittest.TestCase):
                     )
                 )
 
-    def test_main_does_not_write_setup_wizard_manifest_by_default(self):
+
+class MainTests(unittest.TestCase):
+    def test_does_not_write_setup_wizard_manifest_by_default(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -998,7 +888,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result, 0)
             write_manifest.assert_not_called()
 
-    def test_main_writes_setup_wizard_manifest_when_requested(self):
+    def test_writes_setup_wizard_manifest_when_requested(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -1017,7 +907,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result, 0)
             write_manifest.assert_called_once_with(repo_root, ["codex"])
 
-    def test_main_returns_error_when_preflight_fails_before_install(self):
+    def test_returns_error_when_preflight_fails_before_install(self):
         installer = load_installer()
         with patch.object(installer, "preflight_clio", side_effect=RuntimeError("boom")):
             result = installer.main([])

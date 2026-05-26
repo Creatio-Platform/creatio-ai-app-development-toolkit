@@ -20,6 +20,8 @@ from typing import Any
 
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
+MARKETPLACE_GIT_URL = "https://creatio.ghe.com/engineering/ai-driven-app-creation.git"
+PLUGIN_SOURCE = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 SKILL_NAME = "creatio-app-orchestrator"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
@@ -166,12 +168,61 @@ def preflight_copilot() -> str:
     return copilot
 
 
+def preflight_claude() -> str:
+    claude = shutil.which("claude")
+    if not claude:
+        raise RuntimeError(
+            "claude was not found in PATH. Install Claude Code or add it to PATH before installing ADAC."
+        )
+    return claude
+
+
+def _resolve_cli_command(cli_path: str) -> list[str]:
+    path = Path(cli_path)
+    if path.suffix.lower() == ".ps1":
+        return ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(path)]
+    return [cli_path]
+
+
 def resolve_copilot_command() -> list[str]:
-    copilot = preflight_copilot()
-    copilot_path = Path(copilot)
-    if copilot_path.suffix.lower() == ".ps1":
-        return ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(copilot_path)]
-    return [copilot]
+    return _resolve_cli_command(preflight_copilot())
+
+
+def resolve_claude_command() -> list[str]:
+    return _resolve_cli_command(preflight_claude())
+
+
+def _marketplace_already_registered(error: RuntimeError) -> bool:
+    return f'marketplace "{MARKETPLACE_NAME}" already registered' in str(error).lower()
+
+
+def register_remote_marketplace_and_install_plugin(
+    cli_command: list[str],
+    marketplace_remove_flags: list[str] | None = None,
+) -> None:
+    """Register the remote marketplace and install the plugin via the host CLI.
+
+    Tolerates re-runs:
+    - Claude and Codex update the marketplace source in place on re-add.
+    - Copilot rejects re-add with "already registered" and keeps the old source.
+      For Copilot we remove first (with --force to detach installed plugins) and re-add.
+    """
+    marketplace_subcmd = [*cli_command, "plugin", "marketplace"]
+    add_command = [*marketplace_subcmd, "add", MARKETPLACE_GIT_URL]
+    install_command = [*cli_command, "plugin", "install", PLUGIN_SOURCE]
+    remove_command = [*marketplace_subcmd, "remove", MARKETPLACE_NAME, *(marketplace_remove_flags or [])]
+
+    try:
+        run_checked(add_command)
+    except RuntimeError as error:
+        if not _marketplace_already_registered(error):
+            raise
+        try:
+            run_checked(remove_command)
+        except RuntimeError as remove_error:
+            print(f"Could not remove existing '{MARKETPLACE_NAME}' marketplace: {remove_error}")
+        run_checked(add_command)
+    run_checked(install_command)
 
 
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
@@ -233,14 +284,6 @@ def ensure_required_references(repo_root: Path) -> None:
         raise RuntimeError(f"Plugin checkout is missing required reference files: {', '.join(missing)}")
 
 
-def copy_mcp_config(repo_root: Path, target_path: Path) -> None:
-    source = repo_root / ".mcp.json"
-    if not source.exists():
-        raise RuntimeError(f"MCP config not found: {source}")
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, target_path)
-
-
 def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
     source = repo_root / ".mcp.json"
     if not source.exists():
@@ -290,26 +333,6 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
-
-
-def prune_directory_entries(target_dir: Path, allowed_names: set[str], label: str | None = None) -> None:
-    """Remove top-level entries that are not part of the managed installation surface."""
-    if not target_dir.exists():
-        return
-    for entry in target_dir.iterdir():
-        if entry.name in allowed_names:
-            continue
-        if label:
-            print(f"Pruned {entry} from {label}")
-        if entry.is_dir():
-            rmtree_force(entry)
-        else:
-            try:
-                entry.unlink()
-            except PermissionError:
-                # Read-only file (e.g. from a git clone on Windows)
-                os.chmod(entry, stat.S_IWRITE)
-                entry.unlink()
 
 
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
@@ -398,7 +421,6 @@ def merge_personal_marketplace_catalog(repo_root: Path, home: Path) -> None:
         plugin_name = plugin.get("name")
         if not isinstance(plugin_name, str):
             continue
-        # Home-local Codex marketplaces expect plugin paths under ~/.agents/plugins/<plugin-name>.
         plugin_copy = copy.deepcopy(plugin)
         source_config = plugin_copy.get("source")
         if isinstance(source_config, dict) and source_config.get("source") == "local":
@@ -493,69 +515,25 @@ def merge_codex_marketplace_config(
     target_path.write_text(existing, encoding="utf-8")
 
 
-def merge_claude_plugin_settings(marketplace_dir: Path, target_path: Path) -> None:
-    settings = read_json_file(target_path)
-    extra_marketplaces = settings.setdefault("extraKnownMarketplaces", {})
-    if not isinstance(extra_marketplaces, dict):
-        raise RuntimeError(f"extraKnownMarketplaces must be an object in {target_path}")
-    extra_marketplaces[MARKETPLACE_NAME] = {
-        "source": {
-            "source": "directory",
-            "path": str(marketplace_dir),
-        }
-    }
+def enable_claude_marketplace_auto_update(settings_path: Path) -> None:
+    """Set autoUpdate=true on the Claude marketplace entry written by `claude plugin marketplace add`.
 
-    enabled_plugins = settings.setdefault("enabledPlugins", {})
-    if not isinstance(enabled_plugins, dict):
-        raise RuntimeError(f"enabledPlugins must be an object in {target_path}")
-    enabled_plugins[f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"] = True
-    write_json(target_path, settings)
-
-
-def register_claude_known_marketplace(marketplace_dir: Path, target_path: Path) -> None:
-    known = read_json_file(target_path)
-    known[MARKETPLACE_NAME] = {
-        "source": {
-            "source": "directory",
-            "path": str(marketplace_dir),
-        },
-        "installLocation": str(marketplace_dir),
-        "lastUpdated": now_iso(),
-    }
-    write_json(target_path, known)
-
-
-def register_claude_installed_plugin(cache_dir: Path, target_path: Path, version: str) -> None:
-    installed = read_json_file(target_path)
-    plugin_key = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
-
-    installed_version = installed.get("version")
-    if installed and installed_version is not None and installed_version != 2:
-        raise RuntimeError(
-            f"Unsupported Claude installed_plugins.json version in {target_path}: {installed_version!r}. "
-            "Expected version 2."
-        )
-    if installed_version != 2:
-        installed = {"version": 2, "plugins": {}}
-
-    plugins = installed.setdefault("plugins", {})
-    existing_entries = plugins.get(plugin_key, [])
-    installed_at = now_iso()
-    if existing_entries and isinstance(existing_entries, list) and len(existing_entries) > 0:
-        first_entry = existing_entries[0]
-        if isinstance(first_entry, dict):
-            installed_at = first_entry.get("installedAt", installed_at)
-
-    plugins[plugin_key] = [
-        {
-            "scope": "user",
-            "installPath": str(cache_dir),
-            "version": version,
-            "installedAt": installed_at,
-            "lastUpdated": now_iso(),
-        }
-    ]
-    write_json(target_path, installed)
+    Leaves the CLI-managed `source` field alone. If a stale `directory` source is found
+    (left over from a previous local-install run), drop it so the CLI's git source wins.
+    """
+    settings = read_json_file(settings_path)
+    extra = settings.setdefault("extraKnownMarketplaces", {})
+    if not isinstance(extra, dict):
+        raise RuntimeError(f"extraKnownMarketplaces must be an object in {settings_path}")
+    entry = extra.get(MARKETPLACE_NAME)
+    if not isinstance(entry, dict):
+        entry = {}
+    stale_source = entry.get("source")
+    if isinstance(stale_source, dict) and stale_source.get("source") == "directory":
+        entry.pop("source", None)
+    entry["autoUpdate"] = True
+    extra[MARKETPLACE_NAME] = entry
+    write_json(settings_path, settings)
 
 
 def repo_file(repo_root: Path, relative_path: str) -> Path:
@@ -571,40 +549,6 @@ def render_load_order(repo_root: Path) -> str:
         f"5. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
-
-
-def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
-    """Shared skill body for Codex and Copilot targets."""
-    return (
-        "---\n"
-        f"name: {SKILL_NAME}\n"
-        "description: Use when creating Creatio app Business Plans, "
-        "technical implementation handoffs, or applying the approved plan through clio MCP.\n"
-        "---\n"
-        "\n"
-        "# Creatio App Orchestrator\n"
-        "\n"
-        "Use this skill as the entrypoint for ADAC workflows.\n"
-        "\n"
-        f"Toolkit repository is installed at: `{repo_root}`\n"
-        "\n"
-        "## Load Order\n"
-        "\n"
-        f"{render_load_order(repo_root)}"
-        "\n"
-        "## Core Rules\n"
-        "\n"
-        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
-        "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
-        "- Use `context/business-checklist.md`, `context/essentials.md`, `context/naming-conventions.md`, "
-        "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
-        f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
-    )
-
-
-def render_copilot_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    """Build the installed Copilot CLI skill against the self-contained installed plugin."""
-    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
@@ -635,6 +579,7 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
 
 
 def install_codex(repo_root: Path, home: Path) -> None:
+    """Codex stays on local file-copy install — see docs/install.md for rationale."""
     ensure_required_references(repo_root)
     version = plugin_version(repo_root)
     codex_home = home / ".codex"
@@ -661,26 +606,11 @@ def install_codex(repo_root: Path, home: Path) -> None:
 
 def install_claude(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
-    version = plugin_version(repo_root)
     claude_home = home / ".claude"
-    marketplace_dir = claude_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
-    cache_dir = claude_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
-    remove_tree_if_exists(marketplace_dir, "Claude Code")
-    remove_tree_if_exists(cache_dir, "Claude Code")
-    copy_plugin_runtime_surface(repo_root, marketplace_dir)
-    copy_plugin_runtime_surface(repo_root, cache_dir)
+    claude_command = resolve_claude_command()
+    register_remote_marketplace_and_install_plugin(claude_command)
+    enable_claude_marketplace_auto_update(claude_home / "settings.json")
     copy_skill_directories(repo_root, home / ".agents" / "skills")
-    copy_mcp_config(repo_root, claude_home / "adac.mcp.json")
-    merge_claude_plugin_settings(marketplace_dir, claude_home / "settings.json")
-    register_claude_known_marketplace(
-        marketplace_dir,
-        claude_home / "plugins" / "known_marketplaces.json",
-    )
-    register_claude_installed_plugin(
-        cache_dir,
-        claude_home / "plugins" / "installed_plugins.json",
-        version,
-    )
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
@@ -698,43 +628,11 @@ def install_cursor(repo_root: Path, home: Path) -> None:
 
 def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
-    copilot_home = home / ".copilot"
-    installed_plugin_dir = copilot_home / "installed-plugins" / MARKETPLACE_NAME / PLUGIN_NAME
-    skill_source_dir = repo_root / "skills" / SKILL_NAME
-    skill_target_dir = copilot_home / "skills" / SKILL_NAME
     copilot_command = resolve_copilot_command()
-    plugin_source = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
-    try:
-        run_checked([*copilot_command, "plugin", "marketplace", "add", str(repo_root)], cwd=repo_root)
-    except RuntimeError as error:
-        if f'Marketplace "{MARKETPLACE_NAME}" already registered' not in str(error):
-            raise
-    run_checked([*copilot_command, "plugin", "install", plugin_source], cwd=repo_root)
-    plugin_runtime_paths = load_plugin_runtime_paths(repo_root)
-    copy_plugin_runtime_surface(repo_root, installed_plugin_dir)
-    prune_directory_entries(
-        installed_plugin_dir,
-        {Path(relative_path).parts[0] for relative_path in plugin_runtime_paths},
-        "GitHub Copilot CLI plugin runtime",
+    register_remote_marketplace_and_install_plugin(
+        copilot_command,
+        marketplace_remove_flags=["--force"],
     )
-
-    skill_target_dir.mkdir(parents=True, exist_ok=True)
-    agents_source_dir = skill_source_dir / "agents"
-    if agents_source_dir.exists():
-        agents_target_dir = skill_target_dir / "agents"
-        if agents_target_dir.exists():
-            shutil.rmtree(agents_target_dir)
-        shutil.copytree(
-            agents_source_dir,
-            agents_target_dir,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-    skill_body = render_copilot_skill(installed_plugin_dir, copilot_home / "mcp-config.json")
-    (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
-    allowed_skill_entries = {"SKILL.md"}
-    if agents_source_dir.exists():
-        allowed_skill_entries.add("agents")
-    prune_directory_entries(skill_target_dir, allowed_skill_entries, "GitHub Copilot CLI skill")
 
 
 def write_setup_wizard_manifest(

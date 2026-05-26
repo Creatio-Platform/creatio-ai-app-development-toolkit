@@ -26,13 +26,57 @@ The coding agent owns the process lifecycle.
 
 ## Supported coding agents
 
-The installer detects and configures these locally:
+For Claude Code and GitHub Copilot CLI the installer registers ADAC as a remote plugin marketplace
+served from the public Git repository (`MARKETPLACE_GIT_URL` in [install.py](../installer/install.py))
+and installs `creatio-ai-app-development-toolkit@creatio` through the host CLI. The CLI manages the
+plugin payload on disk; the installer does not copy or overlay files into the host's plugin tree.
 
-- **Codex CLI/Desktop** (`~/.codex/`) — copies the ADAC plugin runtime into `~/.codex/plugins/marketplaces/creatio/` and `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`, installs the local plugin surface into `~/.agents/plugins/creatio-ai-app-development-toolkit/`, registers the personal marketplace entry, and registers the `clio` MCP server in `~/.codex/config.toml`.
-- **Claude Code** (`~/.claude/`) — copies the ADAC marketplace into `~/.claude/plugins/marketplaces/creatio/`, copies the plugin cache into `~/.claude/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`, copies ADAC skills into `~/.agents/skills/`, copies MCP config into `~/.claude/adac.mcp.json`, registers the marketplace in `~/.claude/plugins/known_marketplaces.json`, registers the installed plugin in `~/.claude/plugins/installed_plugins.json`, and enables `creatio-ai-app-development-toolkit@creatio` in `~/.claude/settings.json`.
-- **Cursor** (`~/.cursor/`) — copies the plugin into `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into `~/.cursor/mcp.json` (merging with any existing servers), and writes a `creatio-app-orchestrator.mdc` rule into `~/.cursor/rules/`.
+Codex CLI and Cursor remain on the local file-copy install model.
 
-- **GitHub Copilot CLI** (`~/.copilot/`) — registers this checkout as a local Copilot marketplace with `copilot plugin marketplace add <repo-root>` and installs `creatio-ai-app-development-toolkit@creatio` through the native Copilot plugin flow. The installer then overlays the self-contained ADAC runtime into `~/.copilot/installed-plugins/creatio/creatio-ai-app-development-toolkit/` and rewrites the Copilot skill entry under `~/.copilot/skills/creatio-app-orchestrator/` so it points to the installed plugin copy instead of the source checkout. This keeps the Copilot installation usable after the original ADAC repository checkout is deleted.
+- **Claude Code** (`~/.claude/`) — preflights `claude` in PATH, then runs
+  `claude plugin marketplace add <url>` and `claude plugin install creatio-ai-app-development-toolkit@creatio`.
+  Patches `~/.claude/settings.json` to set `extraKnownMarketplaces.creatio.autoUpdate = true` so the
+  marketplace and plugin auto-update on Claude Code startup (third-party marketplaces are otherwise
+  off by default). Copies ADAC skills into `~/.agents/skills/`.
+- **Codex CLI/Desktop** (`~/.codex/`) — copies the ADAC plugin runtime into
+  `~/.codex/plugins/marketplaces/creatio/` and `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`,
+  installs the local plugin surface into `~/.agents/plugins/creatio-ai-app-development-toolkit/`,
+  registers the personal marketplace entry, and registers the `clio` MCP server in
+  `~/.codex/config.toml`. Codex requires a self-contained `plugins/<plugin>/` subdirectory layout
+  inside the marketplace (skills, `.mcp.json`, and `.codex-plugin/plugin.json` all inside the plugin
+  root). Until the repo provides that mirror, Codex installs from the local checkout rather than
+  the remote marketplace.
+- **Cursor** (`~/.cursor/`) — copies the plugin into
+  `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into
+  `~/.cursor/mcp.json` (merging with any existing servers), and writes a
+  `creatio-app-orchestrator.mdc` rule into `~/.cursor/rules/`.
+- **GitHub Copilot CLI** (`~/.copilot/`) — preflights `copilot` in PATH, then runs
+  `copilot plugin marketplace add <url>` and `copilot plugin install creatio-ai-app-development-toolkit@creatio`.
+  Copilot manages the plugin on disk under `~/.copilot/installed-plugins/`. If a `creatio`
+  marketplace already exists (e.g. from a prior local-install run), the installer runs
+  `copilot plugin marketplace remove creatio --force` first so the source can switch to the GHE URL.
+
+## Install from the terminal (advanced)
+
+Tech users who already have Claude Code or GitHub Copilot CLI configured can register the
+marketplace and install the plugin without running [install.py](../installer/install.py):
+
+```bash
+# Claude Code
+claude plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+claude plugin install creatio-ai-app-development-toolkit@creatio
+
+# GitHub Copilot CLI
+copilot plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+copilot plugin install creatio-ai-app-development-toolkit@creatio
+```
+
+For Codex use the installer (`python installer/install.py --target codex`) — the remote marketplace
+flow is not yet supported for Codex because of a marketplace layout requirement (see the Codex
+bullet above).
+
+The terminal commands above do not configure the `clio` MCP server, the Cursor rule, or the
+`~/.agents/skills/` mirror — for those, run `python installer/install.py`.
 
 ## Installation
 
@@ -70,4 +114,5 @@ Advanced users can install for only one agent with `--target <codex|claude|curso
 
 When launched by the Creatio installation wizard, the wizard sets `CAADT_SETUP_WIZARD_MANIFEST=1`. In that mode, `install.py` writes a one-shot `~/.caadt/install-state.json` handoff file so the wizard can display which coding agents were configured, then the wizard deletes it. Manual `python installer/install.py` runs do not create that handoff file by default.
 
-The installer does not use a registry, checksums, or scheduled auto-update in v1.
+The installer does not use a registry, checksums, or an ADAC-owned scheduled updater in v1.
+Claude Code marketplace auto-update is enabled separately through Claude's own marketplace settings.
