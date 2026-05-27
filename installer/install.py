@@ -698,7 +698,6 @@ def install_claude(repo_root: Path, home: Path) -> None:
     claude_command = resolve_claude_command()
     register_remote_marketplace_and_install_plugin(claude_command)
     enable_claude_marketplace_auto_update(claude_home / "settings.json")
-    copy_skill_directories(repo_root, home / ".agents" / "skills")
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:

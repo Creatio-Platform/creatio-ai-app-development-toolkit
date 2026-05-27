@@ -37,7 +37,8 @@ Codex CLI and Cursor remain on the local file-copy install model.
   `claude plugin marketplace add <url>` and `claude plugin install creatio-ai-app-development-toolkit@creatio`.
   Patches `~/.claude/settings.json` to set `extraKnownMarketplaces.creatio.autoUpdate = true` so the
   marketplace and plugin auto-update on Claude Code startup (third-party marketplaces are otherwise
-  off by default). Copies ADAC skills into `~/.agents/skills/`.
+  off by default). Skills ship inside the plugin payload, so the CLI-managed install exposes them
+  directly; the installer does not mirror skills into `~/.agents/skills/` for Claude.
 - **Codex CLI/Desktop** (`~/.codex/`) — copies the ADAC plugin runtime into
   `~/.codex/plugins/marketplaces/creatio/` and `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/`,
   installs the local plugin surface into `~/.agents/plugins/creatio-ai-app-development-toolkit/`,
@@ -75,8 +76,8 @@ For Codex use the installer (`python installer/install.py --target codex`) — t
 flow is not yet supported for Codex because of a marketplace layout requirement (see the Codex
 bullet above).
 
-The terminal commands above do not configure the `clio` MCP server, the Cursor rule, or the
-`~/.agents/skills/` mirror — for those, run `python installer/install.py`.
+The terminal commands above do not configure the `clio` MCP server or the Cursor rule — for those,
+run `python installer/install.py`.
 
 ## Installation
 

@@ -281,9 +281,9 @@ class InstallClaudeTests(unittest.TestCase):
             entry = settings["extraKnownMarketplaces"]["creatio"]
             self.assertTrue(entry["autoUpdate"])
             self.assertNotIn("source", entry)
-            self.assertTrue(
-                (home / ".agents" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
-            )
+            # Claude reads its skill from the CLI-managed plugin, not ~/.agents/skills,
+            # so the installer must not seed that cross-agent mirror for Claude.
+            self.assertFalse((home / ".agents" / "skills").exists())
 
     def test_preserves_existing_settings_when_enabling_auto_update(self):
         installer = load_installer()
