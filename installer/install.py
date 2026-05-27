@@ -69,9 +69,24 @@ def load_plugin_runtime_paths(repo_root: Path) -> list[str]:
     return list(_load_plugin_runtime_paths_cached(repo_root / RELEASE_MANIFEST_FILENAME))
 
 
-def write_json(path: Path, data: Any) -> None:
+def atomic_write_text(path: Path, content: str) -> None:
+    """Write text via a sibling temp file + atomic replace.
+
+    A crash or interruption mid-write cannot leave a truncated or corrupted
+    target file: the original stays intact until os.replace swaps it in one step.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def write_json(path: Path, data: Any) -> None:
+    atomic_write_text(path, json.dumps(data, indent=2) + "\n")
 
 
 def now_iso() -> str:
@@ -100,7 +115,13 @@ def plugin_version(repo_root: Path) -> str:
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"Could not parse JSON in {path}: {error}. "
+            "Fix or remove the file (note: comments are not valid JSON) and retry."
+        ) from error
     if not isinstance(data, dict):
         raise RuntimeError(f"Expected JSON object in {path}")
     return data

@@ -733,6 +733,32 @@ class InstallRoutingTests(unittest.TestCase):
             self.assertEqual(run_checked.call_count, 2)
 
 
+class JsonIoTests(unittest.TestCase):
+    def test_write_json_overwrites_and_leaves_no_temp_file(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "nested" / "settings.json"
+            installer.write_json(target, {"a": 1})
+            installer.write_json(target, {"a": 2, "b": [1, 2]})
+
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"a": 2, "b": [1, 2]})
+            siblings = [p.name for p in target.parent.iterdir()]
+            self.assertEqual(siblings, ["settings.json"])
+
+    def test_read_json_file_wraps_parse_error_as_runtime_error(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "settings.json"
+            path.write_text('{"a": 1, // a comment\n}', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "Could not parse JSON"):
+                installer.read_json_file(path)
+
+    def test_read_json_file_returns_empty_for_missing_file(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(installer.read_json_file(Path(temp) / "missing.json"), {})
+
+
 class PluginVersionTests(unittest.TestCase):
     def test_plugin_version_rejects_invalid_semver(self):
         installer = load_installer()
