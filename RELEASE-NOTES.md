@@ -6,6 +6,21 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 0.1.1 (2026-05-27)
+
+### Features
+
+- **Remote marketplace for Claude and Copilot** (ENG-90475): Claude Code and GitHub Copilot plugins now install from the remote marketplace source instead of a local mirror. JSON config writes hardened with atomic replace to prevent partial writes on interrupted installs.
+- **Mobile pages creation support** (ENG-89649): AI app creation instructions now cover mobile page creation — updated `context/essentials.md`, `context/naming-conventions.md`, and the requirements-gathering runbook.
+
+### Bug Fixes
+
+- **ADAC skill install/runtime fixes** (ENG-89512): Fixed skill file rendering with absolute installed paths for Codex and Claude; removed duplicate standalone skill registrations; added Codex legacy disabled-skill override cleanup; added validator launcher fallback (`py` → `python` → `python3`); prevented duplicate Copilot skill surfacing from install-side runtime.
+- **Codex installer**: Fixed rendered installed skill paths and removed duplicate marketplace/skill surfaces (fix(codex)).
+- **Reduced per-run agent friction** (ENG-89962): `mcp_client.py` now prints a USAGE banner on `--help`/`-h`/bare invocation with PowerShell-safe invocation examples. `AGENTS.md` trimmed (~440 → ~323 lines) by deferring Support Mode policy to `get-guidance`; added "Tool surface preference (clio MCP vs CLI)" rule to prevent agents falling back to CLI by default.
+
+---
+
 ## 0.1.0 (2026-05-18)
 
 ### Breaking Changes
