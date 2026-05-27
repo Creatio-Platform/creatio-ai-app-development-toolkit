@@ -2,9 +2,9 @@
 
 V1 ships as a single root-level plugin. All ADAC skills belong to the root plugin package.
 
-The canonical list of files that ship in the release zip and that `install.py` copies into agent homes is defined in [`.release-manifest.json`](../.release-manifest.json) at the repository root. Two sections:
+The canonical list of files that ship in the release zip is defined in [`.release-manifest.json`](../.release-manifest.json) at the repository root. Two sections:
 
-- `plugin_runtime[]` — paths that `install.py` copies into each agent's plugin destination. `copy_plugin_runtime_surface` reads this list directly; there is no parallel hardcoded list in the installer.
+- `plugin_runtime[]` — paths bundled into the release zip and copied into the agent's plugin destination by the **local-install path** (Codex and Cursor) via `copy_plugin_runtime_surface`, which reads this list directly. Claude and GitHub Copilot CLI install from the remote marketplace (`<cli> plugin marketplace add` + `plugin install`) and do not use this copy step — but they still rely on the bundled checkout for the `~/.agents/skills/` mirror (Claude) and the required-reference preflight. There is no parallel hardcoded list in the installer.
 - `release_extras[]` — additional paths bundled into the release zip but not installed into agent homes (currently `installer/`).
 
 The release workflow (`.github/workflows/release.yml`) builds `creatio-ai-app-development-toolkit-<version>.zip` from `plugin_runtime + release_extras + .release-manifest.json` itself and attaches it to the GitHub Release in a single `gh release create` call (draft → upload → publish). The installation wizard downloads this asset.
@@ -34,4 +34,4 @@ Deferred from v1:
 - Custom ADAC MCP server package.
 - `gh skill install` packaging.
 - Multi-plugin `plugins/<name>/plugin.yaml` packaging.
-- Registry/tarball marketplace and auto-update.
+- Registry/tarball marketplace and an ADAC-owned auto-updater. (Claude Code plugin auto-update is enabled via Claude's own marketplace settings — `extraKnownMarketplaces.creatio.autoUpdate` — not an ADAC-owned mechanism.)

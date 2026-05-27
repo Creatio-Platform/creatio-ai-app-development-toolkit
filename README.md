@@ -23,7 +23,20 @@ Install from a local checkout (developers):
 python installer/install.py
 ```
 
-To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`. See [docs/install.md](docs/install.md) for release zip installation and agent-specific install details.
+To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
+
+Tech users who already have Claude Code or GitHub Copilot CLI in PATH can register the remote
+marketplace directly (Codex stays on the installer-managed local install — see
+[docs/install.md](docs/install.md)):
+
+```bash
+claude plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+claude plugin install creatio-ai-app-development-toolkit@creatio
+copilot plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+copilot plugin install creatio-ai-app-development-toolkit@creatio
+```
+
+See [docs/install.md](docs/install.md) for release zip installation and agent-specific install details.
 
 ## Main Workflow
 
