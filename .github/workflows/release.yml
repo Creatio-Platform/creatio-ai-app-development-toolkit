@@ -93,7 +93,16 @@ jobs:
         # version instead of a raw SHA rollback.
         run: |
           if git ls-remote --exit-code --heads origin release >/dev/null 2>&1; then
-            OLD_VERSION=$(git show "origin/release:.claude-plugin/plugin.json" | jq -r .version)
+            # Capture with explicit failure handling: bash suppresses `set -e`
+            # inside command-substitution-in-assignment, so a failing
+            # `git show | jq` would otherwise leave OLD_VERSION empty and the
+            # equality check below would silently pass.
+            OLD_VERSION=$(git show "origin/release:.claude-plugin/plugin.json" | jq -r .version) \
+              || { echo "ERROR: Failed to read .claude-plugin/plugin.json from origin/release."; exit 1; }
+            if [ -z "$OLD_VERSION" ] || [ "$OLD_VERSION" = "null" ]; then
+              echo "ERROR: OLD_VERSION came back empty/null; refusing to bypass Gate 6."
+              exit 1
+            fi
             if [ "$OLD_VERSION" = "$RELEASE_VERSION" ]; then
               echo "ERROR: New release version ($RELEASE_VERSION) equals current release branch version ($OLD_VERSION)."
               echo "       Cache key on clients is plugin.json:version, so this re-point would be invisible to installed plugins."
