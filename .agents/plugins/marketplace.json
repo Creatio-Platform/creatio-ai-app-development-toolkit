@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "creatio-ai-app-development-toolkit",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "source": {
         "source": "url",
         "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
