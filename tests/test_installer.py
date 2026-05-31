@@ -321,6 +321,42 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         install_calls = [cmd for cmd in commands if cmd[1] == "plugin" and cmd[2] not in {"marketplace"}]
         self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
 
+    def test_pre_remove_marketplace_tolerates_codex_not_configured_or_installed(self):
+        # Regression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
+        # the "no such marketplace" condition as
+        #   `Error: marketplace `creatio` is not configured or installed`
+        # — backticks around the name and "is not configured or installed"
+        # wording. The original `_marketplace_not_found` patterns only matched
+        # "not found" / "no marketplace named" variants and missed this one,
+        # so install.py exited 1 on fresh machines instead of proceeding to
+        # `marketplace add`.
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError(
+                    "Error: marketplace `creatio` is not configured or installed"
+                )
+
+        with patch.object(installer, "run_checked", side_effect=fake_run), patch("builtins.print"):
+            installer.register_remote_marketplace_and_install_plugin(
+                ["codex"],
+                marketplace_remove_flags=[],
+                install_verb="add",
+                pre_remove_marketplace=True,
+            )
+
+        self.assertEqual(
+            commands,
+            [
+                ["codex", "plugin", "marketplace", "remove", "creatio"],
+                ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                ["codex", "plugin", "add", installer.PLUGIN_SOURCE],
+            ],
+        )
+
     def test_pre_remove_marketplace_propagates_non_not_found_remove_failure(self):
         # Regression for PR #73 RC-1: swallowing every RuntimeError on the
         # pre-remove step would hide real failures (permissions, broken CLI,

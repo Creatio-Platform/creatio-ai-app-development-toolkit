@@ -240,6 +240,7 @@ def _marketplace_not_found(error: RuntimeError) -> bool:
         or f'marketplace "{MARKETPLACE_NAME}" not found' in error_text
         or f"no marketplace named '{MARKETPLACE_NAME}'" in error_text
         or f'no marketplace named "{MARKETPLACE_NAME}"' in error_text
+        or f"marketplace `{MARKETPLACE_NAME}` is not configured or installed" in error_text
     )
 
 
