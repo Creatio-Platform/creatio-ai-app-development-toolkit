@@ -419,6 +419,26 @@ class InstallClaudeTests(unittest.TestCase):
 
 
 class RemoveTomlTableBlockTests(unittest.TestCase):
+    def test_removes_block_when_header_has_trailing_comment(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.toml"
+            config_path.write_text(
+                "[marketplaces.creatio] # installed-by-adac\n"
+                'source_type = "local"\n'
+                "\n"
+                "[sandbox]\n"
+                'network = "restricted"\n',
+                encoding="utf-8",
+            )
+
+            installer._remove_toml_table_block(config_path, ("[marketplaces.creatio]",))
+
+            body = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("[marketplaces.creatio]", body)
+            self.assertIn("[sandbox]", body)
+            self.assertIn('network = "restricted"', body)
+
     def test_preserves_multiline_array_in_sibling_table(self):
         # Regression: a generous next-header detector ("any line starting with [")
         # would treat the closing `]` of a multi-line array literal as a new
@@ -821,6 +841,66 @@ class InstallCodexTests(unittest.TestCase):
             catalog = json.loads(personal_catalog.read_text(encoding="utf-8"))
             plugin_names = [plugin["name"] for plugin in catalog["plugins"]]
             self.assertEqual(plugin_names, ["user-own-plugin"])
+
+    def test_deletes_installer_managed_personal_marketplace_when_plugins_is_malformed(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            personal_catalog = home / ".agents" / "plugins" / "marketplace.json"
+            personal_catalog.parent.mkdir(parents=True)
+            personal_catalog.write_text(
+                json.dumps(
+                    {
+                        "name": "creatio",
+                        "interface": {"displayName": "Creatio"},
+                        "plugins": {"name": "creatio-ai-app-development-toolkit"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse(personal_catalog.exists())
+
+    def test_rejects_user_managed_personal_marketplace_when_plugins_is_malformed(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            personal_catalog = home / ".agents" / "plugins" / "marketplace.json"
+            personal_catalog.parent.mkdir(parents=True)
+            personal_catalog.write_text(
+                json.dumps(
+                    {
+                        "name": "personal",
+                        "interface": {"displayName": "Personal Marketplace"},
+                        "plugins": {"name": "user-own-plugin"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), self.assertRaisesRegex(RuntimeError, "'plugins' must be a list"):
+                installer.install_codex(repo_root, home)
 
     def test_rejects_checkout_without_required_references(self):
         installer = load_installer()

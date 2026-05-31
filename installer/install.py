@@ -497,7 +497,10 @@ def remove_personal_marketplace_creatio_entry(catalog_path: Path, marketplace_na
     catalog = read_json_file(catalog_path)
     plugins = catalog.get("plugins")
     if not isinstance(plugins, list):
-        return
+        if catalog.get("name") == marketplace_name:
+            catalog_path.unlink()
+            return
+        raise RuntimeError(f"'plugins' must be a list in {catalog_path}")
 
     filtered = [
         plugin for plugin in plugins
@@ -543,12 +546,20 @@ def enable_claude_marketplace_auto_update(settings_path: Path) -> None:
 # `remove_codex_skill_config_override` to find the end of a removable block
 # without false-matching on lines like a multi-line array's `[`.
 _TOML_TABLE_HEADER_RE = re.compile(
-    r'^\[{1,2}'                                            # opening [ or [[
+    r'^(?P<header>\[{1,2}'                                 # opening [ or [[
     r'(?:[A-Za-z0-9_\-]+|"(?:[^"\\]|\\.)*"|\'[^\']*\')'    # first segment: bare | "double" | 'literal'
     r'(?:\.(?:[A-Za-z0-9_\-]+|"(?:[^"\\]|\\.)*"|\'[^\']*\'))*'  # .segment ...
-    r'\]{1,2}'                                             # closing
+    r'\]{1,2})'                                            # closing
     r'\s*(?:#.*)?$'                                        # trailing whitespace + optional comment
 )
+
+
+def _toml_table_header_marker(line: str) -> str | None:
+    """Return the table header marker for a TOML header line, excluding comments."""
+    match = _TOML_TABLE_HEADER_RE.match(line.strip())
+    if not match:
+        return None
+    return match.group("header")
 
 
 def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> None:
@@ -561,7 +572,7 @@ def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> No
     index = 0
     changed = False
     while index < len(lines):
-        if lines[index].strip() != "[[skills.config]]":
+        if _toml_table_header_marker(lines[index]) != "[[skills.config]]":
             updated.append(lines[index])
             index += 1
             continue
@@ -599,7 +610,7 @@ def _remove_toml_table_block(config_path: Path, table_markers: tuple[str, ...]) 
     index = 0
     changed = False
     while index < len(lines):
-        if lines[index].strip() in table_markers:
+        if _toml_table_header_marker(lines[index]) in table_markers:
             end = index + 1
             while end < len(lines) and not _TOML_TABLE_HEADER_RE.match(lines[end].strip()):
                 end += 1
