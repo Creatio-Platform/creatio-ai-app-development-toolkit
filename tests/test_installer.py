@@ -321,6 +321,29 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         install_calls = [cmd for cmd in commands if cmd[1] == "plugin" and cmd[2] not in {"marketplace"}]
         self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
 
+    def test_pre_remove_marketplace_propagates_non_not_found_remove_failure(self):
+        # Regression for PR #73 RC-1: swallowing every RuntimeError on the
+        # pre-remove step would hide real failures (permissions, broken CLI,
+        # I/O errors) behind a misleading downstream `marketplace add` error.
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError("Error: permission denied while updating config.toml")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, "permission denied"):
+                installer.register_remote_marketplace_and_install_plugin(
+                    ["codex"],
+                    marketplace_remove_flags=[],
+                    install_verb="add",
+                    pre_remove_marketplace=True,
+                )
+
+        self.assertEqual(commands, [["codex", "plugin", "marketplace", "remove", "creatio"]])
+
 
 class InstallClaudeTests(unittest.TestCase):
     def test_shells_out_and_enables_auto_update(self):

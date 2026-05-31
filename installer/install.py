@@ -233,6 +233,16 @@ def _marketplace_already_registered(error: RuntimeError) -> bool:
     )
 
 
+def _marketplace_not_found(error: RuntimeError) -> bool:
+    error_text = str(error).lower()
+    return (
+        f"marketplace '{MARKETPLACE_NAME}' not found" in error_text
+        or f'marketplace "{MARKETPLACE_NAME}" not found' in error_text
+        or f"no marketplace named '{MARKETPLACE_NAME}'" in error_text
+        or f'no marketplace named "{MARKETPLACE_NAME}"' in error_text
+    )
+
+
 def register_remote_marketplace_and_install_plugin(
     cli_command: list[str],
     marketplace_remove_flags: list[str] | None = None,
@@ -265,12 +275,15 @@ def register_remote_marketplace_and_install_plugin(
     if pre_remove_marketplace:
         try:
             run_checked(remove_command)
-        except RuntimeError:
+        except RuntimeError as remove_error:
             # Typical case on a fresh install: marketplace is not registered
-            # yet, so `remove` exits non-zero. Swallow silently — a noisy
-            # warning here would alarm first-time users who have never had
-            # a `creatio` marketplace registered.
-            pass
+            # yet, so `remove` exits non-zero. Swallow silently for that case
+            # only — a noisy warning would alarm first-time users. Any other
+            # failure (permission denied, broken CLI install, etc.) must
+            # propagate so the user sees the real cause rather than a
+            # downstream `marketplace add` error.
+            if not _marketplace_not_found(remove_error):
+                raise
         run_checked(add_command)
         run_checked(install_command)
         return
