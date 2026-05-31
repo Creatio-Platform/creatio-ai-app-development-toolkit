@@ -10,7 +10,7 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ### Bug Fixes
 
-- **Codex install on a fresh machine** (forward-fix for 0.1.2): `installer/install.py` now tolerates the fifth Codex CLI wording for "no such marketplace" — `marketplace \`creatio\` is not configured or installed` (backticks around the name, "is not configured or installed" instead of "not found"). 0.1.2 only recognized four wording variants and exited 1 on the pre-remove step, blocking the remote-marketplace install path for Codex. Claude and Copilot install paths from 0.1.2 were unaffected.
+- **Codex install on a fresh machine** (forward-fix for 0.1.2): `installer/install.py` now tolerates the fifth Codex CLI wording for "no such marketplace" — ``marketplace `creatio` is not configured or installed`` (backticks around the name, "is not configured or installed" instead of "not found"). 0.1.2 only recognized four wording variants and exited 1 on the pre-remove step, blocking the remote-marketplace install path for Codex. Claude and Copilot install paths from 0.1.2 were unaffected.
 
 ---
 
