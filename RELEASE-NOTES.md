@@ -6,6 +6,29 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 0.1.2 (2026-05-31)
+
+### Features
+
+- **Remote marketplace for Codex** (ENG-90514): Codex CLI now installs from the remote git marketplace, matching Claude and Copilot. The installer migrates users coming from the legacy file-copy install — removing `~/.codex/plugins/marketplaces/creatio/`, the `~/.agents/plugins/marketplace.json` shadow catalog that would otherwise shadow the freshly-cloned git marketplace, and stale `config.toml` blocks (`[marketplaces.creatio]`, `[plugins."…@creatio"]`, and `[[skills.config]]` overrides for the toolkit skill) before registering the new marketplace.
+- **Marketplace manifests pinned to the remote `release` branch** (ENG-90475): `.claude-plugin/marketplace.json`, `.github/plugin/marketplace.json`, and `.agents/plugins/marketplace.json` now declare `source: { source: "url", url: "<repo>.git", ref: "release" }` so every marketplace agent fetches plugin payload from the moving `release` branch rather than `main`. Decouples "what users install" from "what is on `main`".
+
+### Hardening
+
+- Codex install distinguishes "marketplace not found" from real failures during pre-remove, so first-time installs no longer print misleading errors.
+- Codex install tolerates malformed marketplace state left by earlier installer versions.
+
+### Release workflow
+
+- Release workflow Gate 6 hardened against silent `OLD_VERSION` capture failures — refuses to force-push the `release` branch onto a SHA that shares its `plugin.json:version` with the current release, preventing clients from missing a release because of payload cache reuse.
+
+### Documentation
+
+- `docs/install.md` expanded with the release-pinned install model, dev escape-hatch instructions for testing unreleased changes, and manual-update guidance.
+- `docs/codex-remote-marketplace-plan.md` added as the design record for the Codex migration.
+
+---
+
 ## 0.1.1 (2026-05-27)
 
 ### Features
