@@ -117,3 +117,67 @@ When launched by the Creatio installation wizard, the wizard sets `CAADT_SETUP_W
 
 The installer does not use a registry, checksums, or an ADAC-owned scheduled updater in v1.
 Claude Code marketplace auto-update is enabled separately through Claude's own marketplace settings.
+
+## Release-pinned plugin source
+
+The Claude and Copilot marketplace manifests (`.claude-plugin/marketplace.json`,
+`.github/plugin/marketplace.json`) pin the plugin payload to the `release` branch via
+`source.ref: "release"`. The `release` branch is a moving pointer that the release workflow
+force-updates to the latest released SHA after `gh release create` succeeds. Effect:
+`claude plugin install creatio-ai-app-development-toolkit@creatio` and the Copilot equivalent
+always fetch the most-recent published release, never an unreleased commit on `main`.
+
+The plugin `source.source: "url"` discriminator is the documented form for git-URL-backed
+sources — see [Claude Code's plugin marketplaces docs](https://code.claude.com/docs/en/plugin-marketplaces.md)
+and the production example in
+[obra/superpowers-marketplace](https://github.com/obra/superpowers-marketplace/blob/main/.claude-plugin/marketplace.json)
+(the `superpowers-dev` entry uses the same shape with `ref` to pin to a branch).
+
+Two manifests, one schema: the repo ships the same `marketplace.json` content at both
+`.claude-plugin/marketplace.json` and `.github/plugin/marketplace.json`. This is because each CLI
+scans a different conventional path inside a registered marketplace repo —
+`.claude-plugin/marketplace.json` is Claude Code's canonical path, and `.github/plugin/marketplace.json`
+is Copilot CLI's canonical path
+([Copilot docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-marketplace),
+matching the official [github/awesome-copilot](https://github.com/github/awesome-copilot/blob/main/.github/plugin/marketplace.json)
+reference marketplace). Copilot CLI also falls back to `.claude-plugin/marketplace.json`, but
+shipping the canonical path explicitly avoids depending on fallback behavior. The schema is
+identical between the two CLIs, so the files are byte-for-byte equal — `scripts/bump-version.js`
+keeps the `plugins[0].version` field in sync via `.version-bump.json`, and
+`tests/test_release_structure.py` asserts both manifests carry the same `source` block.
+
+Codex (`.agents/plugins/marketplace.json`) and Cursor stay on the local file-copy install model
+and are not affected by the `release` branch pin.
+
+### Testing unreleased changes through a marketplace agent
+
+When you need to validate work-in-progress changes through Claude or Copilot (not via Cursor/Codex
+file-copy), the path is per-CLI native:
+
+- **Claude Code** — register a second, dev-scoped marketplace pinned to your branch via the URL
+  fragment, then install the plugin from it:
+  ```bash
+  claude plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git#<your-branch>
+  claude plugin install creatio-ai-app-development-toolkit@<marketplace-name-chosen-by-claude>
+  ```
+  Uninstall and re-add the production `creatio` marketplace when done.
+- **GitHub Copilot CLI** — there is no native escape hatch (see
+  [github/copilot-cli#1296](https://github.com/github/copilot-cli/issues/1296)). To test unreleased
+  changes, fall back to Cursor/Codex file-copy from a local checkout of the working branch via
+  `python installer/install.py --target cursor` (or `--target codex`).
+
+Never push work-in-progress to the `release` branch — that branch is owned by the release workflow
+and is the production install target for every Claude and Copilot user.
+
+### If you disabled Claude marketplace autoUpdate
+
+`installer/install.py` enables `extraKnownMarketplaces.creatio.autoUpdate = true` so Claude
+self-updates the plugin on each session start. If you have flipped this to `false` in
+`~/.claude/settings.json`, run
+
+```bash
+claude plugin update creatio-ai-app-development-toolkit@creatio
+```
+
+manually to pick up new releases. The in-agent update notification and the unified `caadt update`
+command both skip Claude by design, on the assumption that autoUpdate is on.

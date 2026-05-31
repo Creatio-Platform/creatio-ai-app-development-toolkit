@@ -75,17 +75,38 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertEqual(cursor_version, canonical_version)
 
         self.assertEqual(claude["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(claude["plugins"][0]["source"], "./")
         self.assertEqual(claude["plugins"][0]["version"], canonical_version)
+        # Claude and Copilot marketplaces pin the plugin payload to the moving
+        # `release` branch so installs always fetch the latest published release
+        # rather than whatever sits on main. The release workflow force-updates
+        # `release` to the released SHA after `gh release create`. See
+        # docs/install.md → "Release-pinned plugin source".
+        self.assertEqual(
+            claude["plugins"][0]["source"],
+            {
+                "source": "url",
+                "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+                "ref": "release",
+            },
+        )
 
         plugin = codex["plugins"][0]
         self.assertEqual(plugin["name"], "creatio-ai-app-development-toolkit")
         self.assertEqual(plugin["version"], canonical_version)
+        # Codex stays on file-copy install until its remote-marketplace migration
+        # (separate ticket); marketplace.json source remains the local path.
         self.assertEqual(plugin["source"]["path"], "./")
 
         self.assertEqual(copilot["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(copilot["plugins"][0]["source"], "./")
         self.assertEqual(copilot["plugins"][0]["version"], canonical_version)
+        self.assertEqual(
+            copilot["plugins"][0]["source"],
+            {
+                "source": "url",
+                "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+                "ref": "release",
+            },
+        )
 
     def test_main_skill_frontmatter_and_references_are_valid(self):
         skill = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
@@ -156,7 +177,23 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertEqual(direct_input_lines, [])
         self.assertIn("PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)", workflow)
         self.assertNotIn("jq -r .version plugin.json", workflow)
-        self.assertEqual(re.findall(r"- name: Gate (\d+) ", workflow), ["1", "2", "3", "4", "5"])
+        self.assertEqual(re.findall(r"- name: Gate (\d+) ", workflow), ["1", "2", "3", "4", "5", "6"])
+        # Gate 6 protects against pointing `release` at a SHA whose plugin.json
+        # version equals the current release branch's plugin.json version —
+        # client cache is keyed by plugin.json:version, so a same-version
+        # re-point would be invisible to installed plugins.
+        self.assertIn("Gate 6 — new version differs from current `release` branch version", workflow)
+        # Release branch must be force-pushed AFTER `gh release create` succeeds
+        # so a failed asset upload doesn't strand the pointer ahead of a
+        # missing release.
+        # Explicit --force-with-lease=<ref>:<expect> is required — bare
+        # --force-with-lease degrades to plain --force when pushing a raw
+        # SHA:refspec without a tracked local branch.
+        self.assertIn(
+            'git push origin "$GITHUB_SHA:refs/heads/release" --force-with-lease="refs/heads/release:${EXPECTED}"',
+            workflow,
+        )
+        self.assertIn("Verify `release` branch now points to released SHA", workflow)
         self.assertNotIn('node scripts/bump-version.js "$RELEASE_VERSION"', workflow)
         self.assertNotIn("git commit", workflow)
         self.assertNotIn("git push origin main", workflow)

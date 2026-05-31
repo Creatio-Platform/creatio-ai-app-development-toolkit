@@ -79,6 +79,38 @@ jobs:
             exit 1
           fi
 
+      - name: Fetch `release` ref so Gate 6 and the post-release lease see it
+        # Belt-and-braces: actions/checkout@v4 with fetch-depth: 0 fetches all
+        # branches by default, but be explicit so a future checkout config
+        # change can't silently break Gate 6 or the force-with-lease.
+        run: git fetch --no-tags origin release || true
+
+      - name: Gate 6 — new version differs from current `release` branch version
+        # The plugin cache key on the client is plugin.json:version (not SHA),
+        # so re-pointing `release` at a commit whose plugin.json still says the
+        # current version would make clients reuse the old cached payload and
+        # miss the new release. For hotfix rollbacks, ship a forward-fix patch
+        # version instead of a raw SHA rollback.
+        run: |
+          if git ls-remote --exit-code --heads origin release >/dev/null 2>&1; then
+            # Capture with explicit failure handling: bash suppresses `set -e`
+            # inside command-substitution-in-assignment, so a failing
+            # `git show | jq` would otherwise leave OLD_VERSION empty and the
+            # equality check below would silently pass.
+            OLD_VERSION=$(git show "origin/release:.claude-plugin/plugin.json" | jq -r .version) \
+              || { echo "ERROR: Failed to read .claude-plugin/plugin.json from origin/release."; exit 1; }
+            if [ -z "$OLD_VERSION" ] || [ "$OLD_VERSION" = "null" ]; then
+              echo "ERROR: OLD_VERSION came back empty/null; refusing to bypass Gate 6."
+              exit 1
+            fi
+            if [ "$OLD_VERSION" = "$RELEASE_VERSION" ]; then
+              echo "ERROR: New release version ($RELEASE_VERSION) equals current release branch version ($OLD_VERSION)."
+              echo "       Cache key on clients is plugin.json:version, so this re-point would be invisible to installed plugins."
+              echo "       For a rollback, ship a forward-fix patch version (e.g. ${RELEASE_VERSION%.*}.$((${RELEASE_VERSION##*.}+1)))."
+              exit 1
+            fi
+          fi
+
       # === Release execution ===
 
       - name: Build release asset from .release-manifest.json
@@ -134,3 +166,32 @@ jobs:
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
         env:
           GH_TOKEN: ${{ github.token }}
+
+      - name: Fast-forward `release` branch to new release SHA
+        # `release` is the moving pointer that marketplace.json's source.ref
+        # points to for Claude/Copilot plugin installs. Update it AFTER the
+        # release artifact exists. If this step fails the release branch
+        # stays on the previous good release, so users continue installing
+        # the prior release rather than ending up with a half-published one.
+        #
+        # Explicit lease form: bare `--force-with-lease` derives its expected
+        # SHA from a tracked local branch, which we don't have here (we push
+        # a raw SHA:refspec, no local `release` checkout). Pass the lease
+        # value explicitly so the safety actually applies. An empty EXPECTED
+        # value (first-ever release branch creation) tells git to expect the
+        # ref to not exist, which is the correct semantic for bootstrap.
+        run: |
+          EXPECTED=$(git rev-parse --verify --quiet refs/remotes/origin/release || true)
+          git push origin "$GITHUB_SHA:refs/heads/release" --force-with-lease="refs/heads/release:${EXPECTED}"
+
+      - name: Verify `release` branch now points to released SHA
+        # Defence in depth: catch the case where the push above silently
+        # no-op'd (network glitch, branch-protection bypass misconfigured,
+        # etc.) so the workflow fails loudly rather than leaving a stale
+        # release branch behind a successful gh release.
+        run: |
+          REMOTE_SHA=$(git ls-remote origin refs/heads/release | awk '{print $1}')
+          if [ "$REMOTE_SHA" != "$GITHUB_SHA" ]; then
+            echo "ERROR: release branch is at $REMOTE_SHA, expected $GITHUB_SHA"
+            exit 1
+          fi
