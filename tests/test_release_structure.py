@@ -93,9 +93,19 @@ class ReleaseStructureTests(unittest.TestCase):
         plugin = codex["plugins"][0]
         self.assertEqual(plugin["name"], "creatio-ai-app-development-toolkit")
         self.assertEqual(plugin["version"], canonical_version)
-        # Codex stays on file-copy install until its remote-marketplace migration
-        # (separate ticket); marketplace.json source remains the local path.
-        self.assertEqual(plugin["source"]["path"], "./")
+        # Codex marketplace pins the plugin payload to the moving `release`
+        # branch via `source.url + ref`, matching Claude/Copilot exactly. The
+        # plugin payload is fetched separately at the `release` SHA into
+        # Codex CLI's plugin cache; the marketplace clone itself tracks `main`
+        # (where this marketplace.json lives).
+        self.assertEqual(
+            plugin["source"],
+            {
+                "source": "url",
+                "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+                "ref": "release",
+            },
+        )
 
         self.assertEqual(copilot["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
         self.assertEqual(copilot["plugins"][0]["version"], canonical_version)

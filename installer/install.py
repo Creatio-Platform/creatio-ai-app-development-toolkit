@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import functools
 import json
 import os
@@ -198,6 +197,15 @@ def preflight_claude() -> str:
     return claude
 
 
+def preflight_codex() -> str:
+    codex = shutil.which("codex")
+    if not codex:
+        raise RuntimeError(
+            "codex was not found in PATH. Install Codex CLI or add it to PATH before installing ADAC."
+        )
+    return codex
+
+
 def _resolve_cli_command(cli_path: str) -> list[str]:
     path = Path(cli_path)
     if path.suffix.lower() == ".ps1":
@@ -213,28 +221,64 @@ def resolve_claude_command() -> list[str]:
     return _resolve_cli_command(preflight_claude())
 
 
+def resolve_codex_command() -> list[str]:
+    return _resolve_cli_command(preflight_codex())
+
+
 def _marketplace_already_registered(error: RuntimeError) -> bool:
-    return f'marketplace "{MARKETPLACE_NAME}" already registered' in str(error).lower()
+    error_text = str(error).lower()
+    return (
+        f'marketplace "{MARKETPLACE_NAME}" already registered' in error_text
+        or f"marketplace '{MARKETPLACE_NAME}' is already added" in error_text
+    )
 
 
 def register_remote_marketplace_and_install_plugin(
     cli_command: list[str],
     marketplace_remove_flags: list[str] | None = None,
+    install_verb: str = "install",
+    pre_remove_marketplace: bool = False,
 ) -> None:
     """Register the remote marketplace and install the plugin via the host CLI.
 
-    Used by Claude and Copilot only; Codex stays on the local file-copy install.
+    Used by Claude, Copilot, and Codex. Cursor stays on the local file-copy install.
 
     Tolerates re-runs:
     - Claude updates the marketplace source in place on re-add.
-    - Copilot rejects re-add with "already registered" and keeps the old source.
-      For Copilot we remove first (with --force to detach installed plugins) and re-add.
+    - Copilot rejects re-add with "already registered" and keeps the old source;
+      we remove first (with --force to detach installed plugins) on retry.
+    - Codex rejects re-add with "already added from a different source"; we
+      always run `marketplace remove` first (ignoring "not found") because
+      Codex CLI also produces the conflict error on Windows path round-trips
+      that the upstream cleanup did not normalize.
+
+    `install_verb` is `"install"` for Claude/Copilot and `"add"` for Codex,
+    matching each CLI's plugin-install subcommand name. `pre_remove_marketplace`
+    converts the conflict-driven retry into an unconditional remove-then-add
+    sequence — Codex passes True so cleanup of legacy state is exhaustive.
     """
     marketplace_subcmd = [*cli_command, "plugin", "marketplace"]
     add_command = [*marketplace_subcmd, "add", MARKETPLACE_GIT_URL]
-    install_command = [*cli_command, "plugin", "install", PLUGIN_SOURCE]
+    install_command = [*cli_command, "plugin", install_verb, PLUGIN_SOURCE]
     remove_command = [*marketplace_subcmd, "remove", MARKETPLACE_NAME, *(marketplace_remove_flags or [])]
 
+    if pre_remove_marketplace:
+        try:
+            run_checked(remove_command)
+        except RuntimeError:
+            # Typical case on a fresh install: marketplace is not registered
+            # yet, so `remove` exits non-zero. Swallow silently — a noisy
+            # warning here would alarm first-time users who have never had
+            # a `creatio` marketplace registered.
+            pass
+        run_checked(add_command)
+        run_checked(install_command)
+        return
+
+    # Conflict-driven retry path. Through install_codex, pre_remove_marketplace
+    # is always True so this branch is unreachable for Codex in production; it
+    # stays as a safety net (covered by unit tests) for future callers and for
+    # Claude/Copilot's existing behavior.
     try:
         run_checked(add_command)
     except RuntimeError as error:
@@ -420,122 +464,41 @@ def merge_codex_mcp_config(repo_root: Path, target_path: Path) -> None:
     target_path.write_text(existing + separator + block, encoding="utf-8")
 
 
-def merge_personal_marketplace_catalog(repo_root: Path, home: Path) -> None:
-    target_path = home / ".agents" / "plugins" / "marketplace.json"
-    source_path = repo_root / ".agents" / "plugins" / "marketplace.json"
-    if not source_path.exists():
+def remove_personal_marketplace_creatio_entry(catalog_path: Path, marketplace_name: str) -> None:
+    """Strip the creatio shadow from ~/.agents/plugins/marketplace.json.
+
+    The old file-copy install_codex wrote a personal-marketplace catalog at this
+    path so Codex could resolve the local-path plugin source. Codex CLI prefers
+    that file over the freshly-cloned git marketplace of the same name, which
+    breaks `codex plugin add`. We strip the plugin entry; if no plugin entries
+    remain and the catalog still self-identifies as the installer-managed
+    `creatio` catalog (`name == marketplace_name`), the whole file is deleted —
+    any top-level keys the user customized on the installer-managed catalog
+    (e.g. `interface.displayName`) go with it. In practice this file was
+    installer-managed end-to-end before ENG-90514, so that loss is acceptable;
+    a user-curated catalog with a different `name` field always keeps its
+    other plugins and metadata intact.
+    """
+    if not catalog_path.exists():
+        return
+    catalog = read_json_file(catalog_path)
+    plugins = catalog.get("plugins")
+    if not isinstance(plugins, list):
         return
 
-    existing = read_json_file(target_path)
-    source = read_json_file(source_path)
-
-    plugins = existing.setdefault("plugins", [])
-    if not isinstance(plugins, list):
-        raise RuntimeError(f"plugins must be an array in {target_path}")
-    existing_by_name = {
-        plugin.get("name"): plugin
-        for plugin in plugins
-        if isinstance(plugin, dict) and isinstance(plugin.get("name"), str)
-    }
-
-    for plugin in source.get("plugins", []):
-        if not isinstance(plugin, dict):
-            continue
-        plugin_name = plugin.get("name")
-        if not isinstance(plugin_name, str):
-            continue
-        plugin_copy = copy.deepcopy(plugin)
-        source_config = plugin_copy.get("source")
-        if isinstance(source_config, dict) and source_config.get("source") == "local":
-            source_config["path"] = f"./plugins/{plugin_name}"
-        if plugin_name in existing_by_name:
-            existing_plugin = existing_by_name[plugin_name]
-            existing_plugin.clear()
-            existing_plugin.update(plugin_copy)
-        else:
-            plugins.append(plugin_copy)
-            existing_by_name[plugin_name] = plugin_copy
-
-    if not isinstance(existing.get("name"), str) or not existing["name"].strip():
-        existing["name"] = source.get("name") or "personal-marketplace"
-    existing_interface = existing.get("interface")
-    if not isinstance(existing_interface, dict):
-        existing["interface"] = source.get("interface") or {"displayName": "Personal Marketplace"}
-    elif not isinstance(existing_interface.get("displayName"), str) or not existing_interface["displayName"].strip():
-        source_interface = source.get("interface")
-        if isinstance(source_interface, dict) and isinstance(source_interface.get("displayName"), str):
-            existing_interface["displayName"] = source_interface["displayName"]
-
-    write_json(target_path, existing)
-
-
-def write_codex_marketplace_catalog(repo_root: Path, marketplace_root: Path) -> None:
-    source_path = repo_root / ".agents" / "plugins" / "marketplace.json"
-    if not source_path.exists():
+    filtered = [
+        plugin for plugin in plugins
+        if not (isinstance(plugin, dict) and plugin.get("name") == PLUGIN_NAME)
+    ]
+    if filtered == plugins:
         return
 
-    source = read_json_file(source_path)
-    plugins = source.get("plugins", [])
-    if not isinstance(plugins, list):
-        raise RuntimeError(f"plugins must be an array in {source_path}")
+    if not filtered and catalog.get("name") == marketplace_name:
+        catalog_path.unlink()
+        return
 
-    catalog_plugins = []
-    for plugin in plugins:
-        if not isinstance(plugin, dict):
-            continue
-        plugin_name = plugin.get("name")
-        if not isinstance(plugin_name, str) or not plugin_name:
-            continue
-        plugin_copy = copy.deepcopy(plugin)
-        source_config = plugin_copy.get("source")
-        if isinstance(source_config, dict) and source_config.get("source") == "local":
-            source_config["path"] = f"./plugins/{plugin_name}"
-        catalog_plugins.append(plugin_copy)
-
-    catalog = {
-        "name": source.get("name") or MARKETPLACE_NAME,
-        "interface": source.get("interface") or {"displayName": MARKETPLACE_NAME.title()},
-        "plugins": catalog_plugins,
-    }
-    write_json(marketplace_root / ".agents" / "plugins" / "marketplace.json", catalog)
-
-
-def merge_codex_marketplace_config(
-    marketplace_name: str,
-    marketplace_dir: Path,
-    plugin_name: str,
-    target_path: Path,
-) -> None:
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
-
-    marketplace_marker = f"[marketplaces.{marketplace_name}]"
-    if marketplace_marker not in existing:
-        source_path = str(marketplace_dir.resolve())
-        if sys.platform.startswith("win"):
-            source_path = "\\\\?\\" + source_path
-        block = (
-            "\n"
-            f"{marketplace_marker}\n"
-            'last_updated = "installed-by-adac"\n'
-            'source_type = "local"\n'
-            f"source = {toml_quote(source_path)}\n"
-        )
-        separator = "" if not existing or existing.endswith("\n") else "\n"
-        existing = existing + separator + block
-
-    plugin_key = f'{plugin_name}@{marketplace_name}'
-    plugin_marker = f'[plugins.{toml_quote(plugin_key)}]'
-    if plugin_marker not in existing:
-        block = (
-            "\n"
-            f"{plugin_marker}\n"
-            "enabled = true\n"
-        )
-        separator = "" if not existing or existing.endswith("\n") else "\n"
-        existing = existing + separator + block
-
-    target_path.write_text(existing, encoding="utf-8")
+    catalog["plugins"] = filtered
+    write_json(catalog_path, catalog)
 
 
 def enable_claude_marketplace_auto_update(settings_path: Path) -> None:
@@ -559,6 +522,22 @@ def enable_claude_marketplace_auto_update(settings_path: Path) -> None:
     write_json(settings_path, settings)
 
 
+# TOML standard table headers: `[name]` and `[[name]]`. Names are dotted
+# segments; each segment is either a bare key (ASCII letters/digits/_/-) or a
+# quoted string. This regex matches the whole stripped line — it must be the
+# only thing on the line, optionally followed by trailing whitespace or a
+# comment. Used by both `_remove_toml_table_block` and
+# `remove_codex_skill_config_override` to find the end of a removable block
+# without false-matching on lines like a multi-line array's `[`.
+_TOML_TABLE_HEADER_RE = re.compile(
+    r'^\[{1,2}'                                            # opening [ or [[
+    r'(?:[A-Za-z0-9_\-]+|"(?:[^"\\]|\\.)*"|\'[^\']*\')'    # first segment: bare | "double" | 'literal'
+    r'(?:\.(?:[A-Za-z0-9_\-]+|"(?:[^"\\]|\\.)*"|\'[^\']*\'))*'  # .segment ...
+    r'\]{1,2}'                                             # closing
+    r'\s*(?:#.*)?$'                                        # trailing whitespace + optional comment
+)
+
+
 def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> None:
     """Drop explicit Codex skill overrides for the ADAC skill."""
     if not target_path.exists():
@@ -575,7 +554,7 @@ def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> No
             continue
 
         end = index + 1
-        while end < len(lines) and not lines[end].lstrip().startswith("["):
+        while end < len(lines) and not _TOML_TABLE_HEADER_RE.match(lines[end].strip()):
             end += 1
         block = lines[index:end]
         block_text = "".join(block)
@@ -587,6 +566,64 @@ def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> No
 
     if changed:
         target_path.write_text("".join(updated), encoding="utf-8")
+
+
+def _remove_toml_table_block(config_path: Path, table_markers: tuple[str, ...]) -> None:
+    """Remove a top-level TOML table block whose header matches one of the markers.
+
+    Block extends from the matching header line up to (but not including) the
+    next line that is itself a valid TOML table header — not just any line
+    starting with `[`. This matters because a multi-line array literal
+    (`foo = [`, `  "x",`, `]`) or an inline-table-in-array value also begins
+    a line with `[`, and the earlier heuristic would treat that as a new
+    table and leak orphaned value lines into config.toml. Comments, blank
+    lines, and scalar values inside the matched block are all dropped.
+    """
+    if not config_path.exists():
+        return
+    lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    updated: list[str] = []
+    index = 0
+    changed = False
+    while index < len(lines):
+        if lines[index].strip() in table_markers:
+            end = index + 1
+            while end < len(lines) and not _TOML_TABLE_HEADER_RE.match(lines[end].strip()):
+                end += 1
+            changed = True
+            index = end
+            continue
+        updated.append(lines[index])
+        index += 1
+
+    if changed:
+        config_path.write_text("".join(updated), encoding="utf-8")
+
+
+def remove_codex_marketplace_section(config_path: Path, marketplace_name: str) -> None:
+    """Remove a legacy `[marketplaces.<name>]` block from Codex's config.toml.
+
+    Old file-copy install_codex wrote this block pointing at a local-path
+    marketplace dir. Leaving it in place blocks `codex plugin marketplace add`
+    from registering the git source.
+    """
+    markers = (
+        f"[marketplaces.{marketplace_name}]",
+        f"[marketplaces.{toml_quote(marketplace_name)}]",
+    )
+    _remove_toml_table_block(config_path, markers)
+
+
+def remove_codex_plugin_section(config_path: Path, plugin_name: str, marketplace_name: str) -> None:
+    """Remove a legacy `[plugins."<plugin>@<marketplace>"]` block from config.toml.
+
+    The old file-copy install_codex registered the plugin as
+    `[plugins."creatio-ai-app-development-toolkit@creatio"]`. After migration
+    the new install path is the only authoritative registration.
+    """
+    plugin_key = f"{plugin_name}@{marketplace_name}"
+    markers = (f"[plugins.{toml_quote(plugin_key)}]",)
+    _remove_toml_table_block(config_path, markers)
 
 
 def repo_file(repo_root: Path, relative_path: str) -> Path:
@@ -602,38 +639,6 @@ def render_load_order(repo_root: Path) -> str:
         f"5. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
-
-
-def _render_skill_body(repo_root: Path, mcp_config_path: Path) -> str:
-    return (
-        "---\n"
-        f"name: {SKILL_NAME}\n"
-        "description: Use when creating Creatio app Business Plans, "
-        "technical implementation handoffs, or applying the approved plan through clio MCP.\n"
-        "---\n"
-        "\n"
-        "# Creatio App Orchestrator\n"
-        "\n"
-        "Use this skill as the entrypoint for ADAC workflows.\n"
-        "\n"
-        f"Toolkit repository is installed at: `{repo_root}`\n"
-        "\n"
-        "## Load Order\n"
-        "\n"
-        f"{render_load_order(repo_root)}"
-        "\n"
-        "## Core Rules\n"
-        "\n"
-        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
-        "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
-        "- Use `context/business-checklist.md`, `context/essentials.md`, `context/naming-conventions.md`, "
-        "`context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.\n"
-        f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
-    )
-
-
-def render_codex_skill(repo_root: Path, mcp_config_path: Path) -> str:
-    return _render_skill_body(repo_root, mcp_config_path)
 
 
 def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
@@ -679,38 +684,43 @@ def write_rendered_skill(target_root: Path, skill_body: str, agents_source_dir: 
 
 
 def install_codex(repo_root: Path, home: Path) -> None:
-    """Codex stays on local file-copy install — see docs/install.md for rationale."""
+    """Install Codex via the remote marketplace (parity with install_claude).
+
+    Migration cleanup runs first so users coming from the legacy file-copy install
+    end up in the same state as a fresh install. The clio MCP block stays in
+    `config.toml` because Codex CLI does not auto-promote plugin-bundled MCP
+    declarations to user-level `[mcp_servers.*]` entries.
+    """
     ensure_required_references(repo_root)
-    version = plugin_version(repo_root)
     codex_home = home / ".codex"
-    marketplace_dir = codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME
-    marketplace_plugin_dir = marketplace_dir / "plugins" / PLUGIN_NAME
-    cache_dir = codex_home / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME / version
-    standalone_skill_dir = codex_home / "skills" / SKILL_NAME
-    remove_tree_if_exists(marketplace_dir, "Codex")
-    remove_tree_if_exists(cache_dir, "Codex")
+
+    # On-disk artifacts left by the old file-copy install_codex.
+    remove_tree_if_exists(codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME, "Codex")
+    remove_tree_if_exists(codex_home / "plugins" / "cache" / MARKETPLACE_NAME, "Codex")
     remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "Codex")
-    remove_tree_if_exists(home / ".agents" / "skills" / SKILL_NAME, "Codex")
-    remove_tree_if_exists(standalone_skill_dir, "Codex")
-    copy_plugin_runtime_surface(repo_root, marketplace_plugin_dir)
-    write_codex_marketplace_catalog(repo_root, marketplace_dir)
-    copy_plugin_runtime_surface(repo_root, cache_dir)
-    remove_tree_if_exists(marketplace_plugin_dir / "skills", "Codex")
-    remove_tree_if_exists(cache_dir / "skills", "Codex")
-    mcp_config_path = codex_home / "config.toml"
-    agents_source_dir = repo_root / "skills" / SKILL_NAME / "agents"
-    write_rendered_skill(
-        codex_home,
-        render_codex_skill(cache_dir, mcp_config_path),
-        agents_source_dir,
+    remove_tree_if_exists(codex_home / "skills" / SKILL_NAME, "Codex")
+
+    # Personal-marketplace catalog shadow (P5) — Codex CLI prefers this file
+    # over the freshly-cloned git marketplace of the same name when it exists.
+    remove_personal_marketplace_creatio_entry(
+        home / ".agents" / "plugins" / "marketplace.json", MARKETPLACE_NAME
     )
-    remove_codex_skill_config_override(
-        mcp_config_path,
-        f"{PLUGIN_NAME}:{SKILL_NAME}",
+
+    # config.toml leftovers from the file-copy install. Leave [mcp_servers.clio]
+    # alone — merge_codex_mcp_config re-merges it below.
+    config_path = codex_home / "config.toml"
+    remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
+    remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
+    remove_codex_skill_config_override(config_path, f"{PLUGIN_NAME}:{SKILL_NAME}")
+
+    register_remote_marketplace_and_install_plugin(
+        resolve_codex_command(),
+        marketplace_remove_flags=[],
+        install_verb="add",
+        pre_remove_marketplace=True,
     )
-    merge_codex_mcp_config(repo_root, mcp_config_path)
-    merge_codex_marketplace_config(MARKETPLACE_NAME, marketplace_dir, PLUGIN_NAME, mcp_config_path)
-    merge_personal_marketplace_catalog(repo_root, home)
+
+    merge_codex_mcp_config(repo_root, config_path)
 
 
 def install_claude(repo_root: Path, home: Path) -> None:
