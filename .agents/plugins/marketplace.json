@@ -8,8 +8,9 @@
       "name": "creatio-ai-app-development-toolkit",
       "version": "0.1.1",
       "source": {
-        "source": "local",
-        "path": "./"
+        "source": "url",
+        "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+        "ref": "release"
       },
       "policy": {
         "installation": "AVAILABLE",

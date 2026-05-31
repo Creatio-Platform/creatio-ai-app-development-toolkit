@@ -95,8 +95,11 @@ class ConstantsTests(unittest.TestCase):
             "register_claude_known_marketplace",
             "register_claude_installed_plugin",
             "prune_directory_entries",
-            "preflight_codex",
-            "resolve_codex_command",
+            # ENG-90514 removed these along with the file-copy install path.
+            "write_codex_marketplace_catalog",
+            "merge_codex_marketplace_config",
+            "merge_personal_marketplace_catalog",
+            "render_codex_skill",
         ):
             self.assertFalse(
                 hasattr(installer, removed_name),
@@ -144,6 +147,12 @@ class CliPreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "clio was not found in PATH"):
                 installer.preflight_clio()
 
+    def test_preflight_codex_reports_missing_path(self):
+        installer = load_installer()
+        with patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "codex was not found in PATH"):
+                installer.preflight_codex()
+
     def test_resolve_copilot_command_wraps_powershell_shim_on_windows(self):
         installer = load_installer()
         with patch.object(installer, "preflight_copilot", return_value=r"C:\nvm4w\nodejs\copilot.ps1"):
@@ -160,6 +169,15 @@ class CliPreflightTests(unittest.TestCase):
         self.assertEqual(
             command,
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", r"C:\tools\claude.ps1"],
+        )
+
+    def test_resolve_codex_command_wraps_powershell_shim(self):
+        installer = load_installer()
+        with patch.object(installer, "preflight_codex", return_value=r"C:\tools\codex.ps1"):
+            command = installer.resolve_codex_command()
+        self.assertEqual(
+            command,
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", r"C:\tools\codex.ps1"],
         )
 
 class RegisterRemoteMarketplaceTests(unittest.TestCase):
@@ -246,6 +264,86 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "already registered"):
                 installer.register_remote_marketplace_and_install_plugin(["claude"])
 
+    def test_codex_already_added_error_triggers_retry(self):
+        installer = load_installer()
+        commands = []
+        attempt = {"count": 0}
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "add"]:
+                attempt["count"] += 1
+                if attempt["count"] == 1:
+                    raise RuntimeError(
+                        "Error: marketplace 'creatio' is already added from a different source"
+                    )
+
+        with patch.object(installer, "run_checked", side_effect=fake_run), patch("builtins.print"):
+            installer.register_remote_marketplace_and_install_plugin(["codex"], install_verb="add")
+
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(commands[1][1:5], ["plugin", "marketplace", "remove", "creatio"])
+        self.assertEqual(commands[-1][1:4], ["plugin", "add", installer.PLUGIN_SOURCE])
+
+    def test_pre_remove_marketplace_runs_remove_then_add_unconditionally(self):
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError("Error: marketplace 'creatio' not found")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run), patch("builtins.print"):
+            installer.register_remote_marketplace_and_install_plugin(
+                ["codex"],
+                marketplace_remove_flags=[],
+                install_verb="add",
+                pre_remove_marketplace=True,
+            )
+
+        self.assertEqual(
+            commands,
+            [
+                ["codex", "plugin", "marketplace", "remove", "creatio"],
+                ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                ["codex", "plugin", "add", installer.PLUGIN_SOURCE],
+            ],
+        )
+
+    def test_install_verb_changes_install_subcommand(self):
+        installer = load_installer()
+        commands = []
+
+        with patch.object(installer, "run_checked", side_effect=lambda command, **_: commands.append(command)):
+            installer.register_remote_marketplace_and_install_plugin(["codex"], install_verb="add")
+
+        install_calls = [cmd for cmd in commands if cmd[1] == "plugin" and cmd[2] not in {"marketplace"}]
+        self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
+
+    def test_pre_remove_marketplace_propagates_non_not_found_remove_failure(self):
+        # Regression for PR #73 RC-1: swallowing every RuntimeError on the
+        # pre-remove step would hide real failures (permissions, broken CLI,
+        # I/O errors) behind a misleading downstream `marketplace add` error.
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError("Error: permission denied while updating config.toml")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, "permission denied"):
+                installer.register_remote_marketplace_and_install_plugin(
+                    ["codex"],
+                    marketplace_remove_flags=[],
+                    install_verb="add",
+                    pre_remove_marketplace=True,
+                )
+
+        self.assertEqual(commands, [["codex", "plugin", "marketplace", "remove", "creatio"]])
+
 
 class InstallClaudeTests(unittest.TestCase):
     def test_shells_out_and_enables_auto_update(self):
@@ -320,6 +418,136 @@ class InstallClaudeTests(unittest.TestCase):
                 installer.install_claude(repo_root, Path(temp) / "home")
 
 
+class RemoveTomlTableBlockTests(unittest.TestCase):
+    def test_removes_block_when_header_has_trailing_comment(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.toml"
+            config_path.write_text(
+                "[marketplaces.creatio] # installed-by-adac\n"
+                'source_type = "local"\n'
+                "\n"
+                "[sandbox]\n"
+                'network = "restricted"\n',
+                encoding="utf-8",
+            )
+
+            installer._remove_toml_table_block(config_path, ("[marketplaces.creatio]",))
+
+            body = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("[marketplaces.creatio]", body)
+            self.assertIn("[sandbox]", body)
+            self.assertIn('network = "restricted"', body)
+
+    def test_preserves_multiline_array_in_sibling_table(self):
+        # Regression: a generous next-header detector ("any line starting with [")
+        # would treat the closing `]` of a multi-line array literal as a new
+        # table header and leak the rest of the sibling block as orphans.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.toml"
+            config_path.write_text(
+                "[marketplaces.creatio]\n"
+                'source_type = "local"\n'
+                "\n"
+                "[sandbox]\n"
+                "writable_roots = [\n"
+                '  "/tmp/a",\n'
+                '  "/tmp/b",\n'
+                "]\n"
+                'network = "restricted"\n',
+                encoding="utf-8",
+            )
+
+            installer._remove_toml_table_block(config_path, ("[marketplaces.creatio]",))
+
+            body = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("[marketplaces.creatio]", body)
+            self.assertIn("[sandbox]", body)
+            self.assertIn('"/tmp/a"', body)
+            self.assertIn('"/tmp/b"', body)
+            self.assertIn('network = "restricted"', body)
+
+    def test_preserves_inline_table_in_array_in_sibling_table(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.toml"
+            config_path.write_text(
+                '[plugins."creatio-ai-app-development-toolkit@creatio"]\n'
+                "enabled = true\n"
+                "\n"
+                "[profiles]\n"
+                "entries = [\n"
+                '  { name = "a", value = 1 },\n'
+                '  { name = "b", value = 2 },\n'
+                "]\n",
+                encoding="utf-8",
+            )
+
+            installer._remove_toml_table_block(
+                config_path,
+                ('[plugins."creatio-ai-app-development-toolkit@creatio"]',),
+            )
+
+            body = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("creatio-ai-app-development-toolkit@creatio", body)
+            self.assertIn("[profiles]", body)
+            self.assertIn('{ name = "a", value = 1 }', body)
+            self.assertIn('{ name = "b", value = 2 }', body)
+
+    def test_removes_double_bracket_array_of_tables_block(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.toml"
+            config_path.write_text(
+                "[[skills.config]]\n"
+                'name = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"\n'
+                "enabled = false\n"
+                "\n"
+                "[other]\n"
+                "x = 1\n",
+                encoding="utf-8",
+            )
+
+            installer._remove_toml_table_block(config_path, ("[[skills.config]]",))
+
+            body = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("[[skills.config]]", body)
+            self.assertIn("[other]", body)
+            self.assertIn("x = 1", body)
+
+    def test_skill_config_override_preserves_sibling_multiline_array(self):
+        # Same hazard as in _remove_toml_table_block: the end-of-block scan
+        # in remove_codex_skill_config_override must not treat a `[` opening
+        # a multi-line array as a new table header.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.toml"
+            config_path.write_text(
+                "[[skills.config]]\n"
+                'name = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"\n'
+                "enabled = false\n"
+                "\n"
+                "[sandbox]\n"
+                "writable_roots = [\n"
+                '  "/tmp/a",\n'
+                "]\n"
+                'network = "restricted"\n',
+                encoding="utf-8",
+            )
+
+            installer.remove_codex_skill_config_override(
+                config_path,
+                "creatio-ai-app-development-toolkit:creatio-app-orchestrator",
+            )
+
+            body = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("[[skills.config]]", body)
+            self.assertIn("[sandbox]", body)
+            self.assertIn('"/tmp/a"', body)
+            self.assertIn('network = "restricted"', body)
+
+
 class EnableClaudeAutoUpdateTests(unittest.TestCase):
     def test_drops_stale_directory_source(self):
         installer = load_installer()
@@ -370,116 +598,309 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
 
 
 class InstallCodexTests(unittest.TestCase):
-    """Codex stays on the local file-copy install path — see docs/install.md."""
+    """ENG-90514: Codex installs via the remote marketplace, parity with Claude."""
 
-    def _write_codex_checkout(self, installer, repo_root):
-        write_minimal_plugin_checkout(repo_root)
-        (repo_root / ".codex-plugin").mkdir(exist_ok=True)
-        (repo_root / ".codex-plugin" / "plugin.json").write_text(
-            '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","skills":"./skills/","mcpServers":"./.mcp.json"}\n',
-            encoding="utf-8",
-        )
-        (repo_root / ".agents" / "plugins").mkdir(parents=True, exist_ok=True)
-        (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
-            '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","source":{"source":"local","path":"./"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"development"}]}\n',
-            encoding="utf-8",
-        )
-        write_required_references(installer, repo_root)
-        write_release_manifest(repo_root)
-
-    def test_copies_plugin_runtime_and_registers_mcp_in_config_toml(self):
+    def test_shells_out_via_codex_cli_in_remove_add_install_order(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
             repo_root.mkdir()
-            self._write_codex_checkout(installer, repo_root)
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            (home / ".codex").mkdir(parents=True)
+
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch.object(installer, "copy_plugin_runtime_surface") as copy_runtime:
+                installer.install_codex(repo_root, home)
+
+            self.assertEqual(
+                commands,
+                [
+                    ["codex", "plugin", "marketplace", "remove", "creatio"],
+                    ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                    ["codex", "plugin", "add", installer.PLUGIN_SOURCE],
+                ],
+            )
+            copy_runtime.assert_not_called()
+
+    def test_tolerates_marketplace_remove_not_found(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            (home / ".codex").mkdir(parents=True)
+
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                if command[1:4] == ["plugin", "marketplace", "remove"]:
+                    raise RuntimeError("Error: marketplace 'creatio' not found")
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch("builtins.print"):
+                installer.install_codex(repo_root, home)
+
+            self.assertEqual([cmd[1:4] for cmd in commands], [
+                ["plugin", "marketplace", "remove"],
+                ["plugin", "marketplace", "add"],
+                ["plugin", "add", installer.PLUGIN_SOURCE],
+            ])
+
+    def test_cleans_up_legacy_file_copy_artifacts(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            legacy_marketplace_dir = codex_home / "plugins" / "marketplaces" / "creatio"
+            legacy_cache_dir = codex_home / "plugins" / "cache" / "creatio"
+            legacy_personal_plugin_dir = home / ".agents" / "plugins" / "creatio-ai-app-development-toolkit"
+            legacy_skill_dir = codex_home / "skills" / "creatio-app-orchestrator"
+            for directory in (
+                legacy_marketplace_dir,
+                legacy_cache_dir,
+                legacy_personal_plugin_dir,
+                legacy_skill_dir,
+            ):
+                directory.mkdir(parents=True)
+                (directory / "marker").write_text("legacy\n", encoding="utf-8")
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse(legacy_marketplace_dir.exists())
+            self.assertFalse(legacy_cache_dir.exists())
+            self.assertFalse(legacy_personal_plugin_dir.exists())
+            self.assertFalse(legacy_skill_dir.exists())
+
+    def test_removes_legacy_config_toml_blocks_and_preserves_clio_mcp(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.4"\n\n'
+                "[marketplaces.creatio]\n"
+                'last_updated = "installed-by-adac"\n'
+                'source_type = "local"\n'
+                'source = "C:\\\\old\\\\path"\n\n'
+                "[marketplaces.other]\n"
+                'source_type = "git"\n\n'
+                '[plugins."creatio-ai-app-development-toolkit@creatio"]\n'
+                "enabled = true\n\n"
+                '[plugins."other@other"]\n'
+                "enabled = true\n\n"
+                "[[skills.config]]\n"
+                'name = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"\n'
+                "enabled = false\n\n"
+                "[mcp_servers.clio]\n"
+                'command = "custom-clio"\n'
+                'args = ["custom"]\n',
+                encoding="utf-8",
+            )
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), patch("builtins.print"):
+                installer.install_codex(repo_root, home)
+
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('model = "gpt-5.4"', config_body)
+            self.assertNotIn("[marketplaces.creatio]", config_body)
+            self.assertIn("[marketplaces.other]", config_body)
+            self.assertNotIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            self.assertIn('[plugins."other@other"]', config_body)
+            self.assertNotIn("[[skills.config]]", config_body)
+            self.assertIn("[mcp_servers.clio]", config_body)
+            self.assertIn('command = "custom-clio"', config_body)
+
+    def test_merges_clio_mcp_when_absent(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
             home = Path(temp) / "home"
             codex_home = home / ".codex"
             codex_home.mkdir(parents=True)
             (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
 
-            installer.install_codex(repo_root, home)
-
-            marketplace_dir = codex_home / "plugins" / "marketplaces" / "creatio"
-            cache_dir = (
-                codex_home / "plugins" / "cache" / "creatio"
-                / "creatio-ai-app-development-toolkit" / "0.1.0"
-            )
-            marketplace_plugin_dir = marketplace_dir / "plugins" / "creatio-ai-app-development-toolkit"
-            self.assertTrue((marketplace_plugin_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertTrue((marketplace_plugin_dir / ".mcp.json").exists())
-            self.assertTrue((marketplace_dir / ".agents" / "plugins" / "marketplace.json").exists())
-            self.assertTrue((cache_dir / ".codex-plugin" / "plugin.json").exists())
-            self.assertFalse((marketplace_plugin_dir / "skills").exists())
-            self.assertFalse((cache_dir / "skills").exists())
-            self.assertFalse((home / ".agents" / "plugins" / "creatio-ai-app-development-toolkit").exists())
-            self.assertFalse((home / ".agents" / "skills" / "creatio-app-orchestrator").exists())
-            standalone_skill = codex_home / "skills" / "creatio-app-orchestrator" / "SKILL.md"
-            self.assertTrue(standalone_skill.exists())
-            skill_body = standalone_skill.read_text(encoding="utf-8")
-            self.assertIn(f"Toolkit repository is installed at: `{cache_dir}`", skill_body)
-            self.assertIn(
-                f"The `clio` MCP server is registered in `{codex_home / 'config.toml'}`.",
-                skill_body,
-            )
-
-            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('model = "gpt-5.4"', config_body)
-            self.assertIn("[marketplaces.creatio]", config_body)
-            self.assertIn('source_type = "local"', config_body)
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
-            self.assertIn("enabled = true", config_body)
-            self.assertIn("[mcp_servers.clio]", config_body)
-            personal_marketplace = json.loads(
-                (home / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(
-                personal_marketplace["plugins"][0]["source"]["path"],
-                "./plugins/creatio-ai-app-development-toolkit",
-            )
-
-    def test_preserves_existing_clio_mcp_server(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            repo_root.mkdir()
-            self._write_codex_checkout(installer, repo_root)
-            home = Path(temp) / "home"
-            codex_home = home / ".codex"
-            codex_home.mkdir(parents=True)
-            (codex_home / "config.toml").write_text(
-                '[mcp_servers.clio]\ncommand = "custom-clio"\nargs = ["custom"]\n',
-                encoding="utf-8",
-            )
-
-            with patch("builtins.print") as printed:
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ):
                 installer.install_codex(repo_root, home)
 
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('command = "custom-clio"', config_body)
-            self.assertNotIn('command = "clio"\nargs = ["mcp-server"]', config_body)
-            printed.assert_called_once()
+            self.assertIn('model = "gpt-5.4"', config_body)
+            self.assertIn("[mcp_servers.clio]", config_body)
+            self.assertIn('command = "clio"', config_body)
 
-    def test_removes_legacy_disabled_skill_override(self):
+    def test_strips_creatio_entry_from_personal_marketplace_and_deletes_when_empty(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
             repo_root.mkdir()
-            self._write_codex_checkout(installer, repo_root)
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
             home = Path(temp) / "home"
             codex_home = home / ".codex"
             codex_home.mkdir(parents=True)
-            (codex_home / "config.toml").write_text(
-                'model = "gpt-5.4"\n\n[[skills.config]]\nname = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"\nenabled = false\n',
+            personal_catalog = home / ".agents" / "plugins" / "marketplace.json"
+            personal_catalog.parent.mkdir(parents=True)
+            personal_catalog.write_text(
+                json.dumps(
+                    {
+                        "name": "creatio",
+                        "interface": {"displayName": "Creatio"},
+                        "plugins": [
+                            {
+                                "name": "creatio-ai-app-development-toolkit",
+                                "version": "0.1.0",
+                                "source": {
+                                    "source": "local",
+                                    "path": "./plugins/creatio-ai-app-development-toolkit",
+                                },
+                            }
+                        ],
+                    }
+                ),
                 encoding="utf-8",
             )
 
-            installer.install_codex(repo_root, home)
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ):
+                installer.install_codex(repo_root, home)
 
-            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertNotIn("[[skills.config]]", config_body)
-            self.assertNotIn('name = "creatio-ai-app-development-toolkit:creatio-app-orchestrator"', config_body)
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            self.assertFalse(personal_catalog.exists())
+
+    def test_preserves_personal_marketplace_when_user_added_entries(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            personal_catalog = home / ".agents" / "plugins" / "marketplace.json"
+            personal_catalog.parent.mkdir(parents=True)
+            personal_catalog.write_text(
+                json.dumps(
+                    {
+                        "name": "personal",
+                        "interface": {"displayName": "Personal Marketplace"},
+                        "plugins": [
+                            {
+                                "name": "creatio-ai-app-development-toolkit",
+                                "source": {"source": "local", "path": "./plugins/x"},
+                            },
+                            {"name": "user-own-plugin", "source": {"source": "local", "path": "./y"}},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ):
+                installer.install_codex(repo_root, home)
+
+            catalog = json.loads(personal_catalog.read_text(encoding="utf-8"))
+            plugin_names = [plugin["name"] for plugin in catalog["plugins"]]
+            self.assertEqual(plugin_names, ["user-own-plugin"])
+
+    def test_deletes_installer_managed_personal_marketplace_when_plugins_is_malformed(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            personal_catalog = home / ".agents" / "plugins" / "marketplace.json"
+            personal_catalog.parent.mkdir(parents=True)
+            personal_catalog.write_text(
+                json.dumps(
+                    {
+                        "name": "creatio",
+                        "interface": {"displayName": "Creatio"},
+                        "plugins": {"name": "creatio-ai-app-development-toolkit"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse(personal_catalog.exists())
+
+    def test_rejects_user_managed_personal_marketplace_when_plugins_is_malformed(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            personal_catalog = home / ".agents" / "plugins" / "marketplace.json"
+            personal_catalog.parent.mkdir(parents=True)
+            personal_catalog.write_text(
+                json.dumps(
+                    {
+                        "name": "personal",
+                        "interface": {"displayName": "Personal Marketplace"},
+                        "plugins": {"name": "user-own-plugin"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), self.assertRaisesRegex(RuntimeError, "'plugins' must be a list"):
+                installer.install_codex(repo_root, home)
 
     def test_rejects_checkout_without_required_references(self):
         installer = load_installer()
@@ -488,34 +909,6 @@ class InstallCodexTests(unittest.TestCase):
             repo_root.mkdir()
             with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
                 installer.install_codex(repo_root, Path(temp) / "home")
-
-    def test_merge_personal_marketplace_fills_missing_display_name(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            source_dir = repo_root / ".agents" / "plugins"
-            source_dir.mkdir(parents=True)
-            (source_dir / "marketplace.json").write_text(
-                '{"name":"creatio","interface":{"displayName":"Creatio"},"plugins":[{"name":"creatio-ai-app-development-toolkit","source":{"source":"local","path":"./"}}]}\n',
-                encoding="utf-8",
-            )
-            home = Path(temp) / "home"
-            target_dir = home / ".agents" / "plugins"
-            target_dir.mkdir(parents=True)
-            (target_dir / "marketplace.json").write_text(
-                '{"name":"custom-marketplace","interface":{},"plugins":[]}\n',
-                encoding="utf-8",
-            )
-
-            installer.merge_personal_marketplace_catalog(repo_root, home)
-            merged = json.loads((target_dir / "marketplace.json").read_text(encoding="utf-8"))
-
-        self.assertEqual(merged["name"], "custom-marketplace")
-        self.assertEqual(merged["interface"]["displayName"], "Creatio")
-        self.assertEqual(
-            merged["plugins"][0]["source"]["path"],
-            "./plugins/creatio-ai-app-development-toolkit",
-        )
 
 
 class InstallCopilotTests(unittest.TestCase):
