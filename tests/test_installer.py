@@ -72,7 +72,7 @@ class ConstantsTests(unittest.TestCase):
         installer = load_installer()
         self.assertEqual(
             installer.MARKETPLACE_GIT_URL,
-            "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+            "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
         )
 
     def test_plugin_source_combines_plugin_and_marketplace(self):

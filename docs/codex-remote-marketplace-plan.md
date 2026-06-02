@@ -101,7 +101,7 @@ Change the plugin source from local-path to URL+ref, matching Claude/Copilot exa
 ```json
 "source": {
   "source": "url",
-  "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+  "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
   "ref": "release"
 }
 ```
@@ -187,14 +187,14 @@ Claude, Copilot, and Cursor install paths unchanged. Cursor stays on file-copy.
 #### docs/install.md
 - Rewrite the Codex bullet: remote marketplace via CLI, command form
   ```bash
-  codex plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+  codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
   codex plugin add creatio-ai-app-development-toolkit@creatio
   ```
   No `--ref` flag in the public-facing command; the `ref: "release"` lives in marketplace.json.
 - Note that Codex still needs `clio` MCP in `~/.codex/config.toml`, which the installer adds.
 - Add Codex to the "Testing unreleased changes through a marketplace agent" section:
   ```bash
-  codex plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git --ref <your-branch>
+  codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git --ref <your-branch>
   codex plugin add creatio-ai-app-development-toolkit@creatio
   ```
   The `--ref` flag overrides marketplace.json's `ref` for the marketplace clone; the plugin
@@ -231,7 +231,7 @@ Release-structure tests (`tests/test_release_structure.py`):
       codex["plugins"][0]["source"],
       {
           "source": "url",
-          "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+          "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
           "ref": "release",
       },
   )

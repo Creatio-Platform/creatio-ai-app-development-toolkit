@@ -30,9 +30,9 @@ marketplace directly (Codex stays on the installer-managed local install — see
 [docs/install.md](docs/install.md)):
 
 ```bash
-claude plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
-copilot plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
 

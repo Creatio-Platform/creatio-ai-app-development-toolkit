@@ -19,7 +19,7 @@ from typing import Any
 
 PLUGIN_NAME = "creatio-ai-app-development-toolkit"
 MARKETPLACE_NAME = "creatio"
-MARKETPLACE_GIT_URL = "https://creatio.ghe.com/engineering/ai-driven-app-creation.git"
+MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 PLUGIN_SOURCE = f"{PLUGIN_NAME}@{MARKETPLACE_NAME}"
 SKILL_NAME = "creatio-app-orchestrator"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")

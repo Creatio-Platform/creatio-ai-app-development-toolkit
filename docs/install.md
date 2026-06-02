@@ -67,15 +67,15 @@ the marketplace and install the plugin without running [install.py](../installer
 
 ```bash
 # Claude Code
-claude plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
 
 # Codex CLI
-codex plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 codex plugin add creatio-ai-app-development-toolkit@creatio
 
 # GitHub Copilot CLI
-copilot plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git
+copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
 
@@ -97,7 +97,7 @@ Recommended path: use the Creatio installation wizard, which downloads the lates
 
 To do this manually:
 
-1. Download `creatio-ai-app-development-toolkit-<version>.zip` from the [latest release](https://creatio.ghe.com/engineering/ai-driven-app-creation/releases/latest) (asset attached by the release workflow).
+1. Download `creatio-ai-app-development-toolkit-<version>.zip` from the [latest release](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/releases/latest) (asset attached by the release workflow).
 2. Extract it to a temporary folder.
 3. From the extracted folder, run:
 
@@ -110,8 +110,8 @@ To do this manually:
 ### For developers — install from a local checkout
 
 ```bash
-git clone https://creatio.ghe.com/engineering/ai-driven-app-creation.git
-cd ai-driven-app-creation
+git clone https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
+cd creatio-ai-app-development-toolkit
 python installer/install.py
 ```
 
@@ -166,14 +166,14 @@ Cursor file-copy path), the path is per-CLI native:
 - **Claude Code** — register a second, dev-scoped marketplace pinned to your branch via the URL
   fragment, then install the plugin from it:
   ```bash
-  claude plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git#<your-branch>
+  claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git#<your-branch>
   claude plugin install creatio-ai-app-development-toolkit@<marketplace-name-chosen-by-claude>
   ```
   Uninstall and re-add the production `creatio` marketplace when done.
 - **Codex CLI** — override the `ref` baked into `marketplace.json` with `--ref` on the marketplace
   add:
   ```bash
-  codex plugin marketplace add https://creatio.ghe.com/engineering/ai-driven-app-creation.git --ref <your-branch>
+  codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git --ref <your-branch>
   codex plugin add creatio-ai-app-development-toolkit@creatio
   ```
   The `--ref` flag overrides the marketplace clone's tracked branch; the plugin payload then

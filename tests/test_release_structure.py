@@ -85,7 +85,7 @@ class ReleaseStructureTests(unittest.TestCase):
             claude["plugins"][0]["source"],
             {
                 "source": "url",
-                "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+                "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
                 "ref": "release",
             },
         )
@@ -102,7 +102,7 @@ class ReleaseStructureTests(unittest.TestCase):
             plugin["source"],
             {
                 "source": "url",
-                "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+                "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
                 "ref": "release",
             },
         )
@@ -113,7 +113,7 @@ class ReleaseStructureTests(unittest.TestCase):
             copilot["plugins"][0]["source"],
             {
                 "source": "url",
-                "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+                "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
                 "ref": "release",
             },
         )

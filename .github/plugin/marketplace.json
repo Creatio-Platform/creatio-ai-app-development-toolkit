@@ -11,7 +11,7 @@
       "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
       "source": {
         "source": "url",
-        "url": "https://creatio.ghe.com/engineering/ai-driven-app-creation.git",
+        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
         "ref": "release"
       },
       "category": "development",
