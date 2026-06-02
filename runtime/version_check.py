@@ -20,23 +20,60 @@ _GITHUB_API = (
 )
 
 
-def _fetch_release_json() -> dict[str, Any] | None:
-    """Fetch the `releases/latest` JSON from the public GitHub repo.
+# >>> TEMPORARY-PRIVATE-REPO-AUTH (revert this whole block once the repo is public) >>>
+# While the repo is private the GitHub release API returns 404 to
+# unauthenticated callers. Source a token from the gh CLI so the updater can
+# read the release JSON and download the asset. On a public repo this is a
+# no-op: the unauthenticated request already works and the token just raises
+# the rate limit. Delete this helper, drop the `token` plumbing in
+# `_fetch_release_json` / `download_latest_release_zip`, and remove the
+# matching tests to revert.
+def _gh_auth_token() -> str | None:
+    """Return a github.com token from the gh CLI, or None.
 
-    Returns the parsed release JSON on success, or None on any failure.
-    Callers must handle None — a network/API failure must never break the
-    update flow.
+    Fails silently so a missing/unconfigured gh CLI never blocks the call.
+    """
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["gh", "auth", "token", "--hostname", "github.com"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            token = result.stdout.strip()
+            return token or None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+# <<< TEMPORARY-PRIVATE-REPO-AUTH <<<
+
+
+def _fetch_release_json() -> tuple[dict[str, Any], str | None] | None:
+    """Fetch the `releases/latest` JSON from the GitHub repo.
+
+    Returns `(release_json, token_used)` on success, or None on any failure.
+    `token_used` is the bearer token that authorized the call (forwarded to the
+    asset download from the same host), or None when the call succeeded
+    unauthenticated. Callers must handle None — a network/API failure must
+    never break the update flow.
     """
     try:
         import urllib.error
         import urllib.request
 
+        # TEMPORARY-PRIVATE-REPO-AUTH: token is None once the repo is public.
+        token = _gh_auth_token()
         headers = {"User-Agent": "caadt-version-check/1"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(_GITHUB_API, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             if isinstance(body, dict) and body.get("tag_name"):
-                return body
+                return body, token
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -50,9 +87,10 @@ def download_latest_release_zip(dest_path: Path) -> str | None:
     The caller must handle None gracefully — a failed download must never crash
     the update command.
     """
-    release = _fetch_release_json()
-    if release is None:
+    result = _fetch_release_json()
+    if result is None:
         return None
+    release, token = result
 
     tag = release.get("tag_name", "")
     version = tag.lstrip("v") if isinstance(tag, str) and tag else None
@@ -82,6 +120,10 @@ def download_latest_release_zip(dest_path: Path) -> str | None:
             "User-Agent": "caadt-version-check/1",
             "Accept": "application/octet-stream",
         }
+        # TEMPORARY-PRIVATE-REPO-AUTH: forward the token to the asset download
+        # too (private-repo assets need auth). Remove once the repo is public.
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(asset_url, headers=headers)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         with urllib.request.urlopen(req, timeout=60) as resp, dest_path.open("wb") as out:

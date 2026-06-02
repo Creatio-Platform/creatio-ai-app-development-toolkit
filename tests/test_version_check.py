@@ -90,20 +90,23 @@ class DownloadLatestReleaseZipTests(unittest.TestCase):
             self.assertIsNone(self.vc.download_latest_release_zip(self.tmp / "r.zip"))
 
     def test_returns_none_when_no_zip_asset(self):
-        release = {"tag_name": "0.2.0", "assets": [{"name": "notes.txt", "url": "u"}]}
+        release = ({"tag_name": "0.2.0", "assets": [{"name": "notes.txt", "url": "u"}]}, None)
         with patch.object(self.vc, "_fetch_release_json", return_value=release):
             self.assertIsNone(self.vc.download_latest_release_zip(self.tmp / "r.zip"))
 
     def test_downloads_zip_and_returns_version(self):
-        release = {
-            "tag_name": "v0.2.0",
-            "assets": [
-                {
-                    "name": "creatio-ai-app-development-toolkit-0.2.0.zip",
-                    "url": "https://api.github.com/repos/x/releases/assets/9",
-                }
-            ],
-        }
+        release = (
+            {
+                "tag_name": "v0.2.0",
+                "assets": [
+                    {
+                        "name": "creatio-ai-app-development-toolkit-0.2.0.zip",
+                        "url": "https://api.github.com/repos/x/releases/assets/9",
+                    }
+                ],
+            },
+            "gho_TOKEN",
+        )
         captured: dict = {}
 
         def fake_urlopen(req, timeout=None):
@@ -121,17 +124,69 @@ class DownloadLatestReleaseZipTests(unittest.TestCase):
         self.assertEqual(version, "0.2.0")
         self.assertEqual(dest.read_bytes(), b"PKFAKEZIPBYTES")
         self.assertEqual(captured["headers"].get("Accept"), "application/octet-stream")
+        # TEMPORARY-PRIVATE-REPO-AUTH: token from the probe is forwarded here.
+        self.assertEqual(captured["headers"].get("Authorization"), "Bearer gho_TOKEN")
+
+    def test_no_token_header_for_public_asset(self):
+        release = (
+            {
+                "tag_name": "0.2.0",
+                "assets": [{"name": "x.zip", "url": "https://api.github.com/a"}],
+            },
+            None,
+        )
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = dict(req.headers)
+            return _Resp(b"PK")
+
+        with (
+            patch.object(self.vc, "_fetch_release_json", return_value=release),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            self.vc.download_latest_release_zip(self.tmp / "r.zip")
+
+        self.assertNotIn("Authorization", captured["headers"])
 
     def test_network_error_returns_none(self):
-        release = {
-            "tag_name": "0.2.0",
-            "assets": [{"name": "x.zip", "url": "https://api.github.com/a"}],
-        }
+        release = (
+            {"tag_name": "0.2.0", "assets": [{"name": "x.zip", "url": "https://api.github.com/a"}]},
+            None,
+        )
         with (
             patch.object(self.vc, "_fetch_release_json", return_value=release),
             patch("urllib.request.urlopen", side_effect=OSError("boom")),
         ):
             self.assertIsNone(self.vc.download_latest_release_zip(self.tmp / "r.zip"))
+
+
+# ---------------------------------------------------------------------------
+# TEMPORARY-PRIVATE-REPO-AUTH: _gh_auth_token (remove once repo is public)
+# ---------------------------------------------------------------------------
+
+
+class GhAuthTokenTests(unittest.TestCase):
+    def setUp(self):
+        self.vc = load_version_check()
+
+    def test_token_sourced_from_gh_cli(self):
+        import subprocess
+
+        fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="gho_TOKEN\n")
+        with patch("subprocess.run", return_value=fake):
+            self.assertEqual(self.vc._gh_auth_token(), "gho_TOKEN")
+
+    def test_gh_cli_failure_returns_none(self):
+        import subprocess
+
+        fake = subprocess.CompletedProcess(args=[], returncode=1, stdout="")
+        with patch("subprocess.run", return_value=fake):
+            self.assertIsNone(self.vc._gh_auth_token())
+
+    def test_gh_cli_missing_returns_none(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertIsNone(self.vc._gh_auth_token())
 
 
 if __name__ == "__main__":
