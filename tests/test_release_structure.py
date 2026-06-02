@@ -137,7 +137,7 @@ class ReleaseStructureTests(unittest.TestCase):
 
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())
-        self.assertFalse((ROOT / "packages/adac-mcp").exists())
+        self.assertFalse((ROOT / "packages/caadt-mcp").exists())
 
     def test_docs_and_runbooks_do_not_reference_deleted_runtime_helper_paths(self):
         docs = [
