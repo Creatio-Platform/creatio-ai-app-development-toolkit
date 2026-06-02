@@ -1,6 +1,6 @@
 # Release Structure
 
-V1 ships as a single root-level plugin. All ADAC skills belong to the root plugin package.
+V1 ships as a single root-level plugin. All CAADT skills belong to the root plugin package.
 
 The canonical list of files that ship in the release zip is defined in [`.release-manifest.json`](../.release-manifest.json) at the repository root. Two sections:
 
@@ -18,7 +18,7 @@ Included release files (full list lives in `.release-manifest.json`):
 - `.agents/plugins/marketplace.json` for the Codex CLI marketplace catalog (pins the plugin payload to the `release` branch).
 - `.mcp.json` for global clio MCP server configuration.
 - `rules/creatio-app-orchestrator.mdc` for Cursor plugin rule support.
-- `AGENTS.md`, `context/`, `runbooks/`, `runtime/`, and `skills/` for the installed ADAC orchestration runtime.
+- `AGENTS.md`, `context/`, `runbooks/`, `runtime/`, and `skills/` for the installed CAADT orchestration runtime.
 - `installer/` so the extracted release zip can install itself.
 
 Not included in the release asset:
@@ -31,7 +31,7 @@ Not included in the release asset:
 Deferred from v1:
 
 - MCP registry discovery through `server.json`.
-- Custom ADAC MCP server package.
+- Custom CAADT MCP server package.
 - `gh skill install` packaging.
 - Multi-plugin `plugins/<name>/plugin.yaml` packaging.
-- Registry/tarball marketplace and an ADAC-owned auto-updater. (Claude Code plugin auto-update is enabled via Claude's own marketplace settings — `extraKnownMarketplaces.creatio.autoUpdate` — not an ADAC-owned mechanism.)
+- Registry/tarball marketplace and an CAADT-owned auto-updater. (Claude Code plugin auto-update is enabled via Claude's own marketplace settings — `extraKnownMarketplaces.creatio.autoUpdate` — not an CAADT-owned mechanism.)

@@ -46,7 +46,7 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ### Bug Fixes
 
-- **ADAC skill install/runtime fixes** (ENG-89512): Fixed skill file rendering with absolute installed paths for Codex and Claude; removed duplicate standalone skill registrations; added Codex legacy disabled-skill override cleanup; added validator launcher fallback (`py` → `python` → `python3`); prevented duplicate Copilot skill surfacing from install-side runtime.
+- **CAADT skill install/runtime fixes** (ENG-89512): Fixed skill file rendering with absolute installed paths for Codex and Claude; removed duplicate standalone skill registrations; added Codex legacy disabled-skill override cleanup; added validator launcher fallback (`py` → `python` → `python3`); prevented duplicate Copilot skill surfacing from install-side runtime.
 - **Codex installer**: Fixed rendered installed skill paths and removed duplicate marketplace/skill surfaces (fix(codex)).
 - **Reduced per-run agent friction** (ENG-89962): `mcp_client.py` now prints a USAGE banner on `--help`/`-h`/bare invocation with PowerShell-safe invocation examples. `AGENTS.md` trimmed (~440 → ~323 lines) by deferring Support Mode policy to `get-guidance`; added "Tool surface preference (clio MCP vs CLI)" rule to prevent agents falling back to CLI by default.
 
@@ -75,7 +75,7 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 ### clio coupling
 
 - Removed hard-coded `MIN_SUPPORTED_CLIO_VERSION` from `mcp_client.py` as an arbitrary cargo-cult value not tied to any specific clio feature.
-- Coupling between ADAC and clio is now handled at runtime via `get-tool-contract`, which fails fast with an actionable error if a tool ADAC depends on is missing or has changed signature.
+- Coupling between CAADT and clio is now handled at runtime via `get-tool-contract`, which fails fast with an actionable error if a tool CAADT depends on is missing or has changed signature.
 - `installer/install.py::preflight_clio()` checks only that `clio` is on PATH; no version check. Users are expected to keep clio current via `dotnet tool install/update clio -g`.
 
 ### Documentation

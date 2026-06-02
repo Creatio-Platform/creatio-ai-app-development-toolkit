@@ -144,7 +144,7 @@ def run_checked(command: list[str], **kwargs: Any) -> None:
 def preflight_clio() -> str:
     clio = shutil.which("clio")
     if not clio:
-        raise RuntimeError("clio was not found in PATH. Install clio or add it to PATH before installing ADAC.")
+        raise RuntimeError("clio was not found in PATH. Install clio or add it to PATH before installing CAADT.")
     return clio
 
 
@@ -183,7 +183,7 @@ def preflight_copilot() -> str:
     copilot = shutil.which("copilot")
     if not copilot:
         raise RuntimeError(
-            "copilot was not found in PATH. Install GitHub Copilot CLI or add it to PATH before installing ADAC."
+            "copilot was not found in PATH. Install GitHub Copilot CLI or add it to PATH before installing CAADT."
         )
     return copilot
 
@@ -192,7 +192,7 @@ def preflight_claude() -> str:
     claude = shutil.which("claude")
     if not claude:
         raise RuntimeError(
-            "claude was not found in PATH. Install Claude Code or add it to PATH before installing ADAC."
+            "claude was not found in PATH. Install Claude Code or add it to PATH before installing CAADT."
         )
     return claude
 
@@ -201,7 +201,7 @@ def preflight_codex() -> str:
     codex = shutil.which("codex")
     if not codex:
         raise RuntimeError(
-            "codex was not found in PATH. Install Codex CLI or add it to PATH before installing ADAC."
+            "codex was not found in PATH. Install Codex CLI or add it to PATH before installing CAADT."
         )
     return codex
 
@@ -468,7 +468,7 @@ def merge_codex_mcp_config(repo_root: Path, target_path: Path) -> None:
 
     block = (
         "\n"
-        "# Added by ADAC installer.\n"
+        "# Added by CAADT installer.\n"
         "[mcp_servers.clio]\n"
         f"command = {toml_quote(command)}\n"
         f"args = {toml_string_array(args)}\n"
@@ -564,7 +564,7 @@ def _toml_table_header_marker(line: str) -> str | None:
 
 
 def remove_codex_skill_config_override(target_path: Path, skill_name: str) -> None:
-    """Drop explicit Codex skill overrides for the ADAC skill."""
+    """Drop explicit Codex skill overrides for the CAADT skill."""
     if not target_path.exists():
         return
 
@@ -677,7 +677,7 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         "\n"
         f"# Creatio App Orchestrator\n"
         "\n"
-        "Entrypoint for the Creatio AI App Development Toolkit (ADAC) workflow.\n"
+        "Entrypoint for the Creatio AI App Development Toolkit (CAADT) workflow.\n"
         "\n"
         f"Toolkit repository is installed at: `{repo_root}`\n"
         "\n"
