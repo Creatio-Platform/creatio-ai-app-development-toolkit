@@ -68,7 +68,7 @@ def write_minimal_plugin_checkout(repo_root):
 
 
 class ConstantsTests(unittest.TestCase):
-    def test_marketplace_git_url_is_hardcoded_ghe(self):
+    def test_marketplace_git_url_is_hardcoded(self):
         installer = load_installer()
         self.assertEqual(
             installer.MARKETPLACE_GIT_URL,

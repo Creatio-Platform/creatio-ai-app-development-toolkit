@@ -152,10 +152,10 @@ jobs:
         # "latest"), so the installation wizard never sees a release whose
         # asset 404s. Single step keeps tag/release/asset state coherent.
         #
-        # GH_HOST is required on GHE: `gh` only auto-detects the API host from
-        # git remotes for github.com. For custom hostnames it bails with
-        # "none of the git remotes ... point to a known GitHub host" unless
-        # GH_HOST is set explicitly. Derive only the hostname from
+        # GH_HOST is required for non-github.com hosts: `gh` only auto-detects
+        # the API host from git remotes for github.com. For custom hostnames it
+        # bails with "none of the git remotes ... point to a known GitHub host"
+        # unless GH_HOST is set explicitly. Derive only the hostname from
         # GITHUB_SERVER_URL so the workflow is host-agnostic.
         run: |
           export GH_HOST="${GITHUB_SERVER_URL#http://}"

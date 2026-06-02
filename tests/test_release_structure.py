@@ -278,10 +278,10 @@ class ReleaseStructureTests(unittest.TestCase):
             r'gh release create "\$RELEASE_VERSION"[^\n]*(?:\n[ \t]+[^\n]+)*\n[ \t]+"/tmp/creatio-ai-app-development-toolkit-\$\{RELEASE_VERSION\}\.zip"',
         )
 
-    def test_gh_steps_set_gh_host_for_ghe(self):
-        """Regression: gh CLI on GHE refuses commands when it cannot identify
-        the API host. `GH_TOKEN` alone is not enough — gh only auto-detects
-        github.com from git remotes; custom hostnames (creatio.ghe.com) require
+    def test_gh_steps_set_gh_host_for_custom_hosts(self):
+        """Regression: gh CLI on non-github.com hosts refuses commands when it
+        cannot identify the API host. `GH_TOKEN` alone is not enough — gh only
+        auto-detects github.com from git remotes; custom hostnames require
         GH_HOST to be set explicitly. Derive it from GITHUB_SERVER_URL so the
         workflow remains host-agnostic."""
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

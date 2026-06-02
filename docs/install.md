@@ -58,7 +58,7 @@ Cursor remains on the local file-copy install model.
   `copilot plugin marketplace add <url>` and `copilot plugin install creatio-ai-app-development-toolkit@creatio`.
   Copilot manages the plugin on disk under `~/.copilot/installed-plugins/`. If a `creatio`
   marketplace already exists (e.g. from a prior local-install run), the installer runs
-  `copilot plugin marketplace remove creatio --force` first so the source can switch to the GHE URL.
+  `copilot plugin marketplace remove creatio --force` first so the source can switch to the public marketplace URL.
 
 ## Install from the terminal (advanced)
 
