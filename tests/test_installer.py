@@ -12,7 +12,7 @@ INSTALLER_PATH = ROOT / "installer/install.py"
 
 
 def load_installer():
-    spec = importlib.util.spec_from_file_location("adac_installer", INSTALLER_PATH)
+    spec = importlib.util.spec_from_file_location("caadt_installer", INSTALLER_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -460,7 +460,7 @@ class RemoveTomlTableBlockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             config_path = Path(temp) / "config.toml"
             config_path.write_text(
-                "[marketplaces.creatio] # installed-by-adac\n"
+                "[marketplaces.creatio] # installed-by-caadt\n"
                 'source_type = "local"\n'
                 "\n"
                 "[sandbox]\n"
@@ -743,7 +743,7 @@ class InstallCodexTests(unittest.TestCase):
             (codex_home / "config.toml").write_text(
                 'model = "gpt-5.4"\n\n'
                 "[marketplaces.creatio]\n"
-                'last_updated = "installed-by-adac"\n'
+                'last_updated = "installed-by-caadt"\n'
                 'source_type = "local"\n'
                 'source = "C:\\\\old\\\\path"\n\n'
                 "[marketplaces.other]\n"
@@ -1098,7 +1098,7 @@ class McpConfigMergeTests(unittest.TestCase):
             root = Path(temp) / "repo"
             root.mkdir()
             (root / ".mcp.json").write_text(
-                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]},"adac":{"command":"adac"}}}\n',
+                '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]},"caadt":{"command":"caadt"}}}\n',
                 encoding="utf-8",
             )
             target = Path(temp) / "target" / "mcp.json"
@@ -1113,7 +1113,7 @@ class McpConfigMergeTests(unittest.TestCase):
             merged = json.loads(target.read_text(encoding="utf-8"))
 
         self.assertEqual(merged["mcpServers"]["clio"]["command"], "custom-clio")
-        self.assertEqual(merged["mcpServers"]["adac"]["command"], "adac")
+        self.assertEqual(merged["mcpServers"]["caadt"]["command"], "caadt")
         printed.assert_called_once()
 
     def test_merge_mcp_config_accepts_utf8_bom_json(self):

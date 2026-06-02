@@ -5,7 +5,7 @@ description: Use when creating Creatio app Business Plans, technical implementat
 
 # Creatio App Orchestrator
 
-Use this skill as the entrypoint for ADAC workflows.
+Use this skill as the entrypoint for CAADT workflows.
 
 ## Load Order
 

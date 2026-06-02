@@ -94,7 +94,7 @@ Use the latest released clio:
 dotnet tool install clio -g       # first install
 dotnet tool update clio -g        # if already installed
 ```
-ADAC does not pin a specific clio version. If clio is missing a tool ADAC needs, runtime `get-tool-contract` will fail fast with an actionable error.
+CAADT does not pin a specific clio version. If clio is missing a tool CAADT needs, runtime `get-tool-contract` will fail fast with an actionable error.
 
 **Scenario 3 — user provided a custom clio path:**
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
@@ -152,7 +152,7 @@ The `<env_name>` should be a short, descriptive name derived from the URL (e.g.,
 ### 4. Auto-detect runtime during registration
 
 Creatio instances can be `.NET Core / NET8` or `.NET Framework`.
-Do not detect this in ADAC. Let `clio reg-web-app` resolve it and persist the correct `IsNetCore` value:
+Do not detect this in CAADT. Let `clio reg-web-app` resolve it and persist the correct `IsNetCore` value:
 
 ```bash
 clio reg-web-app <env_name> -u <url> -l <login> -p <password>

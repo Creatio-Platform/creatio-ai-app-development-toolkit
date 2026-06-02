@@ -277,13 +277,13 @@ Use the agent runbooks in `runbooks/*.md` as stage-specific execution instructio
 
 ## clio Coupling
 
-ADAC does not pin a specific clio version. Users are expected to have the latest clio on PATH (`dotnet tool install clio -g` or `dotnet tool update clio -g`). `installer/install.py::preflight_clio()` only verifies that `clio` is on PATH; it does not check the version.
+CAADT does not pin a specific clio version. Users are expected to have the latest clio on PATH (`dotnet tool install clio -g` or `dotnet tool update clio -g`). `installer/install.py::preflight_clio()` only verifies that `clio` is on PATH; it does not check the version.
 
-The actual coupling point between ADAC and clio is **MCP tool contracts**, which are resolved at runtime via `get-tool-contract`. If a tool ADAC depends on is missing or has changed signature, ADAC fails fast at session start with an actionable error (`Tool X not found in clio MCP — update clio or report ADAC bug`). No version pin needed.
+The actual coupling point between CAADT and clio is **MCP tool contracts**, which are resolved at runtime via `get-tool-contract`. If a tool CAADT depends on is missing or has changed signature, CAADT fails fast at session start with an actionable error (`Tool X not found in clio MCP — update clio or report CAADT bug`). No version pin needed.
 
 ## Versioning Policy (semver)
 
-ADAC ships as a single versioned product (one number for plugin metadata, skills, rules, runtime scripts, docs, installer, MCP config). Canonical tag: `X.Y.Z` (without `v` prefix; e.g. `0.2.0`, not `v0.2.0`). Pre-release tags (`-rc`, `-beta`) are not used in v1.
+CAADT ships as a single versioned product (one number for plugin metadata, skills, rules, runtime scripts, docs, installer, MCP config). Canonical tag: `X.Y.Z` (without `v` prefix; e.g. `0.2.0`, not `v0.2.0`). Pre-release tags (`-rc`, `-beta`) are not used in v1.
 
 **MAJOR (X.0.0)** — incompatible changes that require user action:
 - Breaking change in workflow contracts (Business Plan format, gate flow).
@@ -295,7 +295,7 @@ ADAC ships as a single versioned product (one number for plugin metadata, skills
 **MINOR (0.X.0)** — backward-compatible capabilities:
 - New runbook or new optional gate.
 - New supported agent.
-- New clio MCP capability adopted (ADAC starts calling a tool that wasn't used before).
+- New clio MCP capability adopted (CAADT starts calling a tool that wasn't used before).
 - New workflow capability without breaking existing contracts.
 
 **PATCH (0.0.X)** — compatible fixes:
