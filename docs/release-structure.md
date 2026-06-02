@@ -34,4 +34,4 @@ Deferred from v1:
 - Custom CAADT MCP server package.
 - `gh skill install` packaging.
 - Multi-plugin `plugins/<name>/plugin.yaml` packaging.
-- Registry/tarball marketplace and an CAADT-owned auto-updater. (Claude Code plugin auto-update is enabled via Claude's own marketplace settings — `extraKnownMarketplaces.creatio.autoUpdate` — not an CAADT-owned mechanism.)
+- Registry/tarball marketplace and a CAADT-owned auto-updater. (Claude Code plugin auto-update is enabled via Claude's own marketplace settings — `extraKnownMarketplaces.creatio.autoUpdate` — not a CAADT-owned mechanism.)

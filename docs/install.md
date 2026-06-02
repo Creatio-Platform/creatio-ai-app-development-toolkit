@@ -123,7 +123,7 @@ Advanced users can install for only one agent with `--target <codex|claude|curso
 
 When launched by the Creatio installation wizard, the wizard sets `CAADT_SETUP_WIZARD_MANIFEST=1`. In that mode, `install.py` writes a one-shot `~/.caadt/install-state.json` handoff file so the wizard can display which coding agents were configured, then the wizard deletes it. Manual `python installer/install.py` runs do not create that handoff file by default.
 
-The installer does not use a registry, checksums, or an CAADT-owned scheduled updater in v1.
+The installer does not use a registry, checksums, or a CAADT-owned scheduled updater in v1.
 Claude Code marketplace auto-update is enabled separately through Claude's own marketplace settings.
 
 ## Release-pinned plugin source
