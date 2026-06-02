@@ -1,6 +1,6 @@
 {
   "name": "creatio-ai-app-development-toolkit",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"

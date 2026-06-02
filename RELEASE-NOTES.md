@@ -6,6 +6,18 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 0.1.4 (2026-06-02)
+
+### Migration
+
+- **Repository moved to public github.com** (ENG-89017): the toolkit now ships from `https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit`. All marketplace manifests, the installer's `MARKETPLACE_GIT_URL`, and the user-facing install commands in `README.md` and `docs/install.md` reference the new public URL. Users installing via the host CLI (`claude plugin marketplace add ...`, `codex plugin marketplace add ...`, `copilot plugin marketplace add ...`) must re-register the marketplace at the new URL — the legacy internal URL is no longer the install source.
+
+### Renaming
+
+- **ADAC short-name replaced with CAADT** (ENG-90826): docs, error messages, installer marker comments, and test fixtures now refer to the toolkit as **CAADT** (Creatio AI App Development Toolkit). Long-form name was already correct; only the acronym changed. No structural identifiers are affected — the marketplace name (`creatio`), plugin ID (`creatio-ai-app-development-toolkit@creatio`), and semver tag format (`X.Y.Z`) are unchanged. Existing installs continue to work; the change is cosmetic.
+
+---
+
 ## 0.1.3 (2026-05-31)
 
 ### Bug Fixes
