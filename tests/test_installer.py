@@ -423,7 +423,7 @@ class InstallClaudeTests(unittest.TestCase):
             # so the installer must not seed that cross-agent mirror for Claude.
             self.assertFalse((home / ".agents" / "skills").exists())
 
-    def test_pre_removes_marketplace_to_migrate_off_legacy_directory_source(self):
+    def test_install_claude_always_removes_marketplace_first_and_tolerates_not_found(self):
         # Regression for ENG-90475 comments 448799 (Windows) and 449177 (macOS):
         # users upgrading from the old file-copy install carry a directory-source
         # `creatio` marketplace whose absolute `installLocation` survives in
