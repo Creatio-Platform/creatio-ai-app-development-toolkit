@@ -255,7 +255,12 @@ def register_remote_marketplace_and_install_plugin(
     Used by Claude, Copilot, and Codex. Cursor stays on the local file-copy install.
 
     Tolerates re-runs:
-    - Claude updates the marketplace source in place on re-add.
+    - Claude always runs `marketplace remove` first (`pre_remove_marketplace=True`)
+      to migrate users off legacy directory-source entries from the file-copy era.
+      Claude CLI's `plugin marketplace add` silently "updates in place" on a
+      re-add instead of raising "already registered", so the conflict-driven
+      retry branch below never fires for Claude — an unconditional remove is the
+      only way to rebuild the entry cleanly (ENG-90475).
     - Copilot rejects re-add with "already registered" and keeps the old source;
       we remove first (with --force to detach installed plugins) on retry.
     - Codex rejects re-add with "already added from a different source"; we
@@ -266,7 +271,8 @@ def register_remote_marketplace_and_install_plugin(
     `install_verb` is `"install"` for Claude/Copilot and `"add"` for Codex,
     matching each CLI's plugin-install subcommand name. `pre_remove_marketplace`
     converts the conflict-driven retry into an unconditional remove-then-add
-    sequence — Codex passes True so cleanup of legacy state is exhaustive.
+    sequence — Claude and Codex both pass True so cleanup of legacy state is
+    exhaustive.
     """
     marketplace_subcmd = [*cli_command, "plugin", "marketplace"]
     add_command = [*marketplace_subcmd, "add", MARKETPLACE_GIT_URL]
@@ -749,10 +755,27 @@ def install_codex(repo_root: Path, home: Path) -> None:
 
 
 def install_claude(repo_root: Path, home: Path) -> None:
+    """Install Claude via the remote marketplace.
+
+    `pre_remove_marketplace=True` is required to migrate users off legacy
+    `directory`-source marketplace entries from the old file-copy install:
+    Claude CLI's `plugin marketplace add` silently "updates in place" on a
+    re-add instead of raising "already registered", so the conflict-driven
+    retry path never fires. The legacy absolute `installLocation` survives
+    in `known_marketplaces.json`, and a later `plugin install` joins the
+    staging `temp_<ts>` dir with that absolute path, producing the
+    `Marketplace file not found at .../temp_<ts>/<abs-legacy-path>` error
+    surfaced in `/plugins → Errors` (ENG-90475 comments 448799, 449177;
+    upstream anthropics/claude-code#36245). An unconditional remove-then-add
+    rebuilds the entry cleanly on every run and makes migration idempotent.
+    """
     ensure_required_references(repo_root)
     claude_home = home / ".claude"
     claude_command = resolve_claude_command()
-    register_remote_marketplace_and_install_plugin(claude_command)
+    register_remote_marketplace_and_install_plugin(
+        claude_command,
+        pre_remove_marketplace=True,
+    )
     enable_claude_marketplace_auto_update(claude_home / "settings.json")
 
 

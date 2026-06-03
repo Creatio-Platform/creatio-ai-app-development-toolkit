@@ -403,9 +403,13 @@ class InstallClaudeTests(unittest.TestCase):
             ):
                 installer.install_claude(repo_root, home)
 
+            # `plugin marketplace remove` runs first so that a stale legacy
+            # entry (directory-source with absolute installLocation) is wiped
+            # before the git-source re-add — see install_claude docstring.
             self.assertEqual(
                 commands,
                 [
+                    ["claude", "plugin", "marketplace", "remove", "creatio"],
                     ["claude", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
                     ["claude", "plugin", "install", installer.PLUGIN_SOURCE],
                 ],
@@ -418,6 +422,55 @@ class InstallClaudeTests(unittest.TestCase):
             # Claude reads its skill from the CLI-managed plugin, not ~/.agents/skills,
             # so the installer must not seed that cross-agent mirror for Claude.
             self.assertFalse((home / ".agents" / "skills").exists())
+
+    def test_install_claude_always_removes_marketplace_first_and_tolerates_not_found(self):
+        # Regression for ENG-90475 comments 448799 (Windows) and 449177 (macOS):
+        # users upgrading from the old file-copy install carry a directory-source
+        # `creatio` marketplace whose absolute `installLocation` survives in
+        # known_marketplaces.json. Claude CLI silently "updates in place" on a
+        # re-add (no `already registered` error → no conflict-retry), and a
+        # subsequent `plugin install` joins the staging temp dir with that
+        # absolute path, producing the `temp_<ts>/<abs-legacy-path>` error in
+        # `/plugins → Errors`. Asserting that `marketplace remove` always runs
+        # first locks in the migration behavior that mirrors install_codex and
+        # matches the manual workaround Vitalii verified on macOS.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            (home / ".claude").mkdir(parents=True)
+
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                # Simulate the fresh-install case where the marketplace is not
+                # yet registered: Claude CLI returns "not found" on remove.
+                # install.py must tolerate this and proceed to add+install
+                # rather than abort, otherwise first-time users on a clean
+                # machine would never get past the pre-remove step.
+                if command[1:4] == ["plugin", "marketplace", "remove"]:
+                    raise RuntimeError("Error: marketplace 'creatio' not found")
+
+            with patch.object(installer, "preflight_claude", return_value="claude"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch("builtins.print"):
+                installer.install_claude(repo_root, home)
+
+            self.assertEqual(commands[0][1:4], ["plugin", "marketplace", "remove"])
+            self.assertEqual(commands[0][4], "creatio")
+            self.assertEqual(
+                [cmd[1:] for cmd in commands],
+                [
+                    ["plugin", "marketplace", "remove", "creatio"],
+                    ["plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                    ["plugin", "install", installer.PLUGIN_SOURCE],
+                ],
+            )
 
     def test_preserves_existing_settings_when_enabling_auto_update(self):
         installer = load_installer()
