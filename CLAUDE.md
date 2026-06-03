@@ -4,7 +4,6 @@ Use repo-local shared skills from `.agents/skills/` when the task matches them.
 
 <!-- BEGIN MANAGED SECTION: company-agent-policy v1.0.0 -->
 <!-- DO NOT EDIT THIS SECTION MANUALLY. -->
-<!-- Managed by https://creatio.ghe.com/engineering/agent-policy-sync -->
 
 ## Required Workflow
 Before any substantial repository analysis, planning, implementation, refactoring, bug fixing, or file edits, use the `$ensure-ai-commit-attribution` skill.
