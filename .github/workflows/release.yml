@@ -17,7 +17,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
@@ -80,7 +80,7 @@ jobs:
           fi
 
       - name: Fetch `release` ref so Gate 6 and the post-release lease see it
-        # Belt-and-braces: actions/checkout@v4 with fetch-depth: 0 fetches all
+        # Belt-and-braces: actions/checkout@v6 with fetch-depth: 0 fetches all
         # branches by default, but be explicit so a future checkout config
         # change can't silently break Gate 6 or the force-with-lease.
         run: git fetch --no-tags origin release || true
