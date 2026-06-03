@@ -1,0 +1,56 @@
+name: SonarCloud
+
+# SonarQube Cloud (SonarCloud) analysis: code quality, maintainability,
+# duplication, and test-coverage Quality Gate. Security SAST stays with
+# Bandit/Semgrep/CodeQL — this is complementary, not a replacement.
+#
+# The whole job is a no-op until the SONAR_TOKEN repository secret exists, so
+# this stays green before SonarCloud onboarding is complete. Once the token is
+# set the analysis runs for real on every PR and push to main.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sonarcloud:
+    name: SonarCloud analysis
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Onboarding notice (token missing)
+        if: ${{ env.SONAR_TOKEN == '' }}
+        run: |
+          echo "SONAR_TOKEN secret is not set — SonarCloud is not onboarded yet."
+          echo "This job is intentionally a no-op until the secret exists. See sonar-project.properties."
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        if: ${{ env.SONAR_TOKEN != '' }}
+        with:
+          # Full history so SonarCloud can attribute new code / blame correctly.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        if: ${{ env.SONAR_TOKEN != '' }}
+        with:
+          python-version: '3.11'
+
+      - name: Generate test coverage
+        if: ${{ env.SONAR_TOKEN != '' }}
+        run: |
+          pip install pytest pytest-cov
+          pytest --cov=. --cov-report=xml tests/
+
+      - name: SonarQube Cloud scan
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
