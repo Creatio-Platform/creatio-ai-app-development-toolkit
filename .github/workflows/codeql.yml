@@ -1,0 +1,44 @@
+name: CodeQL
+
+# NOTE: Uploading CodeQL results to the Security tab requires GitHub Advanced
+# Security for PRIVATE repositories. On a free/private plan the "analyze" step
+# (SARIF upload) will fail with a 403 until either:
+#   - the repository is made public, or
+#   - GitHub Advanced Security is enabled for the org.
+# This workflow is kept ready ("заготовка") so it activates automatically once
+# one of those conditions is met. It is intentionally NOT part of the blocking
+# PR gate in security.yml.
+#
+# Triggers are limited to manual dispatch only: on a private/free plan the
+# "analyze" upload fails with 403, so running on every pull_request/push would
+# post a permanently red check and burn the limited Actions quota. Re-add
+# `pull_request`/`push`/`schedule` once GHAS is enabled or the repo is public.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'

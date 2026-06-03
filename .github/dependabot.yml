@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned to patched versions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - security
+
+  # Python dependencies. Activates automatically once a manifest
+  # (requirements*.txt / pyproject.toml) is committed; until then Dependabot
+  # simply finds nothing to update.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - security
