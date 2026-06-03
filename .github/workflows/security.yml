@@ -58,9 +58,14 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Verify gitleaks
         run: gitleaks version
-      - name: Scan for secrets
-        # Scans the working tree; exits non-zero when leaks are found.
+      - name: Scan working tree for secrets
+        # Scans the current working tree; exits non-zero when leaks are found.
         run: gitleaks dir . --redact -v
+      - name: Scan full git history for secrets
+        # Scans the entire commit history (checkout uses fetch-depth: 0).
+        # A working-tree scan alone misses secrets that were committed and
+        # later removed but still live in history. Exits non-zero on findings.
+        run: gitleaks git . --redact -v
 
   pip-audit:
     name: SCA - pip-audit (Python deps)
