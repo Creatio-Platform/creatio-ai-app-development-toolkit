@@ -1,0 +1,10 @@
+# Code owners for the Creatio AI App Development Toolkit.
+#
+# When the branch ruleset on `main` requires code-owner review, every pull
+# request needs an approval from a member of the team below. The team has
+# write/admin access, so its members are valid reviewers.
+#
+# Order matters: the last matching pattern takes precedence.
+
+# Default owners for everything in the repository.
+*       @Creatio-Platform/toolkit-contributors
