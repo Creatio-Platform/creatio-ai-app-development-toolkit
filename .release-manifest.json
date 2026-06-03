@@ -1,0 +1,19 @@
+{
+  "plugin_runtime": [
+    "AGENTS.md",
+    ".mcp.json",
+    ".agents",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".cursor-plugin",
+    ".github/plugin",
+    "context",
+    "rules",
+    "runbooks",
+    "runtime",
+    "skills"
+  ],
+  "release_extras": [
+    "installer"
+  ]
+}

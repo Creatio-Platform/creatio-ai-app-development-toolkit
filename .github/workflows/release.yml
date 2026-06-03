@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver X.Y.Z (must have matching `## X.Y.Z (date)` section in RELEASE-NOTES.md)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Release Gate + execute
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # === Release Gate (pre-release validations) ===
+
+      - name: Gate 1 — validate version format X.Y.Z (no v prefix, no pre-release)
+        run: |
+          echo "$RELEASE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "ERROR: Version must be X.Y.Z (no 'v' prefix, no pre-release suffixes)."; exit 1; }
+
+      - name: Gate 2 — extract release notes section from RELEASE-NOTES.md
+        run: |
+          awk -v ver="$RELEASE_VERSION" '
+            /^## / {
+              if ($0 ~ "^## " ver " \\(") { found = 1; next }
+              else if (found) { exit }
+            }
+            found { print }
+          ' RELEASE-NOTES.md > /tmp/release_notes.md
+
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "ERROR: No section '## $RELEASE_VERSION (...)' found in RELEASE-NOTES.md, or section is empty."
+            echo "       Add the section in a separate PR before triggering release."
+            exit 1
+          fi
+
+      - name: Gate 3 — manifests already prepared and in sync
+        run: node scripts/bump-version.js --check
+
+      - name: Gate 4 — run tests
+        run: |
+          pip install pytest
+          pytest tests/
+
+      - name: Audit — warn on undeclared files containing the new version
+        run: node scripts/bump-version.js --audit
+        # Soft warning, does not block. Flags hardcoded version stragglers
+        # in files outside .version-bump.json (new plugin manifests of CAs
+        # forgotten in sync list, hardcoded constants in code, etc.).
+
+      - name: Gate 5 — canonical manifest matches input and tag is free
+        run: |
+          node scripts/bump-version.js --check
+          PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)
+          if [ "$PJ_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "ERROR: .claude-plugin/plugin.json version ($PJ_VERSION) != input ($RELEASE_VERSION)"
+            echo "       Prepare and merge a release PR that runs: node scripts/bump-version.js $RELEASE_VERSION"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "ERROR: Remote tag $RELEASE_VERSION already exists."
+            exit 1
+          fi
+
+      - name: Fetch `release` ref so Gate 6 and the post-release lease see it
+        # Belt-and-braces: actions/checkout@v4 with fetch-depth: 0 fetches all
+        # branches by default, but be explicit so a future checkout config
+        # change can't silently break Gate 6 or the force-with-lease.
+        run: git fetch --no-tags origin release || true
+
+      - name: Gate 6 — new version differs from current `release` branch version
+        # The plugin cache key on the client is plugin.json:version (not SHA),
+        # so re-pointing `release` at a commit whose plugin.json still says the
+        # current version would make clients reuse the old cached payload and
+        # miss the new release. For hotfix rollbacks, ship a forward-fix patch
+        # version instead of a raw SHA rollback.
+        run: |
+          if git ls-remote --exit-code --heads origin release >/dev/null 2>&1; then
+            # Capture with explicit failure handling: bash suppresses `set -e`
+            # inside command-substitution-in-assignment, so a failing
+            # `git show | jq` would otherwise leave OLD_VERSION empty and the
+            # equality check below would silently pass.
+            OLD_VERSION=$(git show "origin/release:.claude-plugin/plugin.json" | jq -r .version) \
+              || { echo "ERROR: Failed to read .claude-plugin/plugin.json from origin/release."; exit 1; }
+            if [ -z "$OLD_VERSION" ] || [ "$OLD_VERSION" = "null" ]; then
+              echo "ERROR: OLD_VERSION came back empty/null; refusing to bypass Gate 6."
+              exit 1
+            fi
+            if [ "$OLD_VERSION" = "$RELEASE_VERSION" ]; then
+              echo "ERROR: New release version ($RELEASE_VERSION) equals current release branch version ($OLD_VERSION)."
+              echo "       Cache key on clients is plugin.json:version, so this re-point would be invisible to installed plugins."
+              echo "       For a rollback, ship a forward-fix patch version (e.g. ${RELEASE_VERSION%.*}.$((${RELEASE_VERSION##*.}+1)))."
+              exit 1
+            fi
+          fi
+
+      # === Release execution ===
+
+      - name: Build release asset from .release-manifest.json
+        run: |
+          set -euo pipefail
+          OUT="/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          jq -r '.plugin_runtime[], .release_extras[]' .release-manifest.json | while read -r src; do
+            if [ -z "$src" ]; then continue; fi
+            case "$src" in
+              /*|*..*)
+                echo "ERROR: .release-manifest.json contains unsafe path: $src"
+                exit 1
+                ;;
+            esac
+            if [ ! -e "$src" ]; then
+              echo "ERROR: .release-manifest.json references missing path: $src"
+              exit 1
+            fi
+            dest_parent="$OUT/$(dirname "$src")"
+            mkdir -p "$dest_parent"
+            cp -r "$src" "$OUT/$src"
+          done
+          cp .release-manifest.json "$OUT/"
+          (cd /tmp && zip -r "creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" "creatio-ai-app-development-toolkit-${RELEASE_VERSION}" >/dev/null)
+          ls -la "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
+
+      - name: Tag and push release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$RELEASE_VERSION"
+          git push origin "refs/tags/$RELEASE_VERSION"
+
+      - name: Create GitHub Release with asset
+        # gh release create with asset paths performs draft → upload → publish.
+        # If asset upload fails, the release stays as a draft (not visible as
+        # "latest"), so the installation wizard never sees a release whose
+        # asset 404s. Single step keeps tag/release/asset state coherent.
+        #
+        # GH_HOST is required for non-github.com hosts: `gh` only auto-detects
+        # the API host from git remotes for github.com. For custom hostnames it
+        # bails with "none of the git remotes ... point to a known GitHub host"
+        # unless GH_HOST is set explicitly. Derive only the hostname from
+        # GITHUB_SERVER_URL so the workflow is host-agnostic.
+        run: |
+          export GH_HOST="${GITHUB_SERVER_URL#http://}"
+          export GH_HOST="${GH_HOST#https://}"
+          export GH_HOST="${GH_HOST%/}"
+          gh release create "$RELEASE_VERSION" \
+            --notes-file /tmp/release_notes.md \
+            "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Fast-forward `release` branch to new release SHA
+        # `release` is the moving pointer that marketplace.json's source.ref
+        # points to for Claude/Copilot plugin installs. Update it AFTER the
+        # release artifact exists. If this step fails the release branch
+        # stays on the previous good release, so users continue installing
+        # the prior release rather than ending up with a half-published one.
+        #
+        # Explicit lease form: bare `--force-with-lease` derives its expected
+        # SHA from a tracked local branch, which we don't have here (we push
+        # a raw SHA:refspec, no local `release` checkout). Pass the lease
+        # value explicitly so the safety actually applies. An empty EXPECTED
+        # value (first-ever release branch creation) tells git to expect the
+        # ref to not exist, which is the correct semantic for bootstrap.
+        run: |
+          EXPECTED=$(git rev-parse --verify --quiet refs/remotes/origin/release || true)
+          git push origin "$GITHUB_SHA:refs/heads/release" --force-with-lease="refs/heads/release:${EXPECTED}"
+
+      - name: Verify `release` branch now points to released SHA
+        # Defence in depth: catch the case where the push above silently
+        # no-op'd (network glitch, branch-protection bypass misconfigured,
+        # etc.) so the workflow fails loudly rather than leaving a stale
+        # release branch behind a successful gh release.
+        run: |
+          REMOTE_SHA=$(git ls-remote origin refs/heads/release | awk '{print $1}')
+          if [ "$REMOTE_SHA" != "$GITHUB_SHA" ]; then
+            echo "ERROR: release branch is at $REMOTE_SHA, expected $GITHUB_SHA"
+            exit 1
+          fi

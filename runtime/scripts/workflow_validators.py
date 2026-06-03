@@ -1,0 +1,114 @@
+import re
+
+
+class WorkflowError(Exception):
+    pass
+
+
+REQUIRED_REQUIREMENTS_SECTIONS = [
+    "## 1. Business Outcome",
+    "## 2. Roles and Permissions",
+    "## 3. Object Model",
+    "## 4. Lifecycle and Statuses",
+    "## 5. Business Logic",
+    "## 6. UX Expectations",
+    "## 7. Edge Cases and Exceptions",
+]
+REQUIRED_REQUIREMENTS_MARKERS = [
+    "Minimum to create:",
+    "default list columns:",
+]
+
+ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Main|Supporting) entity:", re.MULTILINE)
+LOOKUPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Lookups\s*$", re.MULTILINE)
+MAIN_ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Main entity:", re.MULTILINE)
+TABLE_HEADER_RE = re.compile(
+    r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
+    re.IGNORECASE,
+)
+UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNORECASE)
+CHECKLIST_SOURCE_RE = re.compile(
+    r"(?:^|\n)\s*(?:"
+    r"source\s*[:=]\s*[\"']?(?:confirmed|assumed)[\"']?"
+    r"|confirmed\s*:"
+    r"|assumed\s*:"
+    r"|complete\s*=\s*true"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def extract_section(text, start_heading, end_heading=None):
+    lines = text.splitlines()
+    capture = False
+    captured = []
+    for line in lines:
+        if line.rstrip() == start_heading:
+            capture = True
+            continue
+        if capture and end_heading and line.rstrip() == end_heading:
+            break
+        if capture:
+            captured.append(line)
+    return "\n".join(captured)
+
+
+def normalize_title_list(text):
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def validate_requirements_doc(content: str) -> None:
+    text = content
+    if not re.search(r"^# .+ - Requirements$", text, re.MULTILINE):
+        raise WorkflowError("Requirements doc failed: title must match '# <AppName> - Requirements'")
+    for section in REQUIRED_REQUIREMENTS_SECTIONS:
+        if section not in text:
+            raise WorkflowError(f"Requirements doc failed: missing required section: {section}")
+    for marker in REQUIRED_REQUIREMENTS_MARKERS:
+        if marker not in text:
+            raise WorkflowError(f"Requirements doc failed: missing required marker: {marker}")
+    if not MAIN_ENTITY_HEADING_RE.search(text):
+        raise WorkflowError("Requirements doc failed: missing 'Main entity' subsection in section 3")
+    if not LOOKUPS_HEADING_RE.search(text):
+        raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
+    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Roles and Permissions")
+    section2_text = extract_section(text, "## 2. Roles and Permissions", "## 3. Object Model")
+    section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
+    section4_text = extract_section(text, "## 4. Lifecycle and Statuses", "## 5. Business Logic")
+    section5_text = extract_section(text, "## 5. Business Logic", "## 6. UX Expectations")
+    section6_text = extract_section(text, "## 6. UX Expectations", "## 7. Edge Cases and Exceptions")
+    section7_text = extract_section(text, "## 7. Edge Cases and Exceptions")
+    lines = section3_text.splitlines()
+    entity_indices = [index for index, line in enumerate(lines) if ENTITY_HEADING_RE.search(line)]
+    if not entity_indices:
+        raise WorkflowError("Requirements doc failed: section 3 must contain at least one main or supporting entity heading")
+    for pos, start in enumerate(entity_indices):
+        end = entity_indices[pos + 1] if pos + 1 < len(entity_indices) else len(lines)
+        block = lines[start:end]
+        block_text = "\n".join(block)
+        for marker in ("Title:", "Code:", "Entity role:", "Primary display field:", "Description:", "Purpose:"):
+            if marker not in block_text:
+                raise WorkflowError(
+                    f"Requirements doc failed: entity block starting at '{lines[start]}' is missing metadata marker '{marker}'"
+                )
+        if not any(TABLE_HEADER_RE.search(line) for line in block):
+            raise WorkflowError(
+                f"Requirements doc failed: entity block starting at '{lines[start]}' must include its own field table"
+            )
+    ba_body = text.split("## Technical Implementation Handoff")[0] if "## Technical Implementation Handoff" in text else text
+    checklist_match = CHECKLIST_SOURCE_RE.search(ba_body)
+    if checklist_match:
+        raise WorkflowError(
+            f"Requirements doc failed: forbidden service marker detected: '{checklist_match.group().strip()}'"
+        )
+    section3_text_lower = section3_text.lower()
+    for line in section6_text.splitlines():
+        if not UX_CARRIER_RE.search(line):
+            continue
+        values = normalize_title_list(re.sub(r"^[\s-]*default [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
+        for title in values:
+            if title == "Name":
+                continue
+            if title.lower() not in section3_text_lower:
+                raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
+

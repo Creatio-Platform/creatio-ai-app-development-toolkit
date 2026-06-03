@@ -1,0 +1,441 @@
+import os
+import sys
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from runtime.scripts.mcp_client import (
+    PersistentMcpClient,
+    USAGE,
+    _HelpRequested,
+    _get_tool_contract_index,
+    _normalize_tool_contract_index,
+    _parse_rpc_result,
+    _validate_params,
+    call_mcp_tool,
+    load_cli_arguments,
+    list_mcp_resources,
+    main,
+    parse_cli_request,
+    read_mcp_resource,
+)
+
+
+def build_contract_index(*contracts):
+    return {contract["name"]: contract for contract in contracts}
+
+
+def build_contract(name, required=None, properties=None, aliases=None, any_of=None, validators=None):
+    return {
+        "name": name,
+        "input-schema": {
+            "required": required or [],
+            "properties": properties or [],
+            "validators": validators or [],
+            "any-of": any_of or [],
+        },
+        "aliases": aliases or [],
+    }
+
+
+def field(name, field_type, description):
+    return {"name": name, "type": field_type, "description": description}
+
+
+def alias(canonical_name, wrong_name, message):
+    return {
+        "scope": "parameter",
+        "canonical-name": canonical_name,
+        "alias": wrong_name,
+        "status": "rejected",
+        "message": message,
+    }
+
+
+APPLICATION_CREATE_CONTRACT = build_contract(
+    "create-app",
+    required=["environment-name", "name", "code", "template-code", "icon-background"],
+    properties=[
+        field("environment-name", "string", "Registered clio environment name."),
+        field("name", "string", "Application display name."),
+        field("code", "string", "Application code."),
+        field("template-code", "string", "Technical template code."),
+        field("icon-background", "string", "Hex icon background."),
+    ],
+    aliases=[
+        alias("code", "app-code", "Use 'code' instead of 'app-code'."),
+        alias("name", "app-name", "Use 'name' instead of 'app-name'."),
+    ],
+)
+
+PAGE_LIST_CONTRACT = build_contract(
+    "list-pages",
+    properties=[
+        field("package-name", "string", "Package name to inspect."),
+        field("code", "string", "Installed application code to inspect."),
+        field("search-pattern", "string", "Optional page schema name pattern."),
+        field("environment-name", "string", "Registered clio environment name."),
+        field("uri", "string", "Explicit Creatio URL."),
+        field("login", "string", "Explicit login."),
+        field("password", "string", "Explicit password."),
+    ],
+    aliases=[
+        alias("package-name", "packageName", "Use 'package-name' instead of 'packageName'."),
+        alias("environment-name", "environmentName", "Use 'environment-name' instead of 'environmentName'."),
+    ],
+    any_of=[["environment-name"], ["uri", "login", "password"]],
+    validators=[
+        {
+            "name": "mutually-exclusive-fields",
+            "code": "invalid-workflow-shape",
+            "fields": ["package-name", "code"],
+            "context": "list-pages accepts package-name or code, not both.",
+        }
+    ],
+)
+
+SCHEMA_SYNC_CONTRACT = build_contract(
+    "sync-schemas",
+    required=["environment-name", "package-name", "operations"],
+    properties=[
+        field("environment-name", "string", "Registered clio environment name."),
+        field("package-name", "string", "Target package name."),
+        field("operations", "array", "Ordered schema operations."),
+    ],
+    aliases=[
+        alias("environment-name", "environmentName", "Use 'environment-name' instead of 'environmentName'."),
+        alias("package-name", "packageName", "Use 'package-name' instead of 'packageName'."),
+    ],
+)
+
+PAGE_SYNC_CONTRACT = build_contract(
+    "sync-pages",
+    required=["environment-name", "pages"],
+    properties=[
+        field("environment-name", "string", "Registered clio environment name."),
+        field("pages", "array", "Page update requests."),
+        field("validate", "boolean", "Run client-side validation."),
+    ],
+)
+
+CREATE_DATA_BINDING_CONTRACT = build_contract(
+    "create-data-binding-db",
+    required=["environment-name", "package-name", "schema-name"],
+    properties=[
+        field("environment-name", "string", "Registered clio environment name."),
+        field("package-name", "string", "Target package name."),
+        field("schema-name", "string", "Entity schema name."),
+    ],
+)
+
+
+class McpClientTests(unittest.TestCase):
+    def setUp(self):
+        cache_patcher = patch("runtime.scripts.mcp_client._TOOL_CONTRACT_CACHE", {"key": None, "contracts": None})
+        self.addCleanup(cache_patcher.stop)
+        cache_patcher.start()
+
+    def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
+        client = PersistentMcpClient()
+        expected = {"success": True, "data": {"tools": [{"name": "sync-schemas"}]}, "raw": "{}"}
+        with patch.object(PersistentMcpClient, "call_method", return_value=expected) as mocked:
+            result = client.list_tools(timeout=15)
+        self.assertEqual(result, expected)
+        mocked.assert_called_once_with("tools/list", {}, timeout=15, expect_tool_result=False)
+
+    def test_persistent_client_list_resources_uses_mcp_resources_list_method(self):
+        client = PersistentMcpClient()
+        expected = {"success": True, "data": {"resources": [{"uri": "docs://mcp/guides/app-modeling"}]}, "raw": "{}"}
+        with patch.object(PersistentMcpClient, "call_method", return_value=expected) as mocked:
+            result = client.list_resources(timeout=15)
+        self.assertEqual(result, expected)
+        mocked.assert_called_once_with("resources/list", {}, timeout=15, expect_tool_result=False)
+
+    def test_persistent_client_read_resource_uses_mcp_resources_read_method(self):
+        client = PersistentMcpClient()
+        expected = {"success": True, "data": {"contents": [{"uri": "docs://mcp/guides/app-modeling"}]}, "raw": "{}"}
+        with patch.object(PersistentMcpClient, "call_method", return_value=expected) as mocked:
+            result = client.read_resource("docs://mcp/guides/app-modeling", timeout=15)
+        self.assertEqual(result, expected)
+        mocked.assert_called_once_with(
+            "resources/read",
+            {"uri": "docs://mcp/guides/app-modeling"},
+            timeout=15,
+            expect_tool_result=False,
+        )
+
+    def test_parse_cli_request_accepts_legacy_positional_mode(self):
+        parsed = parse_cli_request(["list-apps", '{"environment-name":"local"}', "30"])
+        self.assertEqual(parsed["tool_name"], "list-apps")
+        self.assertEqual(parsed["arguments"], {"environment-name": "local"})
+        self.assertEqual(parsed["timeout"], 30)
+
+    def test_parse_cli_request_accepts_args_file_mode(self):
+        temp_path = ROOT / ".tmp-tests" / "mcp-client-args.json"
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
+        try:
+            parsed = parse_cli_request(["list-apps", "--args-file", str(temp_path), "--timeout", "45"])
+        finally:
+            temp_path.unlink(missing_ok=True)
+        self.assertEqual(parsed["tool_name"], "list-apps")
+        self.assertEqual(parsed["arguments"], {"environment-name": "local"})
+        self.assertEqual(parsed["timeout"], 45)
+
+    def test_load_cli_arguments_accepts_stdin_mode(self):
+        arguments = load_cli_arguments(args_stdin=True, stdin_text='{"environment-name":"local"}')
+        self.assertEqual(arguments, {"environment-name": "local"})
+
+    def test_load_cli_arguments_rejects_multiple_sources(self):
+        with self.assertRaisesRegex(ValueError, "exactly one argument source"):
+            load_cli_arguments(args_json="{}", args_file="args.json")
+
+    def test_load_cli_arguments_error_points_to_help(self):
+        with self.assertRaisesRegex(ValueError, "--help"):
+            load_cli_arguments()
+
+    def test_parse_cli_request_raises_help_for_help_flag(self):
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(_HelpRequested):
+                    parse_cli_request([flag])
+
+    def test_parse_cli_request_treats_bare_help_word_as_tool_name(self):
+        # `help` without a leading dash must NOT be treated as the help flag —
+        # it has to fall through to normal tool-name parsing so that a future
+        # clio MCP tool named "help" would still be reachable.
+        with self.assertRaises(ValueError):
+            parse_cli_request(["help"])
+
+    def test_main_prints_usage_and_exits_zero_on_help_flag(self):
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            exit_code = main(["--help"])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Usage:", buffer.getvalue())
+
+    def test_usage_documents_windows_safe_stdin_example(self):
+        self.assertIn("--args-stdin", USAGE)
+        self.assertIn("echo '{}' | py -3 mcp_client.py", USAGE)
+        self.assertIn("PowerShell", USAGE)
+
+    def test_parse_rpc_result_marks_nonzero_exit_code_as_failure(self):
+        collected = [
+            '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\\"exit-code\\":1,\\"execution-log-messages\\":[{\\"message-type\\":\\"Info\\",\\"value\\":\\"boom\\"}] }"}]}}'
+        ]
+        result = _parse_rpc_result(3, collected, expect_tool_result=True)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["exit-code"], 1)
+
+    def test_parse_rpc_result_marks_error_log_message_as_failure(self):
+        collected = [
+            '{"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"{\\"exit-code\\":0,\\"execution-log-messages\\":[{\\"message-type\\":\\"Error\\",\\"value\\":\\"bad\\"}] }"}]}}'
+        ]
+        result = _parse_rpc_result(7, collected, expect_tool_result=True)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["exit-code"], 0)
+
+    def test_get_tool_contract_index_uses_cache(self):
+        fake_client = SimpleNamespace(
+            call_tool=Mock(return_value={
+                "success": True,
+                "data": {
+                    "success": True,
+                    "tools": [APPLICATION_CREATE_CONTRACT, SCHEMA_SYNC_CONTRACT],
+                },
+                "raw": "{}",
+            })
+        )
+        with patch("runtime.scripts.mcp_client._current_clio_resolution_key", return_value=("custom", "/usr/local/bin/clio")), patch(
+            "runtime.scripts.mcp_client._get_shared_client",
+            return_value=fake_client,
+        ):
+            first = _get_tool_contract_index(timeout=10)
+            second = _get_tool_contract_index(timeout=10)
+        self.assertIs(first, second)
+        fake_client.call_tool.assert_called_once_with("get-tool-contract", {}, timeout=10)
+
+    def test_normalize_tool_contract_index_rejects_failure_payload(self):
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            _normalize_tool_contract_index({
+                "success": False,
+                "error": {"code": "missing-required-parameter", "message": "missing"},
+            })
+
+    def test_call_mcp_tool_routes_tools_list_to_list_helper(self):
+        expected = {"success": True, "data": {"tools": [{"name": "sync-pages"}]}, "raw": "{}"}
+        with patch("runtime.scripts.mcp_client.list_mcp_tools", return_value=expected) as mocked:
+            result = call_mcp_tool("tools/list", {})
+        self.assertEqual(result, expected)
+        mocked.assert_called_once()
+
+    def test_call_mcp_tool_bypasses_contract_lookup_for_tool_contract_get(self):
+        fake_client = SimpleNamespace(call_tool=Mock(return_value={"success": True, "data": {"success": True}, "raw": "{}"}))
+        with patch("runtime.scripts.mcp_client._get_shared_client", return_value=fake_client), patch(
+            "runtime.scripts.mcp_client._get_tool_contract_index",
+            side_effect=AssertionError("should not be called"),
+        ):
+            result = call_mcp_tool("get-tool-contract", {})
+        self.assertTrue(result["success"])
+        fake_client.call_tool.assert_called_once_with("get-tool-contract", {}, 120)
+
+    def test_call_mcp_tool_returns_structured_unknown_tool_error(self):
+        contract_index = build_contract_index(PAGE_SYNC_CONTRACT, PAGE_LIST_CONTRACT)
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", return_value=contract_index), \
+             patch("runtime.scripts.mcp_client._load_explicit_tool_contract", return_value=None):
+            result = call_mcp_tool("sync-page", {})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "tool-not-found")
+        self.assertIn("sync-pages", result["data"]["error"]["suggestions"])
+
+    def test_call_mcp_tool_returns_validation_error_from_metadata(self):
+        contract_index = build_contract_index(CREATE_DATA_BINDING_CONTRACT)
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", return_value=contract_index):
+            result = call_mcp_tool("create-data-binding-db", {})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "invalid-request")
+        self.assertIn("Missing required parameter 'environment-name'", result["raw"])
+
+    def test_call_mcp_tool_rejects_unknown_parameter_before_execution(self):
+        contract_index = build_contract_index(PAGE_LIST_CONTRACT)
+        fake_client = SimpleNamespace(call_tool=Mock(side_effect=AssertionError("should not execute tool")))
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", return_value=contract_index), patch(
+            "runtime.scripts.mcp_client._get_shared_client",
+            return_value=fake_client,
+        ):
+            result = call_mcp_tool("list-pages", {"environment-name": "local", "app-code": "UsrTest"})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "invalid-request")
+        self.assertIn("Unknown parameter 'app-code'", result["raw"])
+        fake_client.call_tool.assert_not_called()
+
+    def test_call_mcp_tool_returns_tool_contract_unavailable(self):
+        with patch("runtime.scripts.mcp_client._get_tool_contract_index", side_effect=RuntimeError("metadata unavailable")):
+            result = call_mcp_tool("sync-schemas", {"environment-name": "local"})
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "tool-contract-unavailable")
+        self.assertIn("metadata unavailable", result["raw"])
+
+    def test_list_mcp_resources_uses_shared_client(self):
+        fake_client = SimpleNamespace(list_resources=Mock(return_value={"success": True, "data": {"resources": []}, "raw": "{}"}))
+        with patch("runtime.scripts.mcp_client._get_shared_client", return_value=fake_client):
+            result = list_mcp_resources(timeout=20)
+        self.assertTrue(result["success"])
+        fake_client.list_resources.assert_called_once_with(20)
+
+    def test_read_mcp_resource_rejects_missing_uri(self):
+        result = read_mcp_resource("")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"]["error"]["code"], "invalid-request")
+        self.assertIn("Missing required parameter 'uri'", result["raw"])
+
+    def test_read_mcp_resource_uses_shared_client(self):
+        fake_client = SimpleNamespace(read_resource=Mock(return_value={"success": True, "data": {"contents": []}, "raw": "{}"}))
+        with patch("runtime.scripts.mcp_client._get_shared_client", return_value=fake_client):
+            result = read_mcp_resource("docs://mcp/guides/app-modeling", timeout=20)
+        self.assertTrue(result["success"])
+        fake_client.read_resource.assert_called_once_with("docs://mcp/guides/app-modeling", 20)
+
+
+class ParamValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.contract_index = build_contract_index(
+            APPLICATION_CREATE_CONTRACT,
+            PAGE_LIST_CONTRACT,
+            PAGE_SYNC_CONTRACT,
+            SCHEMA_SYNC_CONTRACT,
+            CREATE_DATA_BINDING_CONTRACT,
+        )
+
+    def test_validate_params_requires_live_contract_to_enforce_rules(self):
+        self.assertEqual(_validate_params("sync-schemas", {"environmentName": "local"}), [])
+
+    def test_application_create_rejects_aliases_and_missing_required_fields(self):
+        errors = _validate_params("create-app", {
+            "environment-name": "local",
+            "app-code": "UsrTest",
+            "app-name": "Test",
+            "template-code": "AppFreedomUI",
+            "icon-background": "#fff",
+        }, self.contract_index)
+        self.assertTrue(any("app-code" in error for error in errors))
+        self.assertTrue(any("app-name" in error for error in errors))
+        self.assertTrue(any("Missing required parameter 'code'" in error for error in errors))
+        self.assertTrue(any("Missing required parameter 'name'" in error for error in errors))
+
+    def test_page_list_requires_connection_by_any_of_contract(self):
+        errors = _validate_params("list-pages", {}, self.contract_index)
+        self.assertTrue(any("connection parameters" in error for error in errors))
+        self.assertFalse(any("package-name" in error for error in errors))
+
+    def test_page_list_accepts_search_only_when_connection_is_present(self):
+        errors = _validate_params("list-pages", {"environment-name": "local", "search-pattern": "UsrTodo*"}, self.contract_index)
+        self.assertEqual(errors, [])
+
+    def test_page_list_rejects_package_name_and_code_together(self):
+        errors = _validate_params(
+            "list-pages",
+            {"environment-name": "local", "package-name": "UsrTodo", "code": "UsrTodo"},
+            self.contract_index,
+        )
+        self.assertTrue(any("package-name or code" in error for error in errors))
+
+    def test_validation_uses_server_declared_types(self):
+        errors = _validate_params("sync-pages", {
+            "environment-name": "local",
+            "pages": {"schema-name": "UsrPage"},
+            "validate": "true",
+        }, self.contract_index)
+        self.assertTrue(any("pages" in error and "array" in error for error in errors))
+        self.assertTrue(any("validate" in error and "boolean" in error for error in errors))
+
+    def test_nested_schema_sync_shape_rejects_legacy_operation_field(self):
+        errors = _validate_params("sync-schemas", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "operations": [
+                {
+                    "operation": "create-lookup",
+                    "schema-name": "UsrVehicleStatus",
+                }
+            ],
+        }, self.contract_index)
+        self.assertTrue(any("operations[0].type is required" in error for error in errors))
+        self.assertTrue(any("legacy field 'operation'" in error for error in errors))
+
+    def test_nested_schema_sync_shape_rejects_invalid_operation_type(self):
+        errors = _validate_params("sync-schemas", {
+            "environment-name": "local",
+            "package-name": "Pkg",
+            "operations": [
+                {
+                    "type": "seed-data",
+                    "schema-name": "UsrVehicleStatus",
+                }
+            ],
+        }, self.contract_index)
+        self.assertTrue(any("operations[0].type must be one of" in error for error in errors))
+
+    def test_metadata_alias_validation_still_rejects_top_level_aliases(self):
+        errors = _validate_params("sync-schemas", {
+            "environmentName": "local",
+            "packageName": "Pkg",
+            "operations": [],
+        }, self.contract_index)
+        self.assertTrue(any("environmentName" in error for error in errors))
+        self.assertTrue(any("packageName" in error for error in errors))
+
+    def test_unknown_parameter_rejection_uses_normalized_contract_fields(self):
+        errors = _validate_params("list-pages", {"environment-name": "local", "app-code": "UsrTodo"}, self.contract_index)
+        self.assertTrue(any("Unknown parameter 'app-code'" in error for error in errors))
+
+
+if __name__ == "__main__":
+    unittest.main()

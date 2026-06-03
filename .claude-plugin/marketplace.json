@@ -1,0 +1,21 @@
+{
+  "name": "creatio",
+  "version": "1.0.0",
+  "description": "Creatio plugin marketplace.",
+  "owner": {
+    "name": "Creatio"
+  },
+  "plugins": [
+    {
+      "name": "creatio-ai-app-development-toolkit",
+      "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
+        "ref": "release"
+      },
+      "category": "development",
+      "version": "0.1.4"
+    }
+  ]
+}
