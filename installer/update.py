@@ -60,6 +60,12 @@ import version_check  # noqa: E402
 # Claude is intentionally absent: it self-updates via the marketplace.
 UPDATEABLE_TARGETS: tuple[str, ...] = ("codex", "cursor", "copilot")
 
+# Upper bound for a single delegated install.py run. The per-agent install
+# does its own network I/O (codex/copilot register a remote marketplace), so
+# without a cap a stalled socket or an interactive prompt would hang the whole
+# updater with no exit code. 10 minutes is generous for a plugin install.
+_INSTALL_TIMEOUT_SECONDS = 600
+
 
 # -------------------------------------------------------------------------
 # Detection
@@ -80,6 +86,21 @@ def detect_updateable_target_ids(home: Path | None = None) -> list[str]:
 # -------------------------------------------------------------------------
 # Source acquisition (download + extract, or local --source)
 # -------------------------------------------------------------------------
+
+
+def _safe_extractall(archive: zipfile.ZipFile, dest: Path) -> None:
+    """Extract *archive* into *dest*, rejecting path-traversal members.
+
+    `ZipFile.extractall` has no zip-slip guard (and, unlike tarfile, no
+    `filter=` option), so a crafted member like `../evil` could write outside
+    *dest*. The release source is trusted, but this is cheap defense in depth.
+    """
+    dest_root = dest.resolve()
+    for member in archive.namelist():
+        target = (dest_root / member).resolve()
+        if target != dest_root and dest_root not in target.parents:
+            raise RuntimeError(f"Unsafe path in release zip: {member!r}")
+    archive.extractall(dest)
 
 
 def _find_extracted_root(base: Path) -> Path | None:
@@ -129,7 +150,7 @@ def acquire_source(
     extract_dir = work_dir / "extracted"
     try:
         with zipfile.ZipFile(zip_path) as archive:
-            archive.extractall(extract_dir)
+            _safe_extractall(archive, extract_dir)
     except (zipfile.BadZipFile, OSError) as error:
         raise RuntimeError(f"Downloaded release zip is not readable: {error}") from error
 
@@ -165,7 +186,27 @@ def update_targets(
         if selected and target_id != selected:
             continue
         command = [sys.executable, str(install_script), "--target", target_id]
-        result = subprocess.run(command, text=True, capture_output=True)
+        try:
+            # stdin=DEVNULL so a delegated install can never block on an
+            # interactive prompt; timeout so a network stall can't hang forever.
+            result = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                timeout=_INSTALL_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            failed.append(target_id)
+            if not silent:
+                detail = (error.stderr or error.stdout or "").strip()
+                suffix = f": {detail}" if detail else ""
+                print(
+                    f"ERROR updating {target_id}: timed out after "
+                    f"{_INSTALL_TIMEOUT_SECONDS}s{suffix}",
+                    file=sys.stderr,
+                )
+            continue
         if result.returncode != 0:
             failed.append(target_id)
             if not silent:
@@ -222,8 +263,6 @@ def main(argv: list[str] | None = None) -> int:
             print("No updatable agents detected (Codex, Cursor, GitHub Copilot CLI).")
         return 0
 
-    before = version_check.installed_plugin_version(_REPO_ROOT)
-
     # Step out of any plugin directory before updating: delegating to install.py
     # rewrites the plugin tree this script may live in, which fails on Windows
     # if the process's working directory is inside the tree being replaced.
@@ -252,8 +291,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.silent:
         if updated:
-            delta = f"v{before} -> v{version}" if before else f"v{version}"
-            print(f"\nUpdated {len(updated)} agent(s) ({delta}): {', '.join(updated)}")
+            # Report the version we updated *to*. We deliberately do not print a
+            # "from" version: the only version this script can read locally is
+            # its own source tree's, which is not the installed agent's version
+            # (it differs when run from a fresh clone), so a "vX -> vY" delta
+            # would be misleading.
+            print(
+                f"\nUpdated {len(updated)} agent(s) to v{version}: "
+                f"{', '.join(updated)}"
+            )
             print("Start a new agent session to load the updated version.")
         if failed:
             print(f"Failed  {len(failed)} agent(s): {', '.join(failed)}", file=sys.stderr)

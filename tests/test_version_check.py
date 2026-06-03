@@ -107,47 +107,45 @@ class DownloadLatestReleaseZipTests(unittest.TestCase):
             },
             "gho_TOKEN",
         )
-        captured: dict = {}
-
-        def fake_urlopen(req, timeout=None):
-            captured["headers"] = dict(req.headers)
-            captured["url"] = req.full_url
-            return _Resp(b"PKFAKEZIPBYTES")
-
         dest = self.tmp / "r.zip"
         with (
             patch.object(self.vc, "_fetch_release_json", return_value=release),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+            patch.object(self.vc, "_open_asset_stream", return_value=_Resp(b"PKFAKEZIPBYTES")),
         ):
             version = self.vc.download_latest_release_zip(dest)
 
         self.assertEqual(version, "0.2.0")
         self.assertEqual(dest.read_bytes(), b"PKFAKEZIPBYTES")
-        self.assertEqual(captured["headers"].get("Accept"), "application/octet-stream")
-        # TEMPORARY-PRIVATE-REPO-AUTH: token from the probe is forwarded here.
-        self.assertEqual(captured["headers"].get("Authorization"), "Bearer gho_TOKEN")
 
-    def test_no_token_header_for_public_asset(self):
+    def test_selects_canonical_zip_by_name(self):
+        # An unrelated zip listed first must not be picked over the canonical
+        # `creatio-ai-app-development-toolkit-<version>.zip` asset.
         release = (
             {
                 "tag_name": "0.2.0",
-                "assets": [{"name": "x.zip", "url": "https://api.github.com/a"}],
+                "assets": [
+                    {"name": "unrelated.zip", "url": "https://api.github.com/wrong"},
+                    {
+                        "name": "creatio-ai-app-development-toolkit-0.2.0.zip",
+                        "url": "https://api.github.com/right",
+                    },
+                ],
             },
             None,
         )
         captured: dict = {}
 
-        def fake_urlopen(req, timeout=None):
-            captured["headers"] = dict(req.headers)
+        def fake_open(asset_url, token):
+            captured["url"] = asset_url
             return _Resp(b"PK")
 
         with (
             patch.object(self.vc, "_fetch_release_json", return_value=release),
-            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+            patch.object(self.vc, "_open_asset_stream", side_effect=fake_open),
         ):
             self.vc.download_latest_release_zip(self.tmp / "r.zip")
 
-        self.assertNotIn("Authorization", captured["headers"])
+        self.assertEqual(captured["url"], "https://api.github.com/right")
 
     def test_network_error_returns_none(self):
         release = (
@@ -156,9 +154,78 @@ class DownloadLatestReleaseZipTests(unittest.TestCase):
         )
         with (
             patch.object(self.vc, "_fetch_release_json", return_value=release),
-            patch("urllib.request.urlopen", side_effect=OSError("boom")),
+            patch.object(self.vc, "_open_asset_stream", side_effect=OSError("boom")),
         ):
             self.assertIsNone(self.vc.download_latest_release_zip(self.tmp / "r.zip"))
+
+
+# ---------------------------------------------------------------------------
+# _open_asset_stream — token must never leak across a redirect
+# ---------------------------------------------------------------------------
+
+
+class OpenAssetStreamTests(unittest.TestCase):
+    def setUp(self):
+        self.vc = load_version_check()
+
+    def test_sends_bearer_on_initial_request(self):
+        captured: dict = {}
+
+        def fake_open(req, timeout=None):
+            captured["headers"] = dict(req.headers)
+            captured["url"] = req.full_url
+            return _Resp(b"PK")
+
+        with patch("urllib.request.OpenerDirector.open", side_effect=fake_open):
+            self.vc._open_asset_stream("https://api.github.com/asset", "gho_TOKEN")
+
+        # TEMPORARY-PRIVATE-REPO-AUTH: token authenticates the API request.
+        self.assertEqual(captured["headers"].get("Authorization"), "Bearer gho_TOKEN")
+        self.assertEqual(captured["headers"].get("Accept"), "application/octet-stream")
+
+    def test_no_authorization_when_no_token(self):
+        captured: dict = {}
+
+        def fake_open(req, timeout=None):
+            captured["headers"] = dict(req.headers)
+            return _Resp(b"PK")
+
+        with patch("urllib.request.OpenerDirector.open", side_effect=fake_open):
+            self.vc._open_asset_stream("https://api.github.com/asset", None)
+
+        self.assertNotIn("Authorization", captured["headers"])
+
+    def test_token_not_replayed_on_cross_host_redirect(self):
+        import urllib.error
+        from email.message import Message
+
+        redirect_headers = Message()
+        redirect_headers["Location"] = "https://objects.githubusercontent.com/blob/123"
+
+        def raising_open(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 302, "Found", redirect_headers, None
+            )
+
+        follow: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            follow["headers"] = dict(req.headers)
+            follow["url"] = req.full_url
+            return _Resp(b"PKREDIRECTED")
+
+        with (
+            patch("urllib.request.OpenerDirector.open", side_effect=raising_open),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            resp = self.vc._open_asset_stream(
+                "https://api.github.com/repos/x/releases/assets/9", "gho_TOKEN"
+            )
+
+        # Followed to the CDN host WITHOUT replaying the bearer token.
+        self.assertEqual(follow["url"], "https://objects.githubusercontent.com/blob/123")
+        self.assertNotIn("Authorization", follow["headers"])
+        self.assertEqual(resp.read(), b"PKREDIRECTED")
 
 
 # ---------------------------------------------------------------------------

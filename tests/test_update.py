@@ -122,6 +122,24 @@ class AcquireSourceTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.upd.acquire_source(work)
 
+    def test_zip_slip_member_rejected(self):
+        work = self.tmp / "work"
+        work.mkdir()
+
+        def fake_download(dest):
+            with zipfile.ZipFile(dest, "w") as archive:
+                # Path-traversal member that would escape the extraction root.
+                archive.writestr("../evil.txt", "pwned")
+            return "0.2.0"
+
+        with patch.object(
+            self.upd.version_check, "download_latest_release_zip", side_effect=fake_download
+        ):
+            with self.assertRaises(RuntimeError):
+                self.upd.acquire_source(work)
+        # Nothing escaped the work dir.
+        self.assertFalse((self.tmp / "evil.txt").exists())
+
 
 # ---------------------------------------------------------------------------
 # update.py — delegation
@@ -183,6 +201,32 @@ class UpdateTargetsTests(unittest.TestCase):
         self.assertEqual(updated, ["copilot"])
         self.assertEqual(failed, ["codex"])
 
+    def test_passes_timeout_and_blocks_stdin(self):
+        seen: dict = {}
+
+        def record(cmd, **kw):
+            seen.update(kw)
+            return self._ok()
+
+        with patch.object(self.upd.subprocess, "run", side_effect=record):
+            self.upd.update_targets(self.fresh_root, ["codex"], silent=True)
+
+        self.assertEqual(seen.get("timeout"), self.upd._INSTALL_TIMEOUT_SECONDS)
+        self.assertEqual(seen.get("stdin"), subprocess.DEVNULL)
+
+    def test_timeout_recorded_as_failure(self):
+        def side(cmd, **kw):
+            if "codex" in cmd:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=kw.get("timeout"))
+            return self._ok()
+
+        with patch.object(self.upd.subprocess, "run", side_effect=side):
+            updated, failed = self.upd.update_targets(
+                self.fresh_root, ["codex", "copilot"], silent=True
+            )
+        self.assertEqual(updated, ["copilot"])
+        self.assertEqual(failed, ["codex"])
+
 
 # ---------------------------------------------------------------------------
 # update.py — main orchestration
@@ -214,10 +258,9 @@ class UpdateMainTests(unittest.TestCase):
         acquire.assert_not_called()
         self.assertEqual(result, 0)
 
-    def test_happy_path_reports_delta_and_chdirs(self):
+    def test_happy_path_reports_target_version_and_chdirs(self):
         with (
             patch.object(self.upd, "detect_updateable_target_ids", return_value=["codex"]),
-            patch.object(self.upd.version_check, "installed_plugin_version", return_value="0.1.3"),
             patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "0.2.0")),
             patch.object(self.upd, "update_targets", return_value=(["codex"], [])),
             patch.object(self.upd.os, "chdir") as chdir,
@@ -228,8 +271,9 @@ class UpdateMainTests(unittest.TestCase):
         self.assertEqual(result, 0)
         chdir.assert_called_once()
         printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
-        self.assertIn("0.1.3", printed)
-        self.assertIn("0.2.0", printed)
+        # Reports the version updated *to*; no misleading "from" version.
+        self.assertIn("to v0.2.0", printed)
+        self.assertNotIn("->", printed)
 
     def test_acquire_failure_returns_one(self):
         with (

@@ -110,27 +110,62 @@ def download_latest_release_zip(dest_path: Path) -> str | None:
     ]
     if not zip_assets:
         return None
-    asset_url = zip_assets[0]["url"]
+    # Prefer the canonically named asset over GitHub's (unspecified) asset
+    # ordering, so an unrelated `.zip` uploaded to a future release can't be
+    # picked up by accident. Fall back to the first zip if the name differs.
+    expected_name = f"creatio-ai-app-development-toolkit-{version}.zip"
+    preferred = [asset for asset in zip_assets if asset["name"] == expected_name]
+    asset_url = (preferred or zip_assets)[0]["url"]
 
     try:
-        import urllib.error
-        import urllib.request
-
-        headers = {
-            "User-Agent": "caadt-version-check/1",
-            "Accept": "application/octet-stream",
-        }
-        # TEMPORARY-PRIVATE-REPO-AUTH: forward the token to the asset download
-        # too (private-repo assets need auth). Remove once the repo is public.
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(asset_url, headers=headers)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(req, timeout=60) as resp, dest_path.open("wb") as out:
+        with _open_asset_stream(asset_url, token) as resp, dest_path.open("wb") as out:
             shutil.copyfileobj(resp, out)
     except Exception:  # noqa: BLE001
         return None
     return version
+
+
+def _open_asset_stream(asset_url: str, token: str | None):
+    """Open a readable stream for a release asset without leaking the token.
+
+    The GitHub asset API answers `Accept: application/octet-stream` with a 302
+    to a presigned CDN URL on a *different* host. CPython's stdlib forwards all
+    non-content headers across hosts on redirect (bpo-33661, still open), so an
+    auto-followed redirect would replay the bearer token to the asset CDN
+    (`objects.githubusercontent.com` / S3). We disable auto-follow and re-issue
+    the request to the redirect target WITHOUT `Authorization` — the CDN
+    authenticates via the query string and ignores the header anyway.
+    """
+    import urllib.error
+    import urllib.request
+
+    class _NoFollowRedirect(urllib.request.HTTPRedirectHandler):
+        # Returning None surfaces the 30x as an HTTPError instead of following.
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    base_headers = {
+        "User-Agent": "caadt-version-check/1",
+        "Accept": "application/octet-stream",
+    }
+    headers = dict(base_headers)
+    # TEMPORARY-PRIVATE-REPO-AUTH: authenticate the initial API request only.
+    # Remove the token plumbing once the repo is public.
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    opener = urllib.request.build_opener(_NoFollowRedirect)
+    req = urllib.request.Request(asset_url, headers=headers)
+    try:
+        return opener.open(req, timeout=60)
+    except urllib.error.HTTPError as err:
+        location = err.headers.get("Location") if err.headers else None
+        if err.code in (301, 302, 303, 307, 308) and location:
+            # Follow once, WITHOUT Authorization, to the redirect target.
+            follow = urllib.request.Request(location, headers=dict(base_headers))
+            return urllib.request.urlopen(follow, timeout=60)
+        raise
 
 
 def installed_plugin_version(plugin_root: Path) -> str | None:
