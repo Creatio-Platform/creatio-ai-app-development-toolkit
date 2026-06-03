@@ -13,13 +13,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions: read-all
+permissions:
+  contents: read
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
+      # Read the repository contents (checkout + Scorecard analysis).
+      contents: read
       # Needed to upload the results to the code-scanning dashboard.
       security-events: write
       # Needed to publish results and get a badge (OIDC token).
