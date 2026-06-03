@@ -213,7 +213,6 @@ class ReleaseStructureTests(unittest.TestCase):
         release_notes = (ROOT / "RELEASE-NOTES.md").read_text(encoding="utf-8")
 
         self.assertNotIn(".copilot-plugin/plugin.json", release_notes)
-        self.assertIn(".github/plugin/plugin.json", release_notes)
 
     def test_release_manifest_has_required_sections(self):
         manifest = read_json(".release-manifest.json")

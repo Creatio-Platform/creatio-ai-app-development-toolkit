@@ -25,18 +25,21 @@ python installer/install.py
 
 To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
 
-Tech users who already have Claude Code or GitHub Copilot CLI in PATH can register the remote
-marketplace directly (Codex stays on the installer-managed local install — see
-[docs/install.md](docs/install.md)):
+Tech users who already have Claude Code, Codex CLI, or GitHub Copilot CLI in PATH can register the
+remote marketplace directly:
 
 ```bash
 claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
+codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
+codex plugin add creatio-ai-app-development-toolkit@creatio
 copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
 
-See [docs/install.md](docs/install.md) for release zip installation and agent-specific install details.
+Codex additionally needs the `clio` MCP server registered in `~/.codex/config.toml` — run
+`python installer/install.py --target codex` once to add it. See [docs/install.md](docs/install.md)
+for release-zip installation and agent-specific install details.
 
 ## Updates
 

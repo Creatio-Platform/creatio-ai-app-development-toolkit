@@ -19,6 +19,7 @@ Included release files (full list lives in `.release-manifest.json`):
 - `.mcp.json` for global clio MCP server configuration.
 - `rules/creatio-app-orchestrator.mdc` for Cursor plugin rule support.
 - `AGENTS.md`, `context/`, `runbooks/`, `runtime/`, and `skills/` for the installed CAADT orchestration runtime.
+- `LICENSE`, `README.md`, and `SECURITY.md` for license compliance, in-zip product overview, and the vulnerability-reporting channel.
 - `installer/` so the extracted release zip can install itself.
 
 Not included in the release asset:

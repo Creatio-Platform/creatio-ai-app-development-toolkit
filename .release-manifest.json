@@ -1,6 +1,9 @@
 {
   "plugin_runtime": [
     "AGENTS.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
     ".mcp.json",
     ".agents",
     ".claude-plugin",
