@@ -13,11 +13,46 @@ import json
 import shutil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 _GITHUB_API = (
     "https://api.github.com/repos/Creatio-Platform/"
     "creatio-ai-app-development-toolkit/releases/latest"
 )
+
+_GITHUB_API_HOST = "api.github.com"
+
+
+def _is_https_url(url: str, *, allowed_host: str | None = None) -> bool:
+    """Return True only for an ``https://`` URL on an optional allowed host.
+
+    Rejects any other scheme (notably ``file://``, ``ftp://``, ``data:``) so an
+    attacker-controlled URL handed to ``urllib.request.urlopen`` cannot read
+    local files or reach unexpected schemes.
+    """
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    if allowed_host is not None and parts.hostname.lower() != allowed_host:
+        return False
+    return True
+
+
+def _https_opener():
+    """Build a urllib opener that can *only* speak HTTPS.
+
+    Unlike the module-level ``urllib.request.urlopen`` (which wires up handlers
+    for ``file://``, ``ftp://`` and friends), this director registers only the
+    HTTPS and redirect handlers. Any non-HTTPS URL — including a ``file://`` URL
+    smuggled in via an API response or a redirect to a downgraded ``http://``
+    target — has no handler and raises instead of being fetched.
+    """
+    import urllib.request
+
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPSHandler())
+    opener.add_handler(urllib.request.HTTPRedirectHandler())
+    return opener
 
 
 def _fetch_release_json() -> dict[str, Any] | None:
@@ -29,9 +64,11 @@ def _fetch_release_json() -> dict[str, Any] | None:
     try:
         import urllib.request
 
+        if not _is_https_url(_GITHUB_API, allowed_host=_GITHUB_API_HOST):
+            return None
         headers = {"User-Agent": "caadt-version-check/1"}
         req = urllib.request.Request(_GITHUB_API, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _https_opener().open(req, timeout=10) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             if isinstance(body, dict) and body.get("tag_name"):
                 return body
@@ -96,12 +133,14 @@ def _open_asset_stream(asset_url: str):
     """
     import urllib.request
 
+    if not _is_https_url(asset_url):
+        raise ValueError("Refusing to open non-HTTPS release asset URL")
     headers = {
         "User-Agent": "caadt-version-check/1",
         "Accept": "application/octet-stream",
     }
     req = urllib.request.Request(asset_url, headers=headers)
-    return urllib.request.urlopen(req, timeout=60)
+    return _https_opener().open(req, timeout=60)
 
 
 def installed_plugin_version(plugin_root: Path) -> str | None:

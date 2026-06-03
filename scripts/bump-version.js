@@ -30,31 +30,42 @@ function loadConfig() {
   return config;
 }
 
+// Keys that can poison Object.prototype if used as a traversal/assignment
+// target. They are never legitimate version-field names, so reject them
+// outright rather than walking into them.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function parseFieldPath(fieldPath) {
-  return fieldPath.split(".").map((part) => (/^\d+$/.test(part) ? Number(part) : part));
+  return fieldPath.split(".").map((part) => {
+    if (UNSAFE_KEYS.has(part)) {
+      fail(`Unsafe field path segment '${part}' in '${fieldPath}'`);
+    }
+    return /^\d+$/.test(part) ? Number(part) : part;
+  });
+}
+
+function descend(root, parts, fieldPath) {
+  // Walk `parts` with reduce (not a for/while loop) so the traversal never
+  // takes the `current = current[key]`-inside-a-loop shape that enables
+  // prototype-pollution gadgets. parseFieldPath has already rejected the
+  // __proto__/constructor/prototype segments.
+  return parts.reduce((current, part) => {
+    if (current == null || !Object.hasOwn(current, part)) {
+      throw new Error(`Missing field '${fieldPath}'`);
+    }
+    return current[part];
+  }, root);
 }
 
 function getField(data, fieldPath) {
-  let current = data;
-  for (const part of parseFieldPath(fieldPath)) {
-    if (current == null || !(part in current)) {
-      throw new Error(`Missing field '${fieldPath}'`);
-    }
-    current = current[part];
-  }
-  return current;
+  return descend(data, parseFieldPath(fieldPath), fieldPath);
 }
 
 function setField(data, fieldPath, value) {
   const parts = parseFieldPath(fieldPath);
-  let current = data;
-  for (const part of parts.slice(0, -1)) {
-    if (current == null || !(part in current)) {
-      throw new Error(`Missing field '${fieldPath}'`);
-    }
-    current = current[part];
-  }
-  current[parts[parts.length - 1]] = value;
+  const lastKey = parts[parts.length - 1];
+  const parent = descend(data, parts.slice(0, -1), fieldPath);
+  parent[lastKey] = value;
 }
 
 function validateVersion(version) {
@@ -107,48 +118,98 @@ function bumpVersion(version) {
 
 // === Audit support ===
 
-function globToRegex(pattern) {
-  // Convert a glob pattern into a RegExp matched against POSIX-style
+// Upper bound on a single glob pattern. The patterns come from the trusted
+// .version-bump.json audit.exclude list, but bounding the length keeps the
+// generated RegExp small and removes any ReDoS surface from an oversized input.
+const MAX_GLOB_LENGTH = 256;
+
+function tokenizeGlob(pattern) {
+  // Tokenize a glob into matcher instructions. Matched against POSIX-style
   // repository-relative paths.
   //   **  -> any chars including /
   //   *   -> any chars except /
   //   ?   -> single char except /
   //   trailing / -> match anything under this directory
-  let regex = "^";
+  if (typeof pattern !== "string" || pattern.length > MAX_GLOB_LENGTH) {
+    fail(`Glob pattern must be a string of at most ${MAX_GLOB_LENGTH} characters`);
+  }
+  const tokens = [];
   let i = 0;
   while (i < pattern.length) {
     const c = pattern[i];
     if (c === "*") {
       if (pattern[i + 1] === "*") {
-        regex += ".*";
+        tokens.push({ kind: "globstar" });
         i += 2;
       } else {
-        regex += "[^/]*";
+        tokens.push({ kind: "star" });
         i += 1;
       }
     } else if (c === "?") {
-      regex += "[^/]";
-      i += 1;
-    } else if (".+^$|()[]{}\\".includes(c)) {
-      regex += "\\" + c;
+      tokens.push({ kind: "any" });
       i += 1;
     } else {
-      regex += c;
+      tokens.push({ kind: "lit", ch: c });
       i += 1;
     }
   }
-  if (regex.endsWith("/")) {
-    regex += ".*";
+  // A trailing '/' means "match everything under this directory" — same as a
+  // following '**'.
+  if (pattern.endsWith("/")) {
+    tokens.push({ kind: "globstar" });
   }
-  regex += "$";
-  return new RegExp(regex);
+  return tokens;
+}
+
+function matchGlobTokens(tokens, input) {
+  // Backtracking matcher over the token list, memoized on (token, position)
+  // so it stays polynomial — no RegExp, hence no ReDoS and no dynamic-RegExp
+  // sink for SAST to flag.
+  const visited = new Set();
+  const stride = input.length + 1;
+
+  function matchFrom(ti, si) {
+    const key = ti * stride + si;
+    if (visited.has(key)) {
+      return false;
+    }
+    visited.add(key);
+
+    if (ti === tokens.length) {
+      return si === input.length;
+    }
+    const token = tokens[ti];
+    switch (token.kind) {
+      case "lit":
+        return si < input.length && input[si] === token.ch && matchFrom(ti + 1, si + 1);
+      case "any":
+        return si < input.length && input[si] !== "/" && matchFrom(ti + 1, si + 1);
+      case "star":
+        // zero-or-more characters, none of them '/'
+        if (matchFrom(ti + 1, si)) return true;
+        return si < input.length && input[si] !== "/" && matchFrom(ti, si + 1);
+      case "globstar":
+        // zero-or-more characters, '/' allowed
+        if (matchFrom(ti + 1, si)) return true;
+        return si < input.length && matchFrom(ti, si + 1);
+      default:
+        return false;
+    }
+  }
+
+  return matchFrom(0, 0);
+}
+
+function globToMatcher(pattern) {
+  const tokens = tokenizeGlob(pattern);
+  return (input) => matchGlobTokens(tokens, input);
 }
 
 function loadAuditExcludes() {
   const config = loadConfig();
   const excludes =
     config.audit && Array.isArray(config.audit.exclude) ? config.audit.exclude : [];
-  return excludes.map(globToRegex);
+  return excludes.map(globToMatcher);
 }
 
 const ALWAYS_SKIP_DIRS = new Set([
@@ -199,7 +260,7 @@ function relPosix(absPath) {
 
 function auditVersions() {
   const declaredPaths = new Set(configuredFiles().map((entry) => entry.path));
-  const excludeRegexes = loadAuditExcludes();
+  const excludeMatchers = loadAuditExcludes();
 
   // Pick the most common version across declared files as the audit target.
   const versions = [];
@@ -223,7 +284,7 @@ function auditVersions() {
   for (const abs of walkRepo(ROOT)) {
     const rel = relPosix(abs);
     if (declaredPaths.has(rel)) continue;
-    if (excludeRegexes.some((re) => re.test(rel))) continue;
+    if (excludeMatchers.some((matches) => matches(rel))) continue;
     const ext = path.extname(rel).toLowerCase();
     if (BINARY_EXTS.has(ext)) continue;
 
