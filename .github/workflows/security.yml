@@ -1,0 +1,88 @@
+name: Security checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly full scan (Mondays 06:00 UTC) to catch newly-disclosed issues
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bandit:
+    name: SAST - Bandit (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Bandit
+        run: pip install bandit
+      - name: Run Bandit
+        # Fail on medium+ severity, medium+ confidence findings.
+        run: bandit -r . -x ./tests,./.git -ll -ii
+
+  semgrep:
+    name: SAST - Semgrep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Semgrep
+        run: pip install semgrep
+      - name: Run Semgrep
+        # --error makes the job fail when findings are reported.
+        run: semgrep scan --config p/default --config p/secrets --error --metrics off
+
+  gitleaks:
+    name: Secrets - gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION=8.21.2
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Verify gitleaks
+        run: gitleaks version
+      - name: Scan for secrets
+        # Scans the working tree; exits non-zero when leaks are found.
+        run: gitleaks dir . --redact -v
+
+  pip-audit:
+    name: SCA - pip-audit (Python deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Detect dependency manifest
+        id: deps
+        shell: bash
+        run: |
+          if ls requirements*.txt pyproject.toml setup.cfg setup.py >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No Python dependency manifest found - skipping pip-audit."
+          fi
+      - name: Install pip-audit
+        if: steps.deps.outputs.present == 'true'
+        run: pip install pip-audit
+      - name: Run pip-audit
+        if: steps.deps.outputs.present == 'true'
+        run: pip-audit
