@@ -20,60 +20,21 @@ _GITHUB_API = (
 )
 
 
-# >>> TEMPORARY-PRIVATE-REPO-AUTH (revert this whole block once the repo is public) >>>
-# While the repo is private the GitHub release API returns 404 to
-# unauthenticated callers. Source a token from the gh CLI so the updater can
-# read the release JSON and download the asset. On a public repo this is a
-# no-op: the unauthenticated request already works and the token just raises
-# the rate limit. Delete this helper, drop the `token` plumbing in
-# `_fetch_release_json` / `download_latest_release_zip`, and remove the
-# matching tests to revert.
-def _gh_auth_token() -> str | None:
-    """Return a github.com token from the gh CLI, or None.
+def _fetch_release_json() -> dict[str, Any] | None:
+    """Fetch the `releases/latest` JSON from the public GitHub repo.
 
-    Fails silently so a missing/unconfigured gh CLI never blocks the call.
+    Returns the release dict on success, or None on any failure. Callers must
+    handle None — a network/API failure must never break the update flow.
     """
     try:
-        import subprocess
-
-        result = subprocess.run(
-            ["gh", "auth", "token", "--hostname", "github.com"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            token = result.stdout.strip()
-            return token or None
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-# <<< TEMPORARY-PRIVATE-REPO-AUTH <<<
-
-
-def _fetch_release_json() -> tuple[dict[str, Any], str | None] | None:
-    """Fetch the `releases/latest` JSON from the GitHub repo.
-
-    Returns `(release_json, token_used)` on success, or None on any failure.
-    `token_used` is the bearer token that authorized the call (forwarded to the
-    asset download from the same host), or None when the call succeeded
-    unauthenticated. Callers must handle None — a network/API failure must
-    never break the update flow.
-    """
-    try:
-        import urllib.error
         import urllib.request
 
-        # TEMPORARY-PRIVATE-REPO-AUTH: token is None once the repo is public.
-        token = _gh_auth_token()
         headers = {"User-Agent": "caadt-version-check/1"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(_GITHUB_API, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             if isinstance(body, dict) and body.get("tag_name"):
-                return body, token
+                return body
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -87,10 +48,9 @@ def download_latest_release_zip(dest_path: Path) -> str | None:
     The caller must handle None gracefully — a failed download must never crash
     the update command.
     """
-    result = _fetch_release_json()
-    if result is None:
+    release = _fetch_release_json()
+    if release is None:
         return None
-    release, token = result
 
     tag = release.get("tag_name", "")
     version = tag.lstrip("v") if isinstance(tag, str) and tag else None
@@ -119,53 +79,29 @@ def download_latest_release_zip(dest_path: Path) -> str | None:
 
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        with _open_asset_stream(asset_url, token) as resp, dest_path.open("wb") as out:
+        with _open_asset_stream(asset_url) as resp, dest_path.open("wb") as out:
             shutil.copyfileobj(resp, out)
     except Exception:  # noqa: BLE001
         return None
     return version
 
 
-def _open_asset_stream(asset_url: str, token: str | None):
-    """Open a readable stream for a release asset without leaking the token.
+def _open_asset_stream(asset_url: str):
+    """Open a readable stream for a release asset.
 
     The GitHub asset API answers `Accept: application/octet-stream` with a 302
-    to a presigned CDN URL on a *different* host. CPython's stdlib forwards all
-    non-content headers across hosts on redirect (bpo-33661, still open), so an
-    auto-followed redirect would replay the bearer token to the asset CDN
-    (`objects.githubusercontent.com` / S3). We disable auto-follow and re-issue
-    the request to the redirect target WITHOUT `Authorization` — the CDN
-    authenticates via the query string and ignores the header anyway.
+    to a presigned CDN URL on a different host; urllib follows it automatically.
+    With the repo public there is no token to protect, so a plain `urlopen`
+    suffices.
     """
-    import urllib.error
     import urllib.request
 
-    class _NoFollowRedirect(urllib.request.HTTPRedirectHandler):
-        # Returning None surfaces the 30x as an HTTPError instead of following.
-        def redirect_request(self, *args, **kwargs):
-            return None
-
-    base_headers = {
+    headers = {
         "User-Agent": "caadt-version-check/1",
         "Accept": "application/octet-stream",
     }
-    headers = dict(base_headers)
-    # TEMPORARY-PRIVATE-REPO-AUTH: authenticate the initial API request only.
-    # Remove the token plumbing once the repo is public.
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    opener = urllib.request.build_opener(_NoFollowRedirect)
     req = urllib.request.Request(asset_url, headers=headers)
-    try:
-        return opener.open(req, timeout=60)
-    except urllib.error.HTTPError as err:
-        location = err.headers.get("Location") if err.headers else None
-        if err.code in (301, 302, 303, 307, 308) and location:
-            # Follow once, WITHOUT Authorization, to the redirect target.
-            follow = urllib.request.Request(location, headers=dict(base_headers))
-            return urllib.request.urlopen(follow, timeout=60)
-        raise
+    return urllib.request.urlopen(req, timeout=60)
 
 
 def installed_plugin_version(plugin_root: Path) -> str | None:
