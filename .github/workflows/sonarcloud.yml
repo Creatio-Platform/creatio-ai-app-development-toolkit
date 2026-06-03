@@ -50,7 +50,9 @@ jobs:
 
       - name: SonarQube Cloud scan
         if: ${{ env.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        # The pinned 40-char string below is a commit SHA, not a Sonar API key;
+        # suppress the false positive from Semgrep's generic secret rule.
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0  nosemgrep
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
