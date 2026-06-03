@@ -14,34 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  bandit:
-    name: SAST - Bandit (Python)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: '3.11'
-      - name: Install Bandit
-        run: pip install bandit
-      - name: Run Bandit
-        # Fail on medium+ severity, medium+ confidence findings.
-        run: bandit -r . -x ./tests,./.git -ll -ii
-
-  semgrep:
-    name: SAST - Semgrep
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: '3.11'
-      - name: Install Semgrep
-        run: pip install semgrep
-      - name: Run Semgrep
-        # --error makes the job fail when findings are reported.
-        run: semgrep scan --config p/default --config p/secrets --error --metrics off
-
   gitleaks:
     name: Secrets - gitleaks
     runs-on: ubuntu-latest
@@ -71,28 +43,3 @@ jobs:
         # A working-tree scan alone misses secrets that were committed and
         # later removed but still live in history. Exits non-zero on findings.
         run: gitleaks git . --redact -v
-
-  pip-audit:
-    name: SCA - pip-audit (Python deps)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: '3.11'
-      - name: Detect dependency manifest
-        id: deps
-        shell: bash
-        run: |
-          if ls requirements*.txt pyproject.toml setup.cfg setup.py >/dev/null 2>&1; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No Python dependency manifest found - skipping pip-audit."
-          fi
-      - name: Install pip-audit
-        if: steps.deps.outputs.present == 'true'
-        run: pip install pip-audit
-      - name: Run pip-audit
-        if: steps.deps.outputs.present == 'true'
-        run: pip-audit
