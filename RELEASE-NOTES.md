@@ -6,6 +6,15 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.0.1 (2026-06-03)
+
+### Maintenance
+
+- Patch release that advances the `release` branch pointer so installed plugins (Claude Code, Codex, Copilot) pick up the new version through marketplace auto-update.
+- No functional or behavioral changes to the toolkit, runbooks, or installer; version metadata is synchronized across all plugin and marketplace manifests.
+
+---
+
 ## 1.0.0 (2026-06-03)
 
 ### Initial public release
