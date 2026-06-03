@@ -38,6 +38,24 @@ copilot plugin install creatio-ai-app-development-toolkit@creatio
 
 See [docs/install.md](docs/install.md) for release zip installation and agent-specific install details.
 
+## Updates
+
+CAADT relies on each agent's native plugin update mechanism.
+
+For a single command that updates every detected agent in one shot, run the manual updater:
+
+```bash
+python installer/update.py
+```
+
+It downloads the latest public release, extracts it to a temp directory, and delegates to that release's `installer/install.py` for each installed agent. Run it from a plain terminal after exiting any agent session — updating an agent rewrites the plugin directory the running session holds. Options:
+
+- `--target {codex,cursor,copilot}` — update only one agent.
+- `--source <dir>` — update from a local checkout/extract instead of downloading.
+- `--silent` — suppress output and exit non-zero on failure.
+
+A network or release-fetch failure exits non-zero without touching installed agents, so the main CAADT workflow keeps working on the previously installed version.
+
 ## Main Workflow
 
 The normal user-facing flow is:
