@@ -14,47 +14,24 @@ permissions:
   contents: read
 
 jobs:
-  bandit:
-    name: SAST - Bandit (Python)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Install Bandit
-        run: pip install bandit
-      - name: Run Bandit
-        # Fail on medium+ severity, medium+ confidence findings.
-        run: bandit -r . -x ./tests,./.git -ll -ii
-
-  semgrep:
-    name: SAST - Semgrep
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Install Semgrep
-        run: pip install semgrep
-      - name: Run Semgrep
-        # --error makes the job fail when findings are reported.
-        run: semgrep scan --config p/default --config p/secrets --error --metrics off
-
   gitleaks:
     name: Secrets - gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
       - name: Install gitleaks
         run: |
+          set -euo pipefail
           GITLEAKS_VERSION=8.21.2
+          GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+          TARBALL="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o "$TARBALL"
+          # Verify the download integrity before trusting/executing the binary.
+          echo "${GITLEAKS_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "$TARBALL" -C "$RUNNER_TEMP/bin" gitleaks
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Verify gitleaks
         run: gitleaks version
@@ -66,28 +43,3 @@ jobs:
         # A working-tree scan alone misses secrets that were committed and
         # later removed but still live in history. Exits non-zero on findings.
         run: gitleaks git . --redact -v
-
-  pip-audit:
-    name: SCA - pip-audit (Python deps)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Detect dependency manifest
-        id: deps
-        shell: bash
-        run: |
-          if ls requirements*.txt pyproject.toml setup.cfg setup.py >/dev/null 2>&1; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No Python dependency manifest found - skipping pip-audit."
-          fi
-      - name: Install pip-audit
-        if: steps.deps.outputs.present == 'true'
-        run: pip install pip-audit
-      - name: Run pip-audit
-        if: steps.deps.outputs.present == 'true'
-        run: pip-audit

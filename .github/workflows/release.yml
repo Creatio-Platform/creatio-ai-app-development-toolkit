@@ -14,17 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Required by actions/attest-build-provenance to mint a signed SLSA
+      # provenance attestation for the release asset.
+      id-token: write
+      attestations: write
     env:
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.11'
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '20'
 
@@ -139,6 +143,24 @@ jobs:
           (cd /tmp && zip -r "creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" "creatio-ai-app-development-toolkit-${RELEASE_VERSION}" >/dev/null)
           ls -la "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
 
+      - name: Generate SHA256 checksum for the release asset
+        # Published alongside the zip so users can verify the download:
+        #   sha256sum -c creatio-ai-app-development-toolkit-<ver>.zip.sha256
+        run: |
+          set -euo pipefail
+          cd /tmp
+          ZIP="creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
+          sha256sum "$ZIP" > "${ZIP}.sha256"
+          cat "${ZIP}.sha256"
+
+      - name: Attest build provenance for the release asset
+        # Mints a signed SLSA provenance attestation tying the zip to this
+        # workflow run/commit. Verifiable with:
+        #   gh attestation verify <zip> --repo <owner>/<repo>
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: /tmp/creatio-ai-app-development-toolkit-${{ env.RELEASE_VERSION }}.zip
+
       - name: Tag and push release
         run: |
           git config user.name "github-actions[bot]"
@@ -163,7 +185,8 @@ jobs:
           export GH_HOST="${GH_HOST%/}"
           gh release create "$RELEASE_VERSION" \
             --notes-file /tmp/release_notes.md \
-            "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip"
+            "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" \
+            "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip.sha256"
         env:
           GH_TOKEN: ${{ github.token }}
 
