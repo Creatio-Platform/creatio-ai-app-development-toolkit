@@ -277,15 +277,25 @@ def register_remote_marketplace_and_install_plugin(
 
 
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
+    """Detect locally installed coding agents to install into.
+
+    For CLI-driven agents (Codex, Claude Code, GitHub Copilot CLI) the install
+    works by driving the agent's own CLI. A home directory alone is not
+    sufficient — the CLI binary must also be on PATH. A leftover ``~/.copilot``
+    (or ``~/.codex`` / ``~/.claude``) whose binary is no longer on PATH is
+    ignored: we have no mechanism to install into an agent we can't invoke.
+
+    Cursor uses a file-copy install and requires no CLI binary.
+    """
     home = home or Path.home()
     targets: list[dict[str, Any]] = []
 
     codex_home = home / ".codex"
-    if codex_home.exists():
+    if codex_home.exists() and shutil.which("codex"):
         targets.append({"id": "codex", "name": "Codex", "home": codex_home})
 
     claude_home = home / ".claude"
-    if claude_home.exists():
+    if claude_home.exists() and shutil.which("claude"):
         targets.append({"id": "claude", "name": "Claude Code", "home": claude_home})
 
     cursor_home = home / ".cursor"
@@ -293,7 +303,7 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
         targets.append({"id": "cursor", "name": "Cursor", "home": cursor_home})
 
     copilot_home = home / ".copilot"
-    if copilot_home.exists():
+    if copilot_home.exists() and shutil.which("copilot"):
         targets.append({"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home})
 
     return targets

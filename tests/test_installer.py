@@ -108,7 +108,7 @@ class ConstantsTests(unittest.TestCase):
 
 
 class DetectTargetsTests(unittest.TestCase):
-    def test_detects_all_four_when_home_dirs_present(self):
+    def test_detects_all_four_when_home_dirs_and_clis_present(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -117,15 +117,45 @@ class DetectTargetsTests(unittest.TestCase):
             (home / ".cursor").mkdir()
             (home / ".copilot").mkdir()
 
-            targets = installer.detect_targets(home)
+            with patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"):
+                targets = installer.detect_targets(home)
 
         self.assertEqual({target["id"] for target in targets}, {"codex", "claude", "cursor", "copilot"})
 
     def test_skips_targets_without_home_dirs(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
-            targets = installer.detect_targets(Path(temp))
+            with patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"):
+                targets = installer.detect_targets(Path(temp))
         self.assertEqual(targets, [])
+
+    def test_skips_cli_driven_targets_whose_binary_is_not_on_path(self):
+        """A leftover ~/.copilot with no copilot binary must not be detected."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / ".codex").mkdir()
+            (home / ".claude").mkdir()
+            (home / ".cursor").mkdir()
+            (home / ".copilot").mkdir()
+
+            # cursor has no binary requirement; the three CLI-driven ones do.
+            with patch("shutil.which", return_value=None):
+                targets = installer.detect_targets(home)
+
+        self.assertEqual({target["id"] for target in targets}, {"cursor"})
+
+    def test_detects_cursor_without_binary(self):
+        """Cursor uses file-copy install — no CLI binary needed."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / ".cursor").mkdir()
+
+            with patch("shutil.which", return_value=None):
+                targets = installer.detect_targets(home)
+
+        self.assertEqual([t["id"] for t in targets], ["cursor"])
 
 
 class CliPreflightTests(unittest.TestCase):
