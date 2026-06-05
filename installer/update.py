@@ -64,8 +64,10 @@ import version_check  # noqa: E402
 NATIVE_TARGETS: tuple[str, ...] = ("codex", "claude", "copilot")
 # Agents with no native update command — reinstalled from the release source.
 COPY_TARGETS: tuple[str, ...] = ("cursor",)
-# Detection/reporting order across every agent we can update.
-ALL_TARGETS: tuple[str, ...] = ("codex", "claude", "cursor", "copilot")
+# Detection/reporting order across every agent we can update. Derived from the
+# two groups above so a new agent added to NATIVE_TARGETS/COPY_TARGETS can never
+# be silently dropped from detection.
+ALL_TARGETS: tuple[str, ...] = NATIVE_TARGETS + COPY_TARGETS
 
 # Upper bound for a single CLI step. Each native step does its own network I/O
 # (refreshing a remote marketplace, pulling a plugin), so without a cap a stalled
@@ -172,7 +174,11 @@ def _update_one_agent(target_id: str, fresh_root: Path | None) -> str | None:
             _update_native(target_id)
     except subprocess.TimeoutExpired:
         return f"timed out after {_STEP_TIMEOUT_SECONDS}s"
-    except RuntimeError as error:
+    except (RuntimeError, ValueError) as error:
+        # ValueError surfaces an unknown native target (native_update_commands).
+        # Unreachable while NATIVE_TARGETS/COPY_TARGETS stay in sync, but caught
+        # here so a future drift records one failed agent instead of aborting the
+        # whole batch — the entire point of this per-agent isolation.
         return str(error)
     return None
 
@@ -181,24 +187,27 @@ def update_agents(
     target_ids: list[str],
     *,
     fresh_root: Path | None = None,
-    selected: str | None = None,
     silent: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Update each agent: native command in place, or Cursor file-copy reinstall.
 
-    A failure on one agent is recorded and the rest continue. Returns
-    (updated, failed) lists of target IDs.
+    Updates every id in *target_ids*; the caller is responsible for scoping that
+    list (e.g. for --target). A failure on one agent is recorded and the rest
+    continue. Returns (updated, failed) lists of target IDs.
     """
     updated: list[str] = []
     failed: list[str] = []
 
     for target_id in target_ids:
-        if selected and target_id != selected:
-            continue
         error = _update_one_agent(target_id, fresh_root)
         if error is None:
             updated.append(target_id)
             if not silent:
+                # NOTE: The setup wizard parses these two per-agent line formats
+                # ("Updated <id>." / "ERROR updating <id>: <reason>") to render a
+                # per-agent success/failure breakdown. Keep them in sync with
+                # caadt-installer-service.ts#parseUpdateAgentResults in the
+                # adac-setup-wizard repo if you change the wording.
                 print(f"Updated {target_id}.")
         else:
             failed.append(target_id)
@@ -338,6 +347,18 @@ def main(argv: list[str] | None = None) -> int:
     effective = [tid for tid in target_ids if not args.target or tid == args.target]
     need_source = any(tid in COPY_TARGETS for tid in effective)
 
+    # --source only scopes Cursor's reinstall; native agents always track their
+    # marketplace. Warn rather than silently ignore it, so a user who passed
+    # --source expecting it to pin every agent isn't misled.
+    if args.source is not None and not args.silent:
+        native_in_scope = [tid for tid in effective if tid in NATIVE_TARGETS]
+        if native_in_scope:
+            print(
+                f"WARNING: --source only applies to Cursor; "
+                f"{', '.join(native_in_scope)} update from their marketplace to latest.",
+                file=sys.stderr,
+            )
+
     work_dir: Path | None = None
     fresh_root: Path | None = None
     version: str | None = None
@@ -357,10 +378,11 @@ def main(argv: list[str] | None = None) -> int:
         if version is None:
             version = version_check.latest_release_version()
 
+        # `effective` is the single place the --target scope is applied;
+        # update_agents updates exactly what it is handed.
         updated, failed = update_agents(
-            target_ids,
+            effective,
             fresh_root=fresh_root,
-            selected=args.target,
             silent=args.silent,
         )
     finally:
@@ -372,11 +394,31 @@ def main(argv: list[str] | None = None) -> int:
             # Report the version we updated *to*. No "from" version: the installed
             # version differs per agent and isn't reliably readable here, so a
             # "vX -> vY" delta would be misleading.
-            target = f" to v{version}" if version else ""
+            #
+            # The "to vX" suffix is only trustworthy when every updated agent
+            # actually landed on `version`. `version` is the --source-pinned
+            # value only when --source was given *and* a source was acquired
+            # (fresh_root set); native agents ignore that source and track their
+            # marketplace to *latest*, so the pinned version would misrepresent
+            # them — drop the suffix only in that case. (Without --source,
+            # `version` is the latest release, which is what natives get too.)
+            version_is_source_pinned = args.source is not None and fresh_root is not None
+            source_pinned_natives = version_is_source_pinned and any(
+                tid in NATIVE_TARGETS for tid in updated
+            )
+            target = f" to v{version}" if version and not source_pinned_natives else ""
             print(f"\nUpdated {len(updated)} agent(s){target}: {', '.join(updated)}")
             print("Start a new agent session to load the updated version.")
         if failed:
             print(f"Failed  {len(failed)} agent(s): {', '.join(failed)}", file=sys.stderr)
+            # A common, non-obvious cause is a still-running agent holding a lock
+            # on its own plugin files (the raw CLI error rarely says so). Phrased
+            # conditionally so it stays correct for network/timeout failures too.
+            print(
+                "A running agent can lock its plugin files and block the update. "
+                "Close the agent(s) above and re-run this command.",
+                file=sys.stderr,
+            )
 
     return 1 if failed else 0
 

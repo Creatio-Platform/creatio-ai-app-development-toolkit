@@ -20,7 +20,7 @@ _INSTALLER_DIR = Path(__file__).resolve().parent
 if str(_INSTALLER_DIR) not in sys.path:
     sys.path.insert(0, str(_INSTALLER_DIR))
 
-import agent_cli  # noqa: E402
+import agent_cli  # noqa: E402  (bound for test patch targets: installer.agent_cli.*)
 from agent_cli import (  # noqa: E402
     MARKETPLACE_NAME,
     PLUGIN_NAME,
