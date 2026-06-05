@@ -1209,10 +1209,44 @@ class InstallRoutingTests(unittest.TestCase):
             with patch.object(installer.agent_cli, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked"
             ) as run_checked:
-                installed = installer.install_for_targets(repo_root, targets)
+                installed, failed = installer.install_for_targets(repo_root, targets)
 
             self.assertEqual(installed, ["copilot"])
+            self.assertEqual(failed, [])
             self.assertEqual(run_checked.call_count, 2)
+
+    def test_install_for_targets_skips_failing_autodetected_target(self):
+        """A leftover ~/.copilot with no `copilot` on PATH must not abort the run."""
+        installer = load_installer()
+        targets = [
+            {"id": "copilot", "name": "GitHub Copilot CLI", "home": Path("/home/.copilot")},
+            {"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")},
+        ]
+        with (
+            patch.object(
+                installer,
+                "install_copilot",
+                side_effect=RuntimeError("copilot was not found in PATH."),
+            ),
+            patch.object(installer, "install_cursor") as install_cursor,
+        ):
+            installed, failed = installer.install_for_targets(Path("/repo"), targets)
+
+        self.assertEqual(installed, ["cursor"])
+        self.assertEqual(failed, [("copilot", "copilot was not found in PATH.")])
+        install_cursor.assert_called_once()
+
+    def test_install_for_targets_reraises_when_explicit_target_fails(self):
+        """`--target copilot` is an explicit request, so a failure must propagate."""
+        installer = load_installer()
+        targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": Path("/home/.copilot")}]
+        with patch.object(
+            installer,
+            "install_copilot",
+            side_effect=RuntimeError("copilot was not found in PATH."),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
+                installer.install_for_targets(Path("/repo"), targets, selected="copilot")
 
 
 class JsonIoTests(unittest.TestCase):
@@ -1423,7 +1457,7 @@ class MainTests(unittest.TestCase):
                     patch.object(installer, "preflight_clio"),
                     patch.object(installer, "resolve_repo_root", return_value=repo_root),
                     patch.object(installer, "detect_targets", return_value=[]),
-                    patch.object(installer, "install_for_targets", return_value=["codex"]),
+                    patch.object(installer, "install_for_targets", return_value=(["codex"], [])),
                     patch.object(installer, "write_setup_wizard_manifest") as write_manifest,
                 ):
                     result = installer.main([])
@@ -1442,7 +1476,7 @@ class MainTests(unittest.TestCase):
                     patch.object(installer, "preflight_clio"),
                     patch.object(installer, "resolve_repo_root", return_value=repo_root),
                     patch.object(installer, "detect_targets", return_value=[]),
-                    patch.object(installer, "install_for_targets", return_value=["codex"]),
+                    patch.object(installer, "install_for_targets", return_value=(["codex"], [])),
                     patch.object(installer, "write_setup_wizard_manifest", return_value=manifest_path) as write_manifest,
                 ):
                     result = installer.main([])
@@ -1454,6 +1488,44 @@ class MainTests(unittest.TestCase):
         installer = load_installer()
         with patch.object(installer, "preflight_clio", side_effect=RuntimeError("boom")):
             result = installer.main([])
+
+        self.assertEqual(result, 1)
+
+    def test_returns_success_when_some_targets_install_and_others_skipped(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with (
+                patch.object(installer, "preflight_clio"),
+                patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                patch.object(installer, "detect_targets", return_value=[]),
+                patch.object(
+                    installer,
+                    "install_for_targets",
+                    return_value=(["codex"], [("copilot", "copilot was not found in PATH.")]),
+                ),
+            ):
+                result = installer.main([])
+
+        self.assertEqual(result, 0)
+
+    def test_returns_error_when_all_detected_targets_fail(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with (
+                patch.object(installer, "preflight_clio"),
+                patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                patch.object(installer, "detect_targets", return_value=[]),
+                patch.object(
+                    installer,
+                    "install_for_targets",
+                    return_value=([], [("copilot", "copilot was not found in PATH.")]),
+                ),
+            ):
+                result = installer.main([])
 
         self.assertEqual(result, 1)
 
