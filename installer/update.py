@@ -375,9 +375,6 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.silent:
                     print(f"ERROR: {error}", file=sys.stderr)
 
-        if version is None:
-            version = version_check.latest_release_version()
-
         # `effective` is the single place the --target scope is applied;
         # update_agents updates exactly what it is handed.
         updated, failed = update_agents(
@@ -391,6 +388,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.silent:
         if updated:
+            # `version` is only ever used for this display line, so resolve the
+            # fallback lazily here — this skips the latest_release_version()
+            # network round-trip entirely in --silent runs and when nothing was
+            # updated. (latest_release_version() returns None on any failure, so
+            # this never raises.)
+            if version is None:
+                version = version_check.latest_release_version()
             # Report the version we updated *to*. No "from" version: the installed
             # version differs per agent and isn't reliably readable here, so a
             # "vX -> vY" delta would be misleading.

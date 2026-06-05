@@ -494,6 +494,32 @@ class UpdateMainTests(unittest.TestCase):
         printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
         self.assertNotIn("A running agent can lock", printed)
 
+    def test_silent_mode_skips_version_lookup(self):
+        # `version` is only used for the display line, so --silent must not pay
+        # for the latest_release_version() network round-trip.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version") as latest,
+            patch.object(self.upd, "update_agents", return_value=(["codex"], [])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print"),
+        ):
+            result = self.upd.main(["--silent"])
+        self.assertEqual(result, 0)
+        latest.assert_not_called()
+
+    def test_version_lookup_skipped_when_nothing_updated(self):
+        # Only failures → no "Updated …" line → no need to resolve the version.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version") as latest,
+            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print"),
+        ):
+            self.upd.main([])
+        latest.assert_not_called()
+
     def test_target_flag_scopes_to_selected_agent(self):
         # main() is the single place --target scoping happens: only the selected
         # installed agent is updated even when others are present.
