@@ -7,6 +7,11 @@ on:
         description: 'Semver X.Y.Z (must have matching `## X.Y.Z (date)` section in RELEASE-NOTES.md)'
         required: true
         type: string
+      dry_run:
+        description: 'Rehearsal: mint the App token, prove write access, build the zip — but DO NOT tag, publish, or move `release`. Skips release-content gates (2/5/6) and provenance. Safe to run from a feature branch before merge.'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   release:
@@ -21,10 +26,25 @@ jobs:
     env:
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
+      # Mint a short-lived token for the dedicated release-bot GitHub App.
+      # This is the ONLY identity allowed to update the protected `release`
+      # branch (see the `update` rule + Integration bypass on the
+      # "release branch protection" ruleset). The default GITHUB_TOKEN cannot
+      # be a repo-ruleset bypass actor on github.com, so all git writes to
+      # protected refs below run through this token via persisted credentials.
+      - name: Mint release-bot app token (auth for git writes to protected refs)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
           fetch-depth: 0
+          # Persist the app token so `git push` (tag + release branch) below
+          # authenticates as the release-bot App, which holds the ruleset bypass.
+          token: ${{ steps.app-token.outputs.token }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.11'
@@ -40,6 +60,7 @@ jobs:
             || { echo "ERROR: Version must be X.Y.Z (no 'v' prefix, no pre-release suffixes)."; exit 1; }
 
       - name: Gate 2 — extract release notes section from RELEASE-NOTES.md
+        if: ${{ !inputs.dry_run }}
         run: |
           awk -v ver="$RELEASE_VERSION" '
             /^## / {
@@ -70,6 +91,7 @@ jobs:
         # forgotten in sync list, hardcoded constants in code, etc.).
 
       - name: Gate 5 — canonical manifest matches input and tag is free
+        if: ${{ !inputs.dry_run }}
         run: |
           node scripts/bump-version.js --check
           PJ_VERSION=$(jq -r .version .claude-plugin/plugin.json)
@@ -90,6 +112,7 @@ jobs:
         run: git fetch --no-tags origin release || true
 
       - name: Gate 6 — new version differs from current `release` branch version
+        if: ${{ !inputs.dry_run }}
         # The plugin cache key on the client is plugin.json:version (not SHA),
         # so re-pointing `release` at a commit whose plugin.json still says the
         # current version would make clients reuse the old cached payload and
@@ -153,7 +176,25 @@ jobs:
           sha256sum "$ZIP" > "${ZIP}.sha256"
           cat "${ZIP}.sha256"
 
+      - name: Dry-run — verify release-bot App token has write access (no release side effects)
+        if: ${{ inputs.dry_run }}
+        # Proves the minted App token can write to the repo (Contents: write)
+        # WITHOUT touching the protected `release` branch: push the triggering
+        # SHA to a throwaway ref and immediately delete it. This exercises the
+        # critical new piece — App auth + write — end-to-end before a real
+        # release. The scratch ref matches no ruleset, so it is unaffected by
+        # the `release`/`main` protections.
+        run: |
+          set -euo pipefail
+          SELFTEST_REF="refs/heads/release-bot-selftest"
+          echo "Pushing $GITHUB_SHA to $SELFTEST_REF as the release-bot App…"
+          git push origin "$GITHUB_SHA:$SELFTEST_REF"
+          echo "Write access confirmed — deleting the scratch ref."
+          git push origin --delete "$SELFTEST_REF"
+          echo "DRY RUN OK: App token minted and verified with write access. Tag/release/branch-move were skipped."
+
       - name: Attest build provenance for the release asset
+        if: ${{ !inputs.dry_run }}
         # Mints a signed SLSA provenance attestation tying the zip to this
         # workflow run/commit. Verifiable with:
         #   gh attestation verify <zip> --repo <owner>/<repo>
@@ -161,7 +202,13 @@ jobs:
         with:
           subject-path: /tmp/creatio-ai-app-development-toolkit-${{ env.RELEASE_VERSION }}.zip
 
+      # ⚠️ INVARIANT: every step below this line performs an irreversible,
+      # outward-facing action (tag push, GitHub Release, `release` branch move).
+      # Each MUST carry `if: ${{ !inputs.dry_run }}`. If you add a new
+      # publishing/pushing step here and forget the guard, a dry-run will
+      # execute it for real. Keep the dry-run rehearsal trustworthy.
       - name: Tag and push release
+        if: ${{ !inputs.dry_run }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -169,6 +216,7 @@ jobs:
           git push origin "refs/tags/$RELEASE_VERSION"
 
       - name: Create GitHub Release with asset
+        if: ${{ !inputs.dry_run }}
         # gh release create with asset paths performs draft → upload → publish.
         # If asset upload fails, the release stays as a draft (not visible as
         # "latest"), so the installation wizard never sees a release whose
@@ -188,9 +236,14 @@ jobs:
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" \
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip.sha256"
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Use the release-bot App token (not GITHUB_TOKEN) so the tag push
+          # and release creation run as the same identity that holds the
+          # `release` branch ruleset bypass, keeping the release fully owned
+          # by the dedicated App.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Fast-forward `release` branch to new release SHA
+        if: ${{ !inputs.dry_run }}
         # `release` is the moving pointer that marketplace.json's source.ref
         # points to for Claude/Copilot plugin installs. Update it AFTER the
         # release artifact exists. If this step fails the release branch
@@ -208,6 +261,7 @@ jobs:
           git push origin "$GITHUB_SHA:refs/heads/release" --force-with-lease="refs/heads/release:${EXPECTED}"
 
       - name: Verify `release` branch now points to released SHA
+        if: ${{ !inputs.dry_run }}
         # Defence in depth: catch the case where the push above silently
         # no-op'd (network glitch, branch-protection bypass misconfigured,
         # etc.) so the workflow fails loudly rather than leaving a stale
