@@ -72,6 +72,47 @@ class InstalledPluginVersionTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# latest_release_version (lightweight tag lookup, no asset download)
+# ---------------------------------------------------------------------------
+
+
+class LatestReleaseVersionTests(unittest.TestCase):
+    def setUp(self):
+        self.vc = load_version_check()
+
+    def test_returns_none_when_no_release(self):
+        with patch.object(self.vc, "_fetch_release_json", return_value=None):
+            self.assertIsNone(self.vc.latest_release_version())
+
+    def test_strips_leading_v_prefix(self):
+        with patch.object(self.vc, "_fetch_release_json", return_value={"tag_name": "v1.2.3"}):
+            self.assertEqual(self.vc.latest_release_version(), "1.2.3")
+
+    def test_returns_tag_without_v_prefix_unchanged(self):
+        with patch.object(self.vc, "_fetch_release_json", return_value={"tag_name": "1.2.3"}):
+            self.assertEqual(self.vc.latest_release_version(), "1.2.3")
+
+    def test_lstrip_v_strips_all_leading_vs(self):
+        # Documents current behavior: lstrip("v") removes *every* leading "v",
+        # not just one. Harmless for canonical vX.Y.Z tags, but pin it so a
+        # future switch to removeprefix("v") is a deliberate, visible change.
+        with patch.object(self.vc, "_fetch_release_json", return_value={"tag_name": "vv2.0.0"}):
+            self.assertEqual(self.vc.latest_release_version(), "2.0.0")
+
+    def test_returns_none_for_missing_tag(self):
+        with patch.object(self.vc, "_fetch_release_json", return_value={}):
+            self.assertIsNone(self.vc.latest_release_version())
+
+    def test_returns_none_for_empty_tag(self):
+        with patch.object(self.vc, "_fetch_release_json", return_value={"tag_name": ""}):
+            self.assertIsNone(self.vc.latest_release_version())
+
+    def test_returns_none_for_non_string_tag(self):
+        with patch.object(self.vc, "_fetch_release_json", return_value={"tag_name": 123}):
+            self.assertIsNone(self.vc.latest_release_version())
+
+
+# ---------------------------------------------------------------------------
 # download_latest_release_zip (self-fetch)
 # ---------------------------------------------------------------------------
 

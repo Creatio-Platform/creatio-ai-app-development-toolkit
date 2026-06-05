@@ -46,19 +46,18 @@ class DetectTargetsTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_detects_only_updateable_present_agents(self):
+    def test_detects_present_agents(self):
         (self.home / ".codex").mkdir()
         (self.home / ".copilot").mkdir()
-        (self.home / ".claude").mkdir()  # present but never updated here
-        ids = self.upd.detect_updateable_target_ids(self.home)
+        ids = self.upd.detect_installed_target_ids(self.home)
         self.assertEqual(ids, ["codex", "copilot"])
 
-    def test_claude_is_never_updateable(self):
+    def test_claude_is_updateable(self):
         (self.home / ".claude").mkdir()
-        self.assertEqual(self.upd.detect_updateable_target_ids(self.home), [])
+        self.assertEqual(self.upd.detect_installed_target_ids(self.home), ["claude"])
 
     def test_none_present(self):
-        self.assertEqual(self.upd.detect_updateable_target_ids(self.home), [])
+        self.assertEqual(self.upd.detect_installed_target_ids(self.home), [])
 
 
 # ---------------------------------------------------------------------------
@@ -142,11 +141,58 @@ class AcquireSourceTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# update.py — delegation
+# update.py — native update command sequences
 # ---------------------------------------------------------------------------
 
 
-class UpdateTargetsTests(unittest.TestCase):
+class NativeUpdateCommandsTests(unittest.TestCase):
+    def setUp(self):
+        self.upd = load_update()
+
+    def _patch_resolvers(self):
+        return (
+            patch.object(self.upd.agent_cli, "resolve_claude_command", return_value=["claude"]),
+            patch.object(self.upd.agent_cli, "resolve_codex_command", return_value=["codex"]),
+            patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]),
+        )
+
+    def test_two_step_sequences_per_agent(self):
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3:
+            self.assertEqual(
+                self.upd.native_update_commands("claude"),
+                [
+                    ["claude", "plugin", "marketplace", "update", "creatio"],
+                    ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+                ],
+            )
+            # Codex has no `plugin update`: refresh the snapshot, then re-add.
+            self.assertEqual(
+                self.upd.native_update_commands("codex"),
+                [
+                    ["codex", "plugin", "marketplace", "upgrade", "creatio"],
+                    ["codex", "plugin", "add", "creatio-ai-app-development-toolkit@creatio"],
+                ],
+            )
+            self.assertEqual(
+                self.upd.native_update_commands("copilot"),
+                [
+                    ["copilot", "plugin", "marketplace", "update", "creatio"],
+                    ["copilot", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+                ],
+            )
+
+    def test_unknown_or_copy_target_raises(self):
+        with self.assertRaises(ValueError):
+            self.upd.native_update_commands("cursor")
+
+
+# ---------------------------------------------------------------------------
+# update.py — update orchestration
+# ---------------------------------------------------------------------------
+
+
+class UpdateAgentsTests(unittest.TestCase):
     def setUp(self):
         self.upd = load_update()
         self._tmp = tempfile.TemporaryDirectory()
@@ -160,10 +206,34 @@ class UpdateTargetsTests(unittest.TestCase):
     def _ok(self, *a, **k):
         return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-    def _fail(self, *a, **k):
-        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
+    def _patch_resolvers(self):
+        return (
+            patch.object(self.upd.agent_cli, "resolve_claude_command", return_value=["claude"]),
+            patch.object(self.upd.agent_cli, "resolve_codex_command", return_value=["codex"]),
+            patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]),
+        )
 
-    def test_all_targets_delegate_to_install_py(self):
+    def test_native_agent_runs_both_steps_in_order(self):
+        calls = []
+
+        def record(cmd, **kw):
+            calls.append(cmd)
+            return self._ok()
+
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=record):
+            updated, failed = self.upd.update_agents(["claude"], silent=True)
+
+        self.assertEqual((updated, failed), (["claude"], []))
+        self.assertEqual(
+            calls,
+            [
+                ["claude", "plugin", "marketplace", "update", "creatio"],
+                ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+            ],
+        )
+
+    def test_cursor_delegates_to_install_py_without_update_flag(self):
         calls = []
 
         def record(cmd, **kw):
@@ -171,61 +241,76 @@ class UpdateTargetsTests(unittest.TestCase):
             return self._ok()
 
         with patch.object(self.upd.subprocess, "run", side_effect=record):
-            updated, failed = self.upd.update_targets(
-                self.fresh_root, ["codex", "copilot"], silent=True
+            updated, failed = self.upd.update_agents(
+                ["cursor"], fresh_root=self.fresh_root, silent=True
             )
 
-        self.assertEqual(updated, ["codex", "copilot"])
-        self.assertEqual(failed, [])
+        self.assertEqual((updated, failed), (["cursor"], []))
+        self.assertEqual(len(calls), 1)
         install_script = str(self.fresh_root / "installer" / "install.py")
-        for cmd in calls:
-            self.assertEqual(cmd[1], install_script)
-            self.assertEqual(cmd[2], "--target")
+        self.assertEqual(calls[0][1], install_script)
+        self.assertEqual(calls[0][2], "--target")
+        self.assertEqual(calls[0][3], "cursor")
+        # Cursor's update IS a reinstall — no --update flag (install.py has none).
+        self.assertNotIn("--update", calls[0])
 
-    def test_selected_filters_targets(self):
+    def test_cursor_without_source_is_failure(self):
         with patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
-            updated, failed = self.upd.update_targets(
-                self.fresh_root, ["codex", "copilot"], selected="copilot", silent=True
-            )
+            updated, failed = self.upd.update_agents(["cursor"], fresh_root=None, silent=True)
+        self.assertEqual((updated, failed), ([], ["cursor"]))
+        run.assert_not_called()
+
+    def test_updates_exactly_the_targets_handed(self):
+        # update_agents no longer filters: the caller scopes the list. Passing a
+        # single id must update only that id (one agent × two native steps).
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
+            updated, _ = self.upd.update_agents(["copilot"], silent=True)
         self.assertEqual(updated, ["copilot"])
-        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_count, 2)  # one agent × two steps
 
-    def test_failure_recorded(self):
+    def test_failed_step_recorded_and_other_agents_continue(self):
         def side(cmd, **kw):
-            return self._fail() if "codex" in cmd else self._ok()
+            if cmd[0] == "codex" and "add" in cmd:
+                return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
+            return self._ok()
 
-        with patch.object(self.upd.subprocess, "run", side_effect=side):
-            updated, failed = self.upd.update_targets(
-                self.fresh_root, ["codex", "copilot"], silent=True
-            )
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=side):
+            updated, failed = self.upd.update_agents(["codex", "copilot"], silent=True)
         self.assertEqual(updated, ["copilot"])
         self.assertEqual(failed, ["codex"])
 
-    def test_passes_timeout_and_blocks_stdin(self):
+    def test_step_passes_timeout_and_blocks_stdin(self):
         seen: dict = {}
 
         def record(cmd, **kw):
             seen.update(kw)
             return self._ok()
 
-        with patch.object(self.upd.subprocess, "run", side_effect=record):
-            self.upd.update_targets(self.fresh_root, ["codex"], silent=True)
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=record):
+            self.upd.update_agents(["codex"], silent=True)
 
-        self.assertEqual(seen.get("timeout"), self.upd._INSTALL_TIMEOUT_SECONDS)
+        self.assertEqual(seen.get("timeout"), self.upd._STEP_TIMEOUT_SECONDS)
         self.assertEqual(seen.get("stdin"), subprocess.DEVNULL)
 
     def test_timeout_recorded_as_failure(self):
         def side(cmd, **kw):
-            if "codex" in cmd:
-                raise subprocess.TimeoutExpired(cmd=cmd, timeout=kw.get("timeout"))
-            return self._ok()
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kw.get("timeout"))
 
-        with patch.object(self.upd.subprocess, "run", side_effect=side):
-            updated, failed = self.upd.update_targets(
-                self.fresh_root, ["codex", "copilot"], silent=True
-            )
-        self.assertEqual(updated, ["copilot"])
-        self.assertEqual(failed, ["codex"])
+        r1, r2, r3 = self._patch_resolvers()
+        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=side):
+            updated, failed = self.upd.update_agents(["codex"], silent=True)
+        self.assertEqual((updated, failed), ([], ["codex"]))
+
+    def test_resolver_failure_recorded(self):
+        # CLI not on PATH → resolve raises RuntimeError → that agent fails.
+        with patch.object(
+            self.upd.agent_cli, "resolve_claude_command", side_effect=RuntimeError("not in PATH")
+        ):
+            updated, failed = self.upd.update_agents(["claude"], silent=True)
+        self.assertEqual((updated, failed), ([], ["claude"]))
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +325,7 @@ class UpdateMainTests(unittest.TestCase):
     def test_no_targets_skips_download(self):
         download = MagicMock()
         with (
-            patch.object(self.upd, "detect_updateable_target_ids", return_value=[]),
+            patch.object(self.upd, "detect_installed_target_ids", return_value=[]),
             patch.object(self.upd, "acquire_source", download),
             patch("builtins.print"),
         ):
@@ -250,7 +335,7 @@ class UpdateMainTests(unittest.TestCase):
 
     def test_target_not_installed_skips(self):
         with (
-            patch.object(self.upd, "detect_updateable_target_ids", return_value=["codex"]),
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
             patch.object(self.upd, "acquire_source") as acquire,
             patch("builtins.print"),
         ):
@@ -258,45 +343,270 @@ class UpdateMainTests(unittest.TestCase):
         acquire.assert_not_called()
         self.assertEqual(result, 0)
 
-    def test_happy_path_reports_target_version_and_chdirs(self):
+    def test_native_only_skips_download(self):
+        # No Cursor → no release source needed; report version via the light API.
         with (
-            patch.object(self.upd, "detect_updateable_target_ids", return_value=["codex"]),
-            patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "0.2.0")),
-            patch.object(self.upd, "update_targets", return_value=(["codex"], [])),
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex", "claude", "copilot"]),
+            patch.object(self.upd, "acquire_source") as acquire,
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=(["codex", "claude", "copilot"], [])),
             patch.object(self.upd.os, "chdir") as chdir,
             patch("builtins.print") as mock_print,
         ):
             result = self.upd.main([])
 
         self.assertEqual(result, 0)
+        acquire.assert_not_called()
         chdir.assert_called_once()
         printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
         # Reports the version updated *to*; no misleading "from" version.
         self.assertIn("to v0.2.0", printed)
         self.assertNotIn("->", printed)
 
-    def test_acquire_failure_returns_one(self):
+    def test_cursor_triggers_download_and_passes_fresh_root(self):
+        captured: dict = {}
+
+        def fake_update_agents(target_ids, *, fresh_root=None, silent=False):
+            captured["fresh_root"] = fresh_root
+            return (list(target_ids), [])
+
         with (
-            patch.object(self.upd, "detect_updateable_target_ids", return_value=["codex"]),
-            patch.object(self.upd.version_check, "installed_plugin_version", return_value="0.1.3"),
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["cursor"]),
+            patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "0.2.0")) as acquire,
+            patch.object(self.upd, "update_agents", side_effect=fake_update_agents),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print"),
+        ):
+            result = self.upd.main([])
+
+        self.assertEqual(result, 0)
+        acquire.assert_called_once()
+        self.assertEqual(captured["fresh_root"], Path("/fresh"))
+
+    def test_cursor_and_native_both_succeed_in_one_pass(self):
+        # Positive mixed case: Cursor + a native agent installed, both succeed in
+        # a single run — release source acquired once, native two-step runs, then
+        # install.py reinstalls Cursor. update_agents is NOT mocked here, so the
+        # real per-agent dispatch is exercised end to end.
+        fresh_root = Path("/fresh")
+        calls = []
+
+        def record(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "cursor"]),
+            patch.object(self.upd, "acquire_source", return_value=(fresh_root, "0.2.0")) as acquire,
+            patch.object(self.upd.agent_cli, "resolve_claude_command", return_value=["claude"]),
+            patch.object(self.upd.subprocess, "run", side_effect=record),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            result = self.upd.main([])
+
+        self.assertEqual(result, 0)
+        acquire.assert_called_once()
+        # Claude two-step + Cursor install.py reinstall = 3 subprocess calls.
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0], ["claude", "plugin", "marketplace", "update", "creatio"])
+        self.assertEqual(
+            calls[1],
+            ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
+        )
+        install_script = str(fresh_root / "installer" / "install.py")
+        self.assertEqual(calls[2][1:], [install_script, "--target", "cursor"])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("Updated 2 agent(s) to v0.2.0", printed)
+        self.assertIn("claude", printed)
+        self.assertIn("cursor", printed)
+
+    def test_cursor_source_failure_does_not_abort_native_agents(self):
+        # Download fails, but native agents must still be attempted; main does
+        # not early-return. update_agents (here mocked) receives fresh_root=None.
+        captured: dict = {}
+
+        def fake_update_agents(target_ids, *, fresh_root=None, silent=False):
+            captured["fresh_root"] = fresh_root
+            return (["codex"], ["cursor"])
+
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex", "cursor"]),
             patch.object(self.upd, "acquire_source", side_effect=RuntimeError("no net")),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", side_effect=fake_update_agents),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print"),
+        ):
+            result = self.upd.main([])
+
+        self.assertIsNone(captured["fresh_root"])
+        self.assertEqual(result, 1)  # cursor failed
+
+    def test_failed_target_returns_one(self):
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print"),
         ):
             result = self.upd.main([])
         self.assertEqual(result, 1)
 
-    def test_failed_target_returns_one(self):
+    def test_failure_prints_running_agent_hint(self):
+        # A failure must surface the running-agent remediation hint: the raw CLI
+        # error (e.g. a locked plugin file) rarely names the real cause.
         with (
-            patch.object(self.upd, "detect_updateable_target_ids", return_value=["codex"]),
-            patch.object(self.upd.version_check, "installed_plugin_version", return_value="0.1.3"),
-            patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "0.2.0")),
-            patch.object(self.upd, "update_targets", return_value=([], ["codex"])),
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main([])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("A running agent can lock its plugin files", printed)
+
+    def test_full_success_omits_running_agent_hint(self):
+        # No failures → no remediation noise.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=(["codex"], [])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main([])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertNotIn("A running agent can lock", printed)
+
+    def test_silent_failure_omits_running_agent_hint(self):
+        # Silent mode is machine-readable for the setup wizard — no extra prose.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main(["--silent"])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertNotIn("A running agent can lock", printed)
+
+    def test_silent_mode_skips_version_lookup(self):
+        # `version` is only used for the display line, so --silent must not pay
+        # for the latest_release_version() network round-trip.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version") as latest,
+            patch.object(self.upd, "update_agents", return_value=(["codex"], [])),
             patch.object(self.upd.os, "chdir"),
             patch("builtins.print"),
         ):
-            result = self.upd.main([])
-        self.assertEqual(result, 1)
+            result = self.upd.main(["--silent"])
+        self.assertEqual(result, 0)
+        latest.assert_not_called()
+
+    def test_version_lookup_skipped_when_nothing_updated(self):
+        # Only failures → no "Updated …" line → no need to resolve the version.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex"]),
+            patch.object(self.upd.version_check, "latest_release_version") as latest,
+            patch.object(self.upd, "update_agents", return_value=([], ["codex"])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print"),
+        ):
+            self.upd.main([])
+        latest.assert_not_called()
+
+    def test_target_flag_scopes_to_selected_agent(self):
+        # main() is the single place --target scoping happens: only the selected
+        # installed agent is updated even when others are present.
+        calls = []
+
+        def record(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex", "copilot"]),
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]),
+            patch.object(self.upd.subprocess, "run", side_effect=record),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            result = self.upd.main(["--target", "copilot"])
+
+        self.assertEqual(result, 0)
+        # Only copilot's two native steps run; codex is untouched.
+        self.assertEqual([c[0] for c in calls], ["copilot", "copilot"])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("Updated 1 agent(s)", printed)
+        self.assertNotIn("codex", printed)
+
+    def test_source_with_native_in_scope_warns(self):
+        # --source only scopes Cursor; warn (don't silently ignore) when a native
+        # agent is also in scope.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "cursor"]),
+            patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "9.9.9")),
+            patch.object(self.upd, "update_agents", return_value=(["claude", "cursor"], [])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main(["--source", "/somewhere"])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("WARNING: --source only applies to Cursor", printed)
+        self.assertIn("claude", printed)
+
+    def test_source_pinned_version_suffix_dropped_for_natives(self):
+        # --source pins `version` to the source archive, but natives track their
+        # marketplace to latest — so the "to vX" suffix must be dropped when a
+        # native is among the updated agents.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "cursor"]),
+            patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "9.9.9")),
+            patch.object(self.upd, "update_agents", return_value=(["claude", "cursor"], [])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main(["--source", "/somewhere"])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("Updated 2 agent(s):", printed)  # no " to vX" suffix
+        self.assertNotIn("to v9.9.9", printed)
+
+    def test_source_cursor_only_keeps_version_suffix(self):
+        # Cursor alone with --source: the source version is exactly what Cursor
+        # got, so the suffix is accurate and must be shown.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["cursor"]),
+            patch.object(self.upd, "acquire_source", return_value=(Path("/fresh"), "9.9.9")),
+            patch.object(self.upd, "update_agents", return_value=(["cursor"], [])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main(["--source", "/somewhere"])
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("to v9.9.9", printed)
+
+    def test_source_with_native_only_keeps_accurate_version_suffix(self):
+        # --source but no Cursor: download is skipped, so nothing is source-pinned
+        # (fresh_root stays None) and `version` is the marketplace-latest the
+        # natives actually got — the suffix is accurate and must be shown.
+        with (
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude"]),
+            patch.object(self.upd, "acquire_source") as acquire,
+            patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
+            patch.object(self.upd, "update_agents", return_value=(["claude"], [])),
+            patch.object(self.upd.os, "chdir"),
+            patch("builtins.print") as mock_print,
+        ):
+            self.upd.main(["--source", "/somewhere"])
+        acquire.assert_not_called()  # no Cursor → no source acquisition
+        printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
+        self.assertIn("to v0.2.0", printed)
 
 
 if __name__ == "__main__":

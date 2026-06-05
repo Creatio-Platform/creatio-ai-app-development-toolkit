@@ -43,7 +43,7 @@ for release-zip installation and agent-specific install details.
 
 ## Updates
 
-CAADT relies on each agent's native plugin update mechanism.
+CAADT updates each agent through that agent's native plugin update command when one is available.
 
 For a single command that updates every detected agent in one shot, run the manual updater:
 
@@ -51,10 +51,10 @@ For a single command that updates every detected agent in one shot, run the manu
 python installer/update.py
 ```
 
-It downloads the latest public release, extracts it to a temp directory, and delegates to that release's `installer/install.py` for each installed agent. Run it from a plain terminal after exiting any agent session — updating an agent rewrites the plugin directory the running session holds. Options:
+Each agent with a native update command is updated in place (its catalog is refreshed, then the plugin is updated). If an agent has no native update command, it is reinstalled from the latest release, which the updater downloads on demand — agents are otherwise updated from their own marketplace, so nothing is downloaded unless a reinstall is needed. Run it from a plain terminal after exiting any agent session — updating an agent rewrites the plugin directory the running session holds. Options:
 
-- `--target {codex,cursor,copilot}` — update only one agent.
-- `--source <dir>` — update from a local checkout/extract instead of downloading.
+- `--target {codex,claude,cursor,copilot}` — update only one agent.
+- `--source <dir>` — reinstall from a local checkout/extract instead of downloading (used for agents without a native update command).
 - `--silent` — suppress output and exit non-zero on failure.
 
 A network or release-fetch failure exits non-zero without touching installed agents, so the main CAADT workflow keeps working on the previously installed version.

@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""Unified, self-fetching CAADT update command.
+"""Unified CAADT update command.
 
-Manual update entrypoint. Each agent also has its own native plugin update
-command (Codex `plugin marketplace upgrade`, Copilot `plugin update`, Claude
-marketplace auto-update) — this script is the one-shot equivalent that updates
-every detected agent in a single run, skipping Claude (its marketplace handles
-itself).
+Manual update entrypoint — the one-shot equivalent of updating every detected
+agent in a single run. Distinct from install.py: this updates *already-installed*
+plugins, it does not install or configure them.
 
 How it works:
-  1. Download the latest release zip (reusing runtime/version_check.py for the
-     public GitHub release API) into a temp directory and extract it.
-  2. For each detected, updateable agent, delegate to the *freshly downloaded*
-     `installer/install.py --target <agent>`. install.py already encodes the
-     correct per-agent mechanism:
-        codex   — remote-marketplace CLI (`codex plugin marketplace add` + add)
-        cursor  — local file-copy from the downloaded release
-        copilot — remote-marketplace CLI (`copilot plugin install`)
-     Delegating to the downloaded install.py means the update always runs the
-     latest install logic against the latest source.
+  - Agents with a native plugin-update command are updated in place via that
+    command. Each is a two-step sequence — refresh the local marketplace catalog,
+    then update/reinstall the plugin — because a bare update compares against the
+    *cached* catalog and no-ops if it looks current:
+        claude  — `claude plugin marketplace update`  + `claude plugin update`
+        codex   — `codex plugin marketplace upgrade`   + `codex plugin add`
+        copilot — `copilot plugin marketplace update`  + `copilot plugin update`
+  - Cursor has no native update command, so it is the only agent that falls back
+    to install.py: it is reinstalled (file-copy) from the latest release, which
+    this command downloads on demand. Agents are updated from their own
+    marketplace git, so the release zip is fetched *only* when Cursor is present.
 
-Because it downloads its own source, this command works from anywhere — a stale
-checkout, an installed plugin directory, or a fresh clone. Run it from a plain
-terminal *after* exiting your agent session: updating an agent rewrites the
-plugin directory the running session holds, which can fail on Windows while the
-session is live.
+update.py shares only `agent_cli` (plugin/marketplace identifiers + CLI
+resolution) with install.py; its update logic is otherwise independent.
+
+Run it from a plain terminal *after* exiting your agent session: updating an
+agent rewrites the plugin directory the running session holds, which can fail on
+Windows while the session is live.
 
 Usage:
   python installer/update.py
-  python installer/update.py --target {codex,cursor,copilot}
-  python installer/update.py --source <dir>   # use a local checkout/extract; skip download
+  python installer/update.py --target {codex,claude,cursor,copilot}
+  python installer/update.py --source <dir>   # reinstall Cursor from a local checkout/extract
   python installer/update.py --silent         # machine-readable; non-zero on failure
 """
 from __future__ import annotations
@@ -43,28 +43,39 @@ import zipfile
 from pathlib import Path
 
 # Allow running as `python installer/update.py` from a checkout, an extracted
-# release, or an installed plugin directory.
+# release, or an installed plugin directory. The installer dir holds agent_cli
+# (shared with install.py); the runtime dir holds version_check.
 _INSTALLER_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _INSTALLER_DIR.parent
 _RUNTIME_DIR = _REPO_ROOT / "runtime"
 
-if str(_RUNTIME_DIR) not in sys.path:
-    sys.path.insert(0, str(_RUNTIME_DIR))
+for _dir in (_INSTALLER_DIR, _RUNTIME_DIR):
+    if str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
 
+import agent_cli  # noqa: E402
 import version_check  # noqa: E402
 
 # -------------------------------------------------------------------------
 # Constants
 # -------------------------------------------------------------------------
 
-# Claude is intentionally absent: it self-updates via the marketplace.
-UPDATEABLE_TARGETS: tuple[str, ...] = ("codex", "cursor", "copilot")
+# Agents with a native plugin-update command — updated in place, no download.
+NATIVE_TARGETS: tuple[str, ...] = ("codex", "claude", "copilot")
+# Agents with no native update command — reinstalled from the release source.
+COPY_TARGETS: tuple[str, ...] = ("cursor",)
+# Detection/reporting order across every agent we can update. Derived from the
+# two groups above so a new agent added to NATIVE_TARGETS/COPY_TARGETS can never
+# be silently dropped from detection.
+ALL_TARGETS: tuple[str, ...] = NATIVE_TARGETS + COPY_TARGETS
 
-# Upper bound for a single delegated install.py run. The per-agent install
-# does its own network I/O (codex/copilot register a remote marketplace), so
-# without a cap a stalled socket or an interactive prompt would hang the whole
-# updater with no exit code. 10 minutes is generous for a plugin install.
-_INSTALL_TIMEOUT_SECONDS = 600
+# Upper bound for a single CLI step. Each native step does its own network I/O
+# (refreshing a remote marketplace, pulling a plugin), so without a cap a stalled
+# socket or an interactive prompt would hang the updater with no exit code.
+_STEP_TIMEOUT_SECONDS = 600
+
+# The installer script delegated to for Cursor and used to locate the release root.
+_INSTALL_SCRIPT_NAME = "install.py"
 
 
 # -------------------------------------------------------------------------
@@ -72,19 +83,142 @@ _INSTALL_TIMEOUT_SECONDS = 600
 # -------------------------------------------------------------------------
 
 
-def detect_updateable_target_ids(home: Path | None = None) -> list[str]:
-    """Return the updateable agents that are installed on this machine.
+def detect_installed_target_ids(home: Path | None = None) -> list[str]:
+    """Return the agents that are installed on this machine.
 
-    Mirrors install.py's detect_targets() home-directory probe, minus Claude
-    (which self-updates). Kept inline so the update command never depends on the
-    possibly-stale install.py it sits next to.
+    Mirrors install.py's detect_targets() home-directory probe. Kept inline so
+    the update command never depends on install.py.
     """
     home = home or Path.home()
-    return [tid for tid in UPDATEABLE_TARGETS if (home / f".{tid}").exists()]
+    return [tid for tid in ALL_TARGETS if (home / f".{tid}").exists()]
 
 
 # -------------------------------------------------------------------------
-# Source acquisition (download + extract, or local --source)
+# Native update commands (two-step: refresh catalog, then update plugin)
+# -------------------------------------------------------------------------
+
+
+def native_update_commands(target_id: str) -> list[list[str]]:
+    """Return the ordered argv command-lists for a native agent's update.
+
+    Step 1 refreshes the local marketplace catalog from its git source; step 2
+    updates (Claude/Copilot) or reinstalls from the refreshed snapshot (Codex,
+    which has no `plugin update`). The refresh is required: a bare update/add
+    resolves the version from the *cached* catalog and skips if it already
+    matches, so without it a moved `release` branch would never be picked up.
+    """
+    if target_id == "claude":
+        cli = agent_cli.resolve_claude_command()
+        return [
+            [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
+            [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
+        ]
+    if target_id == "codex":
+        cli = agent_cli.resolve_codex_command()
+        return [
+            [*cli, "plugin", "marketplace", "upgrade", agent_cli.MARKETPLACE_NAME],
+            [*cli, "plugin", "add", agent_cli.PLUGIN_SOURCE],
+        ]
+    if target_id == "copilot":
+        cli = agent_cli.resolve_copilot_command()
+        return [
+            [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
+            [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
+        ]
+    raise ValueError(f"{target_id!r} has no native update command")
+
+
+def _run_step(command: list[str]) -> None:
+    """Run one update step, raising RuntimeError on a non-zero exit.
+
+    stdin=DEVNULL so a step can never block on an interactive prompt; timeout so
+    a network stall can't hang forever (propagates as TimeoutExpired).
+    """
+    result = subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        timeout=_STEP_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"{' '.join(command)} failed: {detail}")
+
+
+def _update_native(target_id: str) -> None:
+    for command in native_update_commands(target_id):
+        _run_step(command)
+
+
+def _update_cursor(fresh_root: Path | None) -> None:
+    """Reinstall Cursor (file-copy) from the downloaded release via install.py.
+
+    Cursor's "update" is a fresh install from the latest source, so it reuses
+    install.py — the only agent that does.
+    """
+    if fresh_root is None:
+        raise RuntimeError(
+            "could not obtain the release source needed to update Cursor"
+        )
+    install_script = fresh_root / "installer" / _INSTALL_SCRIPT_NAME
+    _run_step([sys.executable, str(install_script), "--target", "cursor"])
+
+
+def _update_one_agent(target_id: str, fresh_root: Path | None) -> str | None:
+    """Update a single agent. Return None on success, or an error message string."""
+    try:
+        if target_id in COPY_TARGETS:
+            _update_cursor(fresh_root)
+        else:
+            _update_native(target_id)
+    except subprocess.TimeoutExpired:
+        return f"timed out after {_STEP_TIMEOUT_SECONDS}s"
+    except (RuntimeError, ValueError) as error:
+        # ValueError surfaces an unknown native target (native_update_commands).
+        # Unreachable while NATIVE_TARGETS/COPY_TARGETS stay in sync, but caught
+        # here so a future drift records one failed agent instead of aborting the
+        # whole batch — the entire point of this per-agent isolation.
+        return str(error)
+    return None
+
+
+def update_agents(
+    target_ids: list[str],
+    *,
+    fresh_root: Path | None = None,
+    silent: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Update each agent: native command in place, or Cursor file-copy reinstall.
+
+    Updates every id in *target_ids*; the caller is responsible for scoping that
+    list (e.g. for --target). A failure on one agent is recorded and the rest
+    continue. Returns (updated, failed) lists of target IDs.
+    """
+    updated: list[str] = []
+    failed: list[str] = []
+
+    for target_id in target_ids:
+        error = _update_one_agent(target_id, fresh_root)
+        if error is None:
+            updated.append(target_id)
+            if not silent:
+                # NOTE: The setup wizard parses these two per-agent line formats
+                # ("Updated <id>." / "ERROR updating <id>: <reason>") to render a
+                # per-agent success/failure breakdown. Keep them in sync with
+                # caadt-installer-service.ts#parseUpdateAgentResults in the
+                # adac-setup-wizard repo if you change the wording.
+                print(f"Updated {target_id}.")
+        else:
+            failed.append(target_id)
+            if not silent:
+                print(f"ERROR updating {target_id}: {error}", file=sys.stderr)
+
+    return updated, failed
+
+
+# -------------------------------------------------------------------------
+# Source acquisition (Cursor only: download + extract, or local --source)
 # -------------------------------------------------------------------------
 
 
@@ -110,10 +244,10 @@ def _find_extracted_root(base: Path) -> Path | None:
     `creatio-ai-app-development-toolkit-<version>/` directory; a `--source`
     checkout may already be that directory.
     """
-    if (base / "installer" / "install.py").exists():
+    if (base / "installer" / _INSTALL_SCRIPT_NAME).exists():
         return base
     for child in sorted(base.iterdir()):
-        if child.is_dir() and (child / "installer" / "install.py").exists():
+        if child.is_dir() and (child / "installer" / _INSTALL_SCRIPT_NAME).exists():
             return child
     return None
 
@@ -123,7 +257,7 @@ def acquire_source(
     *,
     source: Path | None = None,
 ) -> tuple[Path, str]:
-    """Return (fresh_root, version) for the source to update from.
+    """Return (fresh_root, version) for the source to reinstall Cursor from.
 
     With --source, use the given local directory and read its plugin version.
     Otherwise download and extract the latest release into *work_dir*.
@@ -163,84 +297,23 @@ def acquire_source(
 
 
 # -------------------------------------------------------------------------
-# Core update logic
-# -------------------------------------------------------------------------
-
-
-def update_targets(
-    fresh_root: Path,
-    target_ids: list[str],
-    *,
-    selected: str | None = None,
-    silent: bool = False,
-) -> tuple[list[str], list[str]]:
-    """Delegate each target to the freshly downloaded install.py --target <id>.
-
-    Returns (updated, failed) lists of target IDs.
-    """
-    updated: list[str] = []
-    failed: list[str] = []
-    install_script = fresh_root / "installer" / "install.py"
-
-    for target_id in target_ids:
-        if selected and target_id != selected:
-            continue
-        command = [sys.executable, str(install_script), "--target", target_id]
-        try:
-            # stdin=DEVNULL so a delegated install can never block on an
-            # interactive prompt; timeout so a network stall can't hang forever.
-            result = subprocess.run(
-                command,
-                text=True,
-                capture_output=True,
-                stdin=subprocess.DEVNULL,
-                timeout=_INSTALL_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as error:
-            failed.append(target_id)
-            if not silent:
-                detail = (error.stderr or error.stdout or "").strip()
-                suffix = f": {detail}" if detail else ""
-                print(
-                    f"ERROR updating {target_id}: timed out after "
-                    f"{_INSTALL_TIMEOUT_SECONDS}s{suffix}",
-                    file=sys.stderr,
-                )
-            continue
-        if result.returncode != 0:
-            failed.append(target_id)
-            if not silent:
-                detail = (result.stderr or result.stdout or "").strip()
-                print(f"ERROR updating {target_id}: {detail}", file=sys.stderr)
-            continue
-        updated.append(target_id)
-        if not silent:
-            print(f"Updated {target_id}.")
-
-    return updated, failed
-
-
-# -------------------------------------------------------------------------
 # CLI
 # -------------------------------------------------------------------------
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Update installed CAADT agents (Codex, Cursor, Copilot). "
-            "Claude Code is skipped — it self-updates."
-        )
+        description="Update installed CAADT agents (Codex, Claude Code, Cursor, Copilot)."
     )
     parser.add_argument(
         "--target",
-        choices=list(UPDATEABLE_TARGETS),
+        choices=list(ALL_TARGETS),
         help="Update only this agent.",
     )
     parser.add_argument(
         "--source",
         type=Path,
-        help="Update from this local checkout/extract instead of downloading the latest release.",
+        help="Reinstall Cursor from this local checkout/extract instead of downloading the latest release.",
     )
     parser.add_argument(
         "--silent",
@@ -253,56 +326,103 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
-    target_ids = detect_updateable_target_ids()
+    target_ids = detect_installed_target_ids()
     if args.target and args.target not in target_ids:
         if not args.silent:
             print(f"{args.target} is not installed; nothing to update.")
         return 0
     if not target_ids:
         if not args.silent:
-            print("No updatable agents detected (Codex, Cursor, GitHub Copilot CLI).")
+            print("No installed agents detected (Codex, Claude Code, Cursor, GitHub Copilot CLI).")
         return 0
 
-    # Step out of any plugin directory before updating: delegating to install.py
-    # rewrites the plugin tree this script may live in, which fails on Windows
-    # if the process's working directory is inside the tree being replaced.
+    # Step out of any plugin directory before updating: a Cursor reinstall
+    # rewrites the plugin tree this script may live in, which fails on Windows if
+    # the process's working directory is inside the tree being replaced.
     try:
         os.chdir(Path.home())
     except OSError:
         pass
 
-    work_dir = Path(tempfile.mkdtemp(prefix="caadt-update-"))
-    try:
-        try:
-            fresh_root, version = acquire_source(work_dir, source=args.source)
-        except RuntimeError as error:
-            if not args.silent:
-                print(f"ERROR: {error}", file=sys.stderr)
-            return 1
+    effective = [tid for tid in target_ids if not args.target or tid == args.target]
+    need_source = any(tid in COPY_TARGETS for tid in effective)
 
-        updated, failed = update_targets(
-            fresh_root,
-            target_ids,
-            selected=args.target,
+    # --source only scopes Cursor's reinstall; native agents always track their
+    # marketplace. Warn rather than silently ignore it, so a user who passed
+    # --source expecting it to pin every agent isn't misled.
+    if args.source is not None and not args.silent:
+        native_in_scope = [tid for tid in effective if tid in NATIVE_TARGETS]
+        if native_in_scope:
+            print(
+                f"WARNING: --source only applies to Cursor; "
+                f"{', '.join(native_in_scope)} update from their marketplace to latest.",
+                file=sys.stderr,
+            )
+
+    work_dir: Path | None = None
+    fresh_root: Path | None = None
+    version: str | None = None
+    try:
+        # Only Cursor needs the release source; native agents update from their
+        # own marketplace git. Skip the download entirely when no Cursor.
+        if need_source:
+            work_dir = Path(tempfile.mkdtemp(prefix="caadt-update-"))
+            try:
+                fresh_root, version = acquire_source(work_dir, source=args.source)
+            except RuntimeError as error:
+                # Don't abort the whole run — native agents can still update;
+                # Cursor will be reported as failed by update_agents.
+                if not args.silent:
+                    print(f"ERROR: {error}", file=sys.stderr)
+
+        # `effective` is the single place the --target scope is applied;
+        # update_agents updates exactly what it is handed.
+        updated, failed = update_agents(
+            effective,
+            fresh_root=fresh_root,
             silent=args.silent,
         )
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     if not args.silent:
         if updated:
-            # Report the version we updated *to*. We deliberately do not print a
-            # "from" version: the only version this script can read locally is
-            # its own source tree's, which is not the installed agent's version
-            # (it differs when run from a fresh clone), so a "vX -> vY" delta
-            # would be misleading.
-            print(
-                f"\nUpdated {len(updated)} agent(s) to v{version}: "
-                f"{', '.join(updated)}"
+            # `version` is only ever used for this display line, so resolve the
+            # fallback lazily here — this skips the latest_release_version()
+            # network round-trip entirely in --silent runs and when nothing was
+            # updated. (latest_release_version() returns None on any failure, so
+            # this never raises.)
+            if version is None:
+                version = version_check.latest_release_version()
+            # Report the version we updated *to*. No "from" version: the installed
+            # version differs per agent and isn't reliably readable here, so a
+            # "vX -> vY" delta would be misleading.
+            #
+            # The "to vX" suffix is only trustworthy when every updated agent
+            # actually landed on `version`. `version` is the --source-pinned
+            # value only when --source was given *and* a source was acquired
+            # (fresh_root set); native agents ignore that source and track their
+            # marketplace to *latest*, so the pinned version would misrepresent
+            # them — drop the suffix only in that case. (Without --source,
+            # `version` is the latest release, which is what natives get too.)
+            version_is_source_pinned = args.source is not None and fresh_root is not None
+            source_pinned_natives = version_is_source_pinned and any(
+                tid in NATIVE_TARGETS for tid in updated
             )
+            target = f" to v{version}" if version and not source_pinned_natives else ""
+            print(f"\nUpdated {len(updated)} agent(s){target}: {', '.join(updated)}")
             print("Start a new agent session to load the updated version.")
         if failed:
             print(f"Failed  {len(failed)} agent(s): {', '.join(failed)}", file=sys.stderr)
+            # A common, non-obvious cause is a still-running agent holding a lock
+            # on its own plugin files (the raw CLI error rarely says so). Phrased
+            # conditionally so it stays correct for network/timeout failures too.
+            print(
+                "A running agent can lock its plugin files and block the update. "
+                "Close the agent(s) above and re-run this command.",
+                file=sys.stderr,
+            )
 
     return 1 if failed else 0
 
