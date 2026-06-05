@@ -72,6 +72,9 @@ ALL_TARGETS: tuple[str, ...] = ("codex", "claude", "cursor", "copilot")
 # socket or an interactive prompt would hang the updater with no exit code.
 _STEP_TIMEOUT_SECONDS = 600
 
+# The installer script delegated to for Cursor and used to locate the release root.
+_INSTALL_SCRIPT_NAME = "install.py"
+
 
 # -------------------------------------------------------------------------
 # Detection
@@ -156,8 +159,22 @@ def _update_cursor(fresh_root: Path | None) -> None:
         raise RuntimeError(
             "could not obtain the release source needed to update Cursor"
         )
-    install_script = fresh_root / "installer" / "install.py"
+    install_script = fresh_root / "installer" / _INSTALL_SCRIPT_NAME
     _run_step([sys.executable, str(install_script), "--target", "cursor"])
+
+
+def _update_one_agent(target_id: str, fresh_root: Path | None) -> str | None:
+    """Update a single agent. Return None on success, or an error message string."""
+    try:
+        if target_id in COPY_TARGETS:
+            _update_cursor(fresh_root)
+        else:
+            _update_native(target_id)
+    except subprocess.TimeoutExpired:
+        return f"timed out after {_STEP_TIMEOUT_SECONDS}s"
+    except RuntimeError as error:
+        return str(error)
+    return None
 
 
 def update_agents(
@@ -178,27 +195,15 @@ def update_agents(
     for target_id in target_ids:
         if selected and target_id != selected:
             continue
-        try:
-            if target_id in COPY_TARGETS:
-                _update_cursor(fresh_root)
-            else:
-                _update_native(target_id)
-        except subprocess.TimeoutExpired:
-            failed.append(target_id)
+        error = _update_one_agent(target_id, fresh_root)
+        if error is None:
+            updated.append(target_id)
             if not silent:
-                print(
-                    f"ERROR updating {target_id}: timed out after {_STEP_TIMEOUT_SECONDS}s",
-                    file=sys.stderr,
-                )
-            continue
-        except RuntimeError as error:
+                print(f"Updated {target_id}.")
+        else:
             failed.append(target_id)
             if not silent:
                 print(f"ERROR updating {target_id}: {error}", file=sys.stderr)
-            continue
-        updated.append(target_id)
-        if not silent:
-            print(f"Updated {target_id}.")
 
     return updated, failed
 
@@ -230,10 +235,10 @@ def _find_extracted_root(base: Path) -> Path | None:
     `creatio-ai-app-development-toolkit-<version>/` directory; a `--source`
     checkout may already be that directory.
     """
-    if (base / "installer" / "install.py").exists():
+    if (base / "installer" / _INSTALL_SCRIPT_NAME).exists():
         return base
     for child in sorted(base.iterdir()):
-        if child.is_dir() and (child / "installer" / "install.py").exists():
+        if child.is_dir() and (child / "installer" / _INSTALL_SCRIPT_NAME).exists():
             return child
     return None
 

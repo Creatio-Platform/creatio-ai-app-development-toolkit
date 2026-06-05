@@ -263,7 +263,7 @@ class UpdateAgentsTests(unittest.TestCase):
     def test_selected_filters_targets(self):
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
-            updated, failed = self.upd.update_agents(
+            updated, _ = self.upd.update_agents(
                 ["codex", "copilot"], selected="copilot", silent=True
             )
         self.assertEqual(updated, ["copilot"])
