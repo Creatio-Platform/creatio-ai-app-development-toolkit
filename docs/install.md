@@ -198,5 +198,6 @@ self-updates the plugin on each session start. If you have flipped this to `fals
 claude plugin update creatio-ai-app-development-toolkit@creatio
 ```
 
-manually to pick up new releases. The in-agent update notification and the unified `caadt update`
-command both skip Claude by design, on the assumption that autoUpdate is on.
+manually to pick up new releases. The unified `installer/update.py` also runs this same
+`claude plugin update` for you (in addition to Claude's own autoUpdate), so Claude is refreshed
+whether or not autoUpdate is enabled.

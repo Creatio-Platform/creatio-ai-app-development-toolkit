@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Release-asset download helpers used by `installer/update.py`.
 
-Only two public helpers remain:
+Public helpers:
   - `installed_plugin_version()` reads the installed CAADT version from the
     nearest plugin manifest so update.py can report a before/after delta.
+  - `latest_release_version()` fetches just the latest release tag (no asset
+    download) so update.py can report the target version cheaply.
   - `download_latest_release_zip()` fetches the latest release zip asset from
     the public GitHub release so update.py can self-fetch from any checkout.
 """
@@ -75,6 +77,22 @@ def _fetch_release_json() -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def latest_release_version() -> str | None:
+    """Return the latest published release version (tag without a leading 'v').
+
+    Hits only the lightweight `releases/latest` JSON API — no asset download — so
+    update.py can report the target version even when it has nothing to download
+    (every detected agent updates from its own marketplace git). Returns None on
+    any failure; callers must degrade gracefully (a failed lookup must never
+    crash the update flow).
+    """
+    release = _fetch_release_json()
+    if release is None:
+        return None
+    tag = release.get("tag_name", "")
+    return tag.lstrip("v") if isinstance(tag, str) and tag else None
 
 
 def download_latest_release_zip(dest_path: Path) -> str | None:

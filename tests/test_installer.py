@@ -133,13 +133,13 @@ class CliPreflightTests(unittest.TestCase):
         installer = load_installer()
         with patch("shutil.which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "claude was not found in PATH"):
-                installer.preflight_claude()
+                installer.agent_cli.preflight_claude()
 
     def test_preflight_copilot_reports_missing_path(self):
         installer = load_installer()
         with patch("shutil.which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
-                installer.preflight_copilot()
+                installer.agent_cli.preflight_copilot()
 
     def test_preflight_clio_reports_missing_path(self):
         installer = load_installer()
@@ -151,11 +151,11 @@ class CliPreflightTests(unittest.TestCase):
         installer = load_installer()
         with patch("shutil.which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "codex was not found in PATH"):
-                installer.preflight_codex()
+                installer.agent_cli.preflight_codex()
 
     def test_resolve_copilot_command_wraps_powershell_shim_on_windows(self):
         installer = load_installer()
-        with patch.object(installer, "preflight_copilot", return_value=r"C:\nvm4w\nodejs\copilot.ps1"):
+        with patch.object(installer.agent_cli, "preflight_copilot", return_value=r"C:\nvm4w\nodejs\copilot.ps1"):
             command = installer.resolve_copilot_command()
         self.assertEqual(
             command,
@@ -164,7 +164,7 @@ class CliPreflightTests(unittest.TestCase):
 
     def test_resolve_claude_command_wraps_powershell_shim(self):
         installer = load_installer()
-        with patch.object(installer, "preflight_claude", return_value=r"C:\tools\claude.ps1"):
+        with patch.object(installer.agent_cli, "preflight_claude", return_value=r"C:\tools\claude.ps1"):
             command = installer.resolve_claude_command()
         self.assertEqual(
             command,
@@ -173,7 +173,7 @@ class CliPreflightTests(unittest.TestCase):
 
     def test_resolve_codex_command_wraps_powershell_shim(self):
         installer = load_installer()
-        with patch.object(installer, "preflight_codex", return_value=r"C:\tools\codex.ps1"):
+        with patch.object(installer.agent_cli, "preflight_codex", return_value=r"C:\tools\codex.ps1"):
             command = installer.resolve_codex_command()
         self.assertEqual(
             command,
@@ -398,7 +398,7 @@ class InstallClaudeTests(unittest.TestCase):
             def fake_run(command, **_kwargs):
                 commands.append(command)
 
-            with patch.object(installer, "preflight_claude", return_value="claude"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_claude", return_value="claude"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ):
                 installer.install_claude(repo_root, home)
@@ -456,7 +456,7 @@ class InstallClaudeTests(unittest.TestCase):
                 if command[1:4] == ["plugin", "marketplace", "remove"]:
                     raise RuntimeError("Error: marketplace 'creatio' not found")
 
-            with patch.object(installer, "preflight_claude", return_value="claude"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_claude", return_value="claude"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ), patch("builtins.print"):
                 installer.install_claude(repo_root, home)
@@ -488,7 +488,7 @@ class InstallClaudeTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(installer, "preflight_claude", return_value="claude"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_claude", return_value="claude"), patch.object(
                 installer, "run_checked"
             ):
                 installer.install_claude(repo_root, home)
@@ -705,7 +705,7 @@ class InstallCodexTests(unittest.TestCase):
             def fake_run(command, **_kwargs):
                 commands.append(command)
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ), patch.object(installer, "copy_plugin_runtime_surface") as copy_runtime:
                 installer.install_codex(repo_root, home)
@@ -738,7 +738,7 @@ class InstallCodexTests(unittest.TestCase):
                 if command[1:4] == ["plugin", "marketplace", "remove"]:
                     raise RuntimeError("Error: marketplace 'creatio' not found")
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ), patch("builtins.print"):
                 installer.install_codex(repo_root, home)
@@ -772,7 +772,7 @@ class InstallCodexTests(unittest.TestCase):
                 directory.mkdir(parents=True)
                 (directory / "marker").write_text("legacy\n", encoding="utf-8")
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ):
                 installer.install_codex(repo_root, home)
@@ -814,7 +814,7 @@ class InstallCodexTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ), patch("builtins.print"):
                 installer.install_codex(repo_root, home)
@@ -842,7 +842,7 @@ class InstallCodexTests(unittest.TestCase):
             codex_home.mkdir(parents=True)
             (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ):
                 installer.install_codex(repo_root, home)
@@ -885,7 +885,7 @@ class InstallCodexTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ):
                 installer.install_codex(repo_root, home)
@@ -922,7 +922,7 @@ class InstallCodexTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ):
                 installer.install_codex(repo_root, home)
@@ -955,7 +955,7 @@ class InstallCodexTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ):
                 installer.install_codex(repo_root, home)
@@ -986,7 +986,7 @@ class InstallCodexTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(installer, "preflight_codex", return_value="codex"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ), self.assertRaisesRegex(RuntimeError, "'plugins' must be a list"):
                 installer.install_codex(repo_root, home)
@@ -1017,7 +1017,7 @@ class InstallCopilotTests(unittest.TestCase):
             def fake_run(command, **_kwargs):
                 commands.append(command)
 
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ):
                 installer.install_copilot(repo_root, home)
@@ -1051,7 +1051,7 @@ class InstallCopilotTests(unittest.TestCase):
                             'copilot plugin marketplace add failed: Marketplace "creatio" already registered'
                         )
 
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked", side_effect=fake_run
             ):
                 installer.install_copilot(repo_root, Path(temp) / "home")
@@ -1206,7 +1206,7 @@ class InstallRoutingTests(unittest.TestCase):
             copilot_home.mkdir(parents=True)
 
             targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home}]
-            with patch.object(installer, "preflight_copilot", return_value="copilot"), patch.object(
+            with patch.object(installer.agent_cli, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked"
             ) as run_checked:
                 installed = installer.install_for_targets(repo_root, targets)
