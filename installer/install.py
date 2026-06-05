@@ -816,6 +816,24 @@ def should_write_setup_wizard_manifest(env: dict[str, str] | None = None) -> boo
     return value.strip().lower() in {"1", "true", "yes"}
 
 
+_INSTALLERS: dict[str, Any] = {
+    "codex": install_codex,
+    "claude": install_claude,
+    "cursor": install_cursor,
+    "copilot": install_copilot,
+}
+
+
+def _install_one(repo_root: Path, target: dict[str, Any]) -> bool:
+    """Dispatch to the per-agent installer. Returns False for unknown target ids."""
+    installer_fn = _INSTALLERS.get(target["id"])
+    if installer_fn is None:
+        return False
+    home = target["home"].parent if target["id"] in {"codex", "claude", "cursor", "copilot"} else target["home"]
+    installer_fn(repo_root, home)
+    return True
+
+
 def install_for_targets(
     repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None
 ) -> tuple[list[str], list[tuple[str, str]]]:
@@ -843,22 +861,12 @@ def install_for_targets(
     for target in targets:
         if selected and target["id"] != selected:
             continue
-        home = target["home"].parent if target["id"] in {"codex", "claude", "cursor", "copilot"} else target["home"]
         try:
-            if target["id"] == "codex":
-                install_codex(repo_root, home)
-            elif target["id"] == "claude":
-                install_claude(repo_root, home)
-            elif target["id"] == "cursor":
-                install_cursor(repo_root, home)
-            elif target["id"] == "copilot":
-                install_copilot(repo_root, home)
-            else:
+            if not _install_one(repo_root, target):
                 continue
         except RuntimeError as error:
             if selected:
-                # Explicitly requested target — fail hard rather than skip.
-                raise
+                raise  # explicit --target: fail hard
             print(f"WARNING: skipping {target['name']} — {error}", file=sys.stderr)
             failed.append((target["id"], str(error)))
             continue

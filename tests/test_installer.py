@@ -1252,29 +1252,24 @@ class InstallRoutingTests(unittest.TestCase):
             {"id": "copilot", "name": "GitHub Copilot CLI", "home": Path("/home/.copilot")},
             {"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")},
         ]
-        with (
-            patch.object(
-                installer,
-                "install_copilot",
-                side_effect=RuntimeError("copilot was not found in PATH."),
-            ),
-            patch.object(installer, "install_cursor") as install_cursor,
-        ):
+        mock_cursor = unittest.mock.MagicMock()
+        with patch.dict(installer._INSTALLERS, {
+            "copilot": unittest.mock.MagicMock(side_effect=RuntimeError("copilot was not found in PATH.")),
+            "cursor": mock_cursor,
+        }):
             installed, failed = installer.install_for_targets(Path("/repo"), targets)
 
         self.assertEqual(installed, ["cursor"])
         self.assertEqual(failed, [("copilot", "copilot was not found in PATH.")])
-        install_cursor.assert_called_once()
+        mock_cursor.assert_called_once()
 
     def test_install_for_targets_reraises_when_explicit_target_fails(self):
         """`--target copilot` is an explicit request, so a failure must propagate."""
         installer = load_installer()
         targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": Path("/home/.copilot")}]
-        with patch.object(
-            installer,
-            "install_copilot",
-            side_effect=RuntimeError("copilot was not found in PATH."),
-        ):
+        with patch.dict(installer._INSTALLERS, {
+            "copilot": unittest.mock.MagicMock(side_effect=RuntimeError("copilot was not found in PATH.")),
+        }):
             with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
                 installer.install_for_targets(Path("/repo"), targets, selected="copilot")
 
