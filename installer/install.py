@@ -277,15 +277,25 @@ def register_remote_marketplace_and_install_plugin(
 
 
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
+    """Detect locally installed coding agents to install into.
+
+    For CLI-driven agents (Codex, Claude Code, GitHub Copilot CLI) the install
+    works by driving the agent's own CLI. A home directory alone is not
+    sufficient — the CLI binary must also be on PATH. A leftover ``~/.copilot``
+    (or ``~/.codex`` / ``~/.claude``) whose binary is no longer on PATH is
+    ignored: we have no mechanism to install into an agent we can't invoke.
+
+    Cursor uses a file-copy install and requires no CLI binary.
+    """
     home = home or Path.home()
     targets: list[dict[str, Any]] = []
 
     codex_home = home / ".codex"
-    if codex_home.exists():
+    if codex_home.exists() and shutil.which("codex"):
         targets.append({"id": "codex", "name": "Codex", "home": codex_home})
 
     claude_home = home / ".claude"
-    if claude_home.exists():
+    if claude_home.exists() and shutil.which("claude"):
         targets.append({"id": "claude", "name": "Claude Code", "home": claude_home})
 
     cursor_home = home / ".cursor"
@@ -293,7 +303,7 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
         targets.append({"id": "cursor", "name": "Cursor", "home": cursor_home})
 
     copilot_home = home / ".copilot"
-    if copilot_home.exists():
+    if copilot_home.exists() and shutil.which("copilot"):
         targets.append({"id": "copilot", "name": "GitHub Copilot CLI", "home": copilot_home})
 
     return targets
@@ -807,22 +817,80 @@ def should_write_setup_wizard_manifest(env: dict[str, str] | None = None) -> boo
     return value.strip().lower() in {"1", "true", "yes"}
 
 
-def install_for_targets(repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None) -> list[str]:
-    installed = []
+_INSTALLERS: dict[str, Any] = {
+    "codex": install_codex,
+    "claude": install_claude,
+    "cursor": install_cursor,
+    "copilot": install_copilot,
+}
+
+
+def _install_one(repo_root: Path, target: dict[str, Any]) -> bool:
+    """Dispatch to the per-agent installer. Returns False for unknown target ids."""
+    installer_fn = _INSTALLERS.get(target["id"])
+    if installer_fn is None:
+        # detect_targets only ever emits ids present in _INSTALLERS, so this is
+        # defensive. Warn rather than silently drop, otherwise a future agent
+        # added to detection but not to _INSTALLERS would vanish without trace.
+        print(f"WARNING: no installer registered for target {target['id']!r}", file=sys.stderr)
+        return False
+    home = target["home"].parent
+    installer_fn(repo_root, home)
+    return True
+
+
+def install_for_targets(
+    repo_root: Path, targets: list[dict[str, Any]], selected: str | None = None
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Install the plugin into each target, isolating per-target failures.
+
+    Returns ``(installed_ids, failed)`` where ``failed`` is a list of
+    ``(target_id, error_message)`` tuples for auto-detected targets whose
+    install raised.
+
+    Targets are auto-detected by the presence of their agent home directory
+    (``~/.codex``, ``~/.claude``, ``~/.cursor``, ``~/.copilot``), but every
+    target except Cursor installs by driving that agent's own CLI, which must
+    be on PATH. A leftover home directory whose CLI is gone (e.g. ``~/.copilot``
+    surviving an ``npm uninstall -g`` or a PATH change) therefore raises during
+    install. Cursor and the CLI-driven agents also touch the filesystem
+    (copying the plugin surface, rewriting MCP config), which can raise
+    ``OSError``/``PermissionError`` on locked or read-only files. Either failure
+    on an auto-detected target is isolated: it is recorded in ``failed``, a
+    warning is printed, and the remaining targets still install. One
+    un-installable optional agent must not abort the whole run.
+
+    When a single target is explicitly requested via ``selected`` (the
+    ``--target`` flag), a failure is re-raised so the run exits non-zero — the
+    user asked for exactly that agent, so silently skipping it would be wrong.
+    An explicitly requested target that was never detected (its home directory
+    or CLI is missing, so ``detect_targets`` dropped it) is likewise a hard
+    error: the run raises rather than reporting a misleading success.
+    """
+    installed: list[str] = []
+    failed: list[tuple[str, str]] = []
     for target in targets:
         if selected and target["id"] != selected:
             continue
-        home = target["home"].parent if target["id"] in {"codex", "claude", "cursor", "copilot"} else target["home"]
-        if target["id"] == "codex":
-            install_codex(repo_root, home)
-        elif target["id"] == "claude":
-            install_claude(repo_root, home)
-        elif target["id"] == "cursor":
-            install_cursor(repo_root, home)
-        elif target["id"] == "copilot":
-            install_copilot(repo_root, home)
+        try:
+            if not _install_one(repo_root, target):
+                continue
+        except (RuntimeError, OSError) as error:
+            if selected:
+                raise  # explicit --target: fail hard
+            print(f"WARNING: skipping {target['name']} — {error}", file=sys.stderr)
+            failed.append((target["id"], str(error)))
+            continue
         installed.append(target["id"])
-    return installed
+    if selected and not installed and not failed:
+        # Explicit --target for an agent that detect_targets did not return
+        # (home dir absent, or the agent's CLI is not on PATH). The user asked
+        # for exactly this agent; exiting 0 here would be a misleading success.
+        raise RuntimeError(
+            f"requested target {selected!r} is not available "
+            "(home directory missing, or its CLI is not on PATH)"
+        )
+    return installed, failed
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -838,12 +906,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     installed: list[str] = []
+    failed: list[tuple[str, str]] = []
     manifest_path: Path | None = None
     try:
         preflight_clio()
         repo_root = resolve_repo_root()
         targets = detect_targets()
-        installed = install_for_targets(repo_root, targets, args.target)
+        installed, failed = install_for_targets(repo_root, targets, args.target)
         manifest_path = (
             write_setup_wizard_manifest(repo_root, installed)
             if should_write_setup_wizard_manifest()
@@ -855,11 +924,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if installed:
         print(f"Installed {PLUGIN_NAME} for: {', '.join(installed)}")
+    elif failed:
+        # Every detected target failed (e.g. leftover agent home directories
+        # whose CLIs are no longer on PATH). Report non-zero so the wizard
+        # surfaces the failure instead of a misleading "nothing to do" success.
+        print("No coding agents were installed; all detected targets failed.", file=sys.stderr)
     else:
         print("No supported local coding agents were detected.")
+
+    if failed:
+        # Per-target reasons were already printed as WARNING lines inside
+        # install_for_targets; this is just the consolidated summary.
+        skipped = ", ".join(target_id for target_id, _ in failed)
+        print(f"Skipped (install failed): {skipped}", file=sys.stderr)
+
     if manifest_path is not None:
         print(f"Wrote setup wizard manifest: {manifest_path}")
-    return 0
+
+    return 0 if installed or not failed else 1
 
 
 if __name__ == "__main__":

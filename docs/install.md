@@ -34,6 +34,14 @@ overlay files into the host's plugin tree.
 
 Cursor remains on the local file-copy install model.
 
+Targets are auto-detected by the presence of their agent home directory (`~/.codex`, `~/.claude`,
+`~/.cursor`, `~/.copilot`). Because every CLI-driven target needs its agent binary on PATH, a
+leftover home directory whose CLI is gone (e.g. `~/.copilot` surviving an `npm uninstall -g` or a
+PATH change) would otherwise abort the whole run. Instead, a failure on an *auto-detected* target is
+isolated: the installer prints a warning, skips that target, and still installs the rest. The run
+only exits non-zero when nothing installed. A target requested explicitly via `--target` still fails
+hard, since the user asked for exactly that agent.
+
 - **Claude Code** (`~/.claude/`) — preflights `claude` in PATH, then runs
   `claude plugin marketplace add <url>` and `claude plugin install creatio-ai-app-development-toolkit@creatio`.
   Patches `~/.claude/settings.json` to set `extraKnownMarketplaces.creatio.autoUpdate = true` so the

@@ -108,7 +108,7 @@ class ConstantsTests(unittest.TestCase):
 
 
 class DetectTargetsTests(unittest.TestCase):
-    def test_detects_all_four_when_home_dirs_present(self):
+    def test_detects_all_four_when_home_dirs_and_clis_present(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -117,15 +117,45 @@ class DetectTargetsTests(unittest.TestCase):
             (home / ".cursor").mkdir()
             (home / ".copilot").mkdir()
 
-            targets = installer.detect_targets(home)
+            with patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"):
+                targets = installer.detect_targets(home)
 
         self.assertEqual({target["id"] for target in targets}, {"codex", "claude", "cursor", "copilot"})
 
     def test_skips_targets_without_home_dirs(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
-            targets = installer.detect_targets(Path(temp))
+            with patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"):
+                targets = installer.detect_targets(Path(temp))
         self.assertEqual(targets, [])
+
+    def test_skips_cli_driven_targets_whose_binary_is_not_on_path(self):
+        """A leftover ~/.copilot with no copilot binary must not be detected."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / ".codex").mkdir()
+            (home / ".claude").mkdir()
+            (home / ".cursor").mkdir()
+            (home / ".copilot").mkdir()
+
+            # cursor has no binary requirement; the three CLI-driven ones do.
+            with patch("shutil.which", return_value=None):
+                targets = installer.detect_targets(home)
+
+        self.assertEqual({target["id"] for target in targets}, {"cursor"})
+
+    def test_detects_cursor_without_binary(self):
+        """Cursor uses file-copy install — no CLI binary needed."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / ".cursor").mkdir()
+
+            with patch("shutil.which", return_value=None):
+                targets = installer.detect_targets(home)
+
+        self.assertEqual([t["id"] for t in targets], ["cursor"])
 
 
 class CliPreflightTests(unittest.TestCase):
@@ -1211,10 +1241,66 @@ class InstallRoutingTests(unittest.TestCase):
             with patch.object(installer.agent_cli, "preflight_copilot", return_value="copilot"), patch.object(
                 installer, "run_checked"
             ) as run_checked:
-                installed = installer.install_for_targets(repo_root, targets)
+                installed, failed = installer.install_for_targets(repo_root, targets)
 
             self.assertEqual(installed, ["copilot"])
+            self.assertEqual(failed, [])
             self.assertEqual(run_checked.call_count, 2)
+
+    def test_install_for_targets_skips_failing_autodetected_target(self):
+        """A leftover ~/.copilot with no `copilot` on PATH must not abort the run."""
+        installer = load_installer()
+        targets = [
+            {"id": "copilot", "name": "GitHub Copilot CLI", "home": Path("/home/.copilot")},
+            {"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")},
+        ]
+        mock_cursor = unittest.mock.MagicMock()
+        with patch.dict(installer._INSTALLERS, {
+            "copilot": unittest.mock.MagicMock(side_effect=RuntimeError("copilot was not found in PATH.")),
+            "cursor": mock_cursor,
+        }):
+            installed, failed = installer.install_for_targets(Path("/repo"), targets)
+
+        self.assertEqual(installed, ["cursor"])
+        self.assertEqual(failed, [("copilot", "copilot was not found in PATH.")])
+        mock_cursor.assert_called_once()
+
+    def test_install_for_targets_reraises_when_explicit_target_fails(self):
+        """`--target copilot` is an explicit request, so a failure must propagate."""
+        installer = load_installer()
+        targets = [{"id": "copilot", "name": "GitHub Copilot CLI", "home": Path("/home/.copilot")}]
+        with patch.dict(installer._INSTALLERS, {
+            "copilot": unittest.mock.MagicMock(side_effect=RuntimeError("copilot was not found in PATH.")),
+        }):
+            with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
+                installer.install_for_targets(Path("/repo"), targets, selected="copilot")
+
+    def test_install_for_targets_skips_failing_autodetected_target_on_oserror(self):
+        """A file-copy failure (locked/read-only file -> OSError) must also be isolated."""
+        installer = load_installer()
+        targets = [
+            {"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")},
+            {"id": "codex", "name": "Codex", "home": Path("/home/.codex")},
+        ]
+        mock_codex = unittest.mock.MagicMock()
+        with patch.dict(installer._INSTALLERS, {
+            "cursor": unittest.mock.MagicMock(side_effect=PermissionError("file is locked")),
+            "codex": mock_codex,
+        }):
+            installed, failed = installer.install_for_targets(Path("/repo"), targets)
+
+        self.assertEqual(installed, ["codex"])
+        self.assertEqual(failed, [("cursor", "file is locked")])
+        mock_codex.assert_called_once()
+
+    def test_install_for_targets_raises_when_explicit_target_not_detected(self):
+        """`--target copilot` when copilot was filtered out by detection must fail hard, not no-op."""
+        installer = load_installer()
+        # detect_targets dropped copilot (no binary on PATH); only cursor remains.
+        targets = [{"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")}]
+        with patch.dict(installer._INSTALLERS, {"cursor": unittest.mock.MagicMock()}):
+            with self.assertRaisesRegex(RuntimeError, "requested target 'copilot' is not available"):
+                installer.install_for_targets(Path("/repo"), targets, selected="copilot")
 
 
 class JsonIoTests(unittest.TestCase):
@@ -1425,7 +1511,7 @@ class MainTests(unittest.TestCase):
                     patch.object(installer, "preflight_clio"),
                     patch.object(installer, "resolve_repo_root", return_value=repo_root),
                     patch.object(installer, "detect_targets", return_value=[]),
-                    patch.object(installer, "install_for_targets", return_value=["codex"]),
+                    patch.object(installer, "install_for_targets", return_value=(["codex"], [])),
                     patch.object(installer, "write_setup_wizard_manifest") as write_manifest,
                 ):
                     result = installer.main([])
@@ -1444,7 +1530,7 @@ class MainTests(unittest.TestCase):
                     patch.object(installer, "preflight_clio"),
                     patch.object(installer, "resolve_repo_root", return_value=repo_root),
                     patch.object(installer, "detect_targets", return_value=[]),
-                    patch.object(installer, "install_for_targets", return_value=["codex"]),
+                    patch.object(installer, "install_for_targets", return_value=(["codex"], [])),
                     patch.object(installer, "write_setup_wizard_manifest", return_value=manifest_path) as write_manifest,
                 ):
                     result = installer.main([])
@@ -1456,6 +1542,64 @@ class MainTests(unittest.TestCase):
         installer = load_installer()
         with patch.object(installer, "preflight_clio", side_effect=RuntimeError("boom")):
             result = installer.main([])
+
+        self.assertEqual(result, 1)
+
+    def test_returns_success_when_some_targets_install_and_others_skipped(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with (
+                patch.object(installer, "preflight_clio"),
+                patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                patch.object(installer, "detect_targets", return_value=[]),
+                patch.object(
+                    installer,
+                    "install_for_targets",
+                    return_value=(["codex"], [("copilot", "copilot was not found in PATH.")]),
+                ),
+            ):
+                result = installer.main([])
+
+        self.assertEqual(result, 0)
+
+    def test_returns_error_when_all_detected_targets_fail(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with (
+                patch.object(installer, "preflight_clio"),
+                patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                patch.object(installer, "detect_targets", return_value=[]),
+                patch.object(
+                    installer,
+                    "install_for_targets",
+                    return_value=([], [("copilot", "copilot was not found in PATH.")]),
+                ),
+            ):
+                result = installer.main([])
+
+        self.assertEqual(result, 1)
+
+    def test_returns_error_when_explicit_target_not_detected(self):
+        """`--target copilot` when copilot is not detected must exit non-zero, not a silent 0."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with (
+                patch.object(installer, "preflight_clio"),
+                patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                # copilot dropped by detection (no binary); cursor is present.
+                patch.object(
+                    installer,
+                    "detect_targets",
+                    return_value=[{"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")}],
+                ),
+            ):
+                result = installer.main(["--target", "copilot"])
 
         self.assertEqual(result, 1)
 
