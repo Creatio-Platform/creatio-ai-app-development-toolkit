@@ -17,6 +17,7 @@ Use this skill as the entrypoint for CAADT workflows.
 
 ## Core Rules
 
+- Pages are separate for web and mobile: before any page edit, read `context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.
 - Use `context/business-checklist.md`, `context/essentials.md`, `context/naming-conventions.md`, `context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.

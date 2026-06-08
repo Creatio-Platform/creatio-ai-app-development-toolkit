@@ -294,5 +294,18 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertNotIn("application.get_info", content, str(path))
 
 
+    def test_docs_route_page_edits_to_web_vs_mobile(self):
+        # Routing surfaces force reading essentials before a page edit (pointer, not nuance).
+        for path in [ROOT / "AGENTS.md", ROOT / "skills/creatio-app-orchestrator/SKILL.md"]:
+            content = read_text(path)
+            self.assertIn("essentials", content, str(path))
+            self.assertRegex(content, r"(?i)web.{0,20}mobile|mobile.{0,20}web", str(path))
+        # The page-schema nuance lives in essentials, not in the routers.
+        essentials = read_text(ROOT / "context/essentials.md")
+        self.assertIn("_MobileFormPage", essentials)
+        self.assertRegex(essentials, r"(?i)web vs mobile")
+        self.assertRegex(essentials, r"(?i)default to web")
+
+
 if __name__ == "__main__":
     unittest.main()

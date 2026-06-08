@@ -231,6 +231,7 @@ Approval-ready vs delivery-ready rule:
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
+- Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching variant; web and mobile are separate (details in `context/essentials.md`, "Freedom UI — Mobile Pages"). Applies even in autonomous or pre-approved runs.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
 - Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`runtime/scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 

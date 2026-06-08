@@ -1144,6 +1144,8 @@ class InstallCursorTests(unittest.TestCase):
             self.assertIn(str(local_plugin_dir), rule_body)
             self.assertNotIn(str(repo_root), rule_body)
             self.assertIn(str(cursor_home / "mcp.json"), rule_body)
+            self.assertIn("essentials", rule_body)
+            self.assertRegex(rule_body, r"(?i)mobile")
 
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())

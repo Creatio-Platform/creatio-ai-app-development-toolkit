@@ -48,6 +48,8 @@ Read these repository files for the BA stage:
 
 Apply this guidance when the developer mentions mobile access, a mobile-first UX, or mobile-specific sections.
 
+Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching page — web and mobile are separate (see `context/essentials.md`, "Freedom UI — Mobile Pages").
+
 - **Clarify scope**: ask which sections (entities) need mobile pages — mobile and web pages are separate schemas with different component registries and body formats.
 - **Record constraints in the Business Plan**: mobile pages cannot use custom validators, custom handlers, or custom converters. Only 7 OOTB converters may be referenced as inline binding expressions (`crt.ToObjectProp`, `crt.InvertBooleanValue`, `crt.IsEqual`, `crt.AndBooleanValue`, `crt.IsInArray`, `crt.Concat`, `crt.ToCollectionFilters`). If the user requires complex client-side logic (custom validators, converters, or handlers), flag this as out-of-scope for AI generation and note it requires a separate non-AI implementation path.
 - **Provisioning**: mobile pages are created automatically by `create-app-section` when the `UseMobilePageDesigner` feature flag is enabled. No separate mobile page creation tool is needed. Note the flag dependency explicitly in the Business Plan.
