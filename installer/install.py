@@ -828,8 +828,12 @@ def _install_one(repo_root: Path, target: dict[str, Any]) -> bool:
     """Dispatch to the per-agent installer. Returns False for unknown target ids."""
     installer_fn = _INSTALLERS.get(target["id"])
     if installer_fn is None:
+        # detect_targets only ever emits ids present in _INSTALLERS, so this is
+        # defensive. Warn rather than silently drop, otherwise a future agent
+        # added to detection but not to _INSTALLERS would vanish without trace.
+        print(f"WARNING: no installer registered for target {target['id']!r}", file=sys.stderr)
         return False
-    home = target["home"].parent if target["id"] in {"codex", "claude", "cursor", "copilot"} else target["home"]
+    home = target["home"].parent
     installer_fn(repo_root, home)
     return True
 
@@ -848,13 +852,19 @@ def install_for_targets(
     target except Cursor installs by driving that agent's own CLI, which must
     be on PATH. A leftover home directory whose CLI is gone (e.g. ``~/.copilot``
     surviving an ``npm uninstall -g`` or a PATH change) therefore raises during
-    install. Such a failure is isolated: it is recorded in ``failed``, a warning
-    is printed, and the remaining targets still install. One un-installable
-    optional agent must not abort the whole run.
+    install. Cursor and the CLI-driven agents also touch the filesystem
+    (copying the plugin surface, rewriting MCP config), which can raise
+    ``OSError``/``PermissionError`` on locked or read-only files. Either failure
+    on an auto-detected target is isolated: it is recorded in ``failed``, a
+    warning is printed, and the remaining targets still install. One
+    un-installable optional agent must not abort the whole run.
 
     When a single target is explicitly requested via ``selected`` (the
     ``--target`` flag), a failure is re-raised so the run exits non-zero — the
     user asked for exactly that agent, so silently skipping it would be wrong.
+    An explicitly requested target that was never detected (its home directory
+    or CLI is missing, so ``detect_targets`` dropped it) is likewise a hard
+    error: the run raises rather than reporting a misleading success.
     """
     installed: list[str] = []
     failed: list[tuple[str, str]] = []
@@ -864,13 +874,21 @@ def install_for_targets(
         try:
             if not _install_one(repo_root, target):
                 continue
-        except RuntimeError as error:
+        except (RuntimeError, OSError) as error:
             if selected:
                 raise  # explicit --target: fail hard
             print(f"WARNING: skipping {target['name']} — {error}", file=sys.stderr)
             failed.append((target["id"], str(error)))
             continue
         installed.append(target["id"])
+    if selected and not installed and not failed:
+        # Explicit --target for an agent that detect_targets did not return
+        # (home dir absent, or the agent's CLI is not on PATH). The user asked
+        # for exactly this agent; exiting 0 here would be a misleading success.
+        raise RuntimeError(
+            f"requested target {selected!r} is not available "
+            "(home directory missing, or its CLI is not on PATH)"
+        )
     return installed, failed
 
 

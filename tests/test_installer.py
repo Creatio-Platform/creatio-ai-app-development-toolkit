@@ -1273,6 +1273,33 @@ class InstallRoutingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "copilot was not found in PATH"):
                 installer.install_for_targets(Path("/repo"), targets, selected="copilot")
 
+    def test_install_for_targets_skips_failing_autodetected_target_on_oserror(self):
+        """A file-copy failure (locked/read-only file -> OSError) must also be isolated."""
+        installer = load_installer()
+        targets = [
+            {"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")},
+            {"id": "codex", "name": "Codex", "home": Path("/home/.codex")},
+        ]
+        mock_codex = unittest.mock.MagicMock()
+        with patch.dict(installer._INSTALLERS, {
+            "cursor": unittest.mock.MagicMock(side_effect=PermissionError("file is locked")),
+            "codex": mock_codex,
+        }):
+            installed, failed = installer.install_for_targets(Path("/repo"), targets)
+
+        self.assertEqual(installed, ["codex"])
+        self.assertEqual(failed, [("cursor", "file is locked")])
+        mock_codex.assert_called_once()
+
+    def test_install_for_targets_raises_when_explicit_target_not_detected(self):
+        """`--target copilot` when copilot was filtered out by detection must fail hard, not no-op."""
+        installer = load_installer()
+        # detect_targets dropped copilot (no binary on PATH); only cursor remains.
+        targets = [{"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")}]
+        with patch.dict(installer._INSTALLERS, {"cursor": unittest.mock.MagicMock()}):
+            with self.assertRaisesRegex(RuntimeError, "requested target 'copilot' is not available"):
+                installer.install_for_targets(Path("/repo"), targets, selected="copilot")
+
 
 class JsonIoTests(unittest.TestCase):
     def test_write_json_overwrites_and_leaves_no_temp_file(self):
@@ -1551,6 +1578,26 @@ class MainTests(unittest.TestCase):
                 ),
             ):
                 result = installer.main([])
+
+        self.assertEqual(result, 1)
+
+    def test_returns_error_when_explicit_target_not_detected(self):
+        """`--target copilot` when copilot is not detected must exit non-zero, not a silent 0."""
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            with (
+                patch.object(installer, "preflight_clio"),
+                patch.object(installer, "resolve_repo_root", return_value=repo_root),
+                # copilot dropped by detection (no binary); cursor is present.
+                patch.object(
+                    installer,
+                    "detect_targets",
+                    return_value=[{"id": "cursor", "name": "Cursor", "home": Path("/home/.cursor")}],
+                ),
+            ):
+                result = installer.main(["--target", "copilot"])
 
         self.assertEqual(result, 1)
 
