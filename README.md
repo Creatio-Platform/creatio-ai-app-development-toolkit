@@ -15,24 +15,33 @@ Prerequisites:
 - [clio](https://github.com/Advance-Technologies-Foundation/clio) installed and available in `PATH`.
 - Access to a running Creatio instance for implementation after Business Plan approval.
 
-Recommended for end users: install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See [docs/install.md](docs/install.md) for the wizard flow and setup-wizard behavior.
+There are three ways to install — pick one.
 
-Install from a local checkout (developers):
+### Install with the wizard (recommended for end users)
 
-```bash
-python installer/install.py
-```
+Install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See the [Set up the Creatio AI app development toolkit guide](https://academy.creatio.com/docs/8.x/no-code-customization/ai-development/creatio-ai-toolkit-setup) for the full wizard walkthrough, and [docs/install.md](docs/install.md) for setup-wizard behavior details.
 
-To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
+### Register the remote marketplace (tech users)
 
-Tech users who already have Claude Code, Codex CLI, or GitHub Copilot CLI in PATH can register the
-remote marketplace directly:
+If you already have Claude Code, Codex CLI, or GitHub Copilot CLI on `PATH`, register the marketplace and install the plugin directly — run the pair for your agent:
+
+**Claude Code**
 
 ```bash
 claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
+```
+
+**Codex CLI**
+
+```bash
 codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 codex plugin add creatio-ai-app-development-toolkit@creatio
+```
+
+**GitHub Copilot CLI**
+
+```bash
 copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
@@ -41,11 +50,46 @@ Codex additionally needs the `clio` MCP server registered in `~/.codex/config.to
 `python installer/install.py --target codex` once to add it. See [docs/install.md](docs/install.md)
 for release-zip installation and agent-specific install details.
 
+### Install from a local checkout (developers)
+
+```bash
+python installer/install.py
+```
+
+To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
+
 ## Updates
 
-CAADT updates each agent through that agent's native plugin update command when one is available.
+CAADT updates each agent through that agent's native plugin update command when one is available. There are two ways to update — pick one.
 
-For a single command that updates every detected agent in one shot, run the manual updater:
+### Update via native plugin commands
+
+If you registered the remote marketplace directly (Claude Code, Codex CLI, or GitHub Copilot CLI), update the same way — refresh the marketplace catalog, then update the plugin. The refresh is required: a bare update resolves against the cached catalog and no-ops if it looks current. Run the pair for your agent:
+
+**Claude Code**
+
+```bash
+claude plugin marketplace update creatio
+claude plugin update creatio-ai-app-development-toolkit@creatio
+```
+
+**Codex CLI**
+
+```bash
+codex plugin marketplace upgrade creatio
+codex plugin add creatio-ai-app-development-toolkit@creatio
+```
+
+**GitHub Copilot CLI**
+
+```bash
+copilot plugin marketplace update creatio
+copilot plugin update creatio-ai-app-development-toolkit@creatio
+```
+
+Cursor has no native update command — update it with the manual updater below (use `--target cursor` to limit the run to Cursor).
+
+### Update every agent in one shot
 
 ```bash
 python installer/update.py
@@ -87,5 +131,7 @@ Repository docs do not define clio tool parameter or response shapes.
 
 - [Install guide](docs/install.md)
 - [Release packaging](docs/release-structure.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 Support mode, troubleshooting reporting, runtime helper details, and contributor-facing workflow rules are intentionally not duplicated here. Use the source-of-truth documents above when working on those areas.
