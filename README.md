@@ -31,18 +31,25 @@ To install for only one agent, use `--target` with one of `codex`, `claude`, `cu
 
 ### Register the remote marketplace (tech users)
 
-If you already have Claude Code, Codex CLI, or GitHub Copilot CLI on `PATH`, register the marketplace and install the plugin directly — one pair of commands per agent:
+If you already have Claude Code, Codex CLI, or GitHub Copilot CLI on `PATH`, register the marketplace and install the plugin directly — run the pair for your agent:
+
+**Claude Code**
 
 ```bash
-# Claude Code
 claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
+```
 
-# Codex
+**Codex**
+
+```bash
 codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 codex plugin add creatio-ai-app-development-toolkit@creatio
+```
 
-# GitHub Copilot CLI
+**GitHub Copilot CLI**
+
+```bash
 copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
@@ -57,18 +64,25 @@ CAADT updates each agent through that agent's native plugin update command when 
 
 ### Update via native plugin commands
 
-If you registered the remote marketplace directly (Claude Code, Codex CLI, or GitHub Copilot CLI), update the same way — refresh the marketplace catalog, then update the plugin. The refresh is required: a bare update resolves against the cached catalog and no-ops if it looks current. One pair of commands per agent:
+If you registered the remote marketplace directly (Claude Code, Codex CLI, or GitHub Copilot CLI), update the same way — refresh the marketplace catalog, then update the plugin. The refresh is required: a bare update resolves against the cached catalog and no-ops if it looks current. Run the pair for your agent:
+
+**Claude Code**
 
 ```bash
-# Claude Code
 claude plugin marketplace update creatio
 claude plugin update creatio-ai-app-development-toolkit@creatio
+```
 
-# Codex
+**Codex**
+
+```bash
 codex plugin marketplace upgrade creatio
 codex plugin add creatio-ai-app-development-toolkit@creatio
+```
 
-# GitHub Copilot CLI
+**GitHub Copilot CLI**
+
+```bash
 copilot plugin marketplace update creatio
 copilot plugin update creatio-ai-app-development-toolkit@creatio
 ```
