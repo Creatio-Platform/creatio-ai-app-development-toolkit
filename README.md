@@ -19,7 +19,7 @@ There are three ways to install — pick one.
 
 ### Install with the wizard (recommended for end users)
 
-Install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See the [Creatio Academy setup guide](https://academy.creatio.com/docs/8.x/no-code-customization/ai-development/creatio-ai-toolkit-setup) for the full wizard walkthrough, and [docs/install.md](docs/install.md) for setup-wizard behavior details.
+Install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See the [Set up the Creatio AI app development toolkit guide](https://academy.creatio.com/docs/8.x/no-code-customization/ai-development/creatio-ai-toolkit-setup) for the full wizard walkthrough, and [docs/install.md](docs/install.md) for setup-wizard behavior details.
 
 ### Register the remote marketplace (tech users)
 
