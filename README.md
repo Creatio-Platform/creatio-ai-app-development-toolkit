@@ -19,15 +19,7 @@ There are three ways to install — pick one.
 
 ### Install with the wizard (recommended for end users)
 
-Install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See [docs/install.md](docs/install.md) for the wizard flow and setup-wizard behavior.
-
-### Install from a local checkout (developers)
-
-```bash
-python installer/install.py
-```
-
-To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
+Install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See the [Creatio Academy setup guide](https://academy.creatio.com/docs/8.x/no-code-customization/ai-development/creatio-ai-toolkit-setup) for the full wizard walkthrough, and [docs/install.md](docs/install.md) for setup-wizard behavior details.
 
 ### Register the remote marketplace (tech users)
 
@@ -58,6 +50,14 @@ Codex additionally needs the `clio` MCP server registered in `~/.codex/config.to
 `python installer/install.py --target codex` once to add it. See [docs/install.md](docs/install.md)
 for release-zip installation and agent-specific install details.
 
+### Install from a local checkout (developers)
+
+```bash
+python installer/install.py
+```
+
+To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
+
 ## Updates
 
 CAADT updates each agent through that agent's native plugin update command when one is available. There are two ways to update — pick one.
@@ -87,7 +87,7 @@ copilot plugin marketplace update creatio
 copilot plugin update creatio-ai-app-development-toolkit@creatio
 ```
 
-Cursor has no native update command — update it with the manual updater below.
+Cursor has no native update command — update it with the manual updater below (use `--target cursor` to limit the run to Cursor).
 
 ### Update every agent in one shot
 
