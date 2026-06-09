@@ -45,6 +45,20 @@ for release-zip installation and agent-specific install details.
 
 CAADT updates each agent through that agent's native plugin update command when one is available.
 
+Tech users who registered the remote marketplace directly (Claude Code, Codex CLI, or GitHub Copilot
+CLI) can update the same way — refresh the marketplace catalog, then update the plugin (the refresh is
+required: a bare update resolves against the cached catalog and no-ops if it looks current). Cursor
+has no native update command, so update it with `python installer/update.py` instead:
+
+```bash
+claude plugin marketplace update creatio
+claude plugin update creatio-ai-app-development-toolkit@creatio
+codex plugin marketplace upgrade creatio
+codex plugin add creatio-ai-app-development-toolkit@creatio
+copilot plugin marketplace update creatio
+copilot plugin update creatio-ai-app-development-toolkit@creatio
+```
+
 For a single command that updates every detected agent in one shot, run the manual updater:
 
 ```bash
@@ -87,5 +101,7 @@ Repository docs do not define clio tool parameter or response shapes.
 
 - [Install guide](docs/install.md)
 - [Release packaging](docs/release-structure.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 Support mode, troubleshooting reporting, runtime helper details, and contributor-facing workflow rules are intentionally not duplicated here. Use the source-of-truth documents above when working on those areas.
