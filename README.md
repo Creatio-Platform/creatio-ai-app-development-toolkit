@@ -15,9 +15,13 @@ Prerequisites:
 - [clio](https://github.com/Advance-Technologies-Foundation/clio) installed and available in `PATH`.
 - Access to a running Creatio instance for implementation after Business Plan approval.
 
-Recommended for end users: install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See [docs/install.md](docs/install.md) for the wizard flow and setup-wizard behavior.
+There are three ways to install — pick one.
 
-Install from a local checkout (developers):
+### Install with the wizard (recommended for end users)
+
+Install through the Creatio installation wizard, which downloads the latest release asset, runs `install.py`, and cleans up. See [docs/install.md](docs/install.md) for the wizard flow and setup-wizard behavior.
+
+### Install from a local checkout (developers)
 
 ```bash
 python installer/install.py
@@ -25,14 +29,20 @@ python installer/install.py
 
 To install for only one agent, use `--target` with one of `codex`, `claude`, `cursor`, or `copilot`.
 
-Tech users who already have Claude Code, Codex CLI, or GitHub Copilot CLI in PATH can register the
-remote marketplace directly:
+### Register the remote marketplace (tech users)
+
+If you already have Claude Code, Codex CLI, or GitHub Copilot CLI on `PATH`, register the marketplace and install the plugin directly — one pair of commands per agent:
 
 ```bash
+# Claude Code
 claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
+
+# Codex
 codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 codex plugin add creatio-ai-app-development-toolkit@creatio
+
+# GitHub Copilot CLI
 copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
@@ -43,23 +53,29 @@ for release-zip installation and agent-specific install details.
 
 ## Updates
 
-CAADT updates each agent through that agent's native plugin update command when one is available.
+CAADT updates each agent through that agent's native plugin update command when one is available. There are two ways to update — pick one.
 
-Tech users who registered the remote marketplace directly (Claude Code, Codex CLI, or GitHub Copilot
-CLI) can update the same way — refresh the marketplace catalog, then update the plugin (the refresh is
-required: a bare update resolves against the cached catalog and no-ops if it looks current). Cursor
-has no native update command, so update it with `python installer/update.py` instead:
+### Update via native plugin commands
+
+If you registered the remote marketplace directly (Claude Code, Codex CLI, or GitHub Copilot CLI), update the same way — refresh the marketplace catalog, then update the plugin. The refresh is required: a bare update resolves against the cached catalog and no-ops if it looks current. One pair of commands per agent:
 
 ```bash
+# Claude Code
 claude plugin marketplace update creatio
 claude plugin update creatio-ai-app-development-toolkit@creatio
+
+# Codex
 codex plugin marketplace upgrade creatio
 codex plugin add creatio-ai-app-development-toolkit@creatio
+
+# GitHub Copilot CLI
 copilot plugin marketplace update creatio
 copilot plugin update creatio-ai-app-development-toolkit@creatio
 ```
 
-For a single command that updates every detected agent in one shot, run the manual updater:
+Cursor has no native update command — update it with the manual updater below.
+
+### Update every agent in one shot
 
 ```bash
 python installer/update.py
