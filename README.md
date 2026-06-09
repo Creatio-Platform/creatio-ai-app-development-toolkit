@@ -40,7 +40,7 @@ claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app
 claude plugin install creatio-ai-app-development-toolkit@creatio
 ```
 
-**Codex**
+**Codex CLI**
 
 ```bash
 codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
@@ -73,7 +73,7 @@ claude plugin marketplace update creatio
 claude plugin update creatio-ai-app-development-toolkit@creatio
 ```
 
-**Codex**
+**Codex CLI**
 
 ```bash
 codex plugin marketplace upgrade creatio
