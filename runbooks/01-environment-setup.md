@@ -13,6 +13,11 @@ Configure clio CLI and establish connection to the target Creatio runtime for th
 
 Read `AGENTS.md` for the Context Files Reference. For local clio CLI invocations used during environment bootstrap, read `context/clio-cli-reference.md`.
 
+## MCP Transport And Single clio Context
+
+- Prefer native clio MCP tool-calls when the host coding agent exposes them. Use `runtime/scripts/mcp_client.py` only as the stdio fallback on hosts without native MCP. Do not reverse-engineer the wrapper's CLI contract when native calls are available (see `AGENTS.md`, "clio MCP transport preference").
+- Both transports must resolve the same `clio` binary (PATH / `CLIO_CMD`) so they share one config and one registered-environments list. Confirm this single context before resolving the environment: an environment registered through one transport must be visible to the other. If a native call reports `environment not found` while the wrapper resolves the same environment (or vice versa), stop and reconcile the clio resolution before continuing — do not register a duplicate environment to work around a split-brain.
+
 ## Support Mode
 
 When support mode is on, follow `docs://mcp/guides/support-mode` for diagnostic-first behavior, severity routing, confirmation probes, fail-fast evidence, and reporting. The transient-reachability retry budget (up to 3 additional attempts with 15-second delays for DNS resolution, connect timeouts, and host-unreachable failures) is owned by `docs://mcp/guides/agent-execution`. Do not restate either policy in this runbook.
@@ -186,7 +191,7 @@ This information stays in the conversation context — Agent 2 reads the environ
 
 ### 7. DataForge availability check
 
-Run the DataForge status check against the resolved environment:
+Run the DataForge status check against the resolved environment. Prefer a native `dataforge-status` MCP tool-call when the host exposes native MCP; use the stdio wrapper below only as the fallback (see "MCP Transport And Single clio Context" above):
 
 ```bash
 python3 runtime/scripts/mcp_client.py dataforge-status --args-file ./dataforge-status.args.json --timeout 30
@@ -204,6 +209,17 @@ Interpret the result and append one of these lines to the **Runtime Environment*
 
 If the call throws or times out, record `dataforge-availability: unavailable`. Do not retry.
 
+### 8. Resolve writable package context (up front)
+
+Before any schema or page edit happens later in the flow, make sure there is a writable package to edit. Resolve this now — do not defer it until a mid-run write rejection.
+
+- For a brand-new app, the package created by the new-app flow is writable; no extra action is needed here.
+- For an existing or installed app, confirm the target package is unlocked and editable. An installed-app package is frequently locked / read-only and will reject direct schema writes.
+- If the target package is locked or read-only, unlock it or select/create a writable maintainer package before modeling begins.
+- Resolve the exact tool and lock semantics through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`; for local CLI lock/unlock invocations see `context/clio-cli-reference.md`.
+
+Report the resolved writable package context in the conversation so Agent 2 and the implementation step do not rediscover it.
+
 ## Error Handling
 
 | Error | Action |
@@ -220,6 +236,8 @@ If the call throws or times out, record `dataforge-availability: unavailable`. D
 ## Completion Criteria
 
 ✅ `clio healthcheck -e <env_name>` passes  
+✅ Single clio context confirmed — native MCP and the stdio wrapper resolve the same clio config and the same registered environment  
 ✅ Resolved environment name, URL, and runtime are reported in the conversation  
 ✅ DataForge availability status reported in the conversation (`dataforge-availability: ready` or `dataforge-availability: unavailable`)  
+✅ Writable package context resolved up front and reported in the conversation (before any modeling / schema edit)  
 ✅ When support mode is on and the run returns a final response, include the canonical final support block sections; sections with no items must be emitted as `None`  

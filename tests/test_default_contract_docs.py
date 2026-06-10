@@ -82,6 +82,28 @@ DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "context/essentials.md",
 ]
 
+# ENG-91276: native MCP tool-calls are preferred over the mcp_client.py stdio wrapper.
+NATIVE_MCP_FIRST_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "context/INDEX.md",
+    ROOT / "context/essentials.md",
+    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "runbooks/01-environment-setup.md",
+]
+
+# ENG-91276: native MCP and the wrapper must share one clio config / environment list.
+SINGLE_CLIO_CONTEXT_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "runbooks/01-environment-setup.md",
+]
+
+# ENG-91276: a writable package context must be resolved before schema/page edits.
+WRITABLE_PACKAGE_CONTEXT_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+]
+
 
 def read_text(path):
     return path.read_text(encoding="utf-8")
@@ -305,6 +327,32 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("_MobileFormPage", essentials)
         self.assertRegex(essentials, r"(?i)web vs mobile")
         self.assertRegex(essentials, r"(?i)default to web")
+
+    def test_docs_prefer_native_mcp_over_stdio_wrapper(self):
+        # ENG-91276: every transport-aware doc must prefer native MCP and treat
+        # runtime/scripts/mcp_client.py as the stdio fallback, not the default.
+        for path in NATIVE_MCP_FIRST_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("native", content, str(path))
+            self.assertIn("fallback", content, str(path))
+            self.assertIn("mcp_client.py", content, str(path))
+
+    def test_docs_require_single_clio_context(self):
+        # ENG-91276: native MCP and the wrapper must resolve the same clio
+        # (one config / one registered-environments list) — no split-brain.
+        for path in SINGLE_CLIO_CONTEXT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("single clio context", content, str(path))
+            self.assertIn("split-brain", content, str(path))
+
+    def test_docs_require_writable_package_context_up_front(self):
+        # ENG-91276: a writable package context must be resolved before the first
+        # schema/page edit, not discovered as a mid-run write rejection.
+        for path in WRITABLE_PACKAGE_CONTEXT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("writable package context", content, str(path))
+            self.assertIn("up front", content, str(path))
+            self.assertIn("mid-run", content, str(path))
 
 
 if __name__ == "__main__":
