@@ -1146,6 +1146,11 @@ class InstallCursorTests(unittest.TestCase):
             self.assertIn(str(cursor_home / "mcp.json"), rule_body)
             self.assertIn("essentials", rule_body)
             self.assertRegex(rule_body, r"(?i)mobile")
+            self.assertIn("## Analytics Context", rule_body)
+            self.assertIn("`coding_agent`: Cursor", rule_body)
+            self.assertIn("`skill_version`:", rule_body)
+            self.assertIn("`plugin_version`:", rule_body)
+            self.assertIn("Follow `context/product-telemetry.md`", rule_body)
 
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())

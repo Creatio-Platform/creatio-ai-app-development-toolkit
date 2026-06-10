@@ -79,6 +79,10 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 - Treat natural-language confirmation as the approval source.
 - Do not expose internal gate names or script names in user-facing dialogue unless the developer explicitly asks about repository internals.
 
+## Product Telemetry
+
+For CAADT product telemetry, read and follow `context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-measurements` payload shape.
+
 ## Task Classification
 
 Classify each request before choosing the workflow.
