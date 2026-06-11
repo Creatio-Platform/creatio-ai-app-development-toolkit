@@ -254,6 +254,7 @@ Approval-ready vs delivery-ready rule:
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
 - Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching variant; web and mobile are separate (details in `context/essentials.md`, "Freedom UI — Mobile Pages"). Applies even in autonomous or pre-approved runs.
+- Before the first schema or page edit, resolve a writable package context up front. On an existing or installed app, confirm the target package is unlocked and editable (not a locked installed-app package); if it is read-only, unlock it or select/create a writable maintainer package before editing. Resolve the exact mechanism through `get-tool-contract` and clio MCP guidance. Do not discover the write rejection mid-run. Applies even in autonomous or pre-approved runs.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
 - Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`runtime/scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 
@@ -284,6 +285,12 @@ Tool surface preference (clio MCP vs CLI):
 - Spawn the local `clio` CLI binary through a shell only when no MCP equivalent exists for the required operation.
 - After any MCP or environment failure has been resolved, return to MCP-first on the next call — do not stay on CLI fallback by default.
 - Do not parse CLI text output as a substitute for an MCP tool that returns the same data as structured fields. If parsing CLI output is required, that is a signal to switch back to the MCP equivalent.
+
+clio MCP transport preference (native tool-calls vs stdio wrapper):
+
+- When the host coding agent exposes clio MCP as native tool-calls, invoke those tools directly. Treat `runtime/scripts/mcp_client.py` as the stdio fallback for hosts that do not expose native MCP — not as the default transport.
+- Do not spend a turn reading the wrapper's `--help` or source to reverse-engineer its CLI contract when native tool-calls are available. Resolve tool arguments from `get-tool-contract`, never from the wrapper's argument-parsing behavior.
+- Single clio context: both transports — the native host MCP started from `.mcp.json` and the `mcp_client.py` stdio wrapper — must resolve the same `clio` binary through PATH / `CLIO_CMD`, so they share one clio config and one registered-environments list. Before the first environment resolution, confirm this single context; never let a native call report `environment not found` while the wrapper resolves the same environment (split-brain). If the two transports disagree on a known environment, stop and reconcile the clio resolution before continuing.
 
 Canonical repository references:
 
