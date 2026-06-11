@@ -155,6 +155,28 @@ Business discovery must follow a Business Analyst style:
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
 
+## Execution UX and Effort Budget
+
+This section governs how the implementation phase (after Gate R, while applying the plan through clio MCP) is surfaced to the developer. It is harness/orchestration UX, not an MCP contract; exact tool behavior and the canonical retry budget still come from `get-tool-contract` and `docs://mcp/guides/agent-execution`.
+
+Effort and recovery budget:
+
+- Classify a routine, implementation-ready change — for example adding a section to an existing app — as a targeted change, and apply bounded reasoning effort to it. Do not over-analyze a routine change or expand it into open-ended exploration.
+- Keep a bounded recovery budget. If the canonical path for a routine change fails, retry only within the recovery limits defined by `docs://mcp/guides/agent-execution`, then stop with a blocker and report it.
+- Do not pivot to expensive alternative recovery paths — running raw SQL against the database, driving the Creatio UI manually, or restarting the environment — for a routine change unless the developer explicitly asks for that path. Treat such a pivot as a product-level decision, not an automatic fallback.
+
+Progress signals:
+
+- Before starting any operation that can run longer than about a minute — for example app creation, section creation, schema synchronization, page synchronization, or package compilation/restart — emit a short progress line that names the step and notes it may take up to a minute.
+- Never leave the developer with no progress signal for more than 60 seconds during an active run. If a step is still running past that window, surface a brief `still working on <step>` line.
+- Progress signals are conversational status updates, not gates. They never ask for a response and never block execution.
+
+Recovered-error reframing:
+
+- When a non-blocking tool error is recovered automatically — for example a metadata read-back timeout where the operation actually succeeded, or a transient transport error that succeeds on retry — do not surface the raw error as a failure. Report it as normal progress (for example `section created; confirming metadata…`) or omit it.
+- Surface an error to the developer only when it is an actual blocker that stops the run. Keep recovered, non-blocking states distinct from blocking failures in all user-facing text.
+- Under support mode, the diagnostic-first severity routing and fail-fast rules in `docs://mcp/guides/support-mode` still apply and take precedence over reframing.
+
 ## Workflow Routing
 
 Run Gate P once at the start of each app workflow.
@@ -236,6 +258,7 @@ Approval-ready vs delivery-ready rule:
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
 - Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching variant; web and mobile are separate (details in `context/essentials.md`, "Freedom UI — Mobile Pages"). Applies even in autonomous or pre-approved runs.
+- Before the first schema or page edit, resolve a writable package context up front. On an existing or installed app, confirm the target package is unlocked and editable (not a locked installed-app package); if it is read-only, unlock it or select/create a writable maintainer package before editing. Resolve the exact mechanism through `get-tool-contract` and clio MCP guidance. Do not discover the write rejection mid-run. Applies even in autonomous or pre-approved runs.
 - The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
 - Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`runtime/scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.
 
@@ -266,6 +289,12 @@ Tool surface preference (clio MCP vs CLI):
 - Spawn the local `clio` CLI binary through a shell only when no MCP equivalent exists for the required operation.
 - After any MCP or environment failure has been resolved, return to MCP-first on the next call — do not stay on CLI fallback by default.
 - Do not parse CLI text output as a substitute for an MCP tool that returns the same data as structured fields. If parsing CLI output is required, that is a signal to switch back to the MCP equivalent.
+
+clio MCP transport preference (native tool-calls vs stdio wrapper):
+
+- When the host coding agent exposes clio MCP as native tool-calls, invoke those tools directly. Treat `runtime/scripts/mcp_client.py` as the stdio fallback for hosts that do not expose native MCP — not as the default transport.
+- Do not spend a turn reading the wrapper's `--help` or source to reverse-engineer its CLI contract when native tool-calls are available. Resolve tool arguments from `get-tool-contract`, never from the wrapper's argument-parsing behavior.
+- Single clio context: both transports — the native host MCP started from `.mcp.json` and the `mcp_client.py` stdio wrapper — must resolve the same `clio` binary through PATH / `CLIO_CMD`, so they share one clio config and one registered-environments list. Before the first environment resolution, confirm this single context; never let a native call report `environment not found` while the wrapper resolves the same environment (split-brain). If the two transports disagree on a known environment, stop and reconcile the clio resolution before continuing.
 
 Canonical repository references:
 
