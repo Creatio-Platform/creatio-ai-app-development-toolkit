@@ -151,6 +151,28 @@ Business discovery must follow a Business Analyst style:
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
 
+## Execution UX and Effort Budget
+
+This section governs how the implementation phase (after Gate R, while applying the plan through clio MCP) is surfaced to the developer. It is harness/orchestration UX, not an MCP contract; exact tool behavior and the canonical retry budget still come from `get-tool-contract` and `docs://mcp/guides/agent-execution`.
+
+Effort and recovery budget:
+
+- Classify a routine, implementation-ready change — for example adding a section to an existing app — as a targeted change, and apply bounded reasoning effort to it. Do not over-analyze a routine change or expand it into open-ended exploration.
+- Keep a bounded recovery budget. If the canonical path for a routine change fails, retry only within the recovery limits defined by `docs://mcp/guides/agent-execution`, then stop with a blocker and report it.
+- Do not pivot to expensive alternative recovery paths — running raw SQL against the database, driving the Creatio UI manually, or restarting the environment — for a routine change unless the developer explicitly asks for that path. Treat such a pivot as a product-level decision, not an automatic fallback.
+
+Progress signals:
+
+- Before starting any operation that can run longer than about a minute — for example app creation, section creation, schema synchronization, page synchronization, or package compilation/restart — emit a short progress line that names the step and notes it may take up to a minute.
+- Never leave the developer with no progress signal for more than 60 seconds during an active run. If a step is still running past that window, surface a brief `still working on <step>` line.
+- Progress signals are conversational status updates, not gates. They never ask for a response and never block execution.
+
+Recovered-error reframing:
+
+- When a non-blocking tool error is recovered automatically — for example a metadata read-back timeout where the operation actually succeeded, or a transient transport error that succeeds on retry — do not surface the raw error as a failure. Report it as normal progress (for example `section created; confirming metadata…`) or omit it.
+- Surface an error to the developer only when it is an actual blocker that stops the run. Keep recovered, non-blocking states distinct from blocking failures in all user-facing text.
+- Under support mode, the diagnostic-first severity routing and fail-fast rules in `docs://mcp/guides/support-mode` still apply and take precedence over reframing.
+
 ## Workflow Routing
 
 Run Gate P once at the start of each app workflow.

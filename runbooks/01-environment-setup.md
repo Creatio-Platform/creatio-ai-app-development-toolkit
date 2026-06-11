@@ -231,6 +231,7 @@ Report the resolved writable package context in the conversation so Agent 2 and 
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
+| Recovered non-blocking tool error (read-back timeout where the operation actually succeeded, transient retry) | Do not surface it as a failure. Report it as normal progress or omit it; surface only an actual blocker that stops the run. See AGENTS.md "Execution UX and Effort Budget". |
 | Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |
 
 ## Completion Criteria
