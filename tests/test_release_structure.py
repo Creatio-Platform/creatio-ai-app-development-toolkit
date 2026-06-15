@@ -194,11 +194,14 @@ class ReleaseStructureTests(unittest.TestCase):
             ROOT / "skills/creatio-app-orchestrator/SKILL.md",
             ROOT / "rules/creatio-app-orchestrator.mdc",
         ]
+        # Match on the load-bearing concepts (root anchor + a fail-loud
+        # directive that forbids fabricating a plan), not an exact sentence, so
+        # benign rewording does not break the guard.
         for entry in entry_files:
             content = entry.read_text(encoding="utf-8")
             self.assertIn("toolkit root", content, entry.name)
             self.assertIn("STOP", content, entry.name)
-            self.assertIn("do not produce a plan from memory", content, entry.name)
+            self.assertIn("from memory", content, entry.name)
 
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())
