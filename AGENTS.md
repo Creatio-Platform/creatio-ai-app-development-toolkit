@@ -81,7 +81,7 @@ If any answer indicates format drift, the assistant MUST regenerate before respo
 
 ## Product Telemetry
 
-For CAADT product telemetry, read and follow `context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-measurements` payload shape.
+For CAADT product telemetry, read and follow `context/product-telemetry.md`. That file is the source of truth for consent handling, event checkpoints, and the `send-telemetry` payload shape.
 
 ## Task Classification
 

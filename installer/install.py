@@ -650,7 +650,7 @@ def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
     return (
         "## Analytics Context\n"
         "\n"
-        "Use these values for CAADT product telemetry when calling clio measurement tools:\n"
+        "Use these values for CAADT product telemetry when calling clio telemetry tools:\n"
         "\n"
         f"- `coding_agent`: {coding_agent}\n"
         f"- `skill_version`: {version}\n"
@@ -695,7 +695,7 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         "\n"
         "- Pages are separate for web and mobile: before any page edit, read `context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
         "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
-        "- Follow `context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio measurement tools.\n"
+        "- Follow `context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )

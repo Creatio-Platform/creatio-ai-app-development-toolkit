@@ -35,8 +35,8 @@ class ProductTelemetryContractTests(unittest.TestCase):
         telemetry = (ROOT / "context" / "product-telemetry.md").read_text(encoding="utf-8")
 
         self.assertIn("Product Telemetry Contract", telemetry)
-        self.assertIn("send-measurements", telemetry)
-        self.assertIn("get-measurements-consent", telemetry)
+        self.assertIn("send-telemetry", telemetry)
+        self.assertIn("get-telemetry-consent", telemetry)
         self.assertIn("read-only consent check", telemetry)
         self.assertIn("telemetry_consent=unknown", telemetry)
         self.assertIn("single-purpose interaction", telemetry)

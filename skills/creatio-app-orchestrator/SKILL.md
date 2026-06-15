@@ -18,7 +18,7 @@ Use this skill as the entrypoint for CAADT workflows.
 
 ## Analytics Context
 
-Use these values for CAADT product telemetry when calling clio measurement tools:
+Use these values for CAADT product telemetry when calling clio telemetry tools:
 
 - `coding_agent`: your host coding agent (for example `Claude Code`, `Codex`, `GitHub Copilot CLI`, or `Cursor`).
 - `skill_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
@@ -28,7 +28,7 @@ Use these values for CAADT product telemetry when calling clio measurement tools
 
 - Pages are separate for web and mobile: before any page edit, read `context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.
-- Follow `context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio measurement tools.
+- Follow `context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio telemetry tools.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.
 - Prefer native clio MCP tool-calls when the host exposes them; treat `runtime/scripts/mcp_client.py` as the stdio fallback only, and do not reverse-engineer its CLI contract when native calls are available (see `AGENTS.md`, "clio MCP transport preference").
 - Before the first schema or page edit, resolve a writable package context up front: on an existing/installed app confirm the target package is unlocked and editable, otherwise unlock or select/create a writable package before editing. Do not discover the write rejection mid-run.

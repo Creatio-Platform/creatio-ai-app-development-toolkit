@@ -18,7 +18,7 @@ Entrypoint for the Creatio AI App Development Toolkit (CAADT) workflow.
 
 ## Analytics Context
 
-Use these values for CAADT product telemetry when calling clio measurement tools:
+Use these values for CAADT product telemetry when calling clio telemetry tools:
 
 - `coding_agent`: your host coding agent (for example `Claude Code`, `Codex`, `GitHub Copilot CLI`, or `Cursor`).
 - `skill_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
@@ -27,7 +27,7 @@ Use these values for CAADT product telemetry when calling clio measurement tools
 ## Core Rules
 
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.
-- Follow `context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio measurement tools.
+- Follow `context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio telemetry tools.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.
 - Use `context/business-checklist.md`, `context/essentials.md`, `context/naming-conventions.md`, `context/clio-cli-reference.md`, and `context/model-discovery-evidence.md` as the canonical repository references.
 - Treat `.mcp.json` as the plugin MCP connection definition; it starts the global `clio mcp-server` process through the host coding agent.
