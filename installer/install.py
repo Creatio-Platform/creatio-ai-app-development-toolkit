@@ -674,21 +674,6 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
-def write_rendered_skill(target_root: Path, skill_body: str, agents_source_dir: Path | None = None) -> None:
-    skill_target_dir = target_root / "skills" / SKILL_NAME
-    skill_target_dir.mkdir(parents=True, exist_ok=True)
-    (skill_target_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
-    if agents_source_dir and agents_source_dir.exists():
-        agents_target_dir = skill_target_dir / "agents"
-        if agents_target_dir.exists():
-            shutil.rmtree(agents_target_dir)
-        shutil.copytree(
-            agents_source_dir,
-            agents_target_dir,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-
-
 def install_codex(repo_root: Path, home: Path) -> None:
     """Install Codex via the remote marketplace (parity with install_claude).
 
@@ -771,6 +756,11 @@ def install_copilot(repo_root: Path, home: Path) -> None:
     ensure_required_references(repo_root)
     remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "GitHub Copilot CLI")
     remove_tree_if_exists(home / ".agents" / "skills" / SKILL_NAME, "GitHub Copilot CLI")
+    # Legacy file-copy installs rendered a standalone skill with machine-specific
+    # absolute paths into ~/.copilot/skills/. The native marketplace install loads
+    # the skill from the registered plugin cache_path (~/.copilot/installed-plugins),
+    # so this copy is an orphan that shadows the maintained source on stale machines.
+    remove_tree_if_exists(home / ".copilot" / "skills" / SKILL_NAME, "GitHub Copilot CLI")
     copilot_command = resolve_copilot_command()
     register_remote_marketplace_and_install_plugin(
         copilot_command,
