@@ -217,7 +217,7 @@ Gate P:
 
 Gate R:
 
-- Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — entity metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
+- Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.

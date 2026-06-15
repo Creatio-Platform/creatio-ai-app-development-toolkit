@@ -19,9 +19,9 @@ REQUIRED_REQUIREMENTS_MARKERS = [
     "default list columns:",
 ]
 
-ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Main|Supporting) entity:", re.MULTILINE)
+OBJECT_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Section object|Object):", re.MULTILINE)
 LOOKUPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Lookups\s*$", re.MULTILINE)
-MAIN_ENTITY_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Main entity:", re.MULTILINE)
+SECTION_OBJECT_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Section object:", re.MULTILINE)
 TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
     re.IGNORECASE,
@@ -67,8 +67,8 @@ def validate_requirements_doc(content: str) -> None:
     for marker in REQUIRED_REQUIREMENTS_MARKERS:
         if marker not in text:
             raise WorkflowError(f"Requirements doc failed: missing required marker: {marker}")
-    if not MAIN_ENTITY_HEADING_RE.search(text):
-        raise WorkflowError("Requirements doc failed: missing 'Main entity' subsection in section 3")
+    if not SECTION_OBJECT_HEADING_RE.search(text):
+        raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
     section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Roles and Permissions")
@@ -79,21 +79,21 @@ def validate_requirements_doc(content: str) -> None:
     section6_text = extract_section(text, "## 6. UX Expectations", "## 7. Edge Cases and Exceptions")
     section7_text = extract_section(text, "## 7. Edge Cases and Exceptions")
     lines = section3_text.splitlines()
-    entity_indices = [index for index, line in enumerate(lines) if ENTITY_HEADING_RE.search(line)]
-    if not entity_indices:
-        raise WorkflowError("Requirements doc failed: section 3 must contain at least one main or supporting entity heading")
-    for pos, start in enumerate(entity_indices):
-        end = entity_indices[pos + 1] if pos + 1 < len(entity_indices) else len(lines)
+    object_indices = [index for index, line in enumerate(lines) if OBJECT_HEADING_RE.search(line)]
+    if not object_indices:
+        raise WorkflowError("Requirements doc failed: section 3 must contain at least one Section object or Object heading")
+    for pos, start in enumerate(object_indices):
+        end = object_indices[pos + 1] if pos + 1 < len(object_indices) else len(lines)
         block = lines[start:end]
         block_text = "\n".join(block)
-        for marker in ("Title:", "Code:", "Entity role:", "Primary display field:", "Description:", "Purpose:"):
+        for marker in ("Title:", "Code:", "Object role:", "Primary display field:", "Description:", "Purpose:"):
             if marker not in block_text:
                 raise WorkflowError(
-                    f"Requirements doc failed: entity block starting at '{lines[start]}' is missing metadata marker '{marker}'"
+                    f"Requirements doc failed: object block starting at '{lines[start]}' is missing metadata marker '{marker}'"
                 )
         if not any(TABLE_HEADER_RE.search(line) for line in block):
             raise WorkflowError(
-                f"Requirements doc failed: entity block starting at '{lines[start]}' must include its own field table"
+                f"Requirements doc failed: object block starting at '{lines[start]}' must include its own field table"
             )
     ba_body = text.split("## Technical Implementation Handoff")[0] if "## Technical Implementation Handoff" in text else text
     checklist_match = CHECKLIST_SOURCE_RE.search(ba_body)
