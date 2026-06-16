@@ -37,6 +37,7 @@ Use this reference when creating or reviewing Creatio Freedom UI pages for WCAG/
 
 - Prefer native HTML semantics and built-in Creatio components.
 - For custom components, update programmatic names, roles, values, and states.
+- **Check every component for its accessibility parameters and that they are filled.** For each component on the page, verify it exposes the accessibility properties it should (accessible name / `aria-label`, label/caption, tooltip, alt text, title) AND that those properties are actually populated — not left empty or at their default. An empty accessibility property is as bad as a missing one; do not assume a component is accessible just because the property exists.
 
 ## Contrast rules
 

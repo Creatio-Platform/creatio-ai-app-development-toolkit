@@ -112,6 +112,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Icon-only actions have tooltips/accessibility names.
 - [ ] Informative images have alt text; decorative images are ignored by screen readers.
 - [ ] Charts/diagrams have text alternative or data table where needed.
+- [ ] Each component's accessibility parameters (accessible name/`aria-label`, label/caption, tooltip, alt) are present AND filled in — not empty or left at default.
 - [ ] Status changes/no-result messages are announced when relevant.
 
 ## Audit output template
