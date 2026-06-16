@@ -108,6 +108,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Colors are minimized and based on predefined palette.
 - [ ] Color is not the only indication of status or meaning.
 - [ ] Custom global styles/themes have a clear business reason.
+- [ ] Components keep the default Creatio appearance — no global restyle (e.g. `crt.Input` switched to `appearance: "outline"`, custom borders/fonts) that makes the form look different from the base product; no restyle done just to satisfy another rule (e.g. label position).
 
 ### Accessibility
 
