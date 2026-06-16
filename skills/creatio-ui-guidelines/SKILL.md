@@ -71,7 +71,7 @@ When asked to create or redesign a page, follow this sequence:
 3. **Information architecture**: define header, primary display field, required fields, tabs, groups, profile blocks, related records, metrics, and help areas.
 4. **Actions**: list top-right buttons, menu actions, inline actions, action states, confirmations, loading/progress behavior, async notifications, and cancellation/undo strategy.
 5. **Fields and validation**: define field order, labels, placeholders, filters, default values, required markers, lookup/dropdown choices, read-only explanations, and copy rules.
-6. **Accessibility**: verify contrast, keyboard access, focus order, accessible names, alt text, semantic roles, ARIA state updates, and error/status announcements.
+6. **Accessibility**: verify contrast, keyboard access, accessible names, alt text, semantic roles, and error/status announcements.
 7. **Acceptance checklist**: provide a concise checklist that an implementer can use before release.
 
 ## Review output format
