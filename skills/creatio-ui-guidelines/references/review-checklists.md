@@ -109,12 +109,9 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Large text contrast is at least 3:1.
 - [ ] Custom tab, Area, chart, glass, and wallpaper combinations are contrast-checked.
 - [ ] All interactive elements are reachable and usable by keyboard.
-- [ ] Focus order is logical and focus indicators are visible.
 - [ ] Icon-only actions have tooltips/accessibility names.
 - [ ] Informative images have alt text; decorative images are ignored by screen readers.
 - [ ] Charts/diagrams have text alternative or data table where needed.
-- [ ] Custom components use native semantics or correct ARIA roles.
-- [ ] Dynamic ARIA states are updated with visual state.
 - [ ] Status changes/no-result messages are announced when relevant.
 
 ## Audit output template
