@@ -247,7 +247,7 @@ Approval-ready vs delivery-ready rule:
 - Treat physical FK/storage aliases (for example `E17`/`ColumnValueName` values like `...Id`) as storage aliases only, never as naming source for new entities or new custom columns.
 - Existing manually edited title/code divergence is allowed; this derivation contract applies to new creations only.
 - Do not add inherited base columns to requirements.
-- Enum-like business values must be modeled as lookup entities.
+- Enum-like business values must be modeled as lookup objects.
 - App code collisions and stage-transition state conflicts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
 - Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
