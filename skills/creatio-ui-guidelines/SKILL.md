@@ -83,9 +83,9 @@ For audits, use this compact format:
 [1-3 sentences]
 
 ## Findings
-| Severity | Area | Issue | Recommendation |
-|---|---|---|---|
-| High | ... | ... | ... |
+| Severity | Category | Area | Issue | Recommendation |
+|---|---|---|---|---|
+| High | Accessibility / UX improvement | ... | ... | ... |
 
 ## Recommended structure
 [Proposed layout/tabs/actions]

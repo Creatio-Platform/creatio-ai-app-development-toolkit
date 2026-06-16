@@ -121,9 +121,12 @@ Answer these from the user's perspective before the detailed checks:
 [Brief overall assessment]
 
 ## Findings
-| Severity | Area | Issue | Recommendation |
-|---|---|---|---|
-| High | Required fields | Required fields are below the fold | Move required fields to the first tab and visible area |
+| Severity | Category | Area | Issue | Recommendation |
+|---|---|---|---|---|
+| High | UX improvement | Required fields | Required fields are below the fold | Move required fields to the first tab and visible area |
+| Medium | Accessibility | Contrast | Status text relies on color only | Add an icon/label and meet 4.5:1 contrast |
+
+**Category** is one of: **Accessibility** (WCAG/contrast/keyboard/alt/announcements) or **UX improvement** (layout, grouping, copy, components, flow).
 
 ## Proposed page structure
 - Header: ...
