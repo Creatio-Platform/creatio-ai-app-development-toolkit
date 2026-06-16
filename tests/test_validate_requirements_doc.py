@@ -25,11 +25,11 @@ Provide a shared task registry.
 
 ## 3. Object Model
 
-### 3.1 Main entity: Task
+### 3.1 Section object: Task
 
 Title: Task
 Code: `UsrTask`
-Entity role: `main`
+Object role: `main`
 Primary display field: `Name`
 Description: Central work item.
 Purpose: Central work item.
@@ -49,7 +49,7 @@ Minimum to create:
 
 ### 3.3 Relationships
 
-- Source entity: Task; Target entity: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
+- Source object: Task; Target object: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
 
 ## 4. Lifecycle and Statuses
 
@@ -147,12 +147,12 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
         self.assertIn("default list columns:", str(ctx.exception))
 
 
-class TestValidateRequirementsDocEntityMetadata(unittest.TestCase):
-    def test_missing_entity_role_marker(self):
-        doc = VALID_DOC.replace("Entity role: `main`", "")
+class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
+    def test_missing_object_role_marker(self):
+        doc = VALID_DOC.replace("Object role: `main`", "")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("Entity role:", str(ctx.exception))
+        self.assertIn("Object role:", str(ctx.exception))
 
     def test_missing_title_line_in_entity(self):
         doc = VALID_DOC.replace("Title: Task\n", "").replace("- Title: Status;", "- Status;")
