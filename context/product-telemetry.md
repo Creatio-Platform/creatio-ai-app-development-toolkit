@@ -1,10 +1,10 @@
 # Product Telemetry Contract
 
-When the `send-telemetry` clio MCP tool is available, emit product telemetry for CAADT workflow milestones. Telemetry is diagnostic product metadata only. Use only the fields listed in the Telemetry payload section.
+When the `send-telemetry` clio MCP tool is available, emit product telemetry for CAADT workflow milestones. Telemetry is diagnostic product metadata only. Use only the fields listed in the Telemetry payload section. Telemetry must never include sensitive data: no full prompts, passwords, tokens, customer names, raw usernames, full generated app content, or full MCP request/response payloads.
 
-At CAADT workflow start, call clio MCP `get-telemetry-consent` before sending any product telemetry event. This is the read-only consent check. Ask the developer for permission to collect diagnostic product telemetry only when it returns `telemetry_consent=unknown`. The consent prompt must be a single-purpose interaction before requirements gathering, Business Plan discovery, or implementation planning. Do not combine the consent question with discovery questions. Use clio MCP `send-telemetry` to persist the first-run consent decision as `telemetry_consent=granted` or `telemetry_consent=denied`; Clio stores the decision locally. Send `session_started` only when consent is already granted or when the developer grants first-run consent. Treat telemetry as recorded only when the MCP result reports success; if the host displays an invocation exception, do not claim telemetry was recorded. If telemetry is denied or unavailable, continue the CAADT workflow without blocking the user.
+At CAADT workflow start, call clio MCP `get-telemetry-consent` before sending any product telemetry event. This is the read-only consent check. Ask the developer for permission to collect diagnostic product telemetry only when it returns `telemetry_consent=unknown`. The consent prompt must be a single-purpose interaction before requirements gathering, Business Plan discovery, or implementation planning. Do not combine the consent question with discovery questions. Use clio MCP `send-telemetry` with `event_name=session_started` and `telemetry_consent` set to either `granted` or `denied` to persist the first-run consent decision; clio stores the decision locally. When the decision is `denied`, clio records the decision and writes no telemetry event. Emit the `session_started` event itself only when consent is already granted or when the developer grants first-run consent. Treat telemetry as recorded only when the MCP result reports success; if the host displays an invocation exception, do not claim telemetry was recorded. If telemetry is denied or unavailable, continue the CAADT workflow without blocking the user.
 
-Create one `session_id` for the CAADT workflow and reuse it for every telemetry event in that conversation. Use the static Analytics Context from the installed skill or rule for `coding_agent`, `skill_version`, and `plugin_version`.
+Create one `session_id` for the CAADT workflow as a freshly generated random GUID and reuse it for every telemetry event in that conversation. Never derive `session_id` from user, account, file-path, host, or email data; it must be an opaque random identifier. Use the static Analytics Context from the installed skill or rule for `coding_agent`, `skill_version`, and `plugin_version`.
 
 Telemetry payload:
 
@@ -14,6 +14,8 @@ Telemetry payload:
 - `skill_version`
 - `plugin_version`
 - `telemetry_consent`, only when persisting the first-run consent decision
+
+clio also records an anonymized installation identifier and other diagnostic fields it derives locally, so the agent does not send them; clio's `get-tool-contract` is the authoritative stored-event schema.
 
 Required event mapping:
 
