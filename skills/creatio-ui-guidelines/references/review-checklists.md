@@ -120,19 +120,28 @@ Answer these from the user's perspective before the detailed checks:
 ## Summary
 [Brief overall assessment]
 
-## Findings
+## Audited pages
+- <Page title> (`<SchemaName>`, <form/list/mini/dialog>)
+- <Page title> (`<SchemaName>`, …)
+
+## Findings by page
+Report findings separately for each audited page. One subsection per page; if a page has no issues, say "No issues found."
+
+### <Page title> (`<SchemaName>`)
 | Severity | Category | Area | Issue | Recommendation |
 |---|---|---|---|---|
 | High | UX improvement | Required fields | Required fields are below the fold | Move required fields to the first tab and visible area |
 | Medium | Accessibility | Contrast | Status text relies on color only | Add an icon/label and meet 4.5:1 contrast |
 
+### <Page title> (`<SchemaName>`)
+| Severity | Category | Area | Issue | Recommendation |
+|---|---|---|---|---|
+| … | … | … | … | … |
+
 **Category** is one of: **Accessibility** (WCAG/contrast/keyboard/alt/announcements) or **UX improvement** (layout, grouping, copy, components, flow).
 
-## Proposed page structure
-- Header: ...
-- Profile island: ...
-- Main tabs: ...
-- Actions: ...
+## Cross-page notes
+[Issues that span multiple pages — e.g. inconsistent styles, naming, or spacing across the audited set. Omit if none.]
 
 ## Accessibility notes
 - Contrast: ...

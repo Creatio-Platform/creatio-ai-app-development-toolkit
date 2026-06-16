@@ -82,7 +82,11 @@ For audits, use this compact format:
 ## Summary
 [1-3 sentences]
 
-## Findings
+## Audited pages
+- <Page title> (`<SchemaName>`)
+
+## Findings by page (one subsection per page; "No issues found" if clean)
+### <Page title> (`<SchemaName>`)
 | Severity | Category | Area | Issue | Recommendation |
 |---|---|---|---|---|
 | High | Accessibility / UX improvement | ... | ... | ... |
