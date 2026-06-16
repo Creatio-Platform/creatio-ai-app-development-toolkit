@@ -71,6 +71,20 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("`skill_version`", skill)
         self.assertIn("`plugin_version`", skill)
 
+    def test_cursor_rule_references_product_telemetry_contract_file(self):
+        # The committed .mdc ships verbatim via the marketplace and is the
+        # artifact Cursor-marketplace users receive, so it gets the same
+        # contract coverage as SKILL.md (these surfaces are maintained in
+        # parallel and have drifted before).
+        rule = (ROOT / "rules" / "creatio-app-orchestrator.mdc").read_text(encoding="utf-8")
+
+        self.assertIn("context/product-telemetry.md", rule)
+        self.assertIn("Analytics Context values", rule)
+        self.assertIn("## Analytics Context", rule)
+        self.assertIn("`coding_agent`", rule)
+        self.assertIn("`skill_version`", rule)
+        self.assertIn("`plugin_version`", rule)
+
 
 if __name__ == "__main__":
     unittest.main()

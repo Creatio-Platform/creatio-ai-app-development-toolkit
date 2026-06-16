@@ -36,6 +36,7 @@ Use these values for CAADT product telemetry when calling clio telemetry tools:
 
 ## Core Rules
 
+- Pages are separate for web and mobile: before any page edit, read `../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../AGENTS.md`.
 - Follow `../context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio telemetry tools.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.
