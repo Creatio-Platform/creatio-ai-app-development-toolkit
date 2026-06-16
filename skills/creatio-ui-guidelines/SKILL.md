@@ -9,6 +9,8 @@ Use this skill to help agents create or review Creatio Freedom UI pages that loo
 
 **Design as a UI/UX expert, not as a data-model dump.** Before composing or editing a page, mentally walk through how a real user will actually fill it in and use it: the order they enter data, what they need to understand at each step, what would confuse or slow them down, what they look at most often. Make deliberate design decisions and justify them with established UX heuristics and best practices — clarity, recognition over recall, error prevention, consistency, progressive disclosure, and minimal effort. A page is not "done" when the fields exist; it is done when it is genuinely easy and pleasant to complete and use.
 
+**Judge the rendered page, not the schema.** When reviewing or auditing an existing page, base your findings on the actual RENDERED page (screenshot + live accessibility tree), and walk the fill scenario first — only then reconcile with the schema/metadata. Many defects are visual-only and invisible in the schema or a11y tree: empty/unbalanced islands, group headers that don't render, weak placeholders, spacing/proportion issues. "Looks fine in the schema" is not evidence the page is fine.
+
 ## Operating mode
 
 1. Clarify the page goal only when the task cannot proceed without it. Prefer best-effort recommendations over blocking.

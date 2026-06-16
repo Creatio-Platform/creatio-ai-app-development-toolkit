@@ -4,6 +4,13 @@ Use this reference for audits, acceptance criteria, and final checks.
 
 ## Quick audit checklist
 
+### Audit the rendered page, not the schema (do this FIRST)
+
+- [ ] The review is based on the **rendered page** (screenshot + live accessibility tree / DOM), not only the schema, metadata, or `layoutConfig`. Open the actual page and look at it.
+- [ ] You walked the user's **fill scenario** on the render before reconciling with the schema — not the reverse.
+- Why: many defects are **visual-only** and do NOT appear in the schema or the a11y tree — empty/short or unbalanced left island, group headings that don't actually render, placeholder quality (e.g. junk like "Phone 123"), spacing/proportion problems. "Looks fine in the schema" is not evidence the page is fine.
+- [ ] No finding was silently dropped because it looked "intentional" or "temporary" (e.g. a placeholder added for a demo) — flag it explicitly instead of omitting it.
+
 ### Think like a user (UX sanity — do this first)
 
 Answer these from the user's perspective before the detailed checks:
