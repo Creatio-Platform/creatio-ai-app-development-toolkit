@@ -140,6 +140,11 @@ Jump to the section you need:
 - Put logically related fields next to each other (same group, adjacent rows) so the two-column layout reads as coherent pairs, not random placement.
 - If the process has clear steps, show them explicitly or use a wizard to guide the user through it — don't expose the whole data model at once; reveal later fields with business rules as earlier input is filled (progressive disclosure).
 - **Implementation — containers for grouping inputs (Creatio):** field groups of inputs are placed either in a **`crt.ExpansionPanel`** (a named, collapsible field group — the standard way to title and fold a set of related fields) or in a **profile island** (the side `SideAreaProfileContainer`, for key stable data). Inside either, lay the fields out with a `crt.GridContainer` (an N-column grid via `layoutConfig`, where N is the container's own column; full-width field `colSpan: N`, half-width `colSpan: N/2`) or a `crt.FlexContainer`. Note `crt.ExpansionPanel` serves double duty: it wraps a **list** to form a detail (related child-records list) *and* wraps **inputs** to form a collapsible field group — pick the children accordingly. Prefer an ExpansionPanel over a bare grid when a group of fields needs a visible title or should be collapsible.
+- **Choose Flex vs Grid by whether the content changes at runtime.** A `crt.GridContainer` pins each item to fixed `row`/`column` coordinates, so when an item is **hidden** (a field toggled off by a business rule) or **shrinks** (a `crt.ExpansionPanel` collapsing), its slot stays reserved → an empty gap. A `crt.FlexContainer` has no fixed slots: siblings pull up/together to fill the freed space, so the layout adapts. Therefore:
+  - If any field in a group can be **conditionally hidden/shown** (business rule), place that group's fields in a **flex**, so hiding a field leaves no empty slot.
+  - Stack **collapsible panels** (`crt.ExpansionPanel`) and whatever follows them in a **flex**, so the page reflows and lower components pull up when a panel collapses.
+  - This is also why buttons go in a flex (they resize to their label) — see *Buttons and actions*.
+  - Use a **grid** only for **static, always-present** field layouts where the set of visible items and their coordinates don't change at runtime.
 
 ### New island / card container — standard settings
 
