@@ -110,19 +110,19 @@ If full metric detail is missing, define a practical draft set and mark it as an
 ### Data model
 
 Required:
-- main entities
+- main objects
 - whether the app has one primary record type or several distinct business objects
-- lookup entities for enum-like fields
+- lookup objects for enum-like fields
 - key relationships
-- record title / primary display field for each entity and lookup
+- record title / primary display field for each object and lookup
 - standard profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects
 
 Resolve these ambiguities explicitly when they appear in the request:
 - if multiple counterparty categories are mentioned, clarify whether they belong in one universal registry with a type lookup or in separate main business objects
-- if a secondary entity is proposed, state why it is a distinct business object instead of additional fields on the main entity
+- if a secondary object is proposed, state why it is a distinct business object instead of additional fields on the section object
 - if contact-like records are present, state whether they are subordinate to one parent record or may exist independently
 
-The visible BA draft **must** render each entity in the object model section as a markdown table with columns: `Title`, `Code`, `Description`, `Data type`, `Required`, `Default`. Lookup seed rows must also be rendered as a table. Do not use bullet lists to describe entity fields or seed rows.
+The visible BA draft **must** render each object in the object model section as a markdown table with columns: `Title`, `Code`, `Description`, `Data type`, `Required`, `Default`. Lookup seed rows must also be rendered as a table. Do not use bullet lists to describe object fields or seed rows.
 
 ### UX assumptions
 
@@ -133,7 +133,7 @@ Default unless critical:
 - sorting/filtering expectations if important
 
 If the developer omits exact page fields or gives only a partial list, resolve deterministic defaults before handoff:
-- FormPage: keep `Name` as the record title/header when present and include all approved non-inherited business fields from the main entity. Required business fields must always be included.
+- FormPage: keep `Name` as the record title/header when present and include all approved non-inherited business fields from the section object. Required business fields must always be included.
 - ListPage: include `Name`, include every required non-inherited business field, then append short operational fields in this priority order until the default grid remains compact: status/lifecycle, priority/severity, type/category, due/start/end date, owner/assignee, code/number, amount.
 - Keep default ListPage selection compact by capping auto-selected columns at 6 total visible columns unless required business fields exceed that number.
 - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
@@ -173,6 +173,22 @@ It must explicitly define:
 - what the team must see or control in day-to-day work
 - which supporting records are required to make the process operationally usable
 
+### Conditional Page Logic (Business Rules)
+
+At planning time, actively work out the page's *conditional behavior*, not just its static fields. For each form/record page, think through which fields and controls change based on the data on the record, and capture that logic in the Business Plan so it can be implemented as Creatio business rules.
+
+For every business rule, describe it as **action + target + condition**:
+- **show / hide** a field, group, or tab when a condition is met (e.g. hide `Reason` unless `Status = Rejected`)
+- **required / optional** — make a field mandatory only under a condition (e.g. `Close date` required when `Status = Done`)
+- **lock / editable (read-only)** — disable or enable a field under a condition (e.g. lock `Amount` once `Status = Approved`)
+- **set value / default** — auto-fill a field with a value when a condition is met (e.g. set `Owner = current user` on create, set `Completed on = today` when `Status = Done`)
+
+Do not leave this logic implicit. If the requirements imply that a field only matters in some states, that a value should be auto-populated, or that something must be protected after a transition, state the rule explicitly with its trigger condition. Where the lifecycle has distinct statuses, walk each status and note which fields become required, hidden, locked, or auto-set in that state.
+
+Prefer expressing these as deterministic business rules. Flag any condition that needs custom client-side code (custom validators/handlers/converters) as a separate, non-business-rule item, since it falls outside the standard conditional-rule path.
+
+**No duplication between prose and the conditional rules block.** Each conditional rule belongs in exactly one place. If a behavior is captured as a conditional rule (action + target + condition), do not also restate it in the main `Business Logic` prose, and vice versa. The prose covers non-conditional business logic (minimum-to-create, duplicate handling, archive/close posture, ownership/editing posture, derived/aggregated values, cross-field validation that is not a UI rule); the conditional rules block covers the show/hide, required, lock, and set-value rules. Before finalizing the section, scan for any statement that appears both as prose and as a conditional rule and remove the prose copy.
+
 ## Pre-analysis Pass
 
 Before presenting the BA draft to the developer, run a pre-analysis pass across all draft sections and assumptions.
@@ -183,8 +199,8 @@ The pre-analysis must check for:
 - required fields in business logic that are not marked as required in the data model
 - defaults that do not identify an explicit business default or explicit absence of default
 - sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
-- lookup usage that is inconsistent across entities or too broad for the stated business scope
-- supporting entities whose required parent links or cross-field constraints are not explicitly captured
+- lookup usage that is inconsistent across objects or too broad for the stated business scope
+- supporting objects whose required parent links or cross-field constraints are not explicitly captured
 - assumptions that contradict confirmed answers
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the object model section
@@ -224,7 +240,7 @@ If not complete, continue clarification and do not proceed to implementation pla
 - If answer is ambiguous, rephrase and request concrete values.
 - Prefer business language; avoid technical implementation details unless required as blockers.
 - Prefer option-based prompts over open-ended questions whenever deterministic defaults are possible.
-- when the request contains category, lifecycle, or secondary-entity ambiguity, resolve it explicitly before finalizing the BA draft
+- when the request contains category, lifecycle, or secondary-object ambiguity, resolve it explicitly before finalizing the BA draft
 
 ## Technical Minimalism Boundary
 

@@ -55,6 +55,16 @@ Before editing any page, decide whether the requirement targets web, mobile, or 
 - **Provisioning**: mobile pages are created automatically by `create-app-section` when the `UseMobilePageDesigner` feature flag is enabled. No separate mobile page creation tool is needed. Note the flag dependency explicitly in the Business Plan.
 - **Discovery**: `get-page` returns `schema-type: "mobile"` for mobile pages. In `list-pages` and `get-app-info`, identify mobile pages by their naming suffix (`_MobileFormPage` / `_MobileListPage`) or parent template name.
 
+## Component-Aware Planning
+
+Ground the plan in Creatio's real Freedom UI capabilities instead of inventing UX that the platform cannot render. Before drafting `## 6. UX Expectations` and the Technical Implementation Handoff, consult the live component catalog so the plan only proposes controls that actually exist.
+
+- **Read the catalog with `get-component-info`**: call it in list mode (omit `component-type` or pass `"list"`) to retrieve the available Freedom UI component types. Use `schema-type: "web"` (default) for web pages and `schema-type: "mobile"` when mobile is in scope — the two registries differ. Use the `search` keyword to narrow when checking a specific control (e.g. `tab`, `toggle`).
+- **When to read it**: do this during the pre-analysis pass, after the first clarification round — not on the first turn. Do not block first-turn latency on catalog reads.
+- **Version scoping**: pass `environment-name` once the environment is configured (after Gate R) so the catalog matches the target platform version. During the BA stage the environment is usually still deferred; in that case the catalog falls back to the `latest` superset, which may list components not present in the target. Treat any non-trivial/advanced component as **provisional** until it is confirmed against the real environment version during implementation.
+- **Use it to shape the plan**: only propose tabs, widgets, lists, lookups, or specialized controls that exist in the catalog. If a requirement implies a control that is not available, flag it as a gap (and a possible non-AI implementation path) rather than silently planning it.
+- **Keep business language in the BA body**: the visible `## 6. UX Expectations` section stays business-facing (fields, filters, groups by Title). Concrete component type names (e.g. `crt.TabContainer`) belong in the Technical Implementation Handoff, not in the numbered BA sections.
+
 ## Checklist Authority
 
 `context/business-checklist.md` is the single source of truth for:
@@ -146,7 +156,7 @@ Do not show the draft to the developer if any of the following is true:
 
 - a required top-level section is missing, renamed, reordered, or merged
 - `## 3. Object Model` does not contain the required field tables
-- a main or supporting entity is described only in prose or bullets without its own field table
+- a section object or supporting object is described only in prose or bullets without its own field table
 - the object model is rendered as prose-only summary instead of the required `## 3. Object Model` structure
 - a wrapper such as `<proposed_plan>` is being used to justify a shortened, summarized, or freely rewritten body instead of the exact BA-style structure
 
@@ -171,18 +181,18 @@ Use this exact visible skeleton for the Business Plan:
 - `## 1. Business Outcome`
 - `## 2. Roles and Permissions`
 - `## 3. Object Model`
-  - `### 3.1 Main entity: <Business title>`
-  - entity metadata block in this exact order:
+  - `### 3.1 Section object: <Business title>` — the object the section is created on
+  - object metadata block in this exact order:
     - `Title`
     - `Code`
-    - `Entity role`
+    - `Object role`
     - `Primary display field`
     - `Description`
   - `Purpose: <one short sentence>`
   - one required field table
-  - `Minimum to create:` followed by bullets for the main entity only
-  - `### 3.x Supporting entity: <Business title>` blocks as needed
-    - each supporting entity must also include the same entity metadata block before its field table
+  - `Minimum to create:` followed by bullets for the section object only
+  - `### 3.x Object: <Business title>` blocks as needed
+    - each supporting object must also include the same object metadata block before its field table
   - `### 3.x Lookups`
   - `### 3.x Relationships`
 - `## 4. Lifecycle and Statuses`
@@ -203,12 +213,12 @@ Use this exact visible skeleton for the Business Plan:
 - access posture or ownership limits
 - persona notes when they materially affect behavior
 
-`## 3. Object Model` must define the core business entities.
-For each entity block, include:
+`## 3. Object Model` must define the core business objects.
+For each object block, include:
 
 - title
 - code (schema name)
-- entity role: `main`, `supporting`, or `lookup`
+- object role: `main`, `supporting`, or `lookup`
 - primary display field
 - description
 
@@ -221,7 +231,7 @@ Field tables in section 3 must use exactly these columns:
 - `Required`
 - `Default`
 
-Keep the object model simple. Start with the core business object and add supporting entities only when clearly required.
+Keep the object model simple. Start with the core business object and add supporting objects only when clearly required.
 Whenever both title and code are shown in `## 3. Object Model`, show `Title` first and `Code` second.
 `Title` is mandatory for every custom field.
 `Default` must be rendered compactly as one of:
@@ -230,9 +240,9 @@ Whenever both title and code are shown in `## 3. Object Model`, show `Title` fir
 - `-`
 
 Do not use implementation labels such as `schema default` or `ui default` in the visible BA draft.
-If a lookup entity has no custom columns in MVP, state that explicitly.
+If a lookup object has no custom columns in MVP, state that explicitly.
 If the domain is recognizable, `## 3. Object Model` must include the baseline profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects, unless they are explicitly out of scope.
-Do not replace the entity field tables with prose summaries. Every main entity and every supporting entity must have its own explicit field table in the fixed format above.
+Do not replace the object field tables with prose summaries. Every section object and every supporting object must have its own explicit field table in the fixed format above.
 
 In the `Lookups` subsection, use a compact bullet list only.
 Show one bullet per lookup in this order:
@@ -246,11 +256,11 @@ Show one bullet per business relationship.
 Do not use a relationships table unless the request is unusually complex.
 Each relationship bullet must state:
 
-- source entity
-- target entity
+- source object
+- target object
 - cardinality
 - required or optional child-side link status when applicable
-- a short business rationale when the role of the secondary entity is not obvious
+- a short business rationale when the role of the secondary object is not obvious
 
 `## 6. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
 
@@ -272,8 +282,8 @@ Before finalizing the BA draft, verify at minimum:
 
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
-- each supporting entity has the necessary parent-link and cross-field constraints described
-- each main and supporting entity includes both the required metadata block and its own field table
+- each supporting object has the necessary parent-link and cross-field constraints described
+- each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
 - `## 3. Object Model` contains the field tables, lookup bullets, and relationship bullets required by this contract
@@ -324,7 +334,7 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 
 - Business Plan codes are plain PascalCase without any prefix (e.g., `TodoList`, `Status`). Do not add or assume a prefix — clio MCP applies it during implementation.
 - Do not add inherited base columns to requirements.
-- Enum-like fields must be separate lookup entities.
+- Enum-like fields must be separate lookup objects.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
 - If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to the implementation stage after live model discovery.
@@ -338,13 +348,14 @@ Leave the enforcement mechanism to implementation planning under the current `cl
 
 The BA draft is incomplete if any of the following is true:
 
-- an entity does not specify its schema name
+- an object does not specify its schema name
 - a custom field is missing a human-readable `Title`
 - a relationship is described in prose but not listed in the `Relationships` subsection of `## 3. Object Model`
 - a field table default is not rendered as an explicit business default value or `-`
 - a pipeline, funnel, or stages are mentioned without clarifying where lifecycle state lives
-- a secondary entity is listed without explaining its business purpose
+- a secondary object is listed without explaining its business purpose
 - the `businessLogic` group does not cover or explicitly assume minimum create fields, duplicate handling, archive/close posture, and ownership/editing posture
+- the page has conditional behavior (a field that only matters in some states, a value that should be auto-filled, or a field that must be locked/required after a transition) but the `businessLogic` group does not capture it as an explicit conditional rule — see "Conditional Page Logic (Business Rules)" in `context/business-checklist.md`
 
 ## Technical Implementation Handoff
 

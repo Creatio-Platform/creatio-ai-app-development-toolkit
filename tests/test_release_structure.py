@@ -59,12 +59,18 @@ class ReleaseStructureTests(unittest.TestCase):
 
     def test_cursor_plugin_rule_is_valid(self):
         self.assertFalse((ROOT / ".cursor").exists())
-        rule = (ROOT / "rules/creatio-app-orchestrator.mdc").read_text(encoding="utf-8")
+        rule_path = ROOT / "rules/creatio-app-orchestrator.mdc"
+        rule = rule_path.read_text(encoding="utf-8")
         self.assertTrue(rule.startswith("---\n"))
         self.assertIn("description:", rule)
         self.assertIn("alwaysApply: false", rule)
         self.assertIn("Creatio App Orchestrator", rule)
         self.assertIn("runbooks/02-requirements-gathering.md", rule)
+        # The rule sits one level below the toolkit root, so every referenced
+        # path must be anchored with `../` and resolve to a real file when
+        # joined to the rule's own directory (how a host resolves it at
+        # runtime), not when joined to the repo root.
+        self._assert_anchored_paths_resolve(rule_path, "../")
 
     def test_marketplace_catalogs_point_to_plugin(self):
         claude = read_json(".claude-plugin/marketplace.json")
@@ -118,6 +124,54 @@ class ReleaseStructureTests(unittest.TestCase):
             },
         )
 
+    def _assert_anchored_paths_resolve(self, entry_path, anchor_prefix):
+        """Every backticked path reference in an entry file must be anchored
+        with ``anchor_prefix`` and resolve to a real file when joined to the
+        entry file's own directory.
+
+        Resolving against ``entry_path.parent`` (not ``ROOT``) mirrors how a
+        coding agent resolves the path at runtime: the skill/rule loads from
+        its installed directory, which is below the toolkit root that holds
+        ``AGENTS.md``. Resolving against ``ROOT`` would let a broken bare path
+        ship green — the files exist at ROOT, but never at the skill-relative
+        location the agent actually reads.
+        """
+        content = entry_path.read_text(encoding="utf-8")
+        references = re.findall(r"`([^`]+)`", content)
+        # Decide which backtick tokens are *read-paths* that must be anchored:
+        #   - any token with a directory component (e.g. context/INDEX.md),
+        #     excluding bare directory mentions like `skills/` / `rules/`;
+        #   - the toolkit-root files that are read by bare name (AGENTS.md,
+        #     .mcp.json) — a bare `AGENTS.md` is the defect this guards against.
+        # This deliberately ignores *referential* bare filenames such as
+        # `mcp_client.py` (already anchored where it is actually read, in the
+        # Load Order) and non-path tokens like `get-tool-contract`.
+        root_read_files = {"AGENTS.md", ".mcp.json"}
+
+        def is_read_path(ref):
+            if ref.endswith("/"):
+                return False
+            if ref in root_read_files:
+                return True
+            return "/" in ref
+
+        path_refs = [ref for ref in references if is_read_path(ref)]
+        self.assertGreater(
+            len(path_refs), 0, f"{entry_path.name}: no toolkit file references found"
+        )
+        for ref in path_refs:
+            # Every toolkit file reference must be anchored to the toolkit root.
+            # A BARE path (e.g. `AGENTS.md`) resolves against the skill's own
+            # directory at runtime, where the file does not exist. Reject it
+            # here even though it would "resolve" against the repo root.
+            self.assertTrue(
+                ref.startswith(anchor_prefix),
+                f"{entry_path.name}: `{ref}` is not anchored with `{anchor_prefix}` "
+                f"(bare paths resolve to the wrong directory at runtime)",
+            )
+            resolved = (entry_path.parent / ref).resolve()
+            self.assertTrue(resolved.exists(), f"{entry_path.name}: `{ref}` -> {resolved}")
+
     def test_main_skill_frontmatter_and_references_are_valid(self):
         skill = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
         content = skill.read_text(encoding="utf-8")
@@ -126,14 +180,28 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertIn("name: creatio-app-orchestrator", content)
         self.assertIn("description:", content)
 
-        references = re.findall(r"`([^`]+)`", content)
-        required_paths = [
-            ref for ref in references
-            if ref.startswith(("runbooks/", "context/", "runtime/scripts/"))
+        # The skill sits two levels below the toolkit root, so paths anchor
+        # with `../../` and must resolve from the skill's own directory.
+        self._assert_anchored_paths_resolve(skill, "../../")
+
+    def test_orchestrator_entry_files_carry_root_anchor_and_fail_loud(self):
+        """Both entry files must tell the agent where the toolkit root is and
+        stop loudly (rather than silently planning from memory) when the
+        contract files are unreachable, instead of degrading to a free-form
+        plan when the skill loads from outside the repo.
+        """
+        entry_files = [
+            ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+            ROOT / "rules/creatio-app-orchestrator.mdc",
         ]
-        self.assertGreater(required_paths, [])
-        for relative_path in required_paths:
-            self.assertTrue((ROOT / relative_path).exists(), relative_path)
+        # Match on the load-bearing concepts (root anchor + a fail-loud
+        # directive that forbids fabricating a plan), not an exact sentence, so
+        # benign rewording does not break the guard.
+        for entry in entry_files:
+            content = entry.read_text(encoding="utf-8")
+            self.assertIn("toolkit root", content, entry.name)
+            self.assertIn("STOP", content, entry.name)
+            self.assertIn("from memory", content, entry.name)
 
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())
