@@ -121,7 +121,17 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Informative images have alt text; decorative images are ignored by screen readers.
 - [ ] Charts/diagrams have text alternative or data table where needed.
 - [ ] Each component's accessibility parameters (accessible name/`aria-label`, label/caption, tooltip, alt) are present AND filled in — not empty or left at default.
-- [ ] Status changes/no-result messages are announced when relevant.
+- [ ] Status changes/no-result messages are announced when relevant; key actions (e.g. Save) give a meaningful status message (SC 4.1.3).
+- [ ] Every element has a meaningful `Title` (incl. icon-only / visually-hidden), not "Button 1" (SC 4.1.2).
+- [ ] Input errors are identified with correction hints; required fields marked at entry; critical/irreversible actions have confirm or Undo (SC 3.3.1/3.3.3/3.3.4).
+- [ ] No redundant entry — known/linked values (lookups, defaults, process-step data) are pre-populated, not re-asked (SC 3.3.7).
+- [ ] Interactive targets are ≥24×24 px or spaced apart (container gap ≥8 px) (SC 2.5.8).
+- [ ] The same function is identified consistently across pages — same icon/label/tooltip/position (SC 3.2.4).
+- [ ] `PageTitle` is kept; exactly one H1 per page/modal with logical heading order (SC 2.4.2, 1.3.1).
+- [ ] Shell (`BaseShell`/`MainShell`) is not altered, so bypass/skip-link behavior is preserved; customizations stay in the content area (SC 2.4.1).
+- [ ] Navigation and inline-help placement are consistent across pages (SC 3.2.3, 3.2.6).
+- [ ] Link text is descriptive in context — no bare "Click here" (SC 2.4.4).
+- [ ] All elements are localized to every enabled language; no unintended language mix (SC 3.1.1/3.1.2).
 
 ## Audit output template
 

@@ -39,6 +39,31 @@ Use this reference when creating or reviewing Creatio Freedom UI pages for WCAG/
 - For custom components, update programmatic names, roles, values, and states.
 - **Check every component for its accessibility parameters and that they are filled.** For each component on the page, verify it exposes the accessibility properties it should (accessible name / `aria-label`, label/caption, tooltip, alt text, title) AND that those properties are actually populated — not left empty or at their default. An empty accessibility property is as bad as a missing one; do not assume a component is accessible just because the property exists.
 
+## Freedom UI page criteria (WCAG 2.2 AA — no-code guide)
+
+Beyond the principles above, verify these page-design criteria. Each maps to a WCAG Success Criterion (SC).
+
+### Inputs, forms & validation
+- **Meaningful element name (SC 4.1.2):** fill each element's `Title` (top of the properties panel) with a meaningful value — even when the title is visually hidden, assistive tech uses it. An icon-only "add contact" button must be "Add contact", not "Button 1".
+- **Error identification, suggestion & prevention (SC 3.3.1 / 3.3.3 / 3.3.4):** clearly identify input errors and offer correction hints (label/tooltip). Mark required fields at the point of entry (or via business rules), not at a later step. For critical/irreversible actions, add a confirmation step or Undo (e.g. a "Confirm order" step before submit).
+- **Avoid redundant entry (SC 3.3.7):** never ask the user to re-enter data the system already knows — pre-populate connection lookups (e.g. Account on a Contact created from an account), default addresses, and values carried from process steps.
+
+### Element size & appearance
+- **Minimum target size ≥ 24×24 px (SC 2.5.8):** some Creatio controls (e.g. "S"-size buttons) are smaller than 24 px — leave gap/spacing around them (container gap ≥ 8 px) so the effective target area is adequate; always space independent buttons apart.
+- **Consistent identification (SC 3.2.4):** the same function uses the same icon, label, tooltip, and position across all pages (always "Save", never "Submit"/"Update" for the same action; "Customer Name" labeled the same everywhere).
+
+### Page structure
+- **Page title (SC 2.4.2):** keep the `PageTitle` label on every page — it drives the visible title and the browser-tab title, and on record pages auto-fills with the record's primary display value. Edit/move/restyle it, but never delete it.
+- **Heading hierarchy (SC 1.3.1):** use Label heading levels H1 → H2 → H3 top-to-bottom; exactly one H1 per page/modal; add lower levels only when the structure genuinely needs them.
+- **Bypass blocks / skip links (SC 2.4.1):** the Freedom UI shell already provides bypass mechanisms — keep customizations inside the main content area and do not alter `BaseShell`/`MainShell`, so skip-link behavior is preserved.
+- **Consistent navigation (SC 3.2.3):** repeated navigation and controls appear and behave the same across pages; if you build a custom layout, apply the same pattern across related pages.
+- **Consistent help (SC 3.2.6):** place inline help in the same region across pages (e.g. help icons always immediately right of the field label).
+
+### Localization, links & status
+- **Language of page/parts (SC 3.1.1 / 3.1.2):** translate every element (titles, labels, button text) into all enabled languages; don't mix languages on a page unless intended (mark such inputs "Localizable text").
+- **Link purpose in context (SC 2.4.4):** link text must convey its destination on its own or with adjacent text — avoid a bare "Click here"; prefer "View pricing table".
+- **Status messages (SC 4.1.3):** surface meaningful status messages where needed (e.g. a success message on the Save action); rely on Creatio's built-in notification/validation mechanisms.
+
 ## Contrast rules
 
 - Minimum contrast ratio for standard and small text: **4.5:1**.
