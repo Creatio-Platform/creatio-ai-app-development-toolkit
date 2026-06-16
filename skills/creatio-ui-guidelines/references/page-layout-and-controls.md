@@ -120,7 +120,6 @@ Jump to the section you need:
 - Reuse template styles: Headline 1-4 for headings, Body for regular text, Caption for supporting text.
 - Treat color as information coding only with text/icon/status support.
 - Before requesting global font, theme, or style overrides, ask why the change is needed and how it affects system perception and consistency.
-- Perform cross-browser testing for layout and visual changes.
 
 ## Adding and editing data
 
