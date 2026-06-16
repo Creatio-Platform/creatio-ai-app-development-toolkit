@@ -104,6 +104,7 @@ Answer these from the user's perspective before the detailed checks:
 
 ### Accessibility
 
+- [ ] **`references/accessibility-and-colors.md` was actually opened and applied (not skipped, not from memory).** Accessibility is a required dimension of every page/review, not an optional final step — run these checks for every design and audit.
 - [ ] Standard/small text contrast is at least 4.5:1.
 - [ ] Large text contrast is at least 3:1.
 - [ ] Custom tab, Area, chart, glass, and wallpaper combinations are contrast-checked.
