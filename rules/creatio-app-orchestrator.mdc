@@ -31,7 +31,6 @@ are not accessible from this session, and do not produce a plan from memory.
 Use these values for CAADT product telemetry when calling clio telemetry tools:
 
 - `coding_agent`: your host coding agent (for example `Claude Code`, `Codex`, `GitHub Copilot CLI`, or `Cursor`).
-- `skill_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
 - `plugin_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
 
 ## Core Rules

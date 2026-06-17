@@ -1148,7 +1148,7 @@ class InstallCursorTests(unittest.TestCase):
             self.assertRegex(rule_body, r"(?i)mobile")
             self.assertIn("## Analytics Context", rule_body)
             self.assertIn("`coding_agent`: Cursor", rule_body)
-            self.assertIn("`skill_version`:", rule_body)
+            self.assertNotIn("`skill_version`", rule_body)
             self.assertIn("`plugin_version`:", rule_body)
             self.assertIn("Follow `context/product-telemetry.md`", rule_body)
 
@@ -1165,7 +1165,7 @@ class InstallCursorTests(unittest.TestCase):
             # the Cursor rule render never fails mid-install.
             block = installer.render_analytics_context(repo_root, "Cursor")
             self.assertIn("`coding_agent`: Cursor", block)
-            self.assertIn("`skill_version`: unknown", block)
+            self.assertNotIn("`skill_version`", block)
             self.assertIn("`plugin_version`: unknown", block)
 
     def test_analytics_context_renders_resolved_plugin_version(self):
@@ -1174,14 +1174,14 @@ class InstallCursorTests(unittest.TestCase):
             repo_root = Path(temp) / "repo"
             # plugin_version() reads .github/plugin / .claude-plugin /
             # .codex-plugin; with a valid manifest the resolved version is
-            # interpolated into both version fields.
+            # interpolated into the plugin_version field.
             (repo_root / ".github" / "plugin").mkdir(parents=True)
             (repo_root / ".github" / "plugin" / "plugin.json").write_text(
                 '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
                 encoding="utf-8",
             )
             block = installer.render_analytics_context(repo_root, "Cursor")
-            self.assertIn("`skill_version`: 0.1.0", block)
+            self.assertNotIn("`skill_version`", block)
             self.assertIn("`plugin_version`: 0.1.0", block)
 
     def test_rule_survives_source_deletion(self):

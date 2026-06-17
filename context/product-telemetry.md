@@ -4,14 +4,13 @@ When the `send-telemetry` clio MCP tool is available, emit product telemetry for
 
 At CAADT workflow start, call clio MCP `get-telemetry-consent` before sending any product telemetry event. This is the read-only consent check. Ask the developer for permission to collect diagnostic product telemetry only when it returns `telemetry_consent=unknown`. The consent prompt must be a single-purpose interaction before requirements gathering, Business Plan discovery, or implementation planning. Do not combine the consent question with discovery questions. Because enabling telemetry uploads these events to Creatio servers (not only local storage) and retains them for up to one year, the consent prompt must disclose this remote upload and the one-year retention so the decision is informed; it must also state that the data is diagnostic product metadata only (never prompts, generated content, credentials, or personal data) and that declining keeps telemetry off — nothing is collected or sent — and never blocks the workflow. Use clio MCP `send-telemetry` with `event_name=session_started` and `telemetry_consent` set to either `granted` or `denied` to persist the first-run consent decision; clio stores the decision locally. When the decision is `denied`, clio records the decision and writes no telemetry event. Emit the `session_started` event itself only when consent is already granted or when the developer grants first-run consent. Treat telemetry as recorded only when the MCP result reports success; if the host displays an invocation exception, do not claim telemetry was recorded. If telemetry is denied or unavailable, continue the CAADT workflow without blocking the user.
 
-Create one `session_id` for the CAADT workflow as a freshly generated random GUID and reuse it for every telemetry event in that conversation. Never derive `session_id` from user, account, file-path, host, or email data; it must be an opaque random identifier. Use the static Analytics Context from the installed skill or rule for `coding_agent`, `skill_version`, and `plugin_version`.
+Create one `session_id` for the CAADT workflow as a freshly generated random GUID and reuse it for every telemetry event in that conversation. Never derive `session_id` from user, account, file-path, host, or email data; it must be an opaque random identifier. Use the static Analytics Context from the installed skill or rule for `coding_agent` and `plugin_version`.
 
 Telemetry payload:
 
 - `session_id`
 - `event_name`
 - `coding_agent`
-- `skill_version`
 - `plugin_version`
 - `telemetry_consent`, only when persisting the first-run consent decision
 

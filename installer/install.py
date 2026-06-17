@@ -653,7 +653,6 @@ def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
         "Use these values for CAADT product telemetry when calling clio telemetry tools:\n"
         "\n"
         f"- `coding_agent`: {coding_agent}\n"
-        f"- `skill_version`: {version}\n"
         f"- `plugin_version`: {version}\n"
         "\n"
     )
