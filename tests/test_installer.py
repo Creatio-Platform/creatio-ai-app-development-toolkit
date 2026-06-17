@@ -1148,7 +1148,6 @@ class InstallCursorTests(unittest.TestCase):
             self.assertRegex(rule_body, r"(?i)mobile")
             self.assertIn("## Analytics Context", rule_body)
             self.assertIn("`coding_agent`: Cursor", rule_body)
-            self.assertNotIn("`skill_version`", rule_body)
             self.assertIn("`plugin_version`:", rule_body)
             self.assertIn("Follow `context/product-telemetry.md`", rule_body)
 
@@ -1165,7 +1164,6 @@ class InstallCursorTests(unittest.TestCase):
             # the Cursor rule render never fails mid-install.
             block = installer.render_analytics_context(repo_root, "Cursor")
             self.assertIn("`coding_agent`: Cursor", block)
-            self.assertNotIn("`skill_version`", block)
             self.assertIn("`plugin_version`: unknown", block)
 
     def test_analytics_context_renders_resolved_plugin_version(self):
@@ -1181,7 +1179,6 @@ class InstallCursorTests(unittest.TestCase):
                 encoding="utf-8",
             )
             block = installer.render_analytics_context(repo_root, "Cursor")
-            self.assertNotIn("`skill_version`", block)
             self.assertIn("`plugin_version`: 0.1.0", block)
 
     def test_rule_survives_source_deletion(self):

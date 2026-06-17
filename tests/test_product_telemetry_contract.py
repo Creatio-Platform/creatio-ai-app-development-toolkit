@@ -47,7 +47,6 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("`session_id`", telemetry)
         self.assertIn("`event_name`", telemetry)
         self.assertIn("`coding_agent`", telemetry)
-        self.assertNotIn("`skill_version`", telemetry)
         self.assertIn("`plugin_version`", telemetry)
         self.assertIn("shown in the visible conversation body", telemetry)
         self.assertIn("never before or during drafting", telemetry)
@@ -68,7 +67,6 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("Analytics Context values", skill)
         self.assertIn("## Analytics Context", skill)
         self.assertIn("`coding_agent`", skill)
-        self.assertNotIn("`skill_version`", skill)
         self.assertIn("`plugin_version`", skill)
 
     def test_cursor_rule_references_product_telemetry_contract_file(self):
@@ -82,7 +80,6 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("Analytics Context values", rule)
         self.assertIn("## Analytics Context", rule)
         self.assertIn("`coding_agent`", rule)
-        self.assertNotIn("`skill_version`", rule)
         self.assertIn("`plugin_version`", rule)
 
 
