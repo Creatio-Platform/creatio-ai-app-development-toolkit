@@ -6,6 +6,21 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.1.0 (2026-06-17)
+
+### Features
+
+- Prefer the native `clio` MCP server, operate within a single context, and treat the package context as writable, streamlining implementation through clio.
+- Execution UX & effort-budget contract: reasoning-latency expectations, progress signals during long-running work, and recovered-error reframing so transient failures are reported as recovered rather than fatal.
+- Orchestrator now generates business rules and applies improved business-plan object-model naming.
+- Generated UI text must use localizable strings, so produced apps are translation-ready by default.
+
+### Bug Fixes
+
+- Orchestrator skill path resolution now works when the toolkit is invoked from outside the toolkit folder.
+
+---
+
 ## 1.0.1 (2026-06-09)
 
 ### Features
