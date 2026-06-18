@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -57,8 +58,37 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("After explicit plan approval", telemetry)
         self.assertIn("before first implementation action", telemetry)
         self.assertIn("When implementation cannot continue", telemetry)
-        for event_name in REQUIRED_EVENTS:
-            self.assertIn(event_name, telemetry)
+        # Parse the event names declared in the "Required event mapping"
+        # section and assert they EXACTLY match REQUIRED_EVENTS (as sets, so
+        # ordering differences are ignored — the doc and REQUIRED_EVENTS orders
+        # legitimately differ). A plain substring check passes even when an
+        # extra, missing, or typo'd event is present; set equality catches all
+        # three. Scope the parse to the mapping section so event names appearing
+        # in prose elsewhere are not counted.
+        section = telemetry.split("Required event mapping:", 1)[1]
+        section = section.split("Telemetry emission checkpoints:", 1)[0]
+        documented_events = {
+            match.group(1)
+            for line in section.splitlines()
+            for match in [re.match(r"^- `([a-z_]+)`:", line)]
+            if match
+        }
+        self.assertEqual(documented_events, set(REQUIRED_EVENTS))
+
+    def test_product_telemetry_contract_documents_consent_withdrawal(self):
+        telemetry = (ROOT / "context" / "product-telemetry.md").read_text(encoding="utf-8")
+
+        # The consent prompt must disclose that consent can be withdrawn, so the
+        # decision is informed and the right to withdraw is as easy as granting
+        # (GDPR Art. 7(3)).
+        self.assertIn("consent can be withdrawn at any time", telemetry)
+        # The withdrawal flow must be documented and route to the clio MCP tool.
+        self.assertIn("Consent withdrawal", telemetry)
+        self.assertIn("withdraw-telemetry-consent", telemetry)
+        self.assertIn("withdraw telemetry consent at any time", telemetry)
+        # Withdrawal is forward-looking, not retroactive: already-uploaded events
+        # are not deleted (that is server-side erasure, out of this contract).
+        self.assertIn("does not delete events already uploaded to Creatio", telemetry)
 
     def test_skill_entrypoint_references_product_telemetry_contract_file(self):
         skill = (ROOT / "skills" / "creatio-app-orchestrator" / "SKILL.md").read_text(encoding="utf-8")
