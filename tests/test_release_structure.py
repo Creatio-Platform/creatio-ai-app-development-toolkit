@@ -6,6 +6,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Checked-in allowlist of clio guide names the analytics-widgets thin skill is
+# permitted to route to. This mirrors the guide names that must exist in clio's
+# GuidanceCatalog. It is intentionally maintained by hand: renaming or removing a
+# guide on the clio side without updating this list (and the SKILL pointer) must
+# break the build so the drift is caught at review time rather than at runtime.
+CLIO_GUIDE_ALLOWLIST = frozenset(
+    {
+        "analytics-widgets",
+        "dashboards",
+        "indicator-widget",
+        "page-modification",
+    }
+)
+
 
 def read_json(relative_path):
     return json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
@@ -295,6 +309,34 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertIn('export GH_HOST="${GITHUB_SERVER_URL#http://}"', step_body)
         self.assertIn('export GH_HOST="${GH_HOST#https://}"', step_body)
         self.assertIn('export GH_HOST="${GH_HOST%/}"', step_body)
+
+    def test_analytics_widgets_skill_routes_only_to_allowlisted_clio_guides(self):
+        """Drift tripwire: the analytics-widgets thin skill is a pointer into the
+        clio MCP guidance catalog. Every clio guide name it routes to via
+        `get-guidance name=<guide>` must be present in the checked-in
+        CLIO_GUIDE_ALLOWLIST. If clio later removes or renames one of those
+        guides, this test fails — forcing the pointer and allowlist to be
+        updated together rather than silently shipping a dead route."""
+        skill = ROOT / "skills/analytics-widgets/SKILL.md"
+        content = skill.read_text(encoding="utf-8")
+
+        referenced_guides = set(re.findall(r"get-guidance name=([a-z0-9-]+)", content))
+        # The pointer must actually route somewhere; an empty match set would
+        # make the membership assertion vacuously pass.
+        self.assertEqual(
+            referenced_guides,
+            {"analytics-widgets", "dashboards", "indicator-widget"},
+            "analytics-widgets SKILL.md must route to exactly the index, "
+            "dashboards, and indicator-widget clio guides",
+        )
+
+        for guide in referenced_guides:
+            self.assertIn(
+                guide,
+                CLIO_GUIDE_ALLOWLIST,
+                f"clio guide '{guide}' referenced by skills/analytics-widgets/"
+                f"SKILL.md is not in the checked-in CLIO_GUIDE_ALLOWLIST",
+            )
 
 
 if __name__ == "__main__":
