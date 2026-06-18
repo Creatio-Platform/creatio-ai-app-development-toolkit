@@ -90,6 +90,17 @@ class ProductTelemetryContractTests(unittest.TestCase):
         # are not deleted (that is server-side erasure, out of this contract).
         self.assertIn("does not delete events already uploaded to Creatio", telemetry)
 
+    def test_consent_prompt_discloses_pseudonymous_identifier(self):
+        telemetry = (ROOT / "context" / "product-telemetry.md").read_text(encoding="utf-8")
+
+        # The threat analysis classifies the dataset as pseudonymous personal data
+        # (a random installation id, GDPR Recital 30), so the consent prompt must
+        # disclose that identifier and must not claim "no personal data". It states
+        # only that no DIRECTLY IDENTIFYING personal data is collected.
+        self.assertIn("pseudonymous installation identifier", telemetry)
+        self.assertIn("directly identifying personal data", telemetry)
+        self.assertNotIn("credentials, or personal data)", telemetry)
+
     def test_skill_entrypoint_references_product_telemetry_contract_file(self):
         skill = (ROOT / "skills" / "creatio-app-orchestrator" / "SKILL.md").read_text(encoding="utf-8")
 
