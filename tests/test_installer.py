@@ -1146,9 +1146,40 @@ class InstallCursorTests(unittest.TestCase):
             self.assertIn(str(cursor_home / "mcp.json"), rule_body)
             self.assertIn("essentials", rule_body)
             self.assertRegex(rule_body, r"(?i)mobile")
+            self.assertIn("## Analytics Context", rule_body)
+            self.assertIn("`coding_agent`: Cursor", rule_body)
+            self.assertIn("`plugin_version`:", rule_body)
+            self.assertIn("Follow `context/product-telemetry.md`", rule_body)
 
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())
+
+    def test_analytics_context_falls_back_to_unknown_without_manifest(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            # No plugin manifest -> plugin_version() raises RuntimeError, which
+            # render_analytics_context must swallow and default to "unknown" so
+            # the Cursor rule render never fails mid-install.
+            block = installer.render_analytics_context(repo_root, "Cursor")
+            self.assertIn("`coding_agent`: Cursor", block)
+            self.assertIn("`plugin_version`: unknown", block)
+
+    def test_analytics_context_renders_resolved_plugin_version(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            # plugin_version() reads .github/plugin / .claude-plugin /
+            # .codex-plugin; with a valid manifest the resolved version is
+            # interpolated into the plugin_version field.
+            (repo_root / ".github" / "plugin").mkdir(parents=True)
+            (repo_root / ".github" / "plugin" / "plugin.json").write_text(
+                '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
+                encoding="utf-8",
+            )
+            block = installer.render_analytics_context(repo_root, "Cursor")
+            self.assertIn("`plugin_version`: 0.1.0", block)
 
     def test_rule_survives_source_deletion(self):
         installer = load_installer()

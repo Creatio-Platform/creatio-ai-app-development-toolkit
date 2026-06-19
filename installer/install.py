@@ -45,6 +45,7 @@ SETUP_WIZARD_AGENT_DISPLAY_NAMES = {
 }
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
+    "context/product-telemetry.md",
     "context/INDEX.md",
     "context/business-checklist.md",
     "context/essentials.md",
@@ -635,13 +636,36 @@ def repo_file(repo_root: Path, relative_path: str) -> Path:
     return repo_root / relative_path
 
 
+def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
+    """Static Analytics Context block for CAADT product telemetry.
+
+    `plugin_version` resolves from the plugin manifest copied into the install
+    surface; it falls back to "unknown" when no manifest is present so rendering
+    never fails mid-install.
+    """
+    try:
+        version = plugin_version(repo_root)
+    except RuntimeError:
+        version = "unknown"
+    return (
+        "## Analytics Context\n"
+        "\n"
+        "Use these values for CAADT product telemetry when calling clio telemetry tools:\n"
+        "\n"
+        f"- `coding_agent`: {coding_agent}\n"
+        f"- `plugin_version`: {version}\n"
+        "\n"
+    )
+
+
 def render_load_order(repo_root: Path) -> str:
     return (
         f"1. Read `{repo_file(repo_root, 'AGENTS.md')}` for the active orchestration contract.\n"
-        f"2. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
-        f"3. For environment setup, read `{repo_file(repo_root, 'runbooks/01-environment-setup.md')}`.\n"
-        f"4. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
-        f"5. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
+        f"2. Read `{repo_file(repo_root, 'context/product-telemetry.md')}` for telemetry consent, event checkpoints, and payload shape.\n"
+        f"3. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
+        f"4. For environment setup, read `{repo_file(repo_root, 'runbooks/01-environment-setup.md')}`.\n"
+        f"5. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
+        f"6. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
 
@@ -665,10 +689,12 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         "\n"
         f"{render_load_order(repo_root)}"
         "\n"
+        f"{render_analytics_context(repo_root, 'Cursor')}"
         "## Core Rules\n"
         "\n"
         "- Pages are separate for web and mobile: before any page edit, read `context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
         "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
+        "- Follow `context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
