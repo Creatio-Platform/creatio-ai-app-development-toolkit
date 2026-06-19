@@ -54,23 +54,28 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("required runtime context is available", telemetry)
         self.assertIn("before starting the follow-up change work", telemetry)
         self.assertIn("after the follow-up change is complete", telemetry)
-        self.assertIn("Telemetry emission checkpoints", telemetry)
-        self.assertIn("After explicit plan approval", telemetry)
-        self.assertIn("before first implementation action", telemetry)
-        self.assertIn("When implementation cannot continue", telemetry)
-        # Parse the event names declared in the "Required event mapping"
-        # section and assert they EXACTLY match REQUIRED_EVENTS (as sets, so
-        # ordering differences are ignored — the doc and REQUIRED_EVENTS orders
-        # legitimately differ). A plain substring check passes even when an
-        # extra, missing, or typo'd event is present; set equality catches all
-        # three. Scope the parse to the mapping section so event names appearing
-        # in prose elsewhere are not counted.
-        section = telemetry.split("Required event mapping:", 1)[1]
-        section = section.split("Telemetry emission checkpoints:", 1)[0]
+        # Persisting the first-run consent decision must read as a distinct
+        # action from emitting session_started, so the deny path is not taken as
+        # "skip the persist call" (which would leave consent unknown and
+        # re-prompt the developer every run). Both consent values and the
+        # consent-denied status anchor that split.
+        self.assertIn("`telemetry_consent=granted`", telemetry)
+        self.assertIn("`telemetry_consent=denied`", telemetry)
+        self.assertIn("consent-denied", telemetry)
+        # clio's get-tool-contract is authoritative; this file is a mirror.
+        self.assertIn("convenience mirror", telemetry)
+        # The events are documented in a single "when to emit" table (the old
+        # split mapping/checkpoints lists were collapsed into one). Parse the
+        # table rows and assert the event set EXACTLY matches REQUIRED_EVENTS
+        # (as sets, so ordering differences are ignored). A plain substring
+        # check passes even when an extra, missing, or typo'd event is present;
+        # set equality catches all three. Scope the parse to the events section
+        # so event names appearing in prose elsewhere are not counted.
+        section = telemetry.split("## Events", 1)[1]
         documented_events = {
             match.group(1)
             for line in section.splitlines()
-            for match in [re.match(r"^- `([a-z_]+)`:", line)]
+            for match in [re.match(r"^\|\s*`([a-z_]+)`\s*\|", line)]
             if match
         }
         self.assertEqual(documented_events, set(REQUIRED_EVENTS))

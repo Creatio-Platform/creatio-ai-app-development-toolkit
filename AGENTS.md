@@ -130,6 +130,12 @@ The default user-facing flow is:
 6. Wait for the developer's explicit approval of the Business Plan (Gate R).
 7. After Gate R approval, implement the plan using clio MCP tools.
 
+Product telemetry is woven through this flow as a non-blocking, cross-cutting concern. `context/product-telemetry.md` is the source of truth for consent handling and the exact per-event emission points; the touchpoints below are the minimum the agent must not skip, and they never gate the flow (if consent is denied or telemetry is unavailable, continue normally):
+
+- **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and emit `session_started` per the consent table in `context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
+- **During discovery (steps 2-4):** emit `pre_plan_clarification_requested`, `pre_plan_user_input_received`, `business_plan_generated` / `business_plan_regenerated`, and `business_plan_feedback_received` at the points the contract lists.
+- **At Gate R and implementation (steps 6-7):** emit `business_plan_approved`, then `implementation_started` before the first implementation action, and the terminal `implementation_completed` or `implementation_failed` when the run ends.
+
 First-turn latency rule:
 
 - On a new app request, do not spend the first turn inspecting the repository or reading large reference files.
@@ -145,6 +151,7 @@ First-turn latency rule:
 - Additional discovery questions should be asked in the next small themed batch.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
 - Do not read large repository files before the first clarification turn (routing + initial discovery batch) is completed for the current request.
+- First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and `session_started` is emitted silently at workflow start.
 
 Business discovery must follow a Business Analyst style:
 
@@ -265,9 +272,10 @@ Approval-ready vs delivery-ready rule:
 
 ## Orchestration Checklist
 
-1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer.
-2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation.
-3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan. This is the final step.
+0. At workflow start, establish telemetry consent and emit `session_started` per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
+1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Emit the `pre_plan_*` events as you ask for and receive pre-plan input.
+2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan emit `business_plan_generated` (and `business_plan_regenerated` on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; emit `business_plan_approved` then.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan. Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
