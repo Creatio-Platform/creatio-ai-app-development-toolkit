@@ -45,10 +45,28 @@ class ProductTelemetryContractTests(unittest.TestCase):
         self.assertIn("do not claim telemetry was recorded", telemetry)
         self.assertIn("Telemetry payload", telemetry)
         self.assertIn("Use only the fields listed in the Telemetry payload section", telemetry)
-        self.assertIn("`session_id`", telemetry)
-        self.assertIn("`event_name`", telemetry)
-        self.assertIn("`coding_agent`", telemetry)
-        self.assertIn("`plugin_version`", telemetry)
+        # Data-minimization is the load-bearing privacy guarantee for the public,
+        # anonymous ingest endpoint, so pin the prohibition sentence and every
+        # forbidden category: weakening or deleting the rule must fail the suite
+        # (ENG-89424 acceptance: telemetry must not include sensitive data).
+        self.assertIn("Telemetry must never include sensitive data", telemetry)
+        for forbidden in (
+            "full prompts",
+            "passwords",
+            "tokens",
+            "customer names",
+            "raw usernames",
+            "full generated app content",
+            "full MCP request/response payloads",
+        ):
+            self.assertIn(forbidden, telemetry)
+        # The required agent-sent fields must be enumerated INSIDE the payload
+        # section, not merely appear somewhere in the file (they also occur in
+        # prose and the example). Scope the check to the "## Telemetry payload"
+        # section, mirroring the events-section parse below.
+        payload_section = telemetry.split("## Telemetry payload", 1)[1].split("\n## ", 1)[0]
+        for field in ("`session_id`", "`event_name`", "`coding_agent`", "`plugin_version`"):
+            self.assertIn(field, payload_section)
         self.assertIn("shown in the visible conversation body", telemetry)
         self.assertIn("never before or during drafting", telemetry)
         self.assertIn("required runtime context is available", telemetry)

@@ -133,7 +133,7 @@ The default user-facing flow is:
 Product telemetry is woven through this flow as a non-blocking, cross-cutting concern. `context/product-telemetry.md` is the source of truth for consent handling and the exact per-event emission points; the touchpoints below are the minimum the agent must not skip, and they never gate the flow (if consent is denied or telemetry is unavailable, continue normally):
 
 - **At workflow start, before step 2:** call `get-telemetry-consent`, then establish consent and emit `session_started` per the consent table in `context/product-telemetry.md`. On a genuine first run only (result `unknown`), the consent prompt is a single-purpose interaction on its own turn — never merged with the "What I understood" summary or discovery questions.
-- **During discovery (steps 2-4):** emit `pre_plan_clarification_requested`, `pre_plan_user_input_received`, `business_plan_generated` / `business_plan_regenerated`, and `business_plan_feedback_received` at the points the contract lists.
+- **During discovery (steps 2-4):** emit `pre_plan_clarification_requested`, `pre_plan_user_input_received`, `business_plan_generated` / `business_plan_regenerated` (or `business_plan_generation_skipped` when Business Plan generation is intentionally skipped), and `business_plan_feedback_received` at the points the contract lists.
 - **At Gate R and implementation (steps 6-7):** emit `business_plan_approved`, then `implementation_started` before the first implementation action, and the terminal `implementation_completed` or `implementation_failed` when the run ends.
 
 First-turn latency rule:
