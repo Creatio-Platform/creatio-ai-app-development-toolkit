@@ -28,6 +28,7 @@ are not accessible from this session, and do not produce a plan from memory.
 ## Core Rules
 
 - Pages are separate for web and mobile: before any page edit, read `../../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
+- **UI/UX is mandatory, not optional.** Whenever the workflow creates or edits Freedom UI pages (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring page bodies and apply its rules (layout/containers, component choice, lookups, fields, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components).
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../../AGENTS.md`.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.
 - Prefer native clio MCP tool-calls when the host exposes them; treat `../../runtime/scripts/mcp_client.py` as the stdio fallback only, and do not reverse-engineer its CLI contract when native calls are available (see `../../AGENTS.md`, "clio MCP transport preference").
