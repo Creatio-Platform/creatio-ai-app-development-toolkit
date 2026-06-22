@@ -210,7 +210,7 @@ The pre-analysis must check for:
 If pre-analysis finds a material issue:
 - ask a targeted follow-up question when the issue changes business intent or acceptance
 - otherwise resolve it as an explicit assumption before showing the draft
-- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, note it in the Technical Implementation Handoff "Reuse Discovery Signals" block
+- when a business concept is recognizable and could plausibly map to an existing platform or custom schema, resolve it with DataForge model discovery when an environment is available: lock the `reuse` / `extend` / `create new` Model Decision in the plan from the matched tables/lookups/relations (see `runbooks/02-requirements-gathering.md`, "DataForge Model Discovery"). When discovery did not run, note the concept in the Technical Implementation Handoff "Reuse Discovery Signals" block instead.
 
 Do not present the BA draft while known cross-section contradictions or missing carriers still exist.
 

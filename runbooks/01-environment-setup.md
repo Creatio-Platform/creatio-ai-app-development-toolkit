@@ -4,6 +4,8 @@
 
 Configure clio CLI and establish connection to the target Creatio runtime for the current app workflow.
 
+Note: Agent 2 may invoke a subset of this runbook early — environment resolution (Steps 1–6) and the DataForge availability check (Step 7) — during draft assembly, for read-only DataForge model discovery (see `runbooks/02-requirements-gathering.md`, "DataForge Model Discovery"). That early use is optional and read-only. Full environment setup for implementation still completes here after Gate R approval. When Agent 2 already resolved and healthchecked the environment for the current conversation, reuse it instead of re-registering.
+
 ## Input/Output
 
 - **Input:** Developer request with Creatio URL and `<AppName>`

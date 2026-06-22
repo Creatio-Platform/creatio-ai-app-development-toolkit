@@ -1,6 +1,8 @@
 # DataForge Tool Reference
 
-Use this guide when Agent 1 must check DataForge availability and report the status for the Technical Implementation Handoff.
+Use this guide for both DataForge entry points:
+- Agent 1 checking DataForge availability and reporting the status for the Technical Implementation Handoff.
+- Agent 2 running read-only DataForge model discovery during draft assembly to lock `reuse` / `extend` / `create new` Model Decisions in the Business Plan (see `runbooks/02-requirements-gathering.md`, "DataForge Model Discovery"). Discovery calls are read-only `dataforge-*` queries; they must not create, modify, or compile schemas before Gate R.
 
 ## DataForge Tool Parameter Contract
 

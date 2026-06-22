@@ -195,17 +195,36 @@ Technical question policy:
 - do not ask for MCP/template/icon details when deterministic defaults exist
 - runtime credentials or endpoints are execution blockers after Gate R approval
 - if the developer asks for an autonomous flow without required runtime inputs, ask only for the missing blockers
+- a Creatio URL and credentials are requested earlier, during draft assembly, to enable DataForge model discovery whenever a URL is in play — see "DataForge Planning Discovery". This is the only runtime input that may be requested before Gate R. When a URL is available the agent must ask for the credentials needed to connect; only an explicit decline (or no environment to offer) reverts to the deferred flow.
 
 Execution order:
 
-Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP tools
+Agent 2 (with conditional DataForge model discovery) -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP tools
 
 **After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan. Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
+
+## DataForge Planning Discovery
+
+Agent 2 runs read-only DataForge model discovery during draft assembly so the Business Plan reflects the live Creatio model instead of deferring every reuse decision to implementation. Discovery is the default path whenever a Creatio URL is in play; it falls back to the deferred flow only when the developer has no environment to offer or explicitly declines. A missing credential is a reason to ask, not a reason to skip.
+
+Environment resolution for discovery (in priority order):
+
+1. If an environment is already resolved for the current conversation or exactly one registered environment matches the current-request URL, use it.
+2. If a Creatio URL is available (in the request or conversation) but no matching registered environment exists, the agent **MUST** ask the developer for the credentials needed to register/resolve it, then register it and run a `dataforge-status` check. Do not skip discovery because credentials are "not yet" provided — ask for them as part of the clarification batch. Not having credentials in hand is never, on its own, a reason to fall back.
+3. If no Creatio URL is available at all, ask once for a URL (and credentials) so the plan can be aligned with the live model. This single ask may be framed as enrichment, but it must actually be made before falling back.
+4. Fall back to the deferred flow (reuse/extend/create decided at implementation, captured as Reuse Discovery Signals) **only** when: the developer explicitly declines to provide the environment/credentials, does not respond to the ask, or DataForge status is not `Ready` after a valid connection. Do not fall back merely because the environment was not pre-registered.
+
+Discovery and plan impact when DataForge is `Ready`:
+
+- Run discovery before drafting `## 3. Object Model`, using the draft entities and lookups as `candidate-terms` (default tool: `dataforge-context`; see `context/model-discovery-evidence.md` for the exact parameter contract).
+- For each business entity and lookup, lock a Model Decision in the plan — `reuse <existing schema>`, `extend <existing schema>`, or `create new` — based on the matched DataForge tables/lookups/relations.
+- These planning-time discovery calls are read-only (`dataforge-*` only). They never create, modify, or compile schemas before Gate R.
+- Discovery timing must respect the first-turn latency rules in the UX Contract: never run it on the first turn — only during the draft-assembly / pre-analysis pass after the first clarification round.
 
 ## Agent Responsibilities
 
 1. Environment Setup — resolves env name, DataForge availability, and reports them in conversation
-2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `runtime/scripts/workflow_validators.py`
+2. Requirements Gathering — runs conditional DataForge model discovery during draft assembly, presents Business Plan (with locked Model Decisions when discovery ran) and Technical Implementation Handoff inline in conversation, validates with `runtime/scripts/workflow_validators.py`
 
 Agent 2 is interactive and must not be delegated.
 
@@ -249,7 +268,8 @@ Approval-ready vs delivery-ready rule:
 - Do not add inherited base columns to requirements.
 - Enum-like business values must be modeled as lookup objects.
 - App code collisions and stage-transition state conflicts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
-- Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
+- Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved for the current conversation — either the environment Agent 2 resolved for DataForge planning discovery or the one Agent 1 sets up after Gate R.
+- When DataForge model discovery ran during planning, the Business Plan must lock each entity/lookup as `reuse`, `extend`, or `create new` based on the live findings, rather than deferring those decisions to implementation. When discovery did not run (no environment, declined, or DataForge not `Ready`), keep the deferred behavior: leave reuse/extend/create to implementation and record the concepts as Reuse Discovery Signals.
 - Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
 - Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
 - If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.

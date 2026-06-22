@@ -22,11 +22,12 @@ Read these repository files for the BA stage:
 - `AGENTS.md`
 - `context/business-checklist.md`
 - `context/essentials.md` (only the sections needed for the current question batch)
+- `context/model-discovery-evidence.md` (before running DataForge model discovery — for the exact `dataforge-*` parameter contract)
 
 ## Preconditions
 
 - Gate P is approved.
-- Environment inputs are deferred until after Gate R approval.
+- Implementation runtime inputs are deferred until after Gate R approval. The one exception is DataForge model discovery (see "DataForge Model Discovery"): when a Creatio URL is in play, the agent resolves it during draft assembly — asking for credentials if needed — to align the plan with the live model. It reverts to the deferred flow only on an explicit decline (or when there is no environment to offer), not merely because credentials were not provided up front.
 
 ## Conversation Contract
 
@@ -38,11 +39,12 @@ Read these repository files for the BA stage:
 6. Show "What still needs clarification" only after the first clarification round if it still adds value.
 7. Ask technical questions only for true blockers.
 8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round.
-9. Resolve any material contradictions or missing carriers before showing the draft.
-10. Present the full BA-style Business Plan followed immediately by the Technical Implementation Handoff in the same message.
-11. Ask for natural-language approval using this exact closing line:
+9. During the pre-analysis pass, run DataForge model discovery when an environment is available (see "DataForge Model Discovery"). Use the findings to lock each entity/lookup as `reuse`, `extend`, or `create new` before drafting `## 3. Object Model`.
+10. Resolve any material contradictions or missing carriers before showing the draft.
+11. Present the full BA-style Business Plan followed immediately by the Technical Implementation Handoff in the same message.
+12. Ask for natural-language approval using this exact closing line:
     > "Does this Business Plan look good? If yes, provide your Creatio URL and credentials to proceed with implementation."
-12. After approval, validate the documents inline, collect runtime inputs, run Agent 1 to set up the environment, then implement using clio MCP tools.
+13. After approval, validate the documents inline, collect runtime inputs, run Agent 1 to set up the environment, then implement using clio MCP tools.
 
 ## Mobile Page Requirements
 
@@ -64,6 +66,21 @@ Ground the plan in Creatio's real Freedom UI capabilities instead of inventing U
 - **Version scoping**: pass `environment-name` once the environment is configured (after Gate R) so the catalog matches the target platform version. During the BA stage the environment is usually still deferred; in that case the catalog falls back to the `latest` superset, which may list components not present in the target. Treat any non-trivial/advanced component as **provisional** until it is confirmed against the real environment version during implementation.
 - **Use it to shape the plan**: only propose tabs, widgets, lists, lookups, or specialized controls that exist in the catalog. If a requirement implies a control that is not available, flag it as a gap (and a possible non-AI implementation path) rather than silently planning it.
 - **Keep business language in the BA body**: the visible `## 6. UX Expectations` section stays business-facing (fields, filters, groups by Title). Concrete component type names (e.g. `crt.TabContainer`) belong in the Technical Implementation Handoff, not in the numbered BA sections.
+
+## DataForge Model Discovery
+
+Align the Object Model with the live Creatio model during draft assembly, so reuse/extend/create decisions are made in the plan rather than deferred to implementation. Discovery is the default path whenever a Creatio URL is in play. It must never block the *first turn*, but a missing credential is a reason to ask for it — not a reason to skip discovery and degrade to the deferred flow.
+
+- **When to run it**: during the pre-analysis pass, after the first clarification round and before drafting `## 3. Object Model` — never on the first turn, so first-turn latency is preserved.
+- **Resolve an environment** (priority order):
+  1. If an environment is already resolved for this conversation, or exactly one registered environment matches a current-request URL, use it.
+  2. If a Creatio URL is available (in the request or conversation) but no matching registered environment exists, you **MUST** ask the developer for the credentials needed to register it, then register it (see `runbooks/01-environment-setup.md`) and continue. Do not treat "no credentials yet" as a reason to skip — ask for them in the clarification batch.
+  3. If no URL is available at all, ask once for a Creatio URL (and credentials) so the plan can reflect the existing model. Frame it as enrichment if you like, but actually make the ask before considering any fallback.
+  4. Fall back to the deferred flow (leave reuse/extend/create to implementation, record candidates as Reuse Discovery Signals) **only** when the developer explicitly declines, does not respond to the ask, or DataForge is not `Ready` after a valid connection. Not having a pre-registered environment is not, by itself, a fallback trigger.
+- **Check availability first**: run `dataforge-status` for the resolved environment. Proceed with discovery only when `status.status == "Ready"`.
+- **Run read-only discovery**: use `dataforge-context` as the default call, passing the draft business entities and lookups as `candidate-terms` (and lookup names as `lookup-hints`). Use `dataforge-find-tables` / `dataforge-find-lookups` / `dataforge-get-table-columns` / `dataforge-get-relations` to confirm specific matches. Follow `context/model-discovery-evidence.md` for the exact parameter contract. These calls are read-only — they must not create, modify, or compile schemas before Gate R.
+- **Lock Model Decisions in the plan**: for each entity and lookup, decide `reuse <existing schema>`, `extend <existing schema>`, or `create new` based on the matched tables/lookups/relations, and reflect it in `## 3. Object Model` and the Technical Implementation Handoff.
+- **Keep the BA body business-readable**: the matched existing schema name is a technical carrier. State the decision compactly in the entity metadata block (`Model decision:` line) and keep the supporting DataForge evidence in the Technical Implementation Handoff rather than as prose in the numbered sections.
 
 ## Checklist Authority
 
@@ -94,7 +111,7 @@ Stage-specific constraints for this agent:
 - Before presenting the Business Plan, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
-- Defer runtime questions such as URL and credentials until after Gate R approval.
+- Defer runtime questions such as URL and credentials until after Gate R approval. The single exception is DataForge model discovery (see "DataForge Model Discovery"): a URL may be resolved or optionally requested during draft assembly to align the plan with the live model, and a decline reverts to the deferred flow.
 - Internal mechanics, script paths, workflow-state collisions, and stale artifacts are governed by the global invariants in `AGENTS.md`.
 - Do not expose internal commands, script names, shell fixes, filesystem paths, or dependency workarounds in BA dialogue unless the developer explicitly asks about the internal mechanics.
 - Do not surface workflow-state collisions, stale artifacts, or similar internal repository details in BA dialogue unless they create a genuine product-level ambiguity.
@@ -188,6 +205,7 @@ Use this exact visible skeleton for the Business Plan:
     - `Object role`
     - `Primary display field`
     - `Description`
+    - `Model decision` — only when DataForge model discovery ran; one of `reuse <existing schema>`, `extend <existing schema>`, or `create new`
   - `Purpose: <one short sentence>`
   - one required field table
   - `Minimum to create:` followed by bullets for the section object only
@@ -337,8 +355,9 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 - Enum-like fields must be separate lookup objects.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
 - Add another BaseEntity only when the requirements describe a genuinely distinct business object.
-- If a recognizable business concept might map to an existing platform or custom schema, describe the concept in business terms and leave the final `reuse` / `extend` / `create` decision to the implementation stage after live model discovery.
-- When that ambiguity exists, note it in the Technical Implementation Handoff "Reuse Discovery Signals" block so the implementation stage opens the discovery branch for that concept.
+- If a recognizable business concept might map to an existing platform or custom schema, resolve it according to whether DataForge model discovery ran:
+  - **Discovery ran** (environment available, DataForge `Ready`): lock the `reuse` / `extend` / `create new` decision in the plan based on the matched tables/lookups/relations, record it on the object's `Model decision` line, and capture the supporting evidence in the Technical Implementation Handoff "Model Decisions" block.
+  - **Discovery did not run** (no environment, declined, or DataForge not `Ready`): describe the concept in business terms, leave the final `reuse` / `extend` / `create` decision to the implementation stage after live model discovery, and note it in the Technical Implementation Handoff "Reuse Discovery Signals" block so the implementation stage opens the discovery branch for that concept.
 
 ## Default Resolution Rules
 
@@ -378,6 +397,17 @@ It is consumed by the implementation stage that runs after Gate R approval with 
 
 **Schema naming note:** Business Plan codes (e.g., `TodoTask`) are prefix-free base names. During implementation, clio MCP applies the environment's SchemaNamePrefix — actual schema codes in Creatio will reflect that prefix (e.g., `UsrTodoTask` if the prefix is `Usr`).
 
+<When DataForge model discovery ran, include the resolved "Model Decisions" block:>
+
+**Model Decisions (from DataForge discovery):**
+- DataForge environment: <env_name>
+<For each object/lookup:>
+- <concept name> → <reuse <existing schema> | extend <existing schema> | create new>
+  - Evidence: <matched DataForge table/lookup name(s) and why>
+<If all new: "All objects created new — no existing schema matched.">
+
+<When DataForge model discovery did NOT run (no environment, declined, or DataForge not Ready), include the deferred "Reuse Discovery Signals" block instead:>
+
 **Reuse Discovery Signals:**
 <For each business concept that might map to an existing platform entity:>
 - Business concept: <concept name>
@@ -388,5 +418,6 @@ It is consumed by the implementation stage that runs after Gate R approval with 
 
 ### Population rules
 
-- Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
+- Set `Environment` to its values (the DataForge-discovery environment if one was resolved, otherwise the deferred placeholders).
+- When DataForge model discovery ran, populate the **Model Decisions** block from the discovery findings and omit **Reuse Discovery Signals**. When it did not run, populate **Reuse Discovery Signals** from the business analysis (any concept that might map to an existing platform or custom entity) and omit **Model Decisions**. Include exactly one of the two blocks.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.
