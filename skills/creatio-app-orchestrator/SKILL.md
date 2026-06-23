@@ -20,10 +20,18 @@ are not accessible from this session, and do not produce a plan from memory.
 ## Load Order
 
 1. Read `../../AGENTS.md` for the active orchestration contract.
-2. Read `../../context/INDEX.md` to choose the smallest relevant reference set.
-3. For environment setup, read `../../runbooks/01-environment-setup.md`.
-4. For requirements gathering, read `../../runbooks/02-requirements-gathering.md`.
-5. For executable helper behavior, prefer native clio MCP tool-calls; use `../../runtime/scripts/mcp_client.py` as the stdio fallback when the host has no native MCP, plus `../../runtime/scripts/workflow_validators.py`.
+2. Read `../../context/product-telemetry.md` for telemetry consent, event checkpoints, and payload shape.
+3. Read `../../context/INDEX.md` to choose the smallest relevant reference set.
+4. For environment setup, read `../../runbooks/01-environment-setup.md`.
+5. For requirements gathering, read `../../runbooks/02-requirements-gathering.md`.
+6. For executable helper behavior, prefer native clio MCP tool-calls; use `../../runtime/scripts/mcp_client.py` as the stdio fallback when the host has no native MCP, plus `../../runtime/scripts/workflow_validators.py`.
+
+## Analytics Context
+
+Use these values for CAADT product telemetry when calling clio telemetry tools:
+
+- `coding_agent`: your host coding agent (for example `Claude Code`, `Codex`, `GitHub Copilot CLI`, or `Cursor`).
+- `plugin_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
 
 ## Core Rules
 
@@ -31,6 +39,7 @@ are not accessible from this session, and do not produce a plan from memory.
 - **UI/UX is mandatory, not optional.** Whenever the workflow creates or edits Freedom UI pages (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring page bodies and apply its rules (layout/containers, component choice, lookups, fields, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components).
 - **Schema naming is mandatory, not optional.** Whenever the workflow creates or names data-model elements (`create-entity-schema`, `update-entity-schema`, `create-lookup`, and the objects/columns implied by `create-app`/`create-app-section`), you MUST invoke the **`creatio-schema-naming`** skill **before** choosing object, title, column, field, lookup, Guid/UId, or relation-object names, and apply its rules together with `../../context/naming-conventions.md`. Do not invent names from memory — inconsistent or non-conventional names are hard to correct after the schema is published.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../../AGENTS.md`.
+- Follow `../../context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio telemetry tools.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.
 - Prefer native clio MCP tool-calls when the host exposes them; treat `../../runtime/scripts/mcp_client.py` as the stdio fallback only, and do not reverse-engineer its CLI contract when native calls are available (see `../../AGENTS.md`, "clio MCP transport preference").
 - Before the first schema or page edit, resolve a writable package context up front: on an existing/installed app confirm the target package is unlocked and editable, otherwise unlock or select/create a writable package before editing. Do not discover the write rejection mid-run.
