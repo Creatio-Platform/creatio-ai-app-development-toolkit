@@ -1,7 +1,10 @@
 import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +12,36 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read_json(relative_path):
     return json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
+
+
+def _git_tracked_skill_md():
+    """SKILL.md paths git tracks under skills/, or None if git is unavailable.
+
+    Used to scope the structural tests to SHIPPED skills only — an untracked
+    work-in-progress skill directory in the working tree is not part of any
+    release and must not turn the suite red.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "skills"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {line for line in out.splitlines() if line.endswith("/SKILL.md")}
+
+
+def skill_dirs():
+    """Every shipped (git-tracked) skill directory (each holds a SKILL.md).
+
+    Falls back to all on-disk skills when git is unavailable (e.g. a released
+    tarball), which contains no untracked WIP dirs anyway.
+    """
+    dirs = sorted(p.parent for p in (ROOT / "skills").glob("*/SKILL.md"))
+    tracked = _git_tracked_skill_md()
+    if tracked is None:
+        return dirs
+    return [d for d in dirs if f"skills/{d.name}/SKILL.md" in tracked]
 
 
 class ReleaseStructureTests(unittest.TestCase):
@@ -202,6 +235,110 @@ class ReleaseStructureTests(unittest.TestCase):
             self.assertIn("toolkit root", content, entry.name)
             self.assertIn("STOP", content, entry.name)
             self.assertIn("from memory", content, entry.name)
+
+    def test_every_skill_frontmatter_is_valid(self):
+        """All shipped skills — not just the orchestrator — must start with a
+        YAML front-matter block whose `name:` matches the directory and that
+        carries a non-empty `description:`. The orchestrator handoff now makes
+        creatio-ui-guidelines load-bearing, so a malformed block in any skill
+        breaks discovery with no other signal.
+        """
+        dirs = skill_dirs()
+        self.assertGreaterEqual(len(dirs), 3, "expected at least the three shipped skills")
+        for skill_dir in dirs:
+            skill = skill_dir / "SKILL.md"
+            content = skill.read_text(encoding="utf-8")
+            self.assertTrue(content.startswith("---\n"), f"{skill_dir.name}: missing front-matter")
+            self.assertIn(f"name: {skill_dir.name}", content, skill_dir.name)
+            description = re.search(r"^description:\s*(\S.*)$", content, re.MULTILINE)
+            self.assertIsNotNone(description, f"{skill_dir.name}: missing description:")
+            self.assertTrue(description.group(1).strip(), f"{skill_dir.name}: empty description:")
+
+    # Skills the orchestrator MUST hand off to mid-workflow. These are the
+    # orchestrator-driven skills only — standalone skills the user invokes
+    # directly (e.g. a migration skill) are deliberately NOT listed and are not
+    # expected to be wired into the orchestrator.
+    ORCHESTRATOR_HANDOFF_SKILLS = ("creatio-ui-guidelines", "creatio-schema-naming")
+
+    def test_orchestrator_wires_its_handoff_skills(self):
+        """Each orchestrator-driven skill must exist and be referenced by name in
+        the orchestrator SKILL.md. There is no generic skill registry, so the
+        handoff is hand-written prose — this test is what enforces that a
+        load-bearing handoff skill was actually wired (and keeps being wired).
+
+        This intentionally does NOT require every shipped skill to be wired:
+        standalone skills are invoked directly and have no orchestrator handoff.
+        """
+        orchestrator = (ROOT / "skills/creatio-app-orchestrator/SKILL.md").read_text(encoding="utf-8")
+        for name in self.ORCHESTRATOR_HANDOFF_SKILLS:
+            self.assertTrue(
+                (ROOT / "skills" / name / "SKILL.md").exists(),
+                f"{name}/SKILL.md is required by the orchestrator handoff",
+            )
+            self.assertIn(
+                name, orchestrator,
+                f"orchestrator SKILL.md must hand off to `{name}` by name "
+                f"(no generic skill registry enforces this otherwise)",
+            )
+
+    def test_every_skill_openai_manifest_has_consistent_shape(self):
+        """Every skills/*/agents/openai.yaml must be a single flat YAML document
+        with the same keys the launcher reads (display_name, short_description,
+        default_prompt) — and must NOT nest them under an `interface:` wrapper.
+        A divergent shape makes the skill present/launch inconsistently with its
+        siblings.
+        """
+        for skill_dir in skill_dirs():
+            manifest_path = skill_dir / "agents" / "openai.yaml"
+            self.assertTrue(manifest_path.exists(), f"{skill_dir.name}: missing agents/openai.yaml")
+            # Siblings wrap the mapping in front-matter-style `---` fences (open
+            # + close), which YAML parses as two documents; take the first
+            # non-empty mapping.
+            documents = [
+                doc for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
+                if doc is not None
+            ]
+            self.assertEqual(len(documents), 1, f"{skill_dir.name}: openai.yaml must hold one mapping")
+            data = documents[0]
+            self.assertIsInstance(data, dict, f"{skill_dir.name}: openai.yaml must be a flat mapping")
+            self.assertNotIn(
+                "interface", data,
+                f"{skill_dir.name}: openai.yaml must not nest keys under `interface:`",
+            )
+            for key in ("display_name", "short_description", "default_prompt"):
+                self.assertIn(key, data, f"{skill_dir.name}: openai.yaml missing `{key}`")
+                self.assertIsInstance(data[key], str, f"{skill_dir.name}: `{key}` must be a string")
+                self.assertTrue(data[key].strip(), f"{skill_dir.name}: `{key}` is empty")
+
+    def test_skill_relative_references_are_anchored_and_resolve(self):
+        """Every link inside a skill's SKILL.md that points to a file the skill
+        ships (any folder, not just `references/`) must use an explicit `./`
+        anchor and resolve against the skill's own directory at runtime.
+
+        Links that go UP to the toolkit root (`../…`, e.g. the orchestrator's
+        `../../context/…`) are a different contract verified by
+        ``_assert_anchored_paths_resolve`` and are skipped here. Detection keys
+        on the path shape (a slash + a file extension), NOT on a folder name, so
+        a future `./guides/x.md` or `./helpers/x.md` is covered too and a bare
+        `guides/x.md` is rejected.
+        """
+        # backticked token that looks like a path to a file: has a directory
+        # separator and ends in a dotted extension (e.g. foo/bar.md).
+        path_like = re.compile(r".+/.+\.[A-Za-z0-9]+$")
+        for skill_dir in skill_dirs():
+            content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            refs = [r for r in re.findall(r"`([^`]+)`", content) if path_like.match(r)]
+            for ref in refs:
+                if ref.startswith("../"):
+                    # toolkit-root link — covered by _assert_anchored_paths_resolve
+                    continue
+                self.assertTrue(
+                    ref.startswith("./"),
+                    f"{skill_dir.name}: `{ref}` must be anchored with `./` "
+                    f"(explicit skill-relative path) or `../` (toolkit-root path)",
+                )
+                resolved = (skill_dir / ref).resolve()
+                self.assertTrue(resolved.exists(), f"{skill_dir.name}: `{ref}` -> {resolved}")
 
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())

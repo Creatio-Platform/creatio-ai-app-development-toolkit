@@ -1,6 +1,6 @@
 ---
 name: creatio-ui-guidelines
-description: creatio freedom ui page design, layout, and review guidance. apply proactively — even if not explicitly selected and even if the user does not say "ui/ux" — whenever creating, editing, or reviewing creatio (freedom ui) pages or their parts: record/form pages, list pages, sections, mini pages, dialogs, tabs, field groups, profile islands, details/related (child) lists, fields, lookups, widgets, buttons, icons. includes building pages via clio mcp (create-app, create-app-section, create-page, update-page, sync-pages). consult it before placing or ordering fields, choosing a component, setting grid layout/colSpan or container nesting, wiring a detail/child list, configuring a lookup, or writing captions/tooltips — to keep layouts native, gap-free, and accessible. also for ui/ux audits, screenshot or metadata review, wcag/contrast checks, color choices, and label/error wording. keywords: creatio, freedom ui, record page, form page, list page, detail, expanded list, expansion panel, datagrid, lookup, field group, tab, profile island, page layout, ui review, ux audit.
+description: Creatio Freedom UI page design, layout, and review guidance. Apply proactively — even if not explicitly selected and even if the user does not say "UI/UX" — whenever creating, editing, or reviewing Creatio (Freedom UI) pages or their parts: record/form pages, list pages, sections, mini pages, dialogs, tabs, field groups, profile islands, details/related (child) lists, fields, lookups, widgets, buttons, icons. Includes building pages via clio MCP (create-app, create-app-section, create-page, update-page, sync-pages). Consult it before placing or ordering fields, choosing a component, setting grid layout/colSpan or container nesting, wiring a detail/child list, configuring a lookup, or writing captions/tooltips — to keep layouts native, gap-free, and accessible. Also for UI/UX audits, screenshot or metadata review, WCAG/contrast checks, color choices, and label/error wording. Keywords: Creatio, Freedom UI, record page, form page, list page, detail, expanded list, expansion panel, datagrid, lookup, field group, tab, profile island, page layout, UI review, UX audit.
 ---
 
 # Creatio UI guidelines
@@ -29,9 +29,9 @@ Use this skill to help agents create or review Creatio Freedom UI pages that loo
 
 The rules above are only a reminder. The detailed specifics that agents get wrong — exact component names, the concept→component map, grid/column math, gap rules, contrast values, audit templates — live in the references. Do NOT rely on this summary or on memory. For the task at hand, open the matching reference and follow it before producing a design, an edit, or an audit:
 
-- **Creating, editing, laying out, or reviewing a page** — placing/ordering fields, groups, tabs, profile islands, details/child lists, lookups, buttons, layout/`layoutConfig` → **read `references/page-layout-and-controls.md` first** (start with its "Concept → Freedom UI component map").
-- **Anything about accessibility, contrast, color, charts, tabs, or custom components** → **read `references/accessibility-and-colors.md` first**.
-- **Producing an audit, review, or acceptance checklist** → **read `references/review-checklists.md`** and use its severity model and output templates.
+- **Creating, editing, laying out, or reviewing a page** — placing/ordering fields, groups, tabs, profile islands, details/child lists, lookups, buttons, layout/`layoutConfig` → **read `./references/page-layout-and-controls.md` first** (start with its "Concept → Freedom UI component map").
+- **Anything about accessibility, contrast, color, charts, tabs, or custom components** → **read `./references/accessibility-and-colors.md` first**.
+- **Producing an audit, review, or acceptance checklist** → **read `./references/review-checklists.md`** and use its severity model and output templates.
 
 When a task spans several of these, read each relevant reference. Skipping the matching reference is the main cause of the recurring defects (selection-window lookups, layout gaps, bare fields, non-native details).
 

@@ -21,7 +21,7 @@ Turn business meaning into practical schema naming suggestions, including techni
    - column: `Column code`, `Field title`, type, required flag, default value, and description
    - lookup object: `Object code`, `Object title`, and optionally lookup list title
 5. If meaning is ambiguous, provide the best default plus 1-2 alternatives. Ask for clarification only when the generated name would likely be wrong.
-6. For detailed rules and examples, consult `references/creatio-naming-standard.md`.
+6. For detailed rules and examples, consult `./references/creatio-naming-standard.md`.
 
 ## Core naming rules
 
@@ -72,7 +72,7 @@ ProcessElementUId
 
 ### Primary display column
 
-Every object must have a primary display column — prefer a text, required, auto-filled, ideally unique value (often `Name`). See `references/creatio-naming-standard.md` for why and how.
+Every object must have a primary display column — prefer a text, required, auto-filled, ideally unique value (often `Name`). See `./references/creatio-naming-standard.md` for why and how.
 
 ## Output format for name creation
 
