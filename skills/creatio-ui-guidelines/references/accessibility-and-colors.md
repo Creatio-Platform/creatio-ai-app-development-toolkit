@@ -5,8 +5,6 @@ Use this reference when creating or reviewing Creatio Freedom UI pages for WCAG/
 ## Creatio accessibility baseline
 
 - Creatio provides built-in accessibility features for Freedom UI. Since Creatio 8.2.2 Energy, Creatio states compatibility with WCAG 2.0-2.2 AA, Revised Section 508, EN 301 549, and ISO/IEC 40500.
-- Accessibility settings are managed in the Accessibility folder in System settings.
-- Administrators can configure an accessible desktop color; users can enable it in their profile accessibility settings when configured.
 
 
 ## WCAG principles to apply
