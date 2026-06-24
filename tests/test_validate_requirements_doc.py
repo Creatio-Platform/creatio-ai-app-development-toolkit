@@ -61,9 +61,9 @@ Tasks move through New, Active, and Done.
 
 ## 6. UX Expectations
 
-- default list columns: Name, Status
-- default filters: Status
-- main form groups: Main information
+- list columns: Name, Status
+- list filters: Status
+- form groups: Main information
 
 ## 7. Edge Cases and Exceptions
 
@@ -140,11 +140,11 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("Minimum to create:", str(ctx.exception))
 
-    def test_missing_default_list_columns_marker(self):
-        doc = VALID_DOC.replace("- default list columns:", "- list columns:")
+    def test_missing_list_columns_marker(self):
+        doc = VALID_DOC.replace("- list columns:", "- columns:")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("default list columns:", str(ctx.exception))
+        self.assertIn("list columns:", str(ctx.exception))
 
 
 class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):

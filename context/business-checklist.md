@@ -140,10 +140,10 @@ If the developer omits exact page fields or gives only a partial list, resolve d
 - Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
 The BA draft must surface these defaults in the `UX Expectations` section:
-- default list columns
+- list columns
 - default sorting
-- default main filters
-- form field groups
+- list filters
+- form groups
 
 The visible BA draft should render the UX section as a short bullet list, not as a table.
 

@@ -264,17 +264,21 @@ Each relationship bullet must state:
 
 `## 6. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
 
-Its bullets **must use these exact text labels** (colon included) — the validator checks for them verbatim:
+Organize it by **record surface**, one entry per page, each prefixed with its kind:
 
-- `default list columns:` — followed by comma-separated field Titles, e.g. `default list columns: Title, Status, Priority`
-- `default filters:` — followed by the filter field Title, e.g. `default filters: Status`
-- `main form groups:` — followed by a description, e.g. `main form groups: Details (Title, Description), Assignment (Status, Assignee)`
+- **`Section <name>`** — an object with its own section (list + record page in navigation).
+- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the `### 3.x Relationships` subsection — every business object on the *many* side of a 1:M whose *one* side is this object. Lookups are neither (they are dropdown fields).
+
+Describe each surface with these labels (colon included), as applicable — the validator checks `list columns:` verbatim:
+
+- `list columns:` — comma-separated field Titles shown in the list, e.g. `list columns: Title, Status, Priority`
+- `list filters:` — the filter field Titles, e.g. `list filters: Status`
+- `form groups:` — the record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
 
 Also include when applicable:
 
 - default sort for time-based records
 - visibility of overdue or open work items
-- the record surfaces, one per line, split so the kind is explicit: **`Section <name>`** for an object with its own section (list + record page in navigation) and **`Related list <name>`** for an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive related lists from the `### 3.x Relationships` subsection — every business object on the *many* side of a 1:M whose *one* side is this object. Lookups are neither (they are dropdown fields).
 
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.

@@ -16,7 +16,7 @@ REQUIRED_REQUIREMENTS_SECTIONS = [
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
     "Minimum to create:",
-    "default list columns:",
+    "list columns:",
 ]
 
 OBJECT_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Section object|Object):", re.MULTILINE)
@@ -26,7 +26,7 @@ TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
     re.IGNORECASE,
 )
-UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNORECASE)
+UX_CARRIER_RE = re.compile(r"^[\s-]*list (columns|filters):", re.IGNORECASE)
 CHECKLIST_SOURCE_RE = re.compile(
     r"(?:^|\n)\s*(?:"
     r"source\s*[:=]\s*[\"']?(?:confirmed|assumed)[\"']?"
@@ -105,7 +105,7 @@ def validate_requirements_doc(content: str) -> None:
     for line in section6_text.splitlines():
         if not UX_CARRIER_RE.search(line):
             continue
-        values = normalize_title_list(re.sub(r"^[\s-]*default [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
+        values = normalize_title_list(re.sub(r"^[\s-]*list [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
         for title in values:
             if title == "Name":
                 continue
