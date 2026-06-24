@@ -4,8 +4,6 @@ import subprocess
 import unittest
 from pathlib import Path
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,6 +40,46 @@ def skill_dirs():
     if tracked is None:
         return dirs
     return [d for d in dirs if f"skills/{d.name}/SKILL.md" in tracked]
+
+
+def parse_fenced_flat_mapping(text):
+    """Parse a ``---``-fenced flat ``key: "value"`` mapping without PyYAML.
+
+    The skill openai.yaml manifests are a fixed, self-authored shape — a few flat
+    string keys between ``---`` fences — so a small line parser is enough and
+    keeps the test suite dependency-free (CI installs only pytest). Only
+    TOP-LEVEL (non-indented) keys are collected, so a divergent nested shape
+    (e.g. keys under an ``interface:`` wrapper) is NOT silently flattened — it
+    surfaces as a missing required key.
+    """
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        lines = lines[1:]
+    mapping = {}
+    for line in lines:
+        if line.strip() == "---":
+            break
+        if not line or line[0].isspace() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        mapping[key.strip()] = value.strip().strip('"').strip("'").strip()
+    return mapping
+
+
+def looks_like_path(token):
+    """True if a backtick token looks like a file path: a directory separator
+    plus a final ``name.ext`` segment with an alphanumeric extension.
+
+    Plain string logic (no regex) so it cannot trip a ReDoS hotspot (Sonar
+    python:S5852); equivalent to the former ``.+/.+\\.[A-Za-z0-9]+$`` pattern.
+    """
+    head, sep, tail = token.rpartition("/")
+    if not sep or not head:
+        return False
+    name, dot, ext = tail.rpartition(".")
+    return bool(name) and bool(dot) and ext.isalnum()
 
 
 class ReleaseStructureTests(unittest.TestCase):
@@ -291,23 +329,16 @@ class ReleaseStructureTests(unittest.TestCase):
         for skill_dir in skill_dirs():
             manifest_path = skill_dir / "agents" / "openai.yaml"
             self.assertTrue(manifest_path.exists(), f"{skill_dir.name}: missing agents/openai.yaml")
-            # Siblings wrap the mapping in front-matter-style `---` fences (open
-            # + close), which YAML parses as two documents; take the first
-            # non-empty mapping.
-            documents = [
-                doc for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
-                if doc is not None
-            ]
-            self.assertEqual(len(documents), 1, f"{skill_dir.name}: openai.yaml must hold one mapping")
-            data = documents[0]
-            self.assertIsInstance(data, dict, f"{skill_dir.name}: openai.yaml must be a flat mapping")
+            # The manifest is a `---`-fenced flat mapping; parse top-level keys
+            # only so a nested `interface:` shape surfaces as missing keys rather
+            # than being silently flattened.
+            data = parse_fenced_flat_mapping(manifest_path.read_text(encoding="utf-8"))
             self.assertNotIn(
                 "interface", data,
                 f"{skill_dir.name}: openai.yaml must not nest keys under `interface:`",
             )
             for key in ("display_name", "short_description", "default_prompt"):
                 self.assertIn(key, data, f"{skill_dir.name}: openai.yaml missing `{key}`")
-                self.assertIsInstance(data[key], str, f"{skill_dir.name}: `{key}` must be a string")
                 self.assertTrue(data[key].strip(), f"{skill_dir.name}: `{key}` is empty")
 
     def test_skill_relative_references_are_anchored_and_resolve(self):
@@ -322,12 +353,11 @@ class ReleaseStructureTests(unittest.TestCase):
         a future `./guides/x.md` or `./helpers/x.md` is covered too and a bare
         `guides/x.md` is rejected.
         """
-        # backticked token that looks like a path to a file: has a directory
-        # separator and ends in a dotted extension (e.g. foo/bar.md).
-        path_like = re.compile(r".+/.+\.[A-Za-z0-9]+$")
         for skill_dir in skill_dirs():
             content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
-            refs = [r for r in re.findall(r"`([^`]+)`", content) if path_like.match(r)]
+            # A backtick token that looks like a path to a file (dir separator +
+            # name.ext); plain string check, no regex (see looks_like_path).
+            refs = [r for r in re.findall(r"`([^`]+)`", content) if looks_like_path(r)]
             for ref in refs:
                 if ref.startswith("../"):
                     # toolkit-root link — covered by _assert_anchored_paths_resolve

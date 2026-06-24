@@ -70,7 +70,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Read-only fields explain why/how/when they are filled (tooltip) and show units/scale (placeholder).
 - [ ] Non-obvious fields have a placeholder (example/format hint) and/or a tooltip (meaning, units, allowed values); the form is not a wall of bare inputs.
 - [ ] Tooltip/placeholder text is authored as localizable resource strings, not inline literals.
-- [ ] Every input has an explicit `labelPosition` (not `"auto"`), and it is the same for all inputs within a group/panel.
+- [ ] Inputs in a group/panel use a consistent `labelPosition` — prefer an explicit value (`above`/`left`); `"auto"` is acceptable when it already renders consistently (do not restyle a component's appearance just to force an explicit position).
 - [ ] Required fields are marked.
 - [ ] Only the real minimum is required — fields are mandatory only when the record cannot be created without them; the rest stay optional.
 - [ ] Default values, validation, and auto-substitution are configured where helpful.
