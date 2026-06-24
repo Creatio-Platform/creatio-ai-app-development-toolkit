@@ -352,12 +352,22 @@ class ReleaseStructureTests(unittest.TestCase):
         on the path shape (a slash + a file extension), NOT on a folder name, so
         a future `./guides/x.md` or `./helpers/x.md` is covered too and a bare
         `guides/x.md` is rejected.
+
+        Both link forms are inspected: backtick code spans (`` `./references/x.md` ``)
+        AND markdown links (`[text](./references/x.md)`). External targets
+        (`http(s)://…`, anchors, absolute `/…`) are out of scope and ignored.
         """
         for skill_dir in skill_dirs():
             content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
-            # A backtick token that looks like a path to a file (dir separator +
-            # name.ext); plain string check, no regex (see looks_like_path).
-            refs = [r for r in re.findall(r"`([^`]+)`", content) if looks_like_path(r)]
+            # Candidates from backtick code spans AND markdown link targets.
+            # Both extractions use a single bounded character class (no ambiguous
+            # quantifier adjacency), so neither is a ReDoS hotspot.
+            backtick = re.findall(r"`([^`]+)`", content)
+            md_links = re.findall(r"\]\(([^)\s]+)", content)
+            refs = [
+                r for r in (backtick + md_links)
+                if "://" not in r and not r.startswith(("#", "/")) and looks_like_path(r)
+            ]
             for ref in refs:
                 if ref.startswith("../"):
                     # toolkit-root link — covered by _assert_anchored_paths_resolve
