@@ -141,19 +141,7 @@ When you add a **new island** (a `crt.GridContainer`/card-style group), apply th
 - **Spacing (padding):** Top = Medium, Bottom = Medium, Left = Large, Right = Large
 - **Color:** White (the card background that makes the island read as a card).
 
-In the page body these map to container properties (confirm exact keys against an existing island via `get-page`), e.g.:
-
-```jsonc
-{
-  "type": "crt.GridContainer",
-  "color": "white",
-  "columnSpacing": "large",
-  "rowSpacing": "none",
-  "borderRadius": "medium",
-  "padding": { "top": "medium", "bottom": "medium", "left": "large", "right": "large" },
-  "items": []
-}
-```
+Resolve the real container property keys, value enums, and defaults from `get-component-info crt.GridContainer` — do not author them from memory. Note the Designer "Column spacing"/"Row spacing" settings are the per-axis `gap.columnGap`/`gap.rowGap` object (there are no `columnSpacing`/`rowSpacing` properties); the card look is `color`, `borderRadius`, and the per-side `padding` object.
 
 **Plain grid for inputs (NOT an island) — different settings.** When you add a bare `crt.GridContainer` only to lay out inputs *inside* an existing island/panel/tab (no card chrome of its own), use:
 
@@ -162,18 +150,6 @@ In the page body these map to container properties (confirm exact keys against a
 - **Border radius:** None
 - **Spacing (padding):** Top = None, Bottom = None, Left = None, Right = None
 - **Color:** Transparent (it must not paint its own background — the parent island/tab shows through).
-
-```jsonc
-{
-  "type": "crt.GridContainer",
-  "color": "transparent",
-  "columnSpacing": "large",
-  "rowSpacing": "none",
-  "borderRadius": "none",
-  "padding": { "top": "none", "bottom": "none", "left": "none", "right": "none" },
-  "items": []
-}
-```
 
 Rule of thumb: the **island/card** carries the white background, radius and padding (Medium / L-R Large); an **inner layout grid** is transparent with no radius and no padding (it just arranges fields).
 
