@@ -44,6 +44,8 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] No container (group / tab / profile island) holds a single lone field; each holds a logically related set (≥2–3 fields).
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
+- [ ] Every related (1:M child) business object from the plan's `related lists:` is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
+- [ ] Each related list has a working **"+ Add"** wired to the child's add/edit page (mini page or record form) — no related list is read-only because its add page is missing.
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
 - [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty.
