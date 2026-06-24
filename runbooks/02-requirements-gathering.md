@@ -269,6 +269,7 @@ Its bullets **must use these exact text labels** (colon included) — the valida
 - `default list columns:` — followed by comma-separated field Titles, e.g. `default list columns: Title, Status, Priority`
 - `default filters:` — followed by the filter field Title, e.g. `default filters: Status`
 - `main form groups:` — followed by a description, e.g. `main form groups: Details (Title, Description), Assignment (Status, Assignee)`
+- `related lists:` — **only when this object is the parent (1:M) of another business/section object** — the comma-separated business Titles of those child objects, e.g. `related lists: Order Items, Shipments`. Derive it from the `### 3.x Relationships` subsection: list every business object on the *many* side of a 1:M whose *one* side is this object (their records are created and managed from this object's page). EXCLUDE lookup objects — an object referenced as a lookup / enum dictionary is a field (dropdown), never a related list.
 
 Also include when applicable:
 
@@ -283,6 +284,7 @@ Before finalizing the BA draft, verify at minimum:
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
+- each parent-side 1:M relationship to a business/section object is surfaced as a `related lists:` entry in `## 6. UX Expectations` (or carries an explicit assumption when intentionally omitted); lookups are never related lists
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
