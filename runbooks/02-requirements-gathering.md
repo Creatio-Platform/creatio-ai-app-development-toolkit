@@ -269,12 +269,12 @@ Its bullets **must use these exact text labels** (colon included) — the valida
 - `default list columns:` — followed by comma-separated field Titles, e.g. `default list columns: Title, Status, Priority`
 - `default filters:` — followed by the filter field Title, e.g. `default filters: Status`
 - `main form groups:` — followed by a description, e.g. `main form groups: Details (Title, Description), Assignment (Status, Assignee)`
-- `related lists:` — **only when this object is the parent (1:M) of another business/section object** — the comma-separated business Titles of those child objects, e.g. `related lists: Order Items, Shipments`. Derive it from the `### 3.x Relationships` subsection: list every business object on the *many* side of a 1:M whose *one* side is this object (their records are created and managed from this object's page). EXCLUDE lookup objects — an object referenced as a lookup / enum dictionary is a field (dropdown), never a related list.
 
 Also include when applicable:
 
 - default sort for time-based records
 - visibility of overdue or open work items
+- the record surfaces, one per line, split so the kind is explicit: **`Section <name>`** for an object with its own section (list + record page in navigation) and **`Related list <name>`** for an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive related lists from the `### 3.x Relationships` subsection — every business object on the *many* side of a 1:M whose *one* side is this object. Lookups are neither (they are dropdown fields).
 
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
@@ -284,7 +284,7 @@ Before finalizing the BA draft, verify at minimum:
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
-- each parent-side 1:M relationship to a business/section object is surfaced as a `related lists:` entry in `## 6. UX Expectations` (or carries an explicit assumption when intentionally omitted); lookups are never related lists
+- each parent-side 1:M relationship to a business/section object is surfaced as a `Related list <name>` line in `## 6. UX Expectations` (or carries an explicit assumption when intentionally omitted); lookups are never related lists
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
