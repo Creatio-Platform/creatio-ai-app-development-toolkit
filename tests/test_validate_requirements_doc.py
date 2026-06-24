@@ -167,6 +167,29 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
         self.assertIn("title must match", str(ctx.exception))
 
 
+class TestValidateRequirementsDocRelatedLists(unittest.TestCase):
+    def test_related_lists_is_optional(self):
+        # VALID_DOC has no `related lists:` line and must still pass — not every
+        # app has a parent-side 1:M child to surface.
+        self.assertIsNone(validate_requirements_doc(VALID_DOC))
+
+    def test_related_lists_unknown_title_fails(self):
+        doc = VALID_DOC.replace(
+            "- main form groups: Main information",
+            "- main form groups: Main information\n- related lists: Comments",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Comments", str(ctx.exception))
+
+    def test_related_lists_known_title_passes(self):
+        doc = VALID_DOC.replace(
+            "- main form groups: Main information",
+            "- main form groups: Main information\n- related lists: Task",
+        )
+        self.assertIsNone(validate_requirements_doc(doc))
+
+
 
 if __name__ == "__main__":
     unittest.main()

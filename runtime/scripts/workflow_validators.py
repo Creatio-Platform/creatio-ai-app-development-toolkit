@@ -26,7 +26,7 @@ TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
     re.IGNORECASE,
 )
-UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNORECASE)
+UX_CARRIER_RE = re.compile(r"^[\s-]*(default list columns|default filters|related lists):", re.IGNORECASE)
 CHECKLIST_SOURCE_RE = re.compile(
     r"(?:^|\n)\s*(?:"
     r"source\s*[:=]\s*[\"']?(?:confirmed|assumed)[\"']?"
@@ -105,7 +105,9 @@ def validate_requirements_doc(content: str) -> None:
     for line in section6_text.splitlines():
         if not UX_CARRIER_RE.search(line):
             continue
-        values = normalize_title_list(re.sub(r"^[\s-]*default [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
+        # Strip the label (everything through the first colon); the remainder is
+        # the comma-separated business Titles this carrier references.
+        values = normalize_title_list(line.split(":", 1)[1])
         for title in values:
             if title == "Name":
                 continue
