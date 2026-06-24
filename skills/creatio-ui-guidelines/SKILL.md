@@ -29,7 +29,7 @@ Use this skill to help agents create or review Creatio Freedom UI pages that loo
 
 The rules above are only a reminder. The detailed specifics that agents get wrong — exact component names, the concept→component map, grid/column math, gap rules, contrast values, audit templates — live in the references. Do NOT rely on this summary or on memory. For the task at hand, open the matching reference and follow it before producing a design, an edit, or an audit:
 
-- **Creating, editing, laying out, or reviewing a page** — placing/ordering fields, groups, tabs, profile islands, details/child lists, lookups, buttons, layout/`layoutConfig` → **read `./references/page-layout-and-controls.md` first** (start with its "Concept → Freedom UI component map").
+- **Creating, editing, laying out, or reviewing a page** — placing/ordering fields, groups, tabs, profile islands, details/child lists, lookups, buttons, layout/`layoutConfig` → **read `./references/page-layout-and-controls.md` first** (start with its "Choosing the component (source of truth)" — resolve component names via `get-component-info`, never from memory).
 - **Anything about accessibility, contrast, color, charts, tabs, or custom components** → **read `./references/accessibility-and-colors.md` first**.
 - **Producing an audit, review, or acceptance checklist** → **read `./references/review-checklists.md`** and use its severity model and output templates.
 

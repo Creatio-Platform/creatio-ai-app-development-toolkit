@@ -2,36 +2,21 @@
 
 Use these rules for Creatio Freedom UI page creation and UI/UX review.
 
-## Concept → Freedom UI component map
+## Choosing the component (source of truth)
 
-Conceptual UX terms used in this guide map to concrete runtime component types. When a rule says to use one of these, insert the listed `crt.*` component (always confirm availability/exact name with `get-component-info` against the target environment):
+This guide refers to components by conceptual UX terms (profile island, field group, detail list, lookup, metric widget, …). Do NOT author the concrete `crt.*` names from memory or from a static list — they drift between versions and a wrong/renamed type fails to render at runtime. Resolve every concept → component with `get-component-info` against the target environment, which is authoritative and version-scoped:
 
-| Concept / UX term | Component type(s) |
-|---|---|
-| Profile island (side, key stable data) | `SideAreaProfileContainer` (the container); fields laid out via `crt.GridContainer` |
-| Field group / collapsible group | `crt.ExpansionPanel` (titled, collapsible) → fields in `crt.GridContainer`/`crt.FlexContainer` |
-| Tab / tab set | `crt.TabPanel` → `crt.TabContainer` (one per tab) |
-| Detail / related (child) list / "Expanded list" | `crt.ExpansionPanel` + `crt.DataGrid` (or `crt.List`) |
-| List / grid of records | `crt.DataGrid` (also `crt.List`, `crt.MultiList`, `crt.ListWidget`, `crt.FilterableList`) |
-| DCM / status / stage / progress bar | `crt.EntityStageProgressBar` |
-| Metric / indicator | `crt.IndicatorWidget` (single value) · `crt.GaugeWidget` (scaled value) · `crt.ChartWidget` (charts) |
-| Actions dashboard | `crt.ActionDashboard` |
-| Toggle panels | `crt.ToggleContainer` → `crt.ToggleContainerItem` |
-| Layout containers | `crt.GridContainer` (N-column grid) · `crt.FlexContainer` (flex row/column) |
-| Lookup field | `crt.ComboBox` (dropdown vs selection window is set on the column via `simple-lookup`, not here) |
-| Multi-value lookup | `crt.MultiSelect` |
-| Text / number / date / boolean field | `crt.Input` · `crt.NumberInput` · `crt.DateTimePicker` · `crt.Checkbox` |
-| Email / phone / web field | `crt.EmailInput` · `crt.PhoneInput` · `crt.WebInput` |
-| Button / action | `crt.Button`; grouped actions via `crt.Menu` + `crt.MenuItem` |
-| Empty-state placeholder | `crt.Placeholder` |
-| Attachments / files | `crt.FileList` (+ `crt.FileInput`) |
-| Feed | `crt.Feed` |
+- **Browse** the full catalog: `get-component-info` (list mode) — returns every component type with a description and, in detail mode, `whenToUse` / `whenNotToUse` / `synonyms` / `useCases` to choose between visually similar components.
+- **Find** by concept/keyword: `search='tab' | 'lookup' | 'chart' | 'profile' | 'list' …`.
+- **Pre-built combinations** — e.g. "Expanded list" (detail/related child list), "Attachments", "Next steps", "Communication options", "Approval list" — are **composites**, not single types. Get the assembly recipe with `composite='<caption>'` and never hand-build a composite from raw component types.
+
+Scope the catalog to the target platform version by passing `environment-name`; if the version cannot be resolved (`requiresVersionConfirmation`), tell the user the version is unknown and confirm before building.
 
 ## Quick index
 
 Jump to the section you need:
 
-- **Component names** → "Concept → Freedom UI component map" (above).
+- **Component names** → "Choosing the component (source of truth)" (above) — resolve via `get-component-info`.
 - **Record/form page** → General product fit · Text, labels, and messages · Page composition · Analytics and metric widgets · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
 - **List/section page** → List (section) page layout.
 - **Dialogs** → Dialogs and modals.
