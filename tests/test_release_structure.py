@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 import unittest
+import warnings
 from pathlib import Path
 
 
@@ -24,7 +25,8 @@ def _git_tracked_skill_md():
             ["git", "-C", str(ROOT), "ls-files", "skills"],
             capture_output=True, text=True, check=True,
         ).stdout
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError) as exc:
+        warnings.warn(f"git ls-files unavailable; falling back to all on-disk skills: {exc}")
         return None
     return {line for line in out.splitlines() if line.endswith("/SKILL.md")}
 
@@ -53,11 +55,13 @@ def parse_fenced_flat_mapping(text):
     surfaces as a missing required key.
     """
     lines = text.splitlines()
-    if lines and lines[0].strip() == "---":
-        lines = lines[1:]
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("missing opening '---' fence")
+    closed = False
     mapping = {}
-    for line in lines:
+    for line in lines[1:]:
         if line.strip() == "---":
+            closed = True
             break
         if not line or line[0].isspace() or line.lstrip().startswith("#"):
             continue
@@ -65,6 +69,8 @@ def parse_fenced_flat_mapping(text):
             continue
         key, _, value = line.partition(":")
         mapping[key.strip()] = value.strip().strip('"').strip("'").strip()
+    if not closed:
+        raise ValueError("missing closing '---' fence")
     return mapping
 
 
@@ -79,7 +85,9 @@ def looks_like_path(token):
     if not sep or not head:
         return False
     name, dot, ext = tail.rpartition(".")
-    return bool(name) and bool(dot) and ext.isalnum()
+    # A real file extension is never all-digits, so a version-ish token like
+    # `3.3.1/3.3.3` is not treated as a path.
+    return bool(name) and bool(dot) and ext.isalnum() and not ext.isdigit()
 
 
 class ReleaseStructureTests(unittest.TestCase):
@@ -284,13 +292,13 @@ class ReleaseStructureTests(unittest.TestCase):
         dirs = skill_dirs()
         self.assertGreaterEqual(len(dirs), 3, "expected at least the three shipped skills")
         for skill_dir in dirs:
-            skill = skill_dir / "SKILL.md"
-            content = skill.read_text(encoding="utf-8")
-            self.assertTrue(content.startswith("---\n"), f"{skill_dir.name}: missing front-matter")
-            self.assertIn(f"name: {skill_dir.name}", content, skill_dir.name)
-            description = re.search(r"^description:\s*(\S.*)$", content, re.MULTILINE)
-            self.assertIsNotNone(description, f"{skill_dir.name}: missing description:")
-            self.assertTrue(description.group(1).strip(), f"{skill_dir.name}: empty description:")
+            content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            # Parse through the shared parser (single parsing path) — it raises
+            # on a malformed / unclosed front-matter fence.
+            data = parse_fenced_flat_mapping(content)
+            self.assertEqual(data.get("name"), skill_dir.name, skill_dir.name)
+            self.assertTrue((data.get("description") or "").strip(),
+                            f"{skill_dir.name}: empty or missing description:")
 
     # Skills the orchestrator MUST hand off to mid-workflow. These are the
     # orchestrator-driven skills only — standalone skills the user invokes
@@ -540,6 +548,50 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertIn('export GH_HOST="${GITHUB_SERVER_URL#http://}"', step_body)
         self.assertIn('export GH_HOST="${GH_HOST#https://}"', step_body)
         self.assertIn('export GH_HOST="${GH_HOST%/}"', step_body)
+
+
+class HelperFunctionTests(unittest.TestCase):
+    """Unit tests for the non-trivial helpers that replace a library
+    (parse_fenced_flat_mapping ~ PyYAML, looks_like_path ~ a path regex)."""
+
+    def test_parse_valid_flat_mapping(self):
+        text = '---\ndisplay_name: "A"\nshort_description: "B"\ndefault_prompt: "C"\n---\n'
+        self.assertEqual(
+            parse_fenced_flat_mapping(text),
+            {"display_name": "A", "short_description": "B", "default_prompt": "C"},
+        )
+
+    def test_parse_collects_top_level_keys_only(self):
+        # A nested `interface:` shape must NOT be flattened — only the top-level
+        # `interface` key is seen, so required keys read as absent.
+        text = '---\ninterface:\n  display_name: "A"\n---\n'
+        data = parse_fenced_flat_mapping(text)
+        self.assertEqual(set(data), {"interface"})
+        self.assertNotIn("display_name", data)
+
+    def test_parse_ignores_comments_and_blank_lines(self):
+        text = '---\n# a comment\n\ndisplay_name: "A"\n---\n'
+        self.assertEqual(parse_fenced_flat_mapping(text), {"display_name": "A"})
+
+    def test_parse_strips_surrounding_quotes(self):
+        self.assertEqual(parse_fenced_flat_mapping("---\nk: 'v'\n---\n"), {"k": "v"})
+
+    def test_parse_requires_opening_fence(self):
+        with self.assertRaises(ValueError):
+            parse_fenced_flat_mapping('display_name: "A"\n---\n')
+
+    def test_parse_requires_closing_fence(self):
+        with self.assertRaises(ValueError):
+            parse_fenced_flat_mapping('---\ndisplay_name: "A"\n')
+
+    def test_looks_like_path_accepts_relative_file_paths(self):
+        for token in ("./references/x.md", "../../AGENTS.md", "a/b.json", "x/y/z.yaml"):
+            self.assertTrue(looks_like_path(token), token)
+
+    def test_looks_like_path_rejects_non_paths(self):
+        for token in ("crt.Input", "layoutConfig", "get-tool-contract",
+                      "a/b", "a/.md", "3.3.1/3.3.3", "plain"):
+            self.assertFalse(looks_like_path(token), token)
 
 
 if __name__ == "__main__":
