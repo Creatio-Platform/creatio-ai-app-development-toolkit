@@ -365,6 +365,7 @@ class ReleaseStructureTests(unittest.TestCase):
         AND markdown links (`[text](./references/x.md)`). External targets
         (`http(s)://…`, anchors, absolute `/…`) are out of scope and ignored.
         """
+        checked = 0
         for skill_dir in skill_dirs():
             content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
             # Candidates from backtick code spans AND markdown link targets.
@@ -387,6 +388,14 @@ class ReleaseStructureTests(unittest.TestCase):
                 )
                 resolved = (skill_dir / ref).resolve()
                 self.assertTrue(resolved.exists(), f"{skill_dir.name}: `{ref}` -> {resolved}")
+                checked += 1
+        # Non-vacuous guard (mirrors _assert_anchored_paths_resolve): at least one
+        # `./`-anchored skill-relative reference must actually have been checked,
+        # so a silently-empty extraction can't let this test pass proving nothing.
+        self.assertGreater(
+            checked, 0,
+            "no ./-anchored skill-relative references were checked — extraction may match nothing",
+        )
 
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())
