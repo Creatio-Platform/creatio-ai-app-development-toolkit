@@ -45,7 +45,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
 - [ ] Every related (1:M child) business object from the plan's `related lists:` is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
-- [ ] Each related list has a working **"+ Add"** wired to the child's add/edit page (mini page or record form) — no related list is read-only because its add page is missing.
+- [ ] Each related list has a **working** add affordance — inline / editable-grid add (the native default for simple, section-less children) OR a mini/form page wired to "+ Add" (for field-rich children or those with their own section). No related list is read-only, and no toolbar "New" errors with "no page for new record".
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
 - [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty.
