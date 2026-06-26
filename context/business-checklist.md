@@ -36,7 +36,7 @@ Use a Business Analyst discovery style:
 
 - start by analyzing the request in business terms
 - ask only the minimum critical questions
-- keep discovery within 3-7 questions
+- keep discovery within 10 questions
 - prioritize: business goal, core problem, key users/roles, scope, success criteria
 - avoid minor implementation questions unless they are true blockers
 - if a gap is non-critical, make an explicit assumption and continue
@@ -235,7 +235,7 @@ If not complete, continue clarification and do not proceed to implementation pla
 
 - Ask questions in themed batches, not all at once.
 - Prefer 3-5 decision-driving questions for the initial discovery pass.
-- Keep the full discovery within 3-7 questions unless the request is unusually ambiguous.
+- Keep the full discovery within 10 questions unless the request is unusually ambiguous.
 - Keep each question tied to one checklist gap.
 - If answer is ambiguous, rephrase and request concrete values.
 - Prefer business language; avoid technical implementation details unless required as blockers.
