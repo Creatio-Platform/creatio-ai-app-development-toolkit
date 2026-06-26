@@ -209,7 +209,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertTrue(contains_all(agent_doc, ["Use tables only", "## 3. Object Model"]))
         self.assertTrue(contains_all(agent_doc, ["object field tables", "prose summaries"]))
         self.assertIn("object metadata block", agent_doc)
-        self.assertTrue(contains_all(agent_doc, ["child-side link status", "when applicable"]))
+        self.assertTrue(contains_all(agent_doc, ["Contains (parent", "References (lookup fields)", "child-side requirement"]))
         self.assertIn("## 1. Business Outcome", agent_doc)
         self.assertIn("## 2. Roles and Permissions", agent_doc)
         self.assertIn("## 3. Object Model", agent_doc)

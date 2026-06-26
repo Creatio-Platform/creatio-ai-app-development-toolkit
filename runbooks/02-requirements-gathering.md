@@ -248,23 +248,23 @@ Show one bullet per lookup in this order:
 - `Code`
 - allowed values or short description
 
-In the `Relationships` subsection, use a compact bullet list only.
-Show one bullet per business relationship.
-Do not use a relationships table unless the request is unusually complex.
-Each relationship bullet must state:
+In the `Relationships` subsection, give a clear map of how the objects connect — written in business language, not a restatement of the lookup columns. Group the bullets under two bold labels (use a table only if the request is unusually complex):
 
-- source object
-- target object
-- cardinality
-- required or optional child-side link status when applicable
-- a short business rationale when the role of the secondary object is not obvious
+- **Contains (parent → child):** one bullet per business object on the *many* side of a 1:M whose *one* side is a parent/section object. State, in this order:
+  - the link in words — `one <Parent> has many <Child>`
+  - child-side requirement — `required` (a child cannot exist without its parent) or `optional`
+  - where it appears — `shown as the <Child> related list on the <Parent> page`
+  - ownership, when not obvious — whether children are owned by the parent (created and removed with it, not reused elsewhere) or shared
+- **References (lookup fields):** one short bullet per lookup/reference to another object (a catalog, `Contact`, `Account`, or a parent record), in the form `<Object>.<Field> → <Target>` with `required` or `optional`. These are the lookup columns already in the field tables and are listed only to complete the map — do not re-describe them.
+
+Add a one-line business rationale only where the role of the secondary object is not obvious; never add filler. The **Contains** group is what `## 6. UX Expectations` uses to derive related lists, so every parent → child link must appear there.
 
 `## 6. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
 
 Organize it by **record surface**, one entry per page, each prefixed with its kind:
 
 - **`Section <name>`** — an object with its own section (list + record page in navigation).
-- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the `### 3.x Relationships` subsection — every business object on the *many* side of a 1:M whose *one* side is this object. Lookups are neither (they are dropdown fields).
+- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the **Contains** group of the `### 3.x Relationships` subsection — every business object on the *many* side of a 1:M whose *one* side is this object. Lookups are neither (they are dropdown fields).
 
 Describe each surface with these labels (colon included), as applicable — the validator checks `list columns:` verbatim:
 
