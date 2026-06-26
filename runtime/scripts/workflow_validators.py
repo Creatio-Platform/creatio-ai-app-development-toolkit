@@ -86,7 +86,7 @@ def validate_requirements_doc(content: str) -> None:
         end = object_indices[pos + 1] if pos + 1 < len(object_indices) else len(lines)
         block = lines[start:end]
         block_text = "\n".join(block)
-        for marker in ("Title:", "Code:", "Object role:", "Primary display field:", "Description:", "Purpose:"):
+        for marker in ("Title:", "Code:", "Primary display field:", "Description:"):
             if marker not in block_text:
                 raise WorkflowError(
                     f"Requirements doc failed: object block starting at '{lines[start]}' is missing metadata marker '{marker}'"

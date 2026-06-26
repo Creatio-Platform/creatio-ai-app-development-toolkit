@@ -27,12 +27,10 @@ Provide a shared task registry.
 
 ### 3.1 Section object: Task
 
-Title: Task
-Code: `UsrTask`
-Object role: `main`
-Primary display field: `Name`
-Description: Central work item.
-Purpose: Central work item.
+**Title:** Task
+**Code:** `UsrTask`
+**Primary display field:** `Name`
+**Description:** Central work item.
 
 | Title | Code | Description | Data type | Required | Default |
 | --- | --- | --- | --- | --- | --- |
@@ -148,14 +146,8 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
 
 
 class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
-    def test_missing_object_role_marker(self):
-        doc = VALID_DOC.replace("Object role: `main`", "")
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(doc)
-        self.assertIn("Object role:", str(ctx.exception))
-
     def test_missing_title_line_in_entity(self):
-        doc = VALID_DOC.replace("Title: Task\n", "").replace("- Title: Status;", "- Status;")
+        doc = VALID_DOC.replace("**Title:** Task\n", "").replace("- Title: Status;", "- Status;")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("Title:", str(ctx.exception))

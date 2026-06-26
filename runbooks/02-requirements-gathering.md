@@ -182,13 +182,11 @@ Use this exact visible skeleton for the Business Plan:
 - `## 2. Roles and Permissions`
 - `## 3. Object Model`
   - `### 3.1 Section object: <Business title>` — the object the section is created on
-  - object metadata block in this exact order:
+  - object metadata block in this exact order, with each label rendered in **bold** so it does not blend into its value (e.g. `**Title:** <value>`):
     - `Title`
     - `Code`
-    - `Object role`
     - `Primary display field`
-    - `Description`
-  - `Purpose: <one short sentence>`
+    - `Description` (one short sentence: what the object is and its role)
   - one required field table
   - `Minimum to create:` followed by bullets for the section object only
   - `### 3.x Object: <Business title>` blocks as needed
@@ -218,9 +216,8 @@ For each object block, include:
 
 - title
 - code (schema name)
-- object role: `main`, `supporting`, or `lookup`
 - primary display field
-- description
+- description (one short sentence: what the object is and its role)
 
 Field tables in section 3 must use exactly these columns:
 
