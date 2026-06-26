@@ -156,7 +156,7 @@ First-turn latency rule:
 Business discovery must follow a Business Analyst style:
 
 - ask only the minimum critical questions
-- keep the discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest)
+- keep the business discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest; technical questions stay limited to execution blockers)
 - prioritize: business goal, core problem, key users/roles, MVP scope, success criteria
 - avoid minor implementation questions during approval of the business plan
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
