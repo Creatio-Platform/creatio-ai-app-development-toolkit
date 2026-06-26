@@ -252,13 +252,14 @@ Show one bullet per lookup in this order:
 Organize it by **record surface**, one entry per page, each prefixed with its kind:
 
 - **`Section <name>`** — an object with its own section (list + record page in navigation).
-- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the object field tables in `## 3. Object Model`: every business object whose field table has a Lookup column pointing back to a parent/section object (its parent foreign key) is a related list on that parent. Catalog, `Contact`, and `Account` lookups are dropdown fields, not related lists.
+- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the object field tables in `## 3. Object Model`: every business object whose field table has a Lookup column pointing back to a parent/section object (its parent foreign key) is a related list on that parent. Catalog, `Contact`, and `Account` lookups are dropdown fields, not related lists. A related list is two surfaces — the inline list **and** its add/edit page — so always break each one into both: give it its own `list columns:` (what shows in the grid) and `form fields:` (the fields on its add/edit page). Never leave a related list as a bare name.
 
 Describe each surface with these labels (colon included), as applicable — the validator checks `list columns:` verbatim:
 
 - `list columns:` — comma-separated field Titles shown in the list, e.g. `list columns: Title, Status, Priority`
 - `list filters:` — the filter field Titles, e.g. `list filters: Status`
 - `form groups:` — the record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
+- `form fields:` — the fields, in order, on a related list's add/edit (mini) page, e.g. `form fields: Title, Start time, Responsible, Hall`
 
 Also include when applicable:
 
@@ -273,7 +274,7 @@ Before finalizing the BA draft, verify at minimum:
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
-- each child object that links back to a parent via a Lookup column to a parent/section object in its field table is surfaced as a `Related list <name>` line in `## 6. UX Expectations` (or carries an explicit assumption when intentionally omitted); catalog/Contact/Account lookups are never related lists
+- each child object that links back to a parent via a Lookup column to a parent/section object in its field table is surfaced as a `Related list <name>` entry in `## 6. UX Expectations` that breaks out both its `list columns:` and its `form fields:` (or carries an explicit assumption when intentionally omitted); catalog/Contact/Account lookups are never related lists
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
