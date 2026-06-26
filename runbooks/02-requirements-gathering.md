@@ -258,7 +258,7 @@ When planning a surface's add/edit interaction (a section or a related list), an
 
 - **Default — quick-add card + full edit:** add through a compact **mini page** and open/edit the record on the **full record page**. Record it as `add page: mini page (<fields>)` + `edit page: full record page`. Prefer this for related lists.
 - **Single full page:** when the record is rich and quick capture does not matter, one full record page serves both add and edit — give it `form groups:` (or `form fields:`) and omit the add/edit-page split.
-- **Inline in the list:** only for simple line-item lists (a few short columns) or when the user explicitly asks — records are added and edited directly in the grid row. Record it as `add/edit: inline in the list`; there is no separate page, so do NOT list `form fields:`, `form groups:`, `add page:`, or `edit page:`.
+- **Inline in the list:** only for simple line-item lists (a few short columns) or when the user explicitly asks — records are added and edited directly in the grid row. Record it as `add/edit: inline in the list`; there is no separate page, so do NOT list `form fields:`, `form groups:`, `add page:`, or `edit page:` — the inline-editable fields ARE the `list columns:`, so a separate fields line just duplicates them and is wrong here.
 
 Never write `inline` as the value of `add page:` / `edit page:` — those label real pages only.
 
@@ -284,6 +284,7 @@ Before finalizing the BA draft, verify at minimum:
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
 - each child object that links back to a parent via a Lookup column to a parent/section object in its field table is surfaced as a `Related list <name>` entry in `## 6. UX Expectations` stating its `list columns:` and its add/edit interaction (default: a mini `add page:` + full `edit page:`; `inline` only for simple line-item lists or on request) (or carries an explicit assumption when intentionally omitted); catalog/Contact/Account lookups are never related lists
+- an `inline` related list states only its `list columns:` plus the `add/edit: inline in the list` note — it must NOT also carry `form fields:`, `form groups:`, `add page:`, or `edit page:` (those duplicate the columns or imply a page that does not exist)
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
