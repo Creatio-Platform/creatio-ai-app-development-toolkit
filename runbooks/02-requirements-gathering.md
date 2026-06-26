@@ -252,17 +252,23 @@ Show one bullet per lookup in this order:
 Organize it by **record surface**, one entry per page, each prefixed with its kind:
 
 - **`Section <name>`** — an object with its own section (list + record page in navigation).
-- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the object field tables in `## 3. Object Model`: every business object whose field table has a Lookup column pointing back to a parent/section object (its parent foreign key) is a related list on that parent. Catalog, `Contact`, and `Account` lookups are dropdown fields, not related lists. A related list is two surfaces — the inline list **and** its add/edit page — so always break each one into both: give it its own `list columns:` (what shows in the grid) and `form fields:` (the fields on its add/edit page). Never leave a related list as a bare name.
+- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the object field tables in `## 3. Object Model`: every business object whose field table has a Lookup column pointing back to a parent/section object (its parent foreign key) is a related list on that parent. Catalog, `Contact`, and `Account` lookups are dropdown fields, not related lists. Spell out each related list's `list columns:` (the grid) plus its add/edit interaction (chosen per the preference order below); never leave it as a bare name.
 
-When planning each surface (the app's main page, a section, or a related list), analyze the task and decide its add/edit interaction: if quick capture matters or the record has many fields, plan a compact **mini page for adding** and the **full record page for opening/editing**, and record that split with the `add page:` / `edit page:` labels below; otherwise one page serves both and those labels are omitted.
+When planning a surface's add/edit interaction (a section or a related list), analyze the task and choose ONE option, in this order of preference:
+
+- **Default — quick-add card + full edit:** add through a compact **mini page** and open/edit the record on the **full record page**. Record it as `add page: mini page (<fields>)` + `edit page: full record page`. Prefer this for related lists.
+- **Single full page:** when the record is rich and quick capture does not matter, one full record page serves both add and edit — give it `form groups:` (or `form fields:`) and omit the add/edit-page split.
+- **Inline in the list:** only for simple line-item lists (a few short columns) or when the user explicitly asks — records are added and edited directly in the grid row. Record it as `add/edit: inline in the list`; there is no separate page, so do NOT list `form fields:`, `form groups:`, `add page:`, or `edit page:`.
+
+Never write `inline` as the value of `add page:` / `edit page:` — those label real pages only.
 
 Describe each surface with these labels (colon included), as applicable — the validator checks `list columns:` verbatim:
 
 - `list columns:` — comma-separated field Titles shown in the list, e.g. `list columns: Title, Status, Priority`
 - `list filters:` — the filter field Titles, e.g. `list filters: Status`
-- `form groups:` — the record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
-- `form fields:` — the fields, in order, on a related list's add/edit (mini) page, e.g. `form fields: Title, Start time, Responsible, Hall`
-- `add page:` / `edit page:` — when a surface (a section OR a related list) is better served by a compact quick-add **mini page** while records are opened and edited on the **full record page**, state the two separately, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. When the same page is used for both, omit these labels.
+- `form groups:` — the full-record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
+- `form fields:` — the fields, in order, on a quick-add **mini page**, e.g. `form fields: Title, Start time, Responsible, Hall`
+- `add page:` / `edit page:` — the pages used to add vs open a record, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. Use these only for real pages; for the inline option write `add/edit: inline in the list` instead (and omit form fields / form groups).
 
 Also include when applicable:
 
@@ -277,7 +283,7 @@ Before finalizing the BA draft, verify at minimum:
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
-- each child object that links back to a parent via a Lookup column to a parent/section object in its field table is surfaced as a `Related list <name>` entry in `## 6. UX Expectations` that breaks out both its `list columns:` and its `form fields:` (or carries an explicit assumption when intentionally omitted); catalog/Contact/Account lookups are never related lists
+- each child object that links back to a parent via a Lookup column to a parent/section object in its field table is surfaced as a `Related list <name>` entry in `## 6. UX Expectations` stating its `list columns:` and its add/edit interaction (default: a mini `add page:` + full `edit page:`; `inline` only for simple line-item lists or on request) (or carries an explicit assumption when intentionally omitted); catalog/Contact/Account lookups are never related lists
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
