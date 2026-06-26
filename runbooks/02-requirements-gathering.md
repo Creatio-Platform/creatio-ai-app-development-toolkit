@@ -254,12 +254,15 @@ Organize it by **record surface**, one entry per page, each prefixed with its ki
 - **`Section <name>`** — an object with its own section (list + record page in navigation).
 - **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the object field tables in `## 3. Object Model`: every business object whose field table has a Lookup column pointing back to a parent/section object (its parent foreign key) is a related list on that parent. Catalog, `Contact`, and `Account` lookups are dropdown fields, not related lists. A related list is two surfaces — the inline list **and** its add/edit page — so always break each one into both: give it its own `list columns:` (what shows in the grid) and `form fields:` (the fields on its add/edit page). Never leave a related list as a bare name.
 
+When planning each surface (the app's main page, a section, or a related list), analyze the task and decide its add/edit interaction: if quick capture matters or the record has many fields, plan a compact **mini page for adding** and the **full record page for opening/editing**, and record that split with the `add page:` / `edit page:` labels below; otherwise one page serves both and those labels are omitted.
+
 Describe each surface with these labels (colon included), as applicable — the validator checks `list columns:` verbatim:
 
 - `list columns:` — comma-separated field Titles shown in the list, e.g. `list columns: Title, Status, Priority`
 - `list filters:` — the filter field Titles, e.g. `list filters: Status`
 - `form groups:` — the record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
 - `form fields:` — the fields, in order, on a related list's add/edit (mini) page, e.g. `form fields: Title, Start time, Responsible, Hall`
+- `add page:` / `edit page:` — when a surface (a section OR a related list) is better served by a compact quick-add **mini page** while records are opened and edited on the **full record page**, state the two separately, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. When the same page is used for both, omit these labels.
 
 Also include when applicable:
 
