@@ -91,7 +91,7 @@ Stage-specific constraints for this agent:
 - On the first clarification turn, prefer structured input popup UX for routing and the highest-priority business questions when the host mode supports it.
 - If structured input is unavailable, fall back to a compact plain-text first turn without changing the business flow.
 - Apply domain expertise when the app type is recognizable. Do not draft an unrealistically thin data model if standard business attributes are normally expected for that domain.
-- Before presenting the Business Plan, run the pre-analysis pass from `context/business-checklist.md` across every draft section, the relationships subsection, and the assumptions list.
+- Before presenting the Business Plan, run the pre-analysis pass from `context/business-checklist.md` across every draft section and the assumptions list.
 - If pre-analysis finds a contradiction, a missing field carrier, or a business rule that is not represented in the model or UX, do not show the draft yet.
 - Before presenting the Business Plan, run a rendering check against the fixed business document format. Do not improvise headings, subsection layout, or table placement.
 - Defer runtime questions such as URL and credentials until after Gate R approval.
@@ -192,7 +192,6 @@ Use this exact visible skeleton for the Business Plan:
   - `### 3.x Object: <Business title>` blocks as needed
     - each supporting object must also include the same object metadata block before its field table
   - `### 3.x Lookups`
-  - `### 3.x Relationships`
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
@@ -248,23 +247,12 @@ Show one bullet per lookup in this order:
 - `Code`
 - allowed values or short description
 
-In the `Relationships` subsection, give a clear map of how the objects connect — written in business language, not a restatement of the lookup columns. Group the bullets under two bold labels (use a table only if the request is unusually complex):
-
-- **Contains (parent → child):** one bullet per business object on the *many* side of a 1:M whose *one* side is a parent/section object. State, in this order:
-  - the link in words — `one <Parent> has many <Child>`
-  - child-side requirement — `required` (a child cannot exist without its parent) or `optional`
-  - where it appears — `shown as the <Child> related list on the <Parent> page`
-  - ownership, when not obvious — whether children are owned by the parent (created and removed with it, not reused elsewhere) or shared
-- **References (lookup fields):** one short bullet per lookup/reference to another object (a catalog, `Contact`, `Account`, or a parent record), in the form `<Object>.<Field> → <Target>` with `required` or `optional`. These are the lookup columns already in the field tables and are listed only to complete the map — do not re-describe them.
-
-Add a one-line business rationale only where the role of the secondary object is not obvious; never add filler. The **Contains** group is what `## 6. UX Expectations` uses to derive related lists, so every parent → child link must appear there.
-
 `## 6. UX Expectations` must surface deterministic UX defaults in a compact business-facing format.
 
 Organize it by **record surface**, one entry per page, each prefixed with its kind:
 
 - **`Section <name>`** — an object with its own section (list + record page in navigation).
-- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the **Contains** group of the `### 3.x Relationships` subsection — every business object on the *many* side of a 1:M whose *one* side is this object. Lookups are neither (they are dropdown fields).
+- **`Related list <name>`** — an object surfaced as a related list on a parent's record page (with its own add/edit page, no standalone section). Derive these from the object field tables in `## 3. Object Model`: every business object whose field table has a Lookup column pointing back to a parent/section object (its parent foreign key) is a related list on that parent. Catalog, `Contact`, and `Account` lookups are dropdown fields, not related lists.
 
 Describe each surface with these labels (colon included), as applicable — the validator checks `list columns:` verbatim:
 
@@ -285,11 +273,11 @@ Before finalizing the BA draft, verify at minimum:
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
 - each required sort/filter/analytics expectation maps to an explicit field or business object
 - each supporting object has the necessary parent-link and cross-field constraints described
-- each parent-side 1:M relationship to a business/section object is surfaced as a `Related list <name>` line in `## 6. UX Expectations` (or carries an explicit assumption when intentionally omitted); lookups are never related lists
+- each child object that links back to a parent via a Lookup column to a parent/section object in its field table is surfaced as a `Related list <name>` line in `## 6. UX Expectations` (or carries an explicit assumption when intentionally omitted); catalog/Contact/Account lookups are never related lists
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
-- `## 3. Object Model` contains the field tables, lookup bullets, and relationship bullets required by this contract
+- `## 3. Object Model` contains the field tables and lookup bullets required by this contract
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 
@@ -353,7 +341,6 @@ The BA draft is incomplete if any of the following is true:
 
 - an object does not specify its schema name
 - a custom field is missing a human-readable `Title`
-- a relationship is described in prose but not listed in the `Relationships` subsection of `## 3. Object Model`
 - a field table default is not rendered as an explicit business default value or `-`
 - a pipeline, funnel, or stages are mentioned without clarifying where lifecycle state lives
 - a secondary object is listed without explaining its business purpose

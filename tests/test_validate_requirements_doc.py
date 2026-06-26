@@ -45,10 +45,6 @@ Minimum to create:
 
 - Title: Status; Code: `UsrTaskStatus`; Allowed values: New, Active, Done
 
-### 3.3 Relationships
-
-- Source object: Task; Target object: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
-
 ## 4. Lifecycle and Statuses
 
 Tasks move through New, Active, and Done.
