@@ -111,4 +111,9 @@ def validate_requirements_doc(content: str) -> None:
                 continue
             if title.lower() not in section3_text_lower:
                 raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
+    for block in re.split(r"(?im)^.*\bRelated list\b.*$", section6_text)[1:]:
+        if "inline" in block.lower() and re.search(r"(?im)\b(?:form fields:|form groups:|add page:|edit page:)", block):
+            raise WorkflowError(
+                "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"
+            )
 

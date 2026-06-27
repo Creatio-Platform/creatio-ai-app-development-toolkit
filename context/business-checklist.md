@@ -113,7 +113,7 @@ Required:
 - main objects
 - whether the app has one primary record type or several distinct business objects
 - lookup objects for enum-like fields
-- key relationships
+- key relationships — modeled as lookup (foreign-key) columns on the related objects; each 1:M child surfaces as a related list on its parent (there is no separate Relationships subsection)
 - record title / primary display field for each object and lookup
 - standard profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects
 
@@ -131,6 +131,7 @@ Default unless critical:
 - form page field groups/layout notes
 - which field is shown as the record title in lists and forms
 - sorting/filtering expectations if important
+- for each related (child) list: its add/edit interaction — default a quick-add mini page + full edit page; inline editing only for simple line-item lists
 
 If the developer omits exact page fields or gives only a partial list, resolve deterministic defaults before handoff:
 - FormPage: keep `Name` as the record title/header when present and include all approved non-inherited business fields from the section object. Required business fields must always be included.
@@ -139,11 +140,7 @@ If the developer omits exact page fields or gives only a partial list, resolve d
 - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
 - Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
-The BA draft must surface these defaults in the `UX Expectations` section:
-- list columns
-- default sorting
-- list filters
-- form groups
+The BA draft must surface these defaults in the `UX Expectations` section using the section-6 labels defined in `runbooks/02-requirements-gathering.md` (the single source of truth for label names) — at minimum `list columns:` and `list filters:`, the form layout (`form groups:` / `form fields:`), default sort when records are time-based, and, for each related list, its add/edit interaction (`add page:` / `edit page:`, or `add/edit: inline in the list`).
 
 The visible BA draft should render the UX section as a short bullet list, not as a table.
 
@@ -201,6 +198,7 @@ The pre-analysis must check for:
 - sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
 - lookup usage that is inconsistent across objects or too broad for the stated business scope
 - supporting objects whose required parent links or cross-field constraints are not explicitly captured
+- a 1:M child object that is not surfaced as a `Related list` with a defined add/edit interaction in `## 6. UX Expectations` (default: a quick-add mini page + full edit page; inline only for simple line-item lists)
 - assumptions that contradict confirmed answers
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the object model section

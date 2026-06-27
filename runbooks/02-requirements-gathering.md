@@ -268,7 +268,7 @@ Describe each surface with these labels (colon included), as applicable — the 
 - `list filters:` — the filter field Titles, e.g. `list filters: Status`
 - `form groups:` — the full-record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
 - `form fields:` — the fields, in order, on a quick-add **mini page**, e.g. `form fields: Title, Start time, Responsible, Hall`
-- `add page:` / `edit page:` — the pages used to add vs open a record, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. Use these only for real pages; for the inline option write `add/edit: inline in the list` instead (and omit form fields / form groups).
+- `add page:` / `edit page:` — the pages used to add vs open a record, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. Use these only for real pages (never with the inline option).
 
 Also include when applicable:
 

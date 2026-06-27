@@ -155,6 +155,29 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
         self.assertIn("title must match", str(ctx.exception))
 
 
+class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
+    INLINE_CONFLICT = VALID_DOC.replace(
+        "- form groups: Main information\n",
+        "- form groups: Main information\n\n- Related list Subtasks\n"
+        "  - list columns: Name, Status\n"
+        "  - add/edit: inline in the list\n"
+        "  - form fields: Name, Status\n",
+    )
+    INLINE_OK = VALID_DOC.replace(
+        "- form groups: Main information\n",
+        "- form groups: Main information\n\n- Related list Subtasks\n"
+        "  - list columns: Name, Status\n"
+        "  - add/edit: inline in the list\n",
+    )
+
+    def test_inline_related_list_with_form_fields_is_rejected(self):
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(self.INLINE_CONFLICT)
+        self.assertIn("inline related list", str(ctx.exception))
+
+    def test_inline_related_list_without_page_labels_passes(self):
+        self.assertIsNone(validate_requirements_doc(self.INLINE_OK))
+
 
 if __name__ == "__main__":
     unittest.main()
