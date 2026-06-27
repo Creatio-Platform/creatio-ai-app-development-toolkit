@@ -116,7 +116,7 @@ def validate_requirements_doc(content: str) -> None:
     # next surface heading of either kind. An inline related list edits in the
     # grid, so it must not also carry a page/form label -- but only its OWN
     # block is checked, never a trailing Section's labels.
-    surface_re = re.compile(r"(?im)^[\s\-*>#]*\**\s*(Section|Related list)\b")
+    surface_re = re.compile(r"(?im)^[\s\-*>#]*(Section|Related list)\b")
     inline_re = re.compile(r"(?im)^[\s\-*]*add/edit:\s*inline\b")
     page_label_re = re.compile(r"(?im)^[\s\-*]*(?:form fields:|form groups:|add page:|edit page:)")
     surfaces = list(surface_re.finditer(section6_text))

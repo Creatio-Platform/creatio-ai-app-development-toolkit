@@ -67,8 +67,7 @@ Tasks move through New, Active, and Done.
 
 class TestValidateRequirementsDocSections(unittest.TestCase):
     def test_valid_doc_passes(self):
-        result = validate_requirements_doc(VALID_DOC)
-        self.assertIsNone(result)
+        validate_requirements_doc(VALID_DOC)  # must not raise
 
     def test_missing_section_2_roles_and_permissions(self):
         doc = VALID_DOC.replace("## 2. Roles and Permissions", "## 2. Team Roles")
@@ -181,7 +180,7 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
 
     def test_inline_related_list_without_page_labels_passes(self):
         doc = self._doc_with_related_list("add/edit: inline in the list")
-        self.assertIsNone(validate_requirements_doc(doc))
+        validate_requirements_doc(doc)  # must not raise
 
     def test_default_mini_page_related_list_passes(self):
         doc = self._doc_with_related_list(
@@ -189,7 +188,7 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
             "edit page: full record page",
             "form fields: Name, Status",
         )
-        self.assertIsNone(validate_requirements_doc(doc))
+        validate_requirements_doc(doc)  # must not raise
 
     def test_inline_related_list_then_section_with_form_labels_passes(self):
         # Regression: a trailing Section's page/form labels must NOT fold into
@@ -200,7 +199,7 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
             "- Related list Subtasks\n  - list columns: Name, Status\n  - add/edit: inline in the list\n\n"
             "- Section Reports\n  - list columns: Name\n  - form groups: Overview\n",
         )
-        self.assertIsNone(validate_requirements_doc(doc))
+        validate_requirements_doc(doc)  # must not raise
 
 
 if __name__ == "__main__":
