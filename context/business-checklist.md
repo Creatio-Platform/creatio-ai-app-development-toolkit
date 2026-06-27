@@ -233,8 +233,8 @@ If not complete, continue clarification and do not proceed to implementation pla
 
 ## Clarification Strategy
 
-- Ask questions in themed batches, not all at once.
-- Prefer 3-5 decision-driving questions for the initial discovery pass.
+- Group questions logically; if you will realistically ask only once, put the full critical set in that single batch (up to the ceiling) rather than holding questions back for a batch that may never come.
+- Cover the full set of decision-driving questions in the initial discovery pass — up to the 10-question ceiling — since follow-up batches often do not happen.
 - Keep the full business discovery within 10 questions unless the request is unusually ambiguous (technical questions stay limited to execution blockers).
 - Keep each question tied to one checklist gap.
 - If answer is ambiguous, rephrase and request concrete values.

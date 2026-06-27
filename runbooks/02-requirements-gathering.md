@@ -32,9 +32,9 @@ Read these repository files for the BA stage:
 
 1. Parse the free-form prompt.
 2. Apply first-turn latency rules from `AGENTS.md` (UX Contract): reply immediately from the prompt, use structured input when the host supports it, otherwise compact plain text.
-3. On the first turn, ask the main 3-5 business discovery questions.
+3. On the first turn, ask the main business discovery questions — up to the 10-question ceiling, covering the full critical set in this one batch (a follow-up batch often does not happen).
 4. Do not read large repository files or run heavy setup steps before the first clarification round completes.
-5. Ask additional business questions in the next small themed batch.
+5. Ask any remaining critical business questions in a follow-up batch only if needed — prefer to cover them all in the first batch.
 6. Show "What still needs clarification" only after the first clarification round if it still adds value.
 7. Ask technical questions only for true blockers.
 8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round.
