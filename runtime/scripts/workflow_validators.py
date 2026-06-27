@@ -111,8 +111,21 @@ def validate_requirements_doc(content: str) -> None:
                 continue
             if title.lower() not in section3_text_lower:
                 raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
-    for block in re.split(r"(?im)^.*\bRelated list\b.*$", section6_text)[1:]:
-        if "inline" in block.lower() and re.search(r"(?im)\b(?:form fields:|form groups:|add page:|edit page:)", block):
+    # Section 6 lists one block per record surface, each introduced by a
+    # `Section <name>` or `Related list <name>` heading; a block runs until the
+    # next surface heading of either kind. An inline related list edits in the
+    # grid, so it must not also carry a page/form label -- but only its OWN
+    # block is checked, never a trailing Section's labels.
+    surface_re = re.compile(r"(?im)^[\s\-*>#]*\**\s*(Section|Related list)\b")
+    inline_re = re.compile(r"(?im)^[\s\-*]*add/edit:\s*inline\b")
+    page_label_re = re.compile(r"(?im)^[\s\-*]*(?:form fields:|form groups:|add page:|edit page:)")
+    surfaces = list(surface_re.finditer(section6_text))
+    for idx, match in enumerate(surfaces):
+        if match.group(1).lower() != "related list":
+            continue
+        block_end = surfaces[idx + 1].start() if idx + 1 < len(surfaces) else len(section6_text)
+        block = section6_text[match.end():block_end]
+        if inline_re.search(block) and page_label_re.search(block):
             raise WorkflowError(
                 "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"
             )

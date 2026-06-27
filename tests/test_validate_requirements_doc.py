@@ -156,27 +156,51 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
 
 
 class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
-    INLINE_CONFLICT = VALID_DOC.replace(
-        "- form groups: Main information\n",
-        "- form groups: Main information\n\n- Related list Subtasks\n"
-        "  - list columns: Name, Status\n"
-        "  - add/edit: inline in the list\n"
-        "  - form fields: Name, Status\n",
-    )
-    INLINE_OK = VALID_DOC.replace(
-        "- form groups: Main information\n",
-        "- form groups: Main information\n\n- Related list Subtasks\n"
-        "  - list columns: Name, Status\n"
-        "  - add/edit: inline in the list\n",
-    )
+    @staticmethod
+    def _doc_with_related_list(*extra_lines):
+        block = "\n\n- Related list Subtasks\n  - list columns: Name, Status\n" + "".join(
+            f"  {line}\n" for line in extra_lines
+        )
+        return VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n" + block,
+        )
 
-    def test_inline_related_list_with_form_fields_is_rejected(self):
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(self.INLINE_CONFLICT)
-        self.assertIn("inline related list", str(ctx.exception))
+    def test_inline_related_list_rejects_each_page_or_form_label(self):
+        for label in (
+            "form fields: Name, Status",
+            "form groups: Main",
+            "add page: mini page (Name)",
+            "edit page: full record page",
+        ):
+            with self.subTest(label=label):
+                doc = self._doc_with_related_list("add/edit: inline in the list", label)
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("inline related list", str(ctx.exception))
 
     def test_inline_related_list_without_page_labels_passes(self):
-        self.assertIsNone(validate_requirements_doc(self.INLINE_OK))
+        doc = self._doc_with_related_list("add/edit: inline in the list")
+        self.assertIsNone(validate_requirements_doc(doc))
+
+    def test_default_mini_page_related_list_passes(self):
+        doc = self._doc_with_related_list(
+            "add page: mini page (Name, Status)",
+            "edit page: full record page",
+            "form fields: Name, Status",
+        )
+        self.assertIsNone(validate_requirements_doc(doc))
+
+    def test_inline_related_list_then_section_with_form_labels_passes(self):
+        # Regression: a trailing Section's page/form labels must NOT fold into
+        # the preceding inline related list's block.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- Related list Subtasks\n  - list columns: Name, Status\n  - add/edit: inline in the list\n\n"
+            "- Section Reports\n  - list columns: Name\n  - form groups: Overview\n",
+        )
+        self.assertIsNone(validate_requirements_doc(doc))
 
 
 if __name__ == "__main__":
