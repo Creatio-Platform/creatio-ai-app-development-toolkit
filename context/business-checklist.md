@@ -198,7 +198,7 @@ The pre-analysis must check for:
 - sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
 - lookup usage that is inconsistent across objects or too broad for the stated business scope
 - supporting objects whose required parent links or cross-field constraints are not explicitly captured
-- a 1:M child object that is not surfaced as a `Related list` with a defined add/edit interaction in `## 6. UX Expectations` (default: a quick-add mini page + full edit page; inline only for simple line-item lists)
+- a 1:M child object that is not surfaced as a `Related list` with a defined add/edit interaction in `## 6. UX Expectations`
 - assumptions that contradict confirmed answers
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the object model section
