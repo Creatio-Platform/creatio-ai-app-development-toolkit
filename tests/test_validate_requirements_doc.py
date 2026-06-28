@@ -147,6 +147,12 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("Title:", str(ctx.exception))
 
+    def test_missing_description_marker(self):
+        doc = VALID_DOC.replace("**Description:** Central work item.\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Description:", str(ctx.exception))
+
     def test_missing_title_heading(self):
         doc = VALID_DOC.replace("# TestApp - Requirements", "# TestApp Notes")
         with self.assertRaises(WorkflowError) as ctx:
@@ -157,13 +163,12 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
 class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
     @staticmethod
     def _doc_with_related_list(*extra_lines):
+        anchor = "- form groups: Main information\n"
+        assert anchor in VALID_DOC, "fixture anchor missing from VALID_DOC"
         block = "\n\n- Related list Subtasks\n  - list columns: Name, Status\n" + "".join(
             f"  {line}\n" for line in extra_lines
         )
-        return VALID_DOC.replace(
-            "- form groups: Main information\n",
-            "- form groups: Main information\n" + block,
-        )
+        return VALID_DOC.replace(anchor, anchor + block)
 
     def test_inline_related_list_rejects_each_page_or_form_label(self):
         for label in (

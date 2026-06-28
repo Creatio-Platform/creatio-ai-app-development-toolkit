@@ -38,6 +38,14 @@ CHECKLIST_SOURCE_RE = re.compile(
 )
 
 
+# Section 6 record-surface scoping for the inline-related-list conflict check.
+# A surface heading is `Section <name>` / `Related list <name>`; the lookahead
+# requires a following name token so prose like "Section 3 is ..." is not a heading.
+SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#]*(Section|Related list)\b(?=\s+\S)")
+INLINE_INTERACTION_RE = re.compile(r"(?im)^[\s\-*]*add/edit:\s*inline\b")
+PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*]*(?:form fields:|form groups:|add page:|edit page:)")
+
+
 def extract_section(text, start_heading, end_heading=None):
     lines = text.splitlines()
     capture = False
@@ -116,16 +124,13 @@ def validate_requirements_doc(content: str) -> None:
     # next surface heading of either kind. An inline related list edits in the
     # grid, so it must not also carry a page/form label -- but only its OWN
     # block is checked, never a trailing Section's labels.
-    surface_re = re.compile(r"(?im)^[\s\-*>#]*(Section|Related list)\b")
-    inline_re = re.compile(r"(?im)^[\s\-*]*add/edit:\s*inline\b")
-    page_label_re = re.compile(r"(?im)^[\s\-*]*(?:form fields:|form groups:|add page:|edit page:)")
-    surfaces = list(surface_re.finditer(section6_text))
+    surfaces = list(SURFACE_HEADING_RE.finditer(section6_text))
     for idx, match in enumerate(surfaces):
         if match.group(1).lower() != "related list":
             continue
         block_end = surfaces[idx + 1].start() if idx + 1 < len(surfaces) else len(section6_text)
         block = section6_text[match.end():block_end]
-        if inline_re.search(block) and page_label_re.search(block):
+        if INLINE_INTERACTION_RE.search(block) and PAGE_FORM_LABEL_RE.search(block):
             raise WorkflowError(
                 "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"
             )
