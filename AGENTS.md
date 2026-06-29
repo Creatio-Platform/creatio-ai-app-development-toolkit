@@ -169,6 +169,7 @@ This section governs how the implementation phase (after Gate R, while applying 
 Effort and recovery budget:
 
 - Classify a routine, implementation-ready change — for example adding a section to an existing app — as a targeted change, and apply bounded reasoning effort to it. Do not over-analyze a routine change or expand it into open-ended exploration.
+- When the request is to add a section for a named entity (for example "create a section for the Contact object") and no custom app exists yet, create the app without an extra confirmation turn: name it after that entity (apply `creatio-schema-naming` for the app code and title) and proceed. Do not insert an `AskUserQuestion` turn just to confirm that an app should be created or what to name it when the entity is named in the prompt. Pause only when the target entity or the intent is ambiguous.
 - Keep a bounded recovery budget. If the canonical path for a routine change fails, retry only within the recovery limits defined by `docs://mcp/guides/agent-execution`, then stop with a blocker and report it.
 - Do not pivot to expensive alternative recovery paths — running raw SQL against the database, driving the Creatio UI manually, or restarting the environment — for a routine change unless the developer explicitly asks for that path. Treat such a pivot as a product-level decision, not an automatic fallback.
 
@@ -199,6 +200,7 @@ Do not apply Gate P or Gate R to targeted changes.
 - If `clio list-environments` returns multiple registered environments for the same normalized current-request URL, treat the environment choice as ambiguous and ask the developer to choose the environment name explicitly before continuing.
 - Do not auto-select one of several matching environments based on previous runs, active-environment status, or a familiar alias.
 - Reuse a matching environment without asking only when the current conversation explicitly names the environment key to use for that URL.
+- If the current request provides a Creatio URL that matches no registered environment and no credentials were given, auto-register it without a confirmation turn: call `reg-web-app` with default credentials (`Supervisor` / `Supervisor`) and an `<env_name>` derived from the URL, then continue. Do not pause with an `AskUserQuestion` to request credentials when the URL is in the prompt and the intent is unambiguous. This default applies only to that case (URL in the prompt, not yet registered, no credentials supplied); ask for credentials as usual when the developer named a different login, supplied partial credentials, or the intent is ambiguous. If `reg-web-app` registration or login fails, stop with a clear error and report it — do not retry with other guessed credentials.
 
 Technical question policy:
 

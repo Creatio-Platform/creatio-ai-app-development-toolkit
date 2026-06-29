@@ -150,7 +150,15 @@ If the developer provided URL, login, and password:
 clio reg-web-app <env_name> -u <url> -l <login> -p <password>
 ```
 
-If the developer did **not** provide login and/or password — **ask for them**. Do not guess or use defaults.
+**Auto-register from a prompt URL (default).** When the current request supplies a Creatio URL that is not yet registered and the developer did **not** provide credentials, register it **without a confirmation turn** using the default credentials `Supervisor` / `Supervisor`:
+
+```bash
+clio reg-web-app <env_name> -u <url> -l Supervisor -p Supervisor
+```
+
+This default applies only to this unambiguous case (the URL is in the prompt, not yet registered, and no credentials were supplied). Do not pause to ask for credentials in that case. Ask for login and password only when the developer named a different login, supplied partial credentials, or the intent is ambiguous — do not guess a non-default login.
+
+If `clio reg-web-app` fails to register or the login is rejected, **stop with a clear error** and report it. Do not retry with other guessed credentials.
 
 The `<env_name>` should be a short, descriptive name derived from the URL (e.g., `dev-crm`, `prod-sales`).
 
@@ -230,6 +238,7 @@ Report the resolved writable package context in the conversation so Agent 2 and 
 | `clio reg-web-app` auto-detection fails | Stop before app creation. Surface the clio error and ask the developer whether to retry with an explicit runtime override. |
 | `clio healthcheck` fails | Verify the URL is reachable (check for typos, trailing slashes). Verify login/password. Ask the developer to double-check credentials and retry. |
 | Registration fails | Check if the environment name is already taken (`clio list-environments`). Try a different name or update the existing one. |
+| `reg-web-app` login rejected (auth failure) | Stop with a clear error and report it. Do not retry with other guessed credentials. If the default `Supervisor` / `Supervisor` login was rejected, ask the developer for valid credentials before continuing. |
 | Connection timeout | Ask the developer to verify the Creatio instance is running and accessible from this machine. |
 | Recovered non-blocking tool error (read-back timeout where the operation actually succeeded, transient retry) | Do not surface it as a failure. Report it as normal progress or omit it; surface only an actual blocker that stops the run. See AGENTS.md "Execution UX and Effort Budget". |
 | Support mode + non-critical environment/tooling failure | Record canonical incident, apply bounded recovery first, and escalate to fail-fast only when unresolvable and blocking trustworthy CLIO MCP execution evidence. |

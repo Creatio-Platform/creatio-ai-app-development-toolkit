@@ -104,6 +104,19 @@ WRITABLE_PACKAGE_CONTEXT_DOCS = [
     ROOT / "skills/creatio-app-orchestrator/SKILL.md",
 ]
 
+# ENG-91558: a prompt URL with no matching environment is auto-registered with
+# default Supervisor/Supervisor credentials, no confirmation turn; auth failure stops.
+AUTO_REGISTER_PROMPT_URL_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "runbooks/01-environment-setup.md",
+]
+
+# ENG-91558: adding a section for a named entity creates the app without an extra
+# confirmation turn when no custom app exists yet.
+DEFAULT_APP_CREATION_DOCS = [
+    ROOT / "AGENTS.md",
+]
+
 
 def read_text(path):
     return path.read_text(encoding="utf-8")
@@ -353,6 +366,26 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("writable package context", content, str(path))
             self.assertIn("up front", content, str(path))
             self.assertIn("mid-run", content, str(path))
+
+    def test_docs_auto_register_unregistered_prompt_url(self):
+        # ENG-91558: a Creatio URL in the prompt with no matching environment is
+        # auto-registered with default Supervisor/Supervisor credentials and no
+        # confirmation turn; an auth/registration failure stops with a clear error.
+        for path in AUTO_REGISTER_PROMPT_URL_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("auto-register", content, str(path))
+            self.assertIn("supervisor", content, str(path))
+            self.assertIn("without a confirmation turn", content, str(path))
+            self.assertIn("stop with a clear error", content, str(path))
+
+    def test_docs_default_app_creation_without_confirmation(self):
+        # ENG-91558: adding a section for a named entity creates the app named after
+        # that entity without an extra confirmation turn when no custom app exists.
+        for path in DEFAULT_APP_CREATION_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("add a section for a named entity", content, str(path))
+            self.assertIn("without an extra confirmation turn", content, str(path))
+            self.assertIn("askuserquestion", content, str(path))
 
 
 if __name__ == "__main__":
