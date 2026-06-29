@@ -183,18 +183,18 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
                     validate_requirements_doc(doc)
                 self.assertIn("inline related list", str(ctx.exception))
 
-    def test_digit_section_crossref_does_not_end_related_list_block(self):
-        # "Section 3 ..." is a prose cross-reference, not a surface heading, so it
-        # must not end the inline related list's block early and hide the forbidden
-        # form-fields label that follows it.
-        doc = self._doc_with_related_list(
-            "add/edit: inline in the list",
-            "- Section 3 covers the object model",
-            "form fields: Name, Status",
+    def test_digit_named_related_list_surface_is_not_a_false_conflict(self):
+        # A surface NAME may start with a digit (e.g. "360 Reviews"). It must be
+        # detected as its own surface so an adjacent inline list does not absorb
+        # its page/form labels and raise a false conflict.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- Related list Subtasks\n  - list columns: Name, Status\n  - add/edit: inline in the list\n\n"
+            "- Related list 360 Reviews\n  - list columns: Name, Status\n"
+            "  - add page: mini page (Name)\n  - edit page: full record page\n  - form fields: Name, Status\n",
         )
-        with self.assertRaises(WorkflowError) as ctx:
-            validate_requirements_doc(doc)
-        self.assertIn("inline related list", str(ctx.exception))
+        validate_requirements_doc(doc)  # must not raise (two distinct surfaces)
 
     def test_inline_related_list_without_page_labels_passes(self):
         doc = self._doc_with_related_list("add/edit: inline in the list")
