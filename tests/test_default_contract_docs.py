@@ -378,6 +378,18 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("without a confirmation turn", content, str(path))
             self.assertIn("stop with a clear error", content, str(path))
 
+    def test_docs_auto_register_is_host_pattern_guarded(self):
+        # ENG-91558 (review RC-1): auto-register with default credentials must be
+        # gated on a known Creatio host pattern and fall back to asking for
+        # credentials otherwise (prompt-injection / untrusted-URL guard).
+        for path in AUTO_REGISTER_PROMPT_URL_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("known creatio host pattern", content, str(path))
+            self.assertIn(".creatio.com", content, str(path))
+            self.assertIn("localhost", content, str(path))
+            # carve-out boundary that bounds the rule
+            self.assertIn("ambiguous", content, str(path))
+
     def test_docs_default_app_creation_without_confirmation(self):
         # ENG-91558: adding a section for a named entity creates the app named after
         # that entity without an extra confirmation turn when no custom app exists.
@@ -386,6 +398,8 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("add a section for a named entity", content, str(path))
             self.assertIn("without an extra confirmation turn", content, str(path))
             self.assertIn("askuserquestion", content, str(path))
+            # ENG-91558 (review RC-4): the "ambiguous" carve-out bounds the rule
+            self.assertIn("ambiguous", content, str(path))
 
 
 if __name__ == "__main__":
