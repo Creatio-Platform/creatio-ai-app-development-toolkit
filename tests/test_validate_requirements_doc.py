@@ -183,6 +183,19 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
                     validate_requirements_doc(doc)
                 self.assertIn("inline related list", str(ctx.exception))
 
+    def test_digit_section_crossref_does_not_end_related_list_block(self):
+        # "Section 3 ..." is a prose cross-reference, not a surface heading, so it
+        # must not end the inline related list's block early and hide the forbidden
+        # form-fields label that follows it.
+        doc = self._doc_with_related_list(
+            "add/edit: inline in the list",
+            "- Section 3 covers the object model",
+            "form fields: Name, Status",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("inline related list", str(ctx.exception))
+
     def test_inline_related_list_without_page_labels_passes(self):
         doc = self._doc_with_related_list("add/edit: inline in the list")
         validate_requirements_doc(doc)  # must not raise

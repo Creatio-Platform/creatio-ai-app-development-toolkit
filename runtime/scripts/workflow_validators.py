@@ -41,7 +41,7 @@ CHECKLIST_SOURCE_RE = re.compile(
 # Section 6 record-surface scoping for the inline-related-list conflict check.
 # A surface heading is `Section <name>` / `Related list <name>`; the lookahead
 # requires a following name token so prose like "Section 3 is ..." is not a heading.
-SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#]*(Section|Related list)\b(?=\s+\S)")
+SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#]*(Section|Related list)\b(?=\s+(?!\d)\S)")
 INLINE_INTERACTION_RE = re.compile(r"(?im)^[\s\-*]*add/edit:\s*inline\b")
 PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*]*(?:form fields:|form groups:|add page:|edit page:)")
 
