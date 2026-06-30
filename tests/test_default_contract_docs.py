@@ -391,9 +391,21 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("tscrm.com", content, str(path))
             self.assertIn("ts1-", content, str(path))
             self.assertIn("localhost", content, str(path))
+            # ENG-91558 (review RC-13): 127.0.0.1 is part of the closed enumeration
+            self.assertIn("127.0.0.1", content, str(path))
             self.assertNotIn("intranet", content, str(path))
             # carve-out boundary that bounds the rule
             self.assertIn("ambiguous", content, str(path))
+
+    def test_docs_require_env_name_slug_sanitization(self):
+        # ENG-91558 (review RC-12/RC-14): the URL-derived <env_name> must be
+        # sanitized to a safe slug before reaching reg-web-app, and the canonical
+        # AGENTS.md contract must state it (not only the runbook).
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        runbook = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        for content in (agents, runbook):
+            self.assertIn("slug", content)
+            self.assertIn("metacharacter", content)
 
     def test_docs_remind_default_password_rotation_after_auto_register(self):
         # ENG-91558 (review RC-8): the runbook must remind the developer to rotate
