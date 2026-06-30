@@ -385,10 +385,23 @@ class DefaultContractDocsTests(unittest.TestCase):
         for path in AUTO_REGISTER_PROMPT_URL_DOCS:
             content = read_text(path).lower()
             self.assertIn("known creatio host pattern", content, str(path))
+            # ENG-91558 (review RC-6/RC-7): the host pattern is a closed enumeration
+            # of concrete patterns, not an open-ended "intranet" category.
             self.assertIn(".creatio.com", content, str(path))
+            self.assertIn("tscrm.com", content, str(path))
+            self.assertIn("ts1-", content, str(path))
             self.assertIn("localhost", content, str(path))
+            self.assertNotIn("intranet", content, str(path))
             # carve-out boundary that bounds the rule
             self.assertIn("ambiguous", content, str(path))
+
+    def test_docs_remind_default_password_rotation_after_auto_register(self):
+        # ENG-91558 (review RC-8): the runbook must remind the developer to rotate
+        # the default Supervisor password after auto-registering a non-local env.
+        content = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        self.assertIn("change the default", content)
+        self.assertIn("supervisor", content)
+        self.assertIn("password", content)
 
     def test_docs_default_app_creation_without_confirmation(self):
         # ENG-91558: adding a section for a named entity creates the app named after

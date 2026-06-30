@@ -150,7 +150,7 @@ If the developer provided URL, login, and password:
 clio reg-web-app <env_name> -u <url> -l <login> -p <password>
 ```
 
-**Auto-register from a prompt URL (default).** When the current request supplies a Creatio URL that is not yet registered and the developer did **not** provide credentials, register it **without a confirmation turn** using the default credentials `Supervisor` / `Supervisor` — **but only when the URL host matches a known Creatio host pattern**: a Creatio cloud host (`*.creatio.com`), an internal Creatio host (for example `*.tscrm.com` or a `ts1-*` / intranet host), or `localhost` / `127.0.0.1`:
+**Auto-register from a prompt URL (default).** When the current request supplies a Creatio URL that is not yet registered and the developer did **not** provide credentials, register it **without a confirmation turn** using the default credentials `Supervisor` / `Supervisor` — **but only when the URL host matches a known Creatio host pattern**. This is a closed set, not an open-ended category: a Creatio cloud host (`*.creatio.com`), an internal Creatio development host (`*.tscrm.com` or `ts1-*`), or `localhost` / `127.0.0.1`. This is a closed list, not a broad category — extend it explicitly if more patterns are ever needed.
 
 ```bash
 clio reg-web-app <env_name> -u <url> -l Supervisor -p Supervisor
@@ -164,7 +164,7 @@ If `clio reg-web-app` fails to register or the login is rejected, **stop with a 
 
 > Security note: `Supervisor` / `Supervisor` is a well-known default. After auto-registering an environment that is reachable beyond `localhost`, remind the developer to change the default `Supervisor` password on that environment.
 
-The `<env_name>` should be a short, descriptive name derived from the URL (e.g., `dev-crm`, `prod-sales`).
+The `<env_name>` should be a short, descriptive name derived from the URL (e.g., `dev-crm`, `prod-sales`). Sanitize it to a safe slug — letters, digits, and dashes only — stripping any other characters from the URL so it cannot inject shell metacharacters into the `reg-web-app` invocation.
 
 ### 4. Auto-detect runtime during registration
 
