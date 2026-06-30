@@ -394,6 +394,16 @@ class DefaultContractDocsTests(unittest.TestCase):
             # ENG-91558 (review RC-13): 127.0.0.1 is part of the closed enumeration
             self.assertIn("127.0.0.1", content, str(path))
             self.assertNotIn("intranet", content, str(path))
+            # ENG-91558 (review RC-16): the security-critical "no dots" single-label
+            # narrowing for ts1-* must be locked so it cannot silently regress.
+            self.assertIn("no dots", content, str(path))
+            # ENG-91558 (review RC-15): host taken from the authority component only,
+            # with counter-examples for the cloud wildcards and the userinfo bypass.
+            self.assertIn("authority", content, str(path))
+            self.assertIn("creatio.com.attacker", content, str(path))
+            self.assertIn("creatio.com@", content, str(path))
+            # ENG-91558 (review minor): AC2 "do not retry with guessed credentials"
+            self.assertIn("do not retry", content, str(path))
             # carve-out boundary that bounds the rule
             self.assertIn("ambiguous", content, str(path))
 
