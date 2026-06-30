@@ -139,6 +139,35 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("list columns:", str(ctx.exception))
 
+    def test_retired_default_list_columns_label_is_rejected(self):
+        # The retired `default list columns:` label ends with `list columns:`, so a
+        # plain substring check would let an un-migrated doc pass silently.
+        doc = VALID_DOC.replace("- list columns: Name, Status", "- default list columns: Name, Status")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("default list", str(ctx.exception).lower())
+
+    def test_retired_default_list_filters_label_is_rejected(self):
+        doc = VALID_DOC.replace("- list filters: Status", "- default list filters: Status")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("default list", str(ctx.exception).lower())
+
+    def test_list_filters_carrier_resolves(self):
+        # filters branch of UX_CARRIER_RE: a filter title present in the object
+        # model must resolve to a carrier and pass.
+        doc = VALID_DOC.replace("- list filters: Status", "- list filters: Status, Name")
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_list_filters_title_without_carrier_is_rejected(self):
+        # Complementary negative for the filters branch: a filter title with no
+        # carrier in section 3 must be rejected (guards against the branch silently
+        # never running).
+        doc = VALID_DOC.replace("- list filters: Status", "- list filters: Nonexistent")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Nonexistent", str(ctx.exception))
+
 
 class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
     def test_missing_title_line_in_entity(self):

@@ -16,7 +16,6 @@ REQUIRED_REQUIREMENTS_SECTIONS = [
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
     "Minimum to create:",
-    "list columns:",
 ]
 
 OBJECT_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Section object|Object):", re.MULTILINE)
@@ -27,6 +26,14 @@ TABLE_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 UX_CARRIER_RE = re.compile(r"^[\s-]*list (columns|filters):", re.IGNORECASE)
+# `list columns:` must be present as a real line-anchored label. A plain
+# substring test ("list columns:" in text) is wrong because the retired label
+# `default list columns:` ends with it, so an un-migrated doc would pass silently.
+LIST_COLUMNS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#]*list columns:")
+# The retired `default list columns:` / `default list filters:` labels were
+# renamed to `list columns:` / `list filters:`; reject the old form with a
+# helpful migration error instead of letting it slip through.
+RETIRED_LIST_LABEL_RE = re.compile(r"(?im)^[\s\-*>#]*default list (?:columns|filters):")
 CHECKLIST_SOURCE_RE = re.compile(
     r"(?:^|\n)\s*(?:"
     r"source\s*[:=]\s*[\"']?(?:confirmed|assumed)[\"']?"
@@ -79,6 +86,12 @@ def validate_requirements_doc(content: str) -> None:
     for marker in REQUIRED_REQUIREMENTS_MARKERS:
         if marker not in text:
             raise WorkflowError(f"Requirements doc failed: missing required marker: {marker}")
+    if RETIRED_LIST_LABEL_RE.search(text):
+        raise WorkflowError(
+            "Requirements doc failed: retired label 'default list columns:'/'default list filters:' is no longer accepted; use 'list columns:' / 'list filters:' (drop the 'default ' prefix)"
+        )
+    if not LIST_COLUMNS_LABEL_RE.search(text):
+        raise WorkflowError("Requirements doc failed: missing required marker: list columns:")
     if not SECTION_OBJECT_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
