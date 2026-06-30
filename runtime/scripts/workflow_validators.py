@@ -52,9 +52,13 @@ CHECKLIST_SOURCE_RE = re.compile(
 # but NOT a letter-only name: a surface name may start with a digit (e.g.
 # "360 Reviews") or be non-Latin (Cyrillic), and dropping such a heading would let
 # an adjacent inline list absorb its labels and raise a FALSE conflict.
-SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#]*(Section|Related list)\b(?=\s+\S)")
-INLINE_INTERACTION_RE = re.compile(r"(?im)^[\s\-*]*add/edit:\s*inline\b")
-PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*]*(?:form fields:|form groups:|add page:|edit page:)")
+# The prefix class includes the backtick because the §6 contract renders a surface
+# bullet as `- **`Related list <name>`**` (bold + code), so the keyword sits behind
+# `- **``; without the backtick the regex misses every contract-conforming heading
+# and the conflict check below becomes a no-op.
+SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#`]*(Section|Related list)\b(?=\s+\S)")
+INLINE_INTERACTION_RE = re.compile(r"(?im)^[\s\-*`]*add/edit:\s*inline\b")
+PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*`]*(?:form fields:|form groups:|add page:|edit page:)")
 
 
 def extract_section(text, start_heading, end_heading=None):
@@ -136,17 +140,28 @@ def validate_requirements_doc(content: str) -> None:
                 continue
             if title.lower() not in section3_text_lower:
                 raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
-    # Section 6 lists one block per record surface, each introduced by a
-    # `Section <name>` or `Related list <name>` heading; a block runs until the
-    # next surface heading of either kind. An inline related list edits in the
-    # grid, so it must not also carry a page/form label -- but only its OWN
-    # block is checked, never a trailing Section's labels.
-    surfaces = list(SURFACE_HEADING_RE.finditer(section6_text))
-    for idx, match in enumerate(surfaces):
-        if match.group(1).lower() != "related list":
+    # Section 6 lists one block per record surface. A surface heading is a
+    # top-level bullet (`- **`Section <name>`**` / `- **`Related list <name>`**`).
+    # A surface's block is its OWN indented sub-bullets only: it ends at the next
+    # line whose indentation is no deeper than the heading (a sibling top-level
+    # bullet or the next heading). Scoping by indentation rather than "up to the
+    # next heading" stops a heading-less surface -- the section object or the
+    # "single full page" option, both described with bare top-level
+    # `form groups:` bullets -- from being absorbed and raising a false conflict.
+    # An inline related list edits in the grid, so its block must not also carry
+    # a page/form label.
+    s6_lines = section6_text.splitlines()
+    for idx, line in enumerate(s6_lines):
+        match = SURFACE_HEADING_RE.match(line)
+        if not match or match.group(1).lower() != "related list":
             continue
-        block_end = surfaces[idx + 1].start() if idx + 1 < len(surfaces) else len(section6_text)
-        block = section6_text[match.end():block_end]
+        heading_indent = len(line) - len(line.lstrip())
+        block_lines = []
+        for nxt in s6_lines[idx + 1:]:
+            if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= heading_indent:
+                break
+            block_lines.append(nxt)
+        block = "\n".join(block_lines)
         if INLINE_INTERACTION_RE.search(block) and PAGE_FORM_LABEL_RE.search(block):
             raise WorkflowError(
                 "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"

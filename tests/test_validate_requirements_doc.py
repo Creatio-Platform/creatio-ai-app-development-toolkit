@@ -248,6 +248,33 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
         )
         validate_requirements_doc(doc)  # must not raise
 
+    def test_backticked_bold_related_list_heading_is_detected(self):
+        # The §6 contract renders a surface as `- **`Related list <name>`**`. The
+        # heading regex must match that form, otherwise the inline conflict check
+        # silently becomes a no-op on contract-conforming plans.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- **`Related list Subtasks`**\n  - list columns: Name, Status\n"
+            "  - add/edit: inline in the list\n  - form groups: Main\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("inline related list", str(ctx.exception))
+
+    def test_inline_related_list_then_bare_section_object_bullets_pass(self):
+        # A heading-less surface (the section object, or the "single full page"
+        # option) is described with bare top-level `form groups:` bullets. Those
+        # must NOT be absorbed into a preceding inline related list's block, which
+        # would raise a false conflict.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- Related list Subtasks\n  - list columns: Name, Status\n"
+            "  - add/edit: inline in the list\n"
+            "- form groups: Main information\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()
