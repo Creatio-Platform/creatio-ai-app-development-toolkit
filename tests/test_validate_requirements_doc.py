@@ -188,6 +188,27 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("title must match", str(ctx.exception))
 
+    def test_missing_code_marker(self):
+        # `Code:` appears in both the object block and the lookup row, and the
+        # object block extends through the Lookups subsection, so drop both.
+        doc = VALID_DOC.replace("**Code:** `UsrTask`\n", "").replace("Code: `UsrTaskStatus`", "`UsrTaskStatus`")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Code:", str(ctx.exception))
+
+    def test_missing_primary_display_field_marker(self):
+        doc = VALID_DOC.replace("**Primary display field:** `Name`\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Primary display field:", str(ctx.exception))
+
+    def test_object_role_and_purpose_are_optional(self):
+        # `Object role:` / `Purpose:` were dropped from the required metadata
+        # markers; VALID_DOC carries neither, and their absence must not fail.
+        self.assertNotIn("Object role:", VALID_DOC)
+        self.assertNotIn("Purpose:", VALID_DOC)
+        validate_requirements_doc(VALID_DOC)  # must not raise
+
 
 class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
     @staticmethod
@@ -257,6 +278,20 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
             "- form groups: Main information\n\n"
             "- **`Related list Subtasks`**\n  - list columns: Name, Status\n"
             "  - add/edit: inline in the list\n  - form groups: Main\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("inline related list", str(ctx.exception))
+
+    def test_cyrillic_named_related_list_surface_is_detected(self):
+        # The code comment at the surface regex claims non-Latin (Cyrillic) names
+        # are supported; pin it — a Cyrillic-named surface must still be detected
+        # so its own inline/page-label conflict fires.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- Related list Підрядники\n  - list columns: Name, Status\n"
+            "  - add/edit: inline in the list\n  - add page: mini page (Name)\n",
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
