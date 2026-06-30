@@ -256,7 +256,7 @@ Organize it by **record surface**, one entry per page, each prefixed with its ki
 
 When planning a surface's add/edit interaction (a section or a related list), analyze the task and choose ONE option, in this order of preference:
 
-- **Default — quick-add card + full edit:** add through a compact **mini page** and open/edit the record on the **full record page**. Record it as `add page: mini page (<fields>)` + `edit page: full record page`. Prefer this for related lists.
+- **Default — quick-add card + full edit:** add through a compact **mini page** and open/edit the record on the **full record page**. Record it as `add page: mini page (<fields>)` + `edit page: full record page`. Prefer this for related lists. For a child with **no section of its own**, the add/edit pages MUST be registered for the object (page-to-object binding — see `get-guidance related-page-binding`) so the related list's "+ Add" resolves; never wire "+ Add" to an unregistered page. (This intentionally favours a real add/edit page over inline grid add; it relies on page-to-object binding being available.)
 - **Single full page:** when the record is rich and quick capture does not matter, one full record page serves both add and edit — give it `form groups:` (or `form fields:`) and omit the add/edit-page split.
 - **Inline in the list:** only for simple line-item lists (a few short columns) or when the user explicitly asks — records are added and edited directly in the grid row. Record it as `add/edit: inline in the list`; there is no separate page, so do NOT list `form fields:`, `form groups:`, `add page:`, or `edit page:` — the inline-editable fields ARE the `list columns:`, so a separate fields line just duplicates them and is wrong here.
 
