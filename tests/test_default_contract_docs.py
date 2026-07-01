@@ -408,8 +408,29 @@ class DefaultContractDocsTests(unittest.TestCase):
             # zero-confirmation tier — it requires a confirmation turn because the
             # subdomain provisioner is not guaranteed (tenancy trust boundary).
             self.assertIn("zero-confirmation", content, str(path))
+            # ENG-91558 (review RC-21): the :port suffix is stripped before host
+            # matching, so the common local/dev case (host:88) still matches.
+            self.assertIn(":port", content, str(path))
+            self.assertIn("does match", content, str(path))
+            # ENG-91558 (review RC-22): the URL is passed as a discrete argv arg,
+            # never shell-interpolated (path/query cannot inject metacharacters).
+            self.assertIn("argv", content, str(path))
             # carve-out boundary that bounds the rule
             self.assertIn("ambiguous", content, str(path))
+
+    def test_docs_host_pattern_enumeration_consistent_across_docs(self):
+        # ENG-91558 (review RC-23): the host-pattern trust boundary is stated in
+        # both AGENTS.md and the runbook; assert the pattern set is identical in
+        # both so a future edit to one copy cannot silently drift from the other.
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        runbook = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        host_pattern_tokens = [
+            "*.creatio.com", "*.tscrm.com", "ts1-", "localhost", "127.0.0.1",
+            "no dots", "zero-confirmation", ":port", "authority",
+        ]
+        for token in host_pattern_tokens:
+            self.assertIn(token, agents, f"AGENTS.md missing host-pattern token: {token}")
+            self.assertIn(token, runbook, f"runbook missing host-pattern token: {token}")
 
     def test_docs_require_env_name_slug_sanitization(self):
         # ENG-91558 (review RC-12/RC-14): the URL-derived <env_name> must be
