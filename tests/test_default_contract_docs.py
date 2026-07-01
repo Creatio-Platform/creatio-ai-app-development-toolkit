@@ -404,6 +404,10 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("creatio.com@", content, str(path))
             # ENG-91558 (review minor): AC2 "do not retry with guessed credentials"
             self.assertIn("do not retry", content, str(path))
+            # ENG-91558 (review RC-17): cloud *.creatio.com is NOT in the
+            # zero-confirmation tier — it requires a confirmation turn because the
+            # subdomain provisioner is not guaranteed (tenancy trust boundary).
+            self.assertIn("zero-confirmation", content, str(path))
             # carve-out boundary that bounds the rule
             self.assertIn("ambiguous", content, str(path))
 
