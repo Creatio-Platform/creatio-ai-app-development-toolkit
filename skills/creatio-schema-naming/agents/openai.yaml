@@ -1,0 +1,5 @@
+---
+display_name: "Creatio Schema Naming"
+short_description: "Create consistent names for Creatio object schemas, columns, lookups, and relation objects."
+default_prompt: "Use $creatio-schema-naming to choose names for Creatio object schemas, object titles, columns, field titles, lookup objects, Guid/UId columns, and relation objects when generating schemas, metadata, migrations, specs, or implementation plans."
+---
