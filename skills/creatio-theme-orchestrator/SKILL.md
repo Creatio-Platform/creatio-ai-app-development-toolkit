@@ -60,6 +60,13 @@ and for every color decision it has you call clio's color tool and read its verd
 or not, too similar or not, a valid candidate or not). You never compare a color to a threshold
 yourself; clio returns the answer, you relay it in plain words and collect the user's choice.
 
+Present every color visually. Each time you offer, report, or ask about a color — the primary
+and its readable variant, the secondary, the accent, the system colors, and the preview — render
+the actual color as a swatch using the client's visual rendering, with the verdict in words
+beside it. Do this before you ask, on every color, every time. Never present a color as a bare
+hex string; only if the client genuinely cannot render color, tell the user so and then read out
+the hex.
+
 ## Fonts
 
 Optional. Ask whether to change the font (default is Montserrat), then whether to use one
@@ -78,7 +85,7 @@ hard limit and returns a clear error if the name is too long, which you relay.
 ## Conversation rules
 
 - Ask at most one question at a time.
-- Render each color as a visual swatch (the actual color), not a bare hex string, using the client's rendering.
+- Never show a color as a bare hex string — render the actual color as a swatch (see The palette conversation and Build and apply for when and how).
 - Handle changes of mind gracefully — if the user revisits an earlier choice, re-run the
   affected step through the color tool and continue; don't force a fixed script.
 - Intake, palette, and font steps are not approval gates. There is exactly one confirmation
@@ -90,8 +97,9 @@ hard limit and returns a clear error if the name is too long, which you relay.
 ## Build and apply
 
 Before building, present one final summary and take the single confirmation. Recap the chosen
-base (-500) colors (primary, secondary, accent, success, error), any non-default font(s), and the theme
-name, plus a brief reminder of any color the user chose to keep despite a low-contrast warning;
+base (-500) colors (primary, secondary, accent, success, error) — each rendered as a visual
+swatch, not bare hex — any non-default font(s), and the theme name, plus a brief reminder of any
+color the user chose to keep despite a low-contrast warning;
 show full stops or other detail only if asked. If the user wants to change something, return to
 the relevant block (primary / secondary / accent / success / error / font / name) and re-present
 the summary.
