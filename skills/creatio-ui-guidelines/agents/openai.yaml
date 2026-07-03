@@ -1,0 +1,5 @@
+---
+display_name: "Creatio UI Guidelines"
+short_description: "Design and review Creatio Freedom UI pages against UI/UX and WCAG guidelines."
+default_prompt: "Use $creatio-ui-guidelines to design or review Creatio Freedom UI pages, check accessibility/WCAG compliance, choose colors, write labels and error messages, or audit existing UI implementations."
+---

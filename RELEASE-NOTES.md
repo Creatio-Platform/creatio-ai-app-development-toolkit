@@ -6,6 +6,20 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.3.0 (2026-06-25)
+
+### Features
+
+- Add the `creatio-schema-naming` skill — a Creatio data-model naming assistant for object schemas, object/column titles, lookup objects, Guid/UId references, and relation objects, backed by a detailed naming-standard reference. The orchestrator now invokes it before naming any data-model element.
+- Add the `creatio-ui-guidelines` skill — Freedom UI page design, layout, and review guidance, including a concept→component workflow built on `get-component-info`, layout/gap mechanics, and a WCAG 2.2 AA no-code accessibility checklist with audit templates. The orchestrator now invokes it before authoring or reviewing Freedom UI pages.
+- Orchestrator handoffs: `creatio-app-orchestrator` mandates `creatio-ui-guidelines` before Freedom UI page work and `creatio-schema-naming` before naming data-model elements.
+
+### Documentation
+
+- `skills/README.md` updated for the multi-skill model: the orchestrator remains the single entrypoint, with reusable domain-expertise skills it hands off to mid-workflow (gate-ordered stages still must not become standalone skills).
+
+---
+
 ## 1.2.0 (2026-06-22)
 
 ### Features

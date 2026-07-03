@@ -1,6 +1,8 @@
 import json
 import re
+import subprocess
 import unittest
+import warnings
 from pathlib import Path
 
 
@@ -9,6 +11,83 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read_json(relative_path):
     return json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
+
+
+def _git_tracked_skill_md():
+    """SKILL.md paths git tracks under skills/, or None if git is unavailable.
+
+    Used to scope the structural tests to SHIPPED skills only — an untracked
+    work-in-progress skill directory in the working tree is not part of any
+    release and must not turn the suite red.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "skills"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        warnings.warn(f"git ls-files unavailable; falling back to all on-disk skills: {exc}")
+        return None
+    return {line for line in out.splitlines() if line.endswith("/SKILL.md")}
+
+
+def skill_dirs():
+    """Every shipped (git-tracked) skill directory (each holds a SKILL.md).
+
+    Falls back to all on-disk skills when git is unavailable (e.g. a released
+    tarball), which contains no untracked WIP dirs anyway.
+    """
+    dirs = sorted(p.parent for p in (ROOT / "skills").glob("*/SKILL.md"))
+    tracked = _git_tracked_skill_md()
+    if tracked is None:
+        return dirs
+    return [d for d in dirs if f"skills/{d.name}/SKILL.md" in tracked]
+
+
+def parse_fenced_flat_mapping(text):
+    """Parse a ``---``-fenced flat ``key: "value"`` mapping without PyYAML.
+
+    The skill openai.yaml manifests are a fixed, self-authored shape — a few flat
+    string keys between ``---`` fences — so a small line parser is enough and
+    keeps the test suite dependency-free (CI installs only pytest). Only
+    TOP-LEVEL (non-indented) keys are collected, so a divergent nested shape
+    (e.g. keys under an ``interface:`` wrapper) is NOT silently flattened — it
+    surfaces as a missing required key.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("missing opening '---' fence")
+    closed = False
+    mapping = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            closed = True
+            break
+        if not line or line[0].isspace() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        mapping[key.strip()] = value.strip().strip('"').strip("'").strip()
+    if not closed:
+        raise ValueError("missing closing '---' fence")
+    return mapping
+
+
+def looks_like_path(token):
+    """True if a backtick token looks like a file path: a directory separator
+    plus a final ``name.ext`` segment with an alphanumeric extension.
+
+    Plain string logic (no regex) so it cannot trip a ReDoS hotspot (Sonar
+    python:S5852); equivalent to the former ``.+/.+\\.[A-Za-z0-9]+$`` pattern.
+    """
+    head, sep, tail = token.rpartition("/")
+    if not sep or not head:
+        return False
+    name, dot, ext = tail.rpartition(".")
+    # A real file extension is never all-digits, so a version-ish token like
+    # `3.3.1/3.3.3` is not treated as a path.
+    return bool(name) and bool(dot) and ext.isalnum() and not ext.isdigit()
 
 
 class ReleaseStructureTests(unittest.TestCase):
@@ -203,6 +282,121 @@ class ReleaseStructureTests(unittest.TestCase):
             self.assertIn("STOP", content, entry.name)
             self.assertIn("from memory", content, entry.name)
 
+    def test_every_skill_frontmatter_is_valid(self):
+        """All shipped skills — not just the orchestrator — must start with a
+        YAML front-matter block whose `name:` matches the directory and that
+        carries a non-empty `description:`. The orchestrator handoff now makes
+        creatio-ui-guidelines load-bearing, so a malformed block in any skill
+        breaks discovery with no other signal.
+        """
+        dirs = skill_dirs()
+        self.assertGreaterEqual(len(dirs), 3, "expected at least the three shipped skills")
+        for skill_dir in dirs:
+            content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            # Parse through the shared parser (single parsing path) — it raises
+            # on a malformed / unclosed front-matter fence.
+            data = parse_fenced_flat_mapping(content)
+            self.assertEqual(data.get("name"), skill_dir.name, skill_dir.name)
+            self.assertTrue((data.get("description") or "").strip(),
+                            f"{skill_dir.name}: empty or missing description:")
+
+    # Skills the orchestrator MUST hand off to mid-workflow. These are the
+    # orchestrator-driven skills only — standalone skills the user invokes
+    # directly (e.g. a migration skill) are deliberately NOT listed and are not
+    # expected to be wired into the orchestrator.
+    ORCHESTRATOR_HANDOFF_SKILLS = ("creatio-ui-guidelines", "creatio-schema-naming")
+
+    def test_orchestrator_wires_its_handoff_skills(self):
+        """Each orchestrator-driven skill must exist and be referenced by name in
+        the orchestrator SKILL.md. There is no generic skill registry, so the
+        handoff is hand-written prose — this test is what enforces that a
+        load-bearing handoff skill was actually wired (and keeps being wired).
+
+        This intentionally does NOT require every shipped skill to be wired:
+        standalone skills are invoked directly and have no orchestrator handoff.
+        """
+        orchestrator = (ROOT / "skills/creatio-app-orchestrator/SKILL.md").read_text(encoding="utf-8")
+        for name in self.ORCHESTRATOR_HANDOFF_SKILLS:
+            self.assertTrue(
+                (ROOT / "skills" / name / "SKILL.md").exists(),
+                f"{name}/SKILL.md is required by the orchestrator handoff",
+            )
+            self.assertIn(
+                name, orchestrator,
+                f"orchestrator SKILL.md must hand off to `{name}` by name "
+                f"(no generic skill registry enforces this otherwise)",
+            )
+
+    def test_every_skill_openai_manifest_has_consistent_shape(self):
+        """Every skills/*/agents/openai.yaml must be a single flat YAML document
+        with the same keys the launcher reads (display_name, short_description,
+        default_prompt) — and must NOT nest them under an `interface:` wrapper.
+        A divergent shape makes the skill present/launch inconsistently with its
+        siblings.
+        """
+        for skill_dir in skill_dirs():
+            manifest_path = skill_dir / "agents" / "openai.yaml"
+            self.assertTrue(manifest_path.exists(), f"{skill_dir.name}: missing agents/openai.yaml")
+            # The manifest is a `---`-fenced flat mapping; parse top-level keys
+            # only so a nested `interface:` shape surfaces as missing keys rather
+            # than being silently flattened.
+            data = parse_fenced_flat_mapping(manifest_path.read_text(encoding="utf-8"))
+            self.assertNotIn(
+                "interface", data,
+                f"{skill_dir.name}: openai.yaml must not nest keys under `interface:`",
+            )
+            for key in ("display_name", "short_description", "default_prompt"):
+                self.assertIn(key, data, f"{skill_dir.name}: openai.yaml missing `{key}`")
+                self.assertTrue(data[key].strip(), f"{skill_dir.name}: `{key}` is empty")
+
+    def test_skill_relative_references_are_anchored_and_resolve(self):
+        """Every link inside a skill's SKILL.md that points to a file the skill
+        ships (any folder, not just `references/`) must use an explicit `./`
+        anchor and resolve against the skill's own directory at runtime.
+
+        Links that go UP to the toolkit root (`../…`, e.g. the orchestrator's
+        `../../context/…`) are a different contract verified by
+        ``_assert_anchored_paths_resolve`` and are skipped here. Detection keys
+        on the path shape (a slash + a file extension), NOT on a folder name, so
+        a future `./guides/x.md` or `./helpers/x.md` is covered too and a bare
+        `guides/x.md` is rejected.
+
+        Both link forms are inspected: backtick code spans (`` `./references/x.md` ``)
+        AND markdown links (`[text](./references/x.md)`). External targets
+        (`http(s)://…`, anchors, absolute `/…`) are out of scope and ignored.
+        """
+        checked = 0
+        for skill_dir in skill_dirs():
+            content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            # Candidates from backtick code spans AND markdown link targets.
+            # Both extractions use a single bounded character class (no ambiguous
+            # quantifier adjacency), so neither is a ReDoS hotspot.
+            backtick = re.findall(r"`([^`]+)`", content)
+            md_links = re.findall(r"\]\(([^)\s]+)", content)
+            refs = [
+                r for r in (backtick + md_links)
+                if "://" not in r and not r.startswith(("#", "/")) and looks_like_path(r)
+            ]
+            for ref in refs:
+                if ref.startswith("../"):
+                    # toolkit-root link — covered by _assert_anchored_paths_resolve
+                    continue
+                self.assertTrue(
+                    ref.startswith("./"),
+                    f"{skill_dir.name}: `{ref}` must be anchored with `./` "
+                    f"(explicit skill-relative path) or `../` (toolkit-root path)",
+                )
+                resolved = (skill_dir / ref).resolve()
+                self.assertTrue(resolved.exists(), f"{skill_dir.name}: `{ref}` -> {resolved}")
+                checked += 1
+        # Non-vacuous guard (mirrors _assert_anchored_paths_resolve): at least one
+        # `./`-anchored skill-relative reference must actually have been checked,
+        # so a silently-empty extraction can't let this test pass proving nothing.
+        self.assertGreater(
+            checked, 0,
+            "no ./-anchored skill-relative references were checked — extraction may match nothing",
+        )
+
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())
         self.assertFalse((ROOT / "packages/caadt-mcp").exists())
@@ -363,6 +557,50 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertIn('export GH_HOST="${GITHUB_SERVER_URL#http://}"', step_body)
         self.assertIn('export GH_HOST="${GH_HOST#https://}"', step_body)
         self.assertIn('export GH_HOST="${GH_HOST%/}"', step_body)
+
+
+class HelperFunctionTests(unittest.TestCase):
+    """Unit tests for the non-trivial helpers that replace a library
+    (parse_fenced_flat_mapping ~ PyYAML, looks_like_path ~ a path regex)."""
+
+    def test_parse_valid_flat_mapping(self):
+        text = '---\ndisplay_name: "A"\nshort_description: "B"\ndefault_prompt: "C"\n---\n'
+        self.assertEqual(
+            parse_fenced_flat_mapping(text),
+            {"display_name": "A", "short_description": "B", "default_prompt": "C"},
+        )
+
+    def test_parse_collects_top_level_keys_only(self):
+        # A nested `interface:` shape must NOT be flattened — only the top-level
+        # `interface` key is seen, so required keys read as absent.
+        text = '---\ninterface:\n  display_name: "A"\n---\n'
+        data = parse_fenced_flat_mapping(text)
+        self.assertEqual(set(data), {"interface"})
+        self.assertNotIn("display_name", data)
+
+    def test_parse_ignores_comments_and_blank_lines(self):
+        text = '---\n# a comment\n\ndisplay_name: "A"\n---\n'
+        self.assertEqual(parse_fenced_flat_mapping(text), {"display_name": "A"})
+
+    def test_parse_strips_surrounding_quotes(self):
+        self.assertEqual(parse_fenced_flat_mapping("---\nk: 'v'\n---\n"), {"k": "v"})
+
+    def test_parse_requires_opening_fence(self):
+        with self.assertRaises(ValueError):
+            parse_fenced_flat_mapping('display_name: "A"\n---\n')
+
+    def test_parse_requires_closing_fence(self):
+        with self.assertRaises(ValueError):
+            parse_fenced_flat_mapping('---\ndisplay_name: "A"\n')
+
+    def test_looks_like_path_accepts_relative_file_paths(self):
+        for token in ("./references/x.md", "../../AGENTS.md", "a/b.json", "x/y/z.yaml"):
+            self.assertTrue(looks_like_path(token), token)
+
+    def test_looks_like_path_rejects_non_paths(self):
+        for token in ("crt.Input", "layoutConfig", "get-tool-contract",
+                      "a/b", "a/.md", "3.3.1/3.3.3", "plain"):
+            self.assertFalse(looks_like_path(token), token)
 
 
 if __name__ == "__main__":
