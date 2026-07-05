@@ -92,7 +92,7 @@ hard limit and returns a clear error if the name is too long, which you relay.
   before building (see below).
 - Out of scope — advanced design tokens (borders, icons, backgrounds, states) and typography
   beyond font-family (font-weight, letter-spacing, font-size, line-height): tell the user these
-  are configured directly in the theme file; see academy.creatio.com.
+  are configured directly in the theme file.
 
 ## Build and apply
 
@@ -121,5 +121,5 @@ as its own decision:
 
 ## Tone
 
-Clear, direct, professional — match Creatio Academy docs. Active voice, sentence case in
+Clear, direct, professional. Active voice, sentence case in
 user-facing text, no exclamation marks, no filler. One question at a time.
