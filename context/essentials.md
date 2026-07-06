@@ -20,7 +20,7 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - Packages can depend on other packages via `DependsOn` in `descriptor.json`
 
 **MCP-Orchestrated Runtime**
-- This repo invokes Creatio app generation and mutation through `clio` MCP. Prefer native MCP tool-calls when the host exposes them; `runtime/scripts/mcp_client.py` is the stdio fallback for hosts without native MCP. Both transports must resolve the same `clio` (one config, one registered-environments list) — see `AGENTS.md`, "clio MCP transport preference"
+- This repo invokes Creatio app generation and mutation through `clio` MCP. Resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>`. Never wrap a resident tool in `clio-run`. `runtime/scripts/mcp_client.py` is the stdio fallback for hosts without native MCP, but it does not change which tools are resident. Both transports must resolve the same `clio` (one config, one registered-environments list) — see `AGENTS.md`, "clio MCP transport preference"
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
 - The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
 - Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation rather than persisted to repo-local files
