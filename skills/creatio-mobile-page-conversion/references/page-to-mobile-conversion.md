@@ -98,11 +98,14 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        what `mobileValues` deliberately leaves out: the value binding (`control`, or `value` for lookups —
        type-specific), and for a structural mapping (grid → `crt.List` + `crt.ListItem`) the row layout — add a
        `crt.ListItem` into the `crt.List` `itemLayout` (title = first column, body = the rest), per the
-       `componentSuggestions` note and the `mobileContracts` example. If
-       `captionResource` is present, register `key` = `sourceValue` via
-       `update-page resources`. Consult `mobileContracts` / `get-component-info` only for those not-prebuilt
-       parts. `validate-page` is the backstop — it rejects an insert that drops a required property (e.g. a
-       field's caption, or a lookup-path attribute's type) and `update-page` refuses to save.
+       `componentSuggestions` note and the `mobileContracts` example. The `mobileValues` carry every localized
+       string verbatim as `#ResourceString(key)#` tokens — a top-level caption AND nested ones (e.g.
+       `config.title`, `text.template`). Register them ALL: pass `guide.resourceStrings` (a `{ key: en-US text }`
+       map covering the whole converted body) to `update-page resources` in one call — never register a
+       `#ResourceString(...)#` token as the value, and do not hand-pick keys. A token whose key is not
+       registered renders blank. Consult `mobileContracts` / `get-component-info` only for those not-prebuilt parts. `validate-page` is
+       the backstop — it rejects an insert that drops a required property (e.g. a field's caption, or a
+       lookup-path attribute's type) and `update-page` refuses to save.
      - `relocate-children` → do not recreate this container; its children are placed in `parentName`
        (each child entry already carries that `parentName`).
      - `drop` → skip it; tell the user what was dropped and why. (Empty containers are still inserted —
