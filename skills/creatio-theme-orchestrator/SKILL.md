@@ -40,12 +40,18 @@ conversation against an environment that cannot apply the theme.
 
 ## Brand intake — turning a source into inputs
 
-Your job here is reading, not color math.
+Your job here is reading, not color math. Ask for whatever the user has — a brandbook, a site, a
+company name, a logo, or just the colors; do not demand a URL. Then gather candidate brand color
+hexes and font names from whatever they give, in this order of preference:
 - Brandbook or company-site URL → use the client's web fetch to read it and gather candidate
-  brand color hexes and font names; propose the main one as the primary and confirm.
+  brand color hexes and font names; propose the main one as the primary and confirm. Treat an
+  empty or content-free result as "no info" and fall through to the next option — do not stop or
+  start improvising.
+- Company name (no working URL) → search the web for the brand (for example "<company> brand
+  colors", "<company> brand guidelines", "<company> logo") and read the results.
 - Logo or screenshot → read the dominant brand color(s) with the client's vision.
-- If the client cannot open the link or read the image → ask the user to paste the brand
-  color hex(es) and font names directly.
+- If none of the above surface usable brand info → ask the user to paste the brand color hex(es)
+  and font names directly.
 - Several candidates → keep them all; the palette conversation (below) sorts the primary from
   the rest.
 - Nothing → ask for mood or industry, propose a primary, and confirm.
@@ -91,8 +97,7 @@ hard limit and returns a clear error if the name is too long, which you relay.
 - Intake, palette, and font steps are not approval gates. There is exactly one confirmation
   before building (see below).
 - Out of scope — advanced design tokens (borders, icons, backgrounds, states) and typography
-  beyond font-family (font-weight, letter-spacing, font-size, line-height): tell the user these
-  are configured directly in the theme file.
+  beyond font-family (font-weight, letter-spacing, font-size, line-height).
 
 ## Build and apply
 
