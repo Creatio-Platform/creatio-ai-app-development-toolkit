@@ -55,7 +55,8 @@ Jump to the section you need:
   - tabs and toggle panels for secondary information.
 - Avoid pages that require long scrolling. Split information into tabs and groups so the user can jump to the needed area in one click.
 - Do not waste large side-profile space for only one or two fields. Move such fields into a group or choose a template with a header above tabs.
-- **Fill the left/profile column — don't leave it near-empty.** The record-page template ships with a single left island. If the object has many columns, the left side will look empty next to the content area — add a **second left island** below the first, with the **same settings as the existing one** (see *New island / card container — standard settings*), and distribute key stable fields (and/or small metrics) into it so the left column is balanced, not sparse.
+- **Balance the page — the left and right areas must be proportional in length.** The whole page should read as two columns of comparable height, not a tall content area beside a short, half-empty left column. The left/profile column must be filled down to **at least the end of the page's content** (roughly level with the bottom of the right area), not stop a couple of fields in.
+- **Fill the left/profile column — don't leave it near-empty, and don't stop at "a field or two".** The record-page template ships with a single left island. If the object has many columns, the left side will look empty next to the content area — add a **second (and, if needed, third) left island** below the first, with the **same settings as the existing one** (see *New island / card container — standard settings*), and distribute key stable fields (and/or small metrics) into them so the left column reaches the length of the right. **Adding just one or two fields to the left island is NOT enough** when the right area is long: keep grouping related stable attributes into left islands until the left column is genuinely proportional to the right, not merely "no longer blank". Judge this against the *rendered* page height, not the schema — an island that looks fine in the designer can still leave the left column short at runtime.
 - Avoid mixing one-column and two-column fields inside the same group unless it intentionally improves reading flow.
 
 ## Analytics and metric widgets
@@ -79,6 +80,7 @@ Jump to the section you need:
 - Buttons in one group must have consistent height and alignment.
 - Use an unambiguous icon that matches the action. Add tooltip/accessibility text for icon buttons.
 - **Add icons where they aid recognition** — on buttons and menu items, and especially for a set of related actions or several filters: pick distinct, fitting icons (from the Freedom UI icon library) so the UI is scannable and varied, not a row of identical or icon-less items. Keep icon style consistent across the page.
+- **Quick filters on the same page MUST each have a different icon.** When a page shows several quick filters, every filter needs its own distinct, meaning-fitting icon — never repeat the same icon across two filters and never leave several filters sharing one generic icon. Identical icons make the filters indistinguishable and defeat the purpose of the icon; pick a unique icon per filter (consistent in style with the rest of the page).
 - A button must be visible and active only when it can be used. Hide or disable it based on record state and user rights.
 - For state-dependent workflow actions, remove actions that no longer apply, for example hide “Send for approval” once the record is already under approval.
 
@@ -120,7 +122,7 @@ Jump to the section you need:
 
 - Use field groups to divide information. Keep nesting shallow: at most 2 levels.
 - Use tabs and groups for large datasets.
-- **Group fields by business meaning, and never leave a single lone field as its own group, tab, or profile island.** A container (group / tab / island) should hold a logically coherent *set* of related fields — as a rule of thumb at least 2–3. If a container ends up with one field, either merge it into the related block or add the other fields that belong to that block.
+- **Group fields into meaningful blocks — a group of just 1–2 fields is a poor grouping, not only a single lone field.** A container (group / tab / island) should hold a logically coherent *block* of related fields — as a rule of thumb at least 3–4, not one or two. A group with a single field is always wrong (merge it or add the fields that belong to that block); a group with only two fields is a warning sign — combine it with a related group or pull in the other attributes of that business block so it reads as a real block, not a stub. Sparse 1–2-field groups make the page look thin and unbalanced; grouping fields into fuller blocks is also what keeps the page proportional (see *Balance the page* above). Never split what is one business block into several tiny groups just to "have groups".
 - **Fill out the "main information" block.** The record's primary block (profile island + the first/general tab) must carry the core descriptive attributes a user expects for that record type, not just the `Name` — the identifying who/what/when (owner/responsible, type/status, key dates), grouped together. A near-empty main block (e.g. only `Name` in the island while everything else sits elsewhere) is an anti-pattern: move the key stable fields up into it.
 - Put logically related fields next to each other (same group, adjacent rows) so the two-column layout reads as coherent pairs, not random placement.
 - If the process has clear steps, show them explicitly or use a wizard to guide the user through it — don't expose the whole data model at once; reveal later fields with business rules as earlier input is filled (progressive disclosure).
@@ -191,7 +193,22 @@ The sections above describe the record/form page. A **section (list) page** uses
 ## Dialogs and modals
 
 - Dialogs should follow the same styling as Creatio mini pages where possible: predictable title placement, button placement, and visual hierarchy.
+- **Field labels on modals must use `labelPosition: "above"`.** On a modal/dialog page, every field label sits above its input — the narrow modal width leaves no room for a `left` label column, which would squeeze the input and break alignment. The ONLY exception is a genuinely wide modal — page size **L or XL** — where a `left` label position may be acceptable if it reads cleanly; on S/M modals always use `above`. Keep the position consistent across the whole dialog (don't mix `above` and `left`).
 - Put explanatory text before the fields/buttons that depend on it. Users read from top to bottom.
+- **Text-heavy modals must be structured, not a wall of text.** When a dialog carries a lot of explanatory copy, lay it out with clear typography, spacing, and hierarchy instead of dumping dense paragraphs:
+  - **The modal shell is template-provided — don't hand-build or restyle it.** The dialog title, the close (`×`) icon, the actions/buttons row, and the outer dialog padding come from the modal template. Do not set their typography, spacing, or button styles by hand — configure only the **content area** (your fields, their descriptions, tooltips). Match whatever the template already renders.
+  - **Typography — set it with the label's `labelType` preset, never hardcoded px.** `crt.Label` typography is a preset (`labelType`); do NOT set `labelFontSize`/`labelLineHeight`/`labelStyle` by hand — raw values fight the preset and break theme switching (a documented pitfall). Map each role to a preset and keep it consistent:
+    - Section subheading you add yourself → a heading preset, e.g. `labelType: "headline-3"` (design reference ≈ 18/24) — never fake a heading with bold body text or an odd custom size.
+    - Explanatory / description copy → `labelType: "body"` (≈ 13/20) in a **muted/secondary** text color via the `labelColor` **theme token** (design reference `#757575`; do not hardcode the hex), so the description reads as subordinate to its control.
+    - Secondary hints → `labelType: "caption"` (≈ 12/16), also muted.
+    - Set weight with `labelThickness`, not custom CSS. (Button-label typography is intentionally not specified — it belongs to the template.)
+  - **Spacing — use the container's `gap`/`padding` SizeEnum keywords, not raw pixels.** Lay the content out in `crt.FlexContainer`/`crt.GridContainer` and set spacing through `gap` (grid: the `{ columnGap, rowGap }` object; flex: a single keyword) and per-side `padding` — always **`SizeEnum` keywords** (`none`/`small`/`medium`/`large`/…) so they track theme tokens rather than drifting from them. Concretely:
+    - Keep each control together with its own description in a **column** flex with a **small** gap, so the description sits tight under its control (design reference ≈ 8px).
+    - Separate one control-block from the next with a **larger** gap — e.g. `medium`/`large` (design reference ≈ 16px) — so blocks read as distinct.
+    - The pixel figures are the **design intent to eyeball against**, not values to hardcode — the actual property value is the `SizeEnum` keyword.
+    - Never let a paragraph run straight into the next block/heading with no separating gap (the bad example crams the helper paragraph into the "Diagnostics & maintenance" section). Align everything to one left edge; don't push actions/links to a cramped right margin misaligned with the text.
+  - **Move long or conditional explanations into a tooltip, not inline.** A long "why is this disabled / why can't I do this" message, or extra detail a user needs only sometimes, belongs in a **tooltip (`i` icon) next to the control** — with a link to the instruction if relevant — not as a permanent inline block of text. Keep the always-visible copy short; let the tooltip carry the depth. (See the good "Calendar settings" example: the unavailable option explains itself via an `i` tooltip with an instruction link, while the visible description stays one short line.)
+  - If the content is genuinely large and cannot be reduced, reconsider whether a modal is the right container at all — a full page may fit better than an overflowing dialog.
 - Use consistent action labels such as “Save,” “Cancel,” or domain-specific result verbs.
 - Use Plain style for neutral close/cancel actions when appropriate.
 - Dialog errors must explain what the user can do next; avoid admin-only technical text for regular users.
@@ -204,8 +221,10 @@ The sections above describe the record/form page. A **section (list) page** uses
 - Header overloaded with many fields.
 - Fields not grouped or grouped inconsistently.
 - A single lone field as its own group, tab, or profile island (instead of merging it or adding the related fields of that block).
+- Thin 1–2-field groups scattered across the page instead of fuller blocks (a group should hold a real block of ~3–4+ related fields; sparse tiny groups look unbalanced).
 - Two `crt.ExpansionPanel`s placed side by side / in two columns (panels are full width and stack vertically only).
 - Left profile/island too long or too empty.
+- Left column short and half-empty next to a long content area — left and right not proportional (a couple of fields in the island while the right side runs to the bottom of the page).
 - Important data does not fit in profile island or header.
 - Different languages mixed in one page.
 - Abbreviations without tooltips, for example cryptic “F №” or “Op №.”
@@ -213,12 +232,16 @@ The sections above describe the record/form page. A **section (list) page** uses
 - Multiple blue/primary buttons competing for attention.
 - Buttons not aligned with fields or each other.
 - Buttons placed in a long row instead of a menu.
+- Quick filters on one page sharing the same icon (or several filters on one generic icon) — each quick filter must have its own distinct icon.
 - Custom controls that look unlike analogous Creatio functionality.
 - Checkboxes placed before relevant fields or in visually dominant areas.
 - Too many fonts, custom colors, or high-contrast text used as decoration.
 - Long pages with tabs far below the fold.
 - Empty space under an island while header or central area is overloaded.
 - Dialogs with inconsistent button labels, unclear problem explanation, or text placed below buttons.
+- Modal/dialog fields using a `left` (side) label position on an S/M dialog instead of `above` (a `left` position is only acceptable on a wide L/XL modal).
+- Text-heavy modal laid out as a wall of text: paragraphs running into the next section with no separating space, faked headings (random bold instead of a real heading level), inconsistent fonts, or actions/links crammed against the right margin.
+- Long or conditional explanation kept inline in a dialog instead of moved into an `i` tooltip next to the control (with an instruction link where relevant).
 
 ## Default Freedom UI behaviors that silently violate the guidelines
 
