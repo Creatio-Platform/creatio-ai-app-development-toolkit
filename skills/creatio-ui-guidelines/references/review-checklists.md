@@ -133,6 +133,38 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Link text is descriptive in context — no bare "Click here" (SC 2.4.4).
 - [ ] All elements are localized to every enabled language; no unintended language mix (SC 3.1.1/3.1.2).
 
+## Common anti-patterns to flag
+
+A scan list of recurring red flags — complements the positive checklist above. If any of these is present on the rendered page, raise it as a finding.
+
+- Missing section icon.
+- Primary display column not configured.
+- Required fields placed low on the page or hidden in later tabs.
+- Header overloaded with many fields.
+- Fields not grouped or grouped inconsistently.
+- A single lone field as its own group, tab, or profile island (instead of merging it or adding the related fields of that block).
+- Thin 1–2-field groups scattered across the page instead of fuller blocks (a group should hold a real block of ~3–4+ related fields; sparse tiny groups look unbalanced).
+- Two `crt.ExpansionPanel`s placed side by side / in two columns (panels are full width and stack vertically only).
+- Left profile/island too long or too empty.
+- Left column short and half-empty next to a long content area — left and right not proportional (a couple of fields in the island while the right side runs to the bottom of the page).
+- Important data does not fit in profile island or header.
+- Different languages mixed in one page.
+- Abbreviations without tooltips, for example cryptic “F №” or “Op №.”
+- Units/formats not explained, for example retention term without days/months/years.
+- Multiple blue/primary buttons competing for attention.
+- Buttons not aligned with fields or each other.
+- Buttons placed in a long row instead of a menu.
+- Quick filters on one page sharing the same icon (or several filters on one generic icon) — each quick filter must have its own distinct icon.
+- Custom controls that look unlike analogous Creatio functionality.
+- Checkboxes placed before relevant fields or in visually dominant areas.
+- Too many fonts, custom colors, or high-contrast text used as decoration.
+- Long pages with tabs far below the fold.
+- Empty space under an island while header or central area is overloaded.
+- Dialogs with inconsistent button labels, unclear problem explanation, or text placed below buttons.
+- Modal/dialog fields using a `left` (side) label position on an S/M dialog instead of `above` (a `left` position is only acceptable on a wide L/XL modal).
+- Text-heavy modal laid out as a wall of text: paragraphs running into the next section with no separating space, faked headings (random bold instead of a real heading level), inconsistent fonts, or actions/links crammed against the right margin.
+- Long or conditional explanation kept inline in a dialog instead of moved into an `i` tooltip next to the control (with an instruction link where relevant).
+
 ## Audit output template
 
 ```markdown
