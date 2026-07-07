@@ -20,7 +20,7 @@ Jump to the section you need:
 - **Record/form page** → General product fit · Text, labels, and messages · Page composition · Analytics and metric widgets · Buttons and actions · Grouping and page flow (incl. *Layout coordinates and container nesting*) · Fields.
 - **List/section page** → List (section) page layout.
 - **Dialogs** → Dialogs and modals.
-- **Review** → Default Freedom UI behaviors that silently violate the guidelines (below). The full **Common anti-patterns** scan list lives in `./review-checklists.md`.
+- **Review** → Default Freedom UI behaviors that silently violate the guidelines (below). The full audit checklist (anti-patterns folded in) lives in `./review-checklists.md`.
 
 ## General product fit
 

@@ -39,14 +39,14 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Ready templates are reused where possible.
 - [ ] Header is not overloaded.
 - [ ] Important fields fit in the header/profile area.
-- [ ] Long pages are split into tabs, groups, islands, or wizard steps.
+- [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
 - [ ] Field groups have clear names and no unnecessary one-field duplicate-title groups.
-- [ ] No container (group / tab / profile island) holds a single lone field; each holds a logically related set (≥2–3 fields).
+- [ ] No container (group / tab / profile island) holds a single lone field, and thin 1–2-field groups are avoided; each holds a logically related block (≥3–4 fields as a rule of thumb) — merge or fill stubs rather than scatter tiny groups.
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
-- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty.
+- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area.
 - [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
 - [ ] One-column/two-column mixes do not break reading flow.
 - [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2).
@@ -92,6 +92,9 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Operations over 30 seconds or unknown duration are asynchronous with notification.
 - [ ] Dialogs follow Creatio/mini-page styling and place instructions before controls.
 - [ ] Dialog button labels are consistent and result-oriented.
+- [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M).
+- [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin.
+- [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
 
 ### Copy and content
 
@@ -132,38 +135,6 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Navigation and inline-help placement are consistent across pages (SC 3.2.3, 3.2.6).
 - [ ] Link text is descriptive in context — no bare "Click here" (SC 2.4.4).
 - [ ] All elements are localized to every enabled language; no unintended language mix (SC 3.1.1/3.1.2).
-
-## Common anti-patterns to flag
-
-A scan list of recurring red flags — complements the positive checklist above. If any of these is present on the rendered page, raise it as a finding.
-
-- Missing section icon.
-- Primary display column not configured.
-- Required fields placed low on the page or hidden in later tabs.
-- Header overloaded with many fields.
-- Fields not grouped or grouped inconsistently.
-- A single lone field as its own group, tab, or profile island (instead of merging it or adding the related fields of that block).
-- Thin 1–2-field groups scattered across the page instead of fuller blocks (a group should hold a real block of ~3–4+ related fields; sparse tiny groups look unbalanced).
-- Two `crt.ExpansionPanel`s placed side by side / in two columns (panels are full width and stack vertically only).
-- Left profile/island too long or too empty.
-- Left column short and half-empty next to a long content area — left and right not proportional (a couple of fields in the island while the right side runs to the bottom of the page).
-- Important data does not fit in profile island or header.
-- Different languages mixed in one page.
-- Abbreviations without tooltips, for example cryptic “F №” or “Op №.”
-- Units/formats not explained, for example retention term without days/months/years.
-- Multiple blue/primary buttons competing for attention.
-- Buttons not aligned with fields or each other.
-- Buttons placed in a long row instead of a menu.
-- Quick filters on one page sharing the same icon (or several filters on one generic icon) — each quick filter must have its own distinct icon.
-- Custom controls that look unlike analogous Creatio functionality.
-- Checkboxes placed before relevant fields or in visually dominant areas.
-- Too many fonts, custom colors, or high-contrast text used as decoration.
-- Long pages with tabs far below the fold.
-- Empty space under an island while header or central area is overloaded.
-- Dialogs with inconsistent button labels, unclear problem explanation, or text placed below buttons.
-- Modal/dialog fields using a `left` (side) label position on an S/M dialog instead of `above` (a `left` position is only acceptable on a wide L/XL modal).
-- Text-heavy modal laid out as a wall of text: paragraphs running into the next section with no separating space, faked headings (random bold instead of a real heading level), inconsistent fonts, or actions/links crammed against the right margin.
-- Long or conditional explanation kept inline in a dialog instead of moved into an `i` tooltip next to the control (with an instruction link where relevant).
 
 ## Audit output template
 
