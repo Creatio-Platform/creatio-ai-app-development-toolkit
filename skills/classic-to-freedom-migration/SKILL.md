@@ -57,6 +57,8 @@ Read these only when needed:
 - `references/classic-to-freedom-mapping.md` for Classic UI to Freedom UI mapping rules.
 - `references/migration-plan-template.md` before writing the migration plan.
 - `references/migration-documentation.md` before creating or updating the migration documentation set.
+- `references/analysis-summary.md` before presenting the structure-analysis summary to the user in chat.
+- `references/page-design-spec.md` before producing the per-page design spec for each page to rebuild.
 
 ## Documentation
 
@@ -191,6 +193,8 @@ For every Classic item, choose one target:
 
 Use Clio component metadata where available. Prefer declarative Freedom UI configuration and business rules over custom handlers when the behavior is equivalent.
 
+For every page classified as Rebuild or Delta, produce a per-page design spec following `references/page-design-spec.md`: the Classic page walked region by region and mapped onto a Freedom template, with each field's component, data-source attribute, and grid placement, its page rules and handlers, a wireframe of the finished page, and a build order. This spec is the build contract for step 7; attach it to the page's sub-plan in `plan.md`.
+
 ### 6. Write The Migration Plan And Create The Documentation Set
 
 Create the documentation set from `references/migration-documentation.md`, scaled to scope, before the approval gate. Write the plan into `plan.md` using `references/migration-plan-template.md`. For whole-package scope also create `README.md`, `discovery.md`, `roadmap.md`, `decisions.md`, and `worklog.md`, and seed `roadmap.md` with one task per migratable artifact in dependency order.
@@ -222,6 +226,8 @@ For whole-package scope, produce one consolidated plan:
 - a single dependency-ordered implementation sequence across all sections (entities/data sources first, then own sections, then replacing/extension deltas, then backend/process/permission logic)
 - mark each Classic schema as own section vs replacing/extension so the reader knows which becomes a new page and which becomes an additive delta
 
+Alongside the plan, present a short user-facing structure-analysis summary in chat, following `references/analysis-summary.md`. It is the readable companion to `plan.md`: grouped by section, with each page's business rule shown on the page it belongs to and processes/code as section-level items, each carrying its migration call. Render it as plain Markdown in chat — never as HTML or a rendered artifact.
+
 Stop after presenting the plan and ask for explicit approval. Do not edit code, create pages, update schemas, deploy, compile, or push before approval.
 
 ### 7. Implement The Approved Plan
@@ -230,7 +236,7 @@ After approval:
 
 1. Re-read `README.md`, `roadmap.md`, and the approved `plan.md`, plus relevant source files, to recover state. Record the approval in `decisions.md`.
 2. For whole-package scope, migrate one section at a time in the dependency order from the plan (entities/data sources, then own sections, then replacing/extension deltas, then backend); finish and validate each section before starting the next, and re-check existing Freedom artifacts before each create to avoid duplicates.
-3. Execute subtasks in dependency order:
+3. Build each page from its per-page design spec (`references/page-design-spec.md`): create or select the page from the spec's template, then add containers, fields, rules, handlers, and detail data sources in the spec's build order. Execute subtasks in dependency order:
    - package/app/page scaffolding
    - same-package, replacing-package, or new-package setup according to the approved package placement decision
    - Freedom page template creation or existing page selection
@@ -271,5 +277,6 @@ Only move a task to `VALIDATED` after the Definition of Done in `references/migr
 - Include concrete schema names, package names, page names, and tool evidence when known.
 - Separate confirmed facts from inferences.
 - Do not hide fallback gaps; put them in the missing-source risks section.
+- Present the structure-analysis summary as plain Markdown in chat per `references/analysis-summary.md`; do not render it as HTML or a page artifact.
 - Do not commit or push without explicit user approval.
 - Keep the migration documentation set current; it is the shared source of truth for progress, not the chat history.
