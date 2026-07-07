@@ -15,7 +15,7 @@ Read `AGENTS.md` for the Context Files Reference. For local clio CLI invocations
 
 ## MCP Transport And Single clio Context
 
-- Prefer native clio MCP tool-calls when the host coding agent exposes them. Use `runtime/scripts/mcp_client.py` only as the stdio fallback on hosts without native MCP. Do not reverse-engineer the wrapper's CLI contract when native calls are available (see `AGENTS.md`, "clio MCP transport preference").
+- Resident tools (`get-tool-contract` index: `resident=true`) are called natively when the host coding agent exposes clio MCP as native tool-calls; every other tool is invoked via `clio-run <command>` regardless of transport. Use `runtime/scripts/mcp_client.py` only as the stdio fallback on hosts without native MCP. Do not reverse-engineer the wrapper's CLI contract when native calls are available (see `AGENTS.md`, "clio MCP transport preference").
 - Both transports must resolve the same `clio` binary (PATH / `CLIO_CMD`) so they share one config and one registered-environments list. Confirm this single context before resolving the environment: an environment registered through one transport must be visible to the other. If a native call reports `environment not found` while the wrapper resolves the same environment (or vice versa), stop and reconcile the clio resolution before continuing — do not register a duplicate environment to work around a split-brain.
 
 ## Support Mode
@@ -205,7 +205,7 @@ This information stays in the conversation context — Agent 2 reads the environ
 
 ### 7. DataForge availability check
 
-Run the DataForge status check against the resolved environment. Prefer a native `dataforge-status` MCP tool-call when the host exposes native MCP; use the stdio wrapper below only as the fallback (see "MCP Transport And Single clio Context" above):
+Run the DataForge status check against the resolved environment. `dataforge-status` is a resident tool (`get-tool-contract` index: `resident=true`), so call it natively when the host exposes native MCP; use the stdio wrapper below only as the fallback (see "MCP Transport And Single clio Context" above):
 
 ```bash
 python3 runtime/scripts/mcp_client.py dataforge-status --args-file ./dataforge-status.args.json --timeout 30

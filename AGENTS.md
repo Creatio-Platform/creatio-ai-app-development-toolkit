@@ -315,7 +315,8 @@ Tool surface preference (clio MCP vs CLI):
 
 clio MCP transport preference (native tool-calls vs stdio wrapper):
 
-- When the host coding agent exposes clio MCP as native tool-calls, invoke those tools directly. Treat `runtime/scripts/mcp_client.py` as the stdio fallback for hosts that do not expose native MCP — not as the default transport.
+- Resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>`. Never wrap a resident tool in `clio-run`. (Canonical rule, mirrored verbatim from clio MCP's `core-rules` guidance.)
+- When the host coding agent exposes clio MCP as native tool-calls, invoke resident tools directly. Treat `runtime/scripts/mcp_client.py` as the stdio fallback for hosts that do not expose native MCP — not as the default transport. Neither transport makes a long-tail (non-resident) tool callable by its own name: reach it through `clio-run` regardless of which transport is active.
 - Do not spend a turn reading the wrapper's `--help` or source to reverse-engineer its CLI contract when native tool-calls are available. Resolve tool arguments from `get-tool-contract`, never from the wrapper's argument-parsing behavior.
 - Single clio context: both transports — the native host MCP started from `.mcp.json` and the `mcp_client.py` stdio wrapper — must resolve the same `clio` binary through PATH / `CLIO_CMD`, so they share one clio config and one registered-environments list. Before the first environment resolution, confirm this single context; never let a native call report `environment not found` while the wrapper resolves the same environment (split-brain). If the two transports disagree on a known environment, stop and reconcile the clio resolution before continuing.
 
