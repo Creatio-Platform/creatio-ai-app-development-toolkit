@@ -92,9 +92,9 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        `elementMap[].mobileValues`: paste it as the component's `values` verbatim** — it already carries the
        `type` and every source property the mobile component supports; never drop any of them. It also already
        carries the **converted event-binding requests** (a button's `clicked`, a field's `valueChange`/`updated`):
-       supported requests are remapped; a request not in the supported map (web-only with no mobile equivalent,
-       or a custom `usr.*` request) is kept and flagged for you to verify/remove — do NOT hand-edit these
-       bindings; paste `mobileValues` as-is. Then add ONLY
+       supported requests are kept/remapped. A component whose request the mobile app does NOT support was
+       already DROPPED (its elementMap entry is `drop`, not `insert`), so it is not among the components you
+       build — do NOT hand-edit these bindings; paste `mobileValues` as-is. Then add ONLY
        what `mobileValues` deliberately leaves out: the value binding (`control`, or `value` for lookups —
        type-specific), and for a structural mapping (grid → `crt.List` + `crt.ListItem`) the row layout — add a
        `crt.ListItem` into the `crt.List` `itemLayout` (title = first column, body = the rest), per the
@@ -226,9 +226,9 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   placement is already baked into `mobileValues`; the container side is `guide.adaptiveLayout[].adaptiveDiff`,
   applied in step 5b after approval.)
 - **Manual follow-ups** — page-level business rules are converted in `guide.pageBusinessRules` and
-  re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests are converted in
-  `guide.requestConversions` and already baked into `mobileValues`; `flaggedRequests` (web-only or custom —
-  verify on mobile, remove if not applicable) and any `droppedRequests` remain manual. Plus mobile manifest /
+  re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests: supported ones are baked
+  into `mobileValues` (`guide.requestConversions`); components whose request the mobile app does not support are
+  DROPPED (elementMap `drop`) — list the removed action components. Plus mobile manifest /
   wizard registration. (The default mobile edit page is now automated via `register-related-page`.)
 
 Keep it skimmable. **On request (View details / Adjust)** — only if the developer asks to see more or
@@ -252,10 +252,9 @@ After `validate-page`, deliver a report:
 - **Page-level business rules:** which `convertedRules` were recreated on the mobile page
   (`create-page-business-rule`) and which `droppedRules` did not convert.
 - **Requests (actions):** from `guide.requestConversions` — which event-binding requests were carried
-  (`convertedRequests`, remapped where the mobile name differs), and which requests not in the supported map
-  (web-only or custom) were **flagged** (`flaggedRequests`) for the developer to verify on mobile and remove
-  if not applicable. (`droppedRequests` lists any binding stripped because a rules version explicitly marks
-  the request unsupported.)
+  (`convertedRequests`, remapped where the mobile name differs). Components whose request the mobile app does
+  NOT support were **dropped entirely** (their `elementMap` entry is `drop`, reason names the request) — list
+  those removed action components for the developer.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet), whether the developer adjusted or declined it, and that the child placement
   was applied via `mobileValues` and the container columns via each `adaptiveLayout[].adaptiveDiff`.
@@ -271,11 +270,11 @@ After `validate-page`, deliver a report:
   surviving hide/show/make-* actions — set-values / apply-filter / apply-static-filter do not exist at
   page level). Recreate each `convertedRules[].rule` verbatim with `create-page-business-rule` on the
   mobile page (step 7c). **Object-/entity-level business rules are shared** across web and mobile — do NOT touch them.
-- **Requests (actions) ARE converted** for you and baked into `elementMap[].mobileValues`: the conversion map
-  stores only the requests SUPPORTED on mobile (a subset of web) — those are remapped. A request not in the
-  map (web-only with no mobile equivalent, or custom `usr.*`) is kept and flagged for review; only a request a
-  rules version explicitly marks unsupported is stripped (`guide.requestConversions`). Page `handlers`
-  (web-only AMD) are NEVER transferred.
+- **Requests (actions) ARE handled** for you: a supported request is kept/remapped in `elementMap[].mobileValues`;
+  a component whose request the Creatio Mobile app does NOT support (and that does not remap to a supported one)
+  is **DROPPED entirely** — its `elementMap` entry is `drop` (reason names the request), never `insert`. A
+  component with a dead action is not shipped. `guide.requestConversions` is the advisory summary of the kept
+  ones. Page `handlers` (web-only AMD) are NEVER transferred.
 - **Adaptive layout is a PROPOSAL and two-sided.** When `guide.adaptiveLayout` is present, the per-screen
   field placement is already baked into `elementMap[].mobileValues.layoutConfig.adaptive` (child side); apply
   each `guide.adaptiveLayout[].adaptiveDiff` for the container columns (container side) — both are needed. The
