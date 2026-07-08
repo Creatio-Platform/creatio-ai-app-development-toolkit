@@ -41,6 +41,16 @@ Use when the user names a package or application, says "the whole app/package", 
 - Order the migration by dependency, not by file or alphabetical order: entities/data sources first, then self-contained own sections, then replacing/extension deltas on base sections, then backend/process/permission logic.
 - Produce one consolidated approval-gated plan that lists each section as a sub-plan, sharing the discovery, package-placement, and validation sections.
 
+### Existing-Freedom reconcile scope
+
+Use when the Classic section being migrated **already has a Freedom UI section/page for the same entity** (shipped out of the box or built earlier), and the client's value is the customizations they layered on the Classic section in their own packages. Here the goal is not a new page — it is to make the existing Freedom section carry the client's Classic customization intent, and to reconcile away anything on Freedom that contradicts it.
+
+- Detect it in discovery: a Classic section/page/detail has an existing Freedom counterpart for the same entity, and the client owns customizations (replacing schemas, added fields/details/rules/buttons, hidden or removed base elements) in their editable packages.
+- The unit of work is the client's **customization delta**, not the whole Classic page. Target the existing Freedom section; never create a duplicate.
+- Reconcile in both directions: what the client added in Classic but is missing on Freedom gets **added**; what exists on Freedom but is not in the client's Classic setup — because they never added it or explicitly removed/hid it in Classic — gets **removed/hidden**, within the customization scope.
+- Never strip base/standard Freedom elements that have no Classic analog just because they are absent from the delta; absence is not intent to remove. Flag those as manual decisions.
+- Follow `references/existing-freedom-reconcile.md` for the isolate-delta → read-Freedom → diff → apply → verify procedure, and record every removal with its Classic evidence.
+
 ## Source Policy
 
 Use a hybrid discovery strategy with fallback:
@@ -59,6 +69,7 @@ Read these only when needed:
 - `references/migration-documentation.md` before creating or updating the migration documentation set.
 - `references/analysis-summary.md` before presenting the structure-analysis summary to the user in chat.
 - `references/page-design-spec.md` before producing the per-page design spec for each page to rebuild.
+- `references/existing-freedom-reconcile.md` when the Classic section already has a Freedom counterpart and the client's customizations must be ported onto it and reconciled.
 
 ## Documentation
 
@@ -178,7 +189,7 @@ Before mapping individual controls, choose the Freedom page strategy:
    - `list_page_templates` results such as list page, tabs form page, right-area form page, top-area form page, blank page, mini page, or sidebar/page-specific templates
    - component capabilities from `get_component_info`
 3. Pick one strategy and record the reason:
-   - update an existing Freedom page
+   - update an existing Freedom page — when a Freedom counterpart already exists for the entity, follow `references/existing-freedom-reconcile.md`: port the client's Classic customization delta onto it and reconcile away Freedom elements that contradict the client's Classic setup, instead of building a new page
    - create a new Freedom page from the closest template
    - create a blank/custom Freedom page only when no standard template preserves the required structure
    - mark as manual decision if the Classic template has no safe Freedom analog
