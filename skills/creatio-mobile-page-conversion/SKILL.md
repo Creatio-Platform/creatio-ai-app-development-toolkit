@@ -21,6 +21,30 @@ accordingly.
 If you cannot read `./references/page-to-mobile-conversion.md`, **STOP**: tell the user the CAADT
 toolkit files are not accessible from this session, and do not run the conversion from memory.
 
+## Preflight: the converter is a GATED clio feature (check first)
+
+The Web→Mobile converter is an **experimental clio feature, off by default**. The converter-specific
+surface — the `get-mobile-page-conversion-guide` tool and the `get-guidance` article
+`freedom-page-web-to-mobile-conversion` — is gated behind the feature flag **`mobile-page-converter`**
+and is **not registered** until that flag is enabled. (The general page tools `create-page` /
+`update-page` / `validate-page` and the universal `register-related-page` are always available and are
+NOT gated — but on their own they are not enough to run this flow correctly.)
+
+Before the Load order below, verify the converter is available: list the server tools (or call
+`get-tool-contract`) and check for `get-mobile-page-conversion-guide`.
+
+- **If present** → proceed with the Load order and the flow.
+- **If absent** → the feature is turned off. **STOP** and tell the user verbatim:
+
+  > The Web→Mobile converter is not enabled in your clio. Enable it once with:
+  > `clio experimental --name mobile-page-converter --enable`
+  > then re-run this request. (Disable later with `--disable`; list all flags with `clio experimental`.)
+
+  Do **not** run the conversion from memory or hand-roll the mobile body with the general page tools
+  while the flag is off — without `get-mobile-page-conversion-guide` and the
+  `freedom-page-web-to-mobile-conversion` guidance you lack the authoritative component mapping and
+  paste-verbatim data sections. Do not try to work around the gate.
+
 ## Load order
 
 1. Read `./references/page-to-mobile-conversion.md` — the **AUTHORITATIVE playbook**. It defines the
