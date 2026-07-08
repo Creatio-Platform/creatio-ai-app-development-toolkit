@@ -31,7 +31,12 @@ MAX_SKILL_DESCRIPTION_BYTES = 1024
 # not: trimming under the cap must not silently drop a load-bearing trigger.
 # ENG-92957 dropped these during trimming and they were caught by hand, not CI.
 LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
-    "creatio-ui-guidelines": ["record page", "form page", "page layout", "UI review"],
+    "creatio-ui-guidelines": [
+        "Creatio", "Freedom UI", "record page", "form page", "list page", "detail",
+        "expanded list", "expansion panel", "datagrid", "lookup", "field group", "tab",
+        "profile island", "mini page", "dialog", "section", "page layout",
+        "UI review", "UX audit",
+    ],
 }
 
 
