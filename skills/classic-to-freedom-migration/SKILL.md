@@ -9,6 +9,8 @@ Use this skill to guide a coding agent through migration of a Creatio Classic UI
 
 The skill is approval-gated. Do not create or edit Freedom UI artifacts until the migration plan has been reviewed and explicitly approved by the user.
 
+**Always present the migration plan to the user before any implementation — for every scope (single-section, whole-package, and existing-Freedom reconcile), with no exceptions.** Never jump from analysis straight to building, and never treat a task as "too small" or "obvious" to skip the plan. The plan is shown as the readable, section-grouped structure-analysis summary (`references/analysis-summary.md`); the dense detail lives in `plan.md`. For the reconcile scope, the plan must include the reconciliation diff (what will be added, modified, and removed/hidden on the existing Freedom section). Presenting the plan and stopping for approval is a required step, not an optional one.
+
 ## Inputs
 
 - Creatio section/page URL, or a section/page/entity name.
@@ -288,6 +290,6 @@ Only move a task to `VALIDATED` after the Definition of Done in `references/migr
 - Include concrete schema names, package names, page names, and tool evidence when known.
 - Separate confirmed facts from inferences.
 - Do not hide fallback gaps; put them in the missing-source risks section.
-- Present the structure-analysis summary as plain Markdown in chat per `references/analysis-summary.md`; do not render it as HTML or a page artifact.
+- Always show the migration plan before implementing, for every scope — present it as the structure-analysis summary in plain Markdown in chat per `references/analysis-summary.md` (do not render it as HTML or a page artifact), and stop for explicit approval. Never skip the plan, even for a single small section or an obvious reconcile.
 - Do not commit or push without explicit user approval.
 - Keep the migration documentation set current; it is the shared source of truth for progress, not the chat history.
