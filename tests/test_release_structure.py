@@ -9,10 +9,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # GitHub Copilot's skill loader drops any skill whose `description` exceeds this
-# length (~1024 chars); Claude Code / Codex do not enforce it. ENG-92957: the
+# limit (~1024 bytes); Claude Code / Codex do not enforce it. ENG-92957: the
 # creatio-ui-guidelines description silently grew past the cap and Copilot
 # stopped loading the skill. Pin the invariant so a future edit fails CI here
-# rather than shipping green and breaking Copilot discovery.
+# rather than shipping green and breaking Copilot discovery. The cap is measured
+# in UTF-8 BYTES, not code points: the descriptions contain multi-byte chars
+# (em dashes), so a byte-based loader cap can trip while the code-point count
+# still looks safe.
 MAX_SKILL_DESCRIPTION_LEN = 1024
 
 
@@ -309,10 +312,13 @@ class ReleaseStructureTests(unittest.TestCase):
                             f"{skill_dir.name}: empty or missing description:")
             # Pin the Copilot description-length cap (ENG-92957): a description
             # over the limit parses fine everywhere but is silently dropped by
-            # Copilot, so it must fail here rather than ship green.
+            # Copilot, so it must fail here rather than ship green. Measure UTF-8
+            # bytes, not code points — the em dashes are multi-byte, so a
+            # byte-based loader cap can trip while the char count still looks safe.
+            description_bytes = len(description.encode("utf-8"))
             self.assertLessEqual(
-                len(description), MAX_SKILL_DESCRIPTION_LEN,
-                f"{skill_dir.name}: description is {len(description)} chars, "
+                description_bytes, MAX_SKILL_DESCRIPTION_LEN,
+                f"{skill_dir.name}: description is {description_bytes} bytes, "
                 f"exceeds Copilot cap of {MAX_SKILL_DESCRIPTION_LEN}",
             )
 
