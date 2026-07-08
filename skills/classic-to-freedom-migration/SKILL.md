@@ -173,7 +173,9 @@ Build a structured inventory of the Classic implementation:
 - backend dependencies: C# source schemas, web services, processes, SQL scripts, integrations, feature flags, and package dependencies
 - security and access: operation permissions, record permissions, role-based UI logic, and restricted actions
 
-Do not assume Classic logic has a direct Freedom equivalent. Classify each behavior using the categories from `references/classic-to-freedom-mapping.md`.
+Read ALL package layers for every Classic page/section/detail, not just the top one: `get-client-unit-schema` returns only the top replacing schema's own body, which for base-product pages is often a thin override with empty `diff`/`details`/`businessRules`. An empty block in one layer is NOT evidence the page has none — never report "no business rules / no layout / no details" from a single layer. Enumerate the full package chain and merge layers per `references/classic-to-freedom-mapping.md`, and mark each item CONFIRMED only when its source layer body was actually read.
+
+Do not assume Classic logic has a direct Freedom equivalent. Classify each behavior using the categories from `references/classic-to-freedom-mapping.md`. Distinguish declarative `businessRules` (→ page/entity business rules) from imperative logic in `attributes`/`methods` (→ Freedom handlers, converters, virtual attributes), and report the two separately so one is not silently converted into the other.
 
 ### 5. Map To Freedom UI
 

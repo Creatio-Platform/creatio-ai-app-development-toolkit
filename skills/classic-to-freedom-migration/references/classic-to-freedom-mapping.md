@@ -100,3 +100,52 @@ For each Classic page/detail, record:
 - Mark every Classic method that affects user-visible behavior as mapped, intentionally dropped, or blocked.
 - Treat security, permission, and data-integrity logic as migration-critical.
 - Treat unsupported Classic UX patterns as product decisions, not implementation details.
+
+## Classic layout & business rules: read ALL package layers, not just the top one
+
+`get-client-unit-schema` (and any single-schema read) returns only the OWN body of the
+top-most replacing schema for that name. For a base-product Classic page that top layer is
+frequently a thin override whose `diff`, `details`, and `businessRules` blocks are EMPTY
+(`/**SCHEMA_DIFF*/[]`, `/**SCHEMA_BUSINESS_RULES*/{}`). The real layout, details, and
+business rules live in ANCESTOR package layers.
+
+Hard rule: an empty `diff` / `businessRules` / `details` in one layer is NOT evidence that
+the page has none. NEVER state "the Classic page has no business rules / no layout / no
+details" based on a single layer's body. Doing so is a discovery defect, not a finding.
+
+Correct discovery procedure for every Classic page/section/detail:
+1. Enumerate ALL replacing schemas for the name across packages (e.g. `list-pages` /
+   `list-client-unit-schemas` by schema-name) and record the full package chain,
+   base → top.
+2. Read each layer's own body. If the read tool only resolves the top layer, obtain the
+   lower layers by:
+   - pulling package source with `download-configuration-by-environment` and grepping
+     `businessRules` / `SCHEMA_DIFF` across every `*PageV2` / `*SectionV2` body, or
+   - reading the layer directly in the Client Unit Schema designer.
+3. Merge `diff`, `details`, and `businessRules` across layers to reconstruct the effective
+   Classic page. Attribute each item to the layer it came from.
+4. In the plan's discovery-evidence table, add a "layer coverage" row: list which layers
+   were actually read and which were not. Mark any business rule / field / detail as
+   CONFIRMED only when its source layer body was read; otherwise mark it INFERRED and list
+   it as a missing-source risk.
+
+## Distinguish declarative business rules from imperative logic — they map differently
+
+When reading a Classic page body, classify behavior by WHERE it is defined, because the
+Freedom target differs:
+
+- Declarative `businessRules` block → migrate with `create-page-business-rules` /
+  `create-entity-business-rules`.
+  - `ruleType: 0` = BINDPARAMETER, with `property`: 0=Visible, 1=Enabled, 2=Required,
+    3=Readonly; `conditions[]` hold `leftExpression` (attribute + attributePath) /
+    `comparisonType` / `rightExpression` (constant or attribute). Example:
+    `Parent` required when `Type.IsSlave == true`.
+  - `ruleType: 1` = FILTRATION, filters a lookup by `baseAttributePatch` + `comparisonType`
+    + `value`. Example: filter `Owner` by `Account`.
+- Imperative logic in `attributes` (`lookupListConfig.filters`, `dependencies`) and
+  `methods` (ESQ queries, `on*Changed`, `onEntityInitialized`, save overrides) → migrate as
+  Freedom handlers (`crt.HandlerChainService`), converters, or virtual attributes, NOT as
+  business rules.
+
+Report the two categories separately in the Business Logic Analysis section so declarative
+rules are not silently converted into custom handlers (or vice versa).
