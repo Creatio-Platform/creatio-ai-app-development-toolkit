@@ -8,6 +8,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# GitHub Copilot's skill loader drops any skill whose `description` exceeds this
+# length (~1024 chars); Claude Code / Codex do not enforce it. ENG-92957: the
+# creatio-ui-guidelines description silently grew past the cap and Copilot
+# stopped loading the skill. Pin the invariant so a future edit fails CI here
+# rather than shipping green and breaking Copilot discovery.
+MAX_SKILL_DESCRIPTION_LEN = 1024
+
 
 def read_json(relative_path):
     return json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
@@ -297,8 +304,17 @@ class ReleaseStructureTests(unittest.TestCase):
             # on a malformed / unclosed front-matter fence.
             data = parse_fenced_flat_mapping(content)
             self.assertEqual(data.get("name"), skill_dir.name, skill_dir.name)
-            self.assertTrue((data.get("description") or "").strip(),
+            description = (data.get("description") or "").strip()
+            self.assertTrue(description,
                             f"{skill_dir.name}: empty or missing description:")
+            # Pin the Copilot description-length cap (ENG-92957): a description
+            # over the limit parses fine everywhere but is silently dropped by
+            # Copilot, so it must fail here rather than ship green.
+            self.assertLessEqual(
+                len(description), MAX_SKILL_DESCRIPTION_LEN,
+                f"{skill_dir.name}: description is {len(description)} chars, "
+                f"exceeds Copilot cap of {MAX_SKILL_DESCRIPTION_LEN}",
+            )
 
     # Skills the orchestrator MUST hand off to mid-workflow. These are the
     # orchestrator-driven skills only — standalone skills the user invokes
