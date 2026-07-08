@@ -1,7 +1,7 @@
 # Freedom UI Web → Mobile Page Conversion (conversion playbook)
 
 The authoritative playbook for the `creatio-mobile-page-conversion` skill: converting an existing
-**Freedom UI web page** into a **Freedom UI mobile page** for the Creatio Mobile app (ENG-89620). This is a targeted, implementation-ready
+**Freedom UI web page** into a **Freedom UI mobile page** for the Creatio Mobile app. This is a targeted, implementation-ready
 change: it does **not** require a full BA-style Business Plan (Gate R). It DOES require a blocking
 approval gate — **Gate M** — between analysis and any write to Creatio: present a plain-language
 **conversion plan** (what will be transferred, what will be adapted, what is unsupported), after
@@ -45,7 +45,7 @@ Read `get-guidance` with name `freedom-page-web-to-mobile-conversion` before act
 
 ## Flow
 
-This flow follows the canonical Expected User Flow. Steps 1–6 are analysis and approval and write
+This flow follows the steps below. Steps 1–6 are analysis and approval and write
 NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
 
 1. **Select the source page and resolve the environment.** Identify the Web page the developer wants
@@ -224,7 +224,7 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* This
   is a PROPOSAL — the developer can adjust the column counts / placement or decline it. (The child
   placement is already baked into `mobileValues`; the container side is `guide.adaptiveLayout[].adaptiveDiff`,
-  applied in step 5b after approval.)
+  applied in step 7 after approval.)
 - **Manual follow-ups** — page-level business rules are converted in `guide.pageBusinessRules` and
   re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests: supported ones are baked
   into `mobileValues` (`guide.requestConversions`); components whose request the mobile app does not support are
