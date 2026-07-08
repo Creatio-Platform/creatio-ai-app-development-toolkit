@@ -88,7 +88,14 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        merge-by-name (the row goes on the `ListItem` element: `title`/`body`) — NEVER insert a second
        `crt.List` and NEVER put `itemLayout` inside a merge of the parent `List` (silent no-op; `ListItem`
        is a separate named element).
-     - `insert` → add `mobileType` under `parentName`/`propertyName`. **Start from
+     - `insert` → add `mobileType` under `parentName`/`propertyName`. When the entry has an `index`, add it to
+       the insert op at that 0-based position (a positional element mapped above/below an anchor, e.g. above the
+       mobile `Tabs`); otherwise omit `index` and append. On a **tabbed record page** every web tab inserts as
+       its OWN new mobile tab (`parentName: Tabs`) — there is no general-tab collapse — while the web wrapper's
+       non-tab content merges into the mobile general tab's grid (e.g. `CardContentWrapper`→`GeneralTabContainer`).
+       The mobile template's **Feed and Attachments tabs must stay LAST**: insert each converted web tab BEFORE
+       them (index it after the general tab) so the order is general tab → converted web tabs → Feed → Attachments.
+       **Start from
        `elementMap[].mobileValues`: paste it as the component's `values` verbatim** — it already carries the
        `type` and every source property the mobile component supports; never drop any of them. It also already
        carries the **converted event-binding requests** (a button's `clicked`, a field's `valueChange`/`updated`):
