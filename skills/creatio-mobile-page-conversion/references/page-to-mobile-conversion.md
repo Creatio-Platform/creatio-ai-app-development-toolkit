@@ -158,13 +158,14 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      points the default at the given page.
 7c. **Recreate page-level business rules** — only after Gate M, and only if
    `guide.pageBusinessRules.convertedRules` is non-empty. The guide already applied the conversion
-   logic (condition kept verbatim; page rules carry only element actions — hide / show / make-editable /
-   read-only / required / optional — and an action survives only for the referenced elements whose
-   component converts, with element names remapped web→mobile; a rule whose every action drops is in
-   `droppedRules`). For each `convertedRules[]` entry, pass its `rule` VERBATIM to
+   logic (page rules carry only element actions — hide / show / make-editable / read-only / required /
+   optional — and an action survives only for the referenced elements whose component converts, with element
+   names remapped web→mobile; the condition ALWAYS converts verbatim — every operand type is supported in a
+   mobile page-rule condition, including **SysSetting** (compare against a system setting); a rule whose every
+   action drops is in `droppedRules`). For each `convertedRules[]` entry, pass its `rule` VERBATIM to
    `create-page-business-rule` (`environment-name`, `package-name`,
-   `page-schema-name = <the new mobile page>`, `rule`). Report any `droppedRules[]` to the developer
-   (not transferred). Object-/entity-level business rules are shared across web and mobile — do NOT touch them.
+   `page-schema-name = <the new mobile page>`, `rule`). Report any `droppedRules[]` to the developer with
+   their reason (not transferred). Object-/entity-level business rules are shared across web and mobile — do NOT touch them.
 8. **Deliver the conversion report** (see below).
 9. **Hand off.** Tell the developer to open the result in **Freedom UI Mobile Designer** for review
    and manual refinement.
