@@ -22,22 +22,53 @@ function makeProxy() {
 }
 const PROXY = makeProxy();
 
+// Enum tables seeded into the sandbox so SYMBOLIC refs (BusinessRuleModule.enums.RuleType.FILTRATION,
+// ...Property.REQUIRED) resolve to their real numeric value during parse instead of collapsing to a
+// Proxy (which silently mis-decoded to BINDPARAMETER/Visible). Backed proxy: known member -> number,
+// unknown -> PROXY (never crash a body).
+function enumProxy(table) {
+  return new Proxy({}, { get: (_t, p) => (p in table ? table[p] : PROXY), apply: () => PROXY });
+}
+const BUSINESS_RULE_MODULE = new Proxy({}, {
+  get: (_t, p) => p === "enums" ? new Proxy({}, {
+    get: (_t2, e) => e === "RuleType" ? enumProxy({ BINDPARAMETER: 0, FILTRATION: 1 })
+      : e === "Property" ? enumProxy({ VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 })
+        : PROXY,
+  }) : PROXY,
+  apply: () => PROXY,
+});
+// Resolve an AMD dependency name to a stub. Only BusinessRuleModule needs real values (for rule enums);
+// everything else (terrasoft, Ext, helpers) is the universal Proxy.
+function resolveDep(name) {
+  return name === "BusinessRuleModule" ? BUSINESS_RULE_MODULE : PROXY;
+}
+
 // Extract the schema object literal from a layer body by capturing define().
 export function parseLayer(src, pkg) {
-  let captured = null;
+  let captured = null, parseError = null;
+  // factory `this` also exposes BusinessRuleModule (bodies reference this.BusinessRuleModule too).
+  const thisProxy = new Proxy(function () {}, {
+    get: (_t, p) => p === "BusinessRuleModule" ? BUSINESS_RULE_MODULE : PROXY,
+    apply: () => PROXY, construct: () => PROXY,
+  });
   const sandbox = {
     define(_name, depsOrFactory, maybeFactory) {
       const factory = typeof depsOrFactory === "function" ? depsOrFactory : maybeFactory;
       const deps = Array.isArray(depsOrFactory) ? depsOrFactory : [];
-      try { captured = factory.apply(PROXY, deps.map(() => PROXY)); }
-      catch (e) { captured = { __error: String(e) }; }
+      if (typeof factory !== "function") { parseError = "define() has no factory function"; return; }
+      try { captured = factory.apply(thisProxy, deps.map(resolveDep)); }
+      catch (e) { parseError = "factory threw: " + String(e && e.message || e); }
     },
-    Terrasoft: PROXY, Ext: PROXY, window: {}, console: { log() {} },
+    // window/console are PROXY (NOT plain host objects) so a body cannot reach the host realm via
+    // window.constructor.constructor / console.log.constructor (sandbox-escape hardening).
+    Terrasoft: PROXY, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
   };
-  vm.runInNewContext(src, sandbox, { timeout: 4000 });
+  try { vm.runInNewContext(src, sandbox, { timeout: 4000 }); }
+  catch (e) { parseError = parseError || ("eval failed: " + String(e && e.message || e)); }
   const s = captured || {};
   return {
     pkg,
+    error: parseError,
     entitySchemaName: typeof s.entitySchemaName === "string" ? s.entitySchemaName : "?",
     diff: normalizeDiff(s.diff),
     businessRules: plainObj(s.businessRules),
@@ -100,6 +131,21 @@ function normalizeModules(m) {
 const RULE_TYPE = { 0: "BINDPARAMETER", 1: "FILTRATION" };
 const PROP = { 0: "Visible", 1: "Enabled", 2: "Required", 3: "Readonly" };
 
+// Extract a rule's condition tree (leftExpression attribute/path, comparison, rightExpression value)
+// so the mapper can emit COMPLETE business rules (not just an action + prose note).
+function sanitizeConditions(conds) {
+  if (!Array.isArray(conds)) return [];
+  return conds.map(c => {
+    const l = (c && c.leftExpression) || {}, r = (c && c.rightExpression) || {};
+    return {
+      comparison: typeof c.comparisonType === "number" ? c.comparisonType : null,
+      left: { attribute: isStr(l.attribute) ? l.attribute : null, path: isStr(l.attributePath) ? l.attributePath : null },
+      right: { value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
+               dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null },
+    };
+  });
+}
+
 export function mergeLayers(layers /* base->top */) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
@@ -136,8 +182,15 @@ export function mergeLayers(layers /* base->top */) {
           const id = `${attr}::${key}`;
           const rec = {
             attr, key, system: sys,
-            ruleType: RULE_TYPE[r.ruleType] ?? (isStr(r.ruleType) ? r.ruleType : (r.ruleType ?? "?")),
-            property: PROP[r.property] ?? (r.property != null ? r.property : null),
+            // guard: only decode when numeric (after enum seeding legacy rules are numbers too);
+            // a still-non-numeric value is genuinely symbolic/unknown -> flagged, never silently "0".
+            ruleType: typeof r.ruleType === "number" ? (RULE_TYPE[r.ruleType] ?? String(r.ruleType)) : "symbolic",
+            property: typeof r.property === "number" ? (PROP[r.property] ?? String(r.property)) : null,
+            conditions: sanitizeConditions(r.conditions),
+            filterColumn: isStr(r.baseAttributePatch) ? r.baseAttributePatch : null,
+            comparison: typeof r.comparisonType === "number" ? r.comparisonType : null,
+            value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
+            dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null,
             enabled: r.enabled !== false, removed: r.removed === true,
             provenance: [L.pkg],
           };

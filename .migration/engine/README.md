@@ -22,7 +22,7 @@ node .migration/engine/run.mjs
 `mapToFreedom(effective, {entityColumns})` → Freedom ChangeSet: `viewConfigDiff` (поле = 3-частинне зв'язування, control за типом колонки), `viewModelConfigDiff`/`modelConfigDiff`, `pageBusinessRules`/`entityBusinessRules` (FILTRATION→entity apply-static-filter; BINDPARAMETER→page make-* + **зворотне**), `details` (композит «Expanded list» + dependency), `handlerStubs`, `needsDecision[]` (judgment 20%: кастомні компоненти/графіки, методи, видалення, невідомі типи).
 - **container-role mapping** (урок #6): `ProfileContainer`→`SideAreaProfileContainer`.
 - Запуск: `node .migration/engine/run-mapper.mjs` — **golden 12/12 ✅**.
-- Для SupportUnit код згенерував **той самий ChangeSet, що зібрано вручну на стенді** (`poc/body_full6.js`) — підтвердження «код готує чернетку, агент доробляє спірне».
+- Для SupportUnit код генерує ChangeSet, **структурно еквівалентний зрізу**, зібраному вручну (`poc/body_full6.js`), для полів/контролів/профілю/деталі/правил. Він **не байт-у-байт**: mapper поки не має seed базового шаблону (тому немає поля `Name`) і віддає деталь як composite-спеку, а не повне тіло Expanded list із тулбаром. Це відомі прогалини — див. нижче.
 
 ## Обмеження прототипу (доробити на Ф2→продукт)
 - Символьні enum-и (`Terrasoft.ContentType.LOOKUP`, `ViewItemType.*`) через Proxy стають нечисловими → у моделі беремо лише числові `contentType/itemType`; символьні декодуються окремою таблицею на етапі mapper (Ф3).

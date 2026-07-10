@@ -37,15 +37,27 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- fields (3-part binding: control + attribute + dataSource) ----
   const rowByContainer = {};
+  const nameCount = {};
   for (const f of eff.fields) {
     const parent = toContainer(f.parent);
+    // #3/F4: only ProfileContainer/Header have a role mapping; anything else lands in the main tab.
+    // Flag it — tabs/groups/grid-layout container tree is NOT built yet (deferred to Ф3 build-out).
+    if (f.parent && !(f.parent in CONTAINER))
+      needsDecision.push({ kind: "container", item: f.name || f.bindTo,
+        reason: `classic container '${f.parent}' has no role mapping — placed in ${parent}; confirm target tab/group (tab/group tree not yet built)` });
     rowByContainer[parent] = (rowByContainer[parent] || 0) + 1;
-    const ctl = control(cols[f.bindTo], f.contentType);
-    if (!ctl) needsDecision.push({ kind: "field-control", item: f.bindTo,
+    const col = f.bindTo || f.name || "Field";
+    const ctl = control(cols[col], f.contentType);
+    if (!ctl) needsDecision.push({ kind: "field-control", item: col,
       reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });
     const c = ctl || { type: "crt.Input" };
+    // #4: unique element name derived from the column; two classic items on one column -> _2, _3 + flag.
+    nameCount[col] = (nameCount[col] || 0) + 1;
+    const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+    if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
+      reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
     const values = {
-      type: c.type, control: "$" + f.bindTo, label: "$Resources.Strings." + f.bindTo,
+      type: c.type, control: "$" + col, label: "$Resources.Strings." + col,
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: true,
       layoutConfig: { column: 1, row: rowByContainer[parent],
         colSpan: parent === "SideAreaProfileContainer" ? 1 : 24, rowSpan: 1 },
@@ -53,9 +65,9 @@ export function mapToFreedom(eff, opts = {}) {
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;
-    viewConfigDiff.push({ operation: "insert", name: f.bindTo, values, parentName: parent, propertyName: "items" });
-    attributes[f.bindTo] = { modelConfig: { path: "PDS." + f.bindTo } };
-    pdsColumns[f.bindTo] = { path: f.bindTo };
+    viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
+    attributes[col] = { modelConfig: { path: "PDS." + col } };
+    pdsColumns[col] = { path: col };
   }
 
   // ---- rules ----
@@ -63,16 +75,20 @@ export function mapToFreedom(eff, opts = {}) {
   for (const r of eff.rules) {
     if (r.ruleType === "FILTRATION") {
       entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr,
-        note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+        filter: r.filterColumn ? { columnPath: r.filterColumn, comparisonType: r.comparison, value: r.value, dataValueType: r.dataValueType } : null,
+        conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
         provenance: r.provenance });
     } else if (r.ruleType === "BINDPARAMETER") {
       const acts = PROP_ACTION[r.property];
       if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); continue; }
       pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
-        note: "page-level; condition ported from classic; inverse rule required for the opposite condition",
+        conditions: r.conditions,
+        note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
         provenance: r.provenance });
     } else {
-      needsDecision.push({ kind: "rule", item: r.attr, reason: `unknown ruleType '${r.ruleType}'` });
+      // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
+      needsDecision.push({ kind: "rule", item: r.attr,
+        reason: `rule '${r.attr}' ruleType is '${r.ruleType}' (enum unresolved) — resolve and re-map, do not assume` });
     }
   }
 
