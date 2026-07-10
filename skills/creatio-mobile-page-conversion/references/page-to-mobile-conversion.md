@@ -35,7 +35,12 @@ The tools used in this flow:
   (`guide.pageBusinessRules.convertedRules[].rule`) on the mobile page. Only after Gate M.
 - `get-component-info` (schema-type `mobile`) — full mobile component contract when the guide's
   inline `mobileContracts` entry is not enough.
-- `odata-read` / `odata-update` / `odata-create` — section/workplace registration writes (set
+- `odata-read` — read-only lookups of the current section/workplace state (`SysModule`, `SysWorkplace`,
+  `SysModuleInWorkplace`). Use it WHILE building the plan (steps 4–5, before Gate M/S) to enumerate the
+  real workplace options for the developer and avoid proposing a generic choice or creating a duplicate
+  `SysWorkplace` later. It is read-only and is NOT gated. (`get-mobile-page-conversion-guide` already
+  probes this state into `guide.sectionRegistration`; use `odata-read` for anything it did not cover.)
+- `odata-update` / `odata-create` — section/workplace registration WRITES (set
   `SysModule.MobileSectionSchemaUId`; add `SysModuleInWorkplace`; create `SysWorkplace`). Only after Gate S.
 - `register-related-page` — for FORM pages: registers the converted mobile form page as the entity's
   default mobile edit page (`schema-type=mobile`, `is-default=true` → `MobileRelatedPage` add-on; also
