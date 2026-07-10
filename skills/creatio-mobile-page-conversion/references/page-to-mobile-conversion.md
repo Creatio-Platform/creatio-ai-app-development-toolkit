@@ -84,6 +84,10 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    `create-page`, `update-page`, `validate-page`, or `create-page-business-rule` until the developer
    approves.
 7. **Create or update the Freedom UI Mobile page** (only after Gate M):
+   - **Before building the body, invoke the `creatio-ui-guidelines` skill** (per the skill Load order)
+     and apply its mobile-relevant rules (component choice, lookups, fields, captions, tooltips,
+     accessibility); run its review checklist before step 8. The `mobileValues` paste is mechanical, but
+     `create-page`/`update-page` still author a Freedom UI page body, so the same UI/UX checklist applies.
    - Create the page from the confirmed `recommendedMobileTemplate` (confirm via `list-page-templates`
      schema-type `mobile`) with `create-page`, unless it already exists. Naming convention:
      `<Entity>_MobileFormPage` / `<Entity>_MobileListPage` (no prefix in the plan — clio applies the

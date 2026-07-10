@@ -54,7 +54,12 @@ Before the Load order below, verify the converter is available: list the server 
    guidance (component classification, the paste-verbatim data-section rules, the hard mobile rules).
 3. Read `../../context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics
    (separate web/mobile pages, body format, component-registry differences).
-4. Resolve every clio MCP tool contract through `get-tool-contract`; do not hardcode payloads.
+4. **Before authoring the mobile page body (Flow step 7), invoke the `creatio-ui-guidelines` skill** and
+   apply its mobile-relevant rules (component choice, lookups, fields, captions, tooltips, accessibility),
+   then run its review checklist before treating the page as done. `create-page` / `update-page` on a
+   mobile page are the same page-authoring tool calls the toolkit's Core Rules gate behind
+   `creatio-ui-guidelines` — the mechanical `mobileValues` paste does not exempt them.
+5. Resolve every clio MCP tool contract through `get-tool-contract`; do not hardcode payloads.
 
 ## Gates are MANDATORY — this is the point of this skill
 
