@@ -68,23 +68,18 @@ Before the Load order below, verify the converter is available: list the server 
 
 ## Gates are MANDATORY — this is the point of this skill
 
-Conversion is **analysis-first**. The guide tool writes nothing; persistence and registration each
+Conversion is **analysis-first**: the guide tool writes nothing, and persistence and registration each
 require explicit developer approval **after** you present a plain-language plan. Do not let an imperative
-request collapse this into a single unattended pass.
+request collapse this into a single unattended pass. The invariants:
 
-- **Gate M (before ANY write).** After running `get-mobile-page-conversion-guide`, present the
-  plain-language conversion plan (what transfers, what is adapted, what is unsupported, what needs a
-  decision, the section-registration intent) and **STOP**. Do NOT call `create-page`, `update-page`,
-  `validate-page`, or `create-page-business-rule` until the developer **explicitly approves** the plan in
-  a separate response.
-- **Gate S (before ANY section/workplace registration).** Do NOT call `odata-update` / `odata-create`
-  (`SysModule` / `SysModuleInWorkplace` / `SysWorkplace`) or `register-related-page` until the developer
-  **separately approves** the registration plan. Registering as a section is always the user's decision.
-- **The initial request is NOT approval.** A prompt like *"convert Leads_ListPage to a mobile list page,
-  then register it as the Leads section, then tell me what was set up"* states the **request** — it
-  pre-authorizes nothing. Present the plan, then wait for an explicit go-ahead.
-- **Headless / autonomous mode: never self-approve.** If you cannot get an interactive answer, produce
-  the plan, ask for confirmation, and **END THE TURN** without writing or registering anything.
+- **Gate M** — before ANY write (`create-page` / `update-page` / `validate-page` /
+  `create-page-business-rule`).
+- **Gate S** — before ANY section/workplace registration (`odata-update` / `odata-create` /
+  `register-related-page`).
+- **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
+  and END THE TURN without writing — never self-approve.
 
-The detailed Gate M / Gate S rules, the conversion-plan contents, and the conversion-report format all
-live in `./references/page-to-mobile-conversion.md` — follow it.
+The AUTHORITATIVE, detailed gate rules — the two-choice (View details / Adjust vs Approve) flow, what the
+plan must contain, and the exact FORBIDDEN-until-approved tool lists — live in the "Gate M" / "Gate S"
+sections of `./references/page-to-mobile-conversion.md`. That file is the single source of truth: follow
+it, and make gate-rule changes there rather than duplicating them here.
