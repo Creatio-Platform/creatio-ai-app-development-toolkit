@@ -11,20 +11,25 @@
 node .migration/engine/run.mjs
 ```
 
-## Golden-результат (15/15 ✅)
+## Golden-результат (merge 29/29 ✅)
 - **SupportUnit** (SupportCalendar + SupportService): entity=SupportUnit; 8 полів; 3 вкладки; 3 деталі (вкл. `SupportScheduleEmployeeDetail`); 4 правила (ParentSupportUnit/SupportWorkingDayType FILTRATION, Contact/Calendar Required); метод `setName`.
 - **Contract** (9 шарів): entity=Contract; 25 полів; 5 вкладок; 14 деталей; 19 активних правил; **removed** `State`(WorkContractsProcess), `Contact`+`ContractSumGroup`(WorkOverride); `Owner` FILTRATION + `Parent` Required (WorkContractsProcess); 71 метод.
+- **F1 (порядок):** шари подаються у справжньому порядку залежностей (`HierarchyLevel` зі стенду: 299<320<…<607). `mergeLayers` віддає `warnings` (op б'є по відсутньому item) і `unresolvedParents` (діагностика порядку/seed).
+- **F2 (seed бази):** `mergeLayers(layers, {seedLayers})` + fixture `_base/BaseModulePageV2_skeleton.js` → базові контейнери резолвляться (`unresolvedParents→0`), базова вкладка `ESNTab` з'являється, клієнтські вкладки лишаються.
 
 ## Що доводить
 Реконструкція ефективної сторінки з 9 шарів, яку раніше LLM-субагент рахував ~142k токенів, тут виконується **детерміновано й миттєво кодом** — підтвердження тези «merge = код, не LLM».
 
 ## Ф3 — Mapper (`mapper.mjs`, `run-mapper.mjs`)
 `mapToFreedom(effective, {entityColumns})` → Freedom ChangeSet: `viewConfigDiff` (поле = 3-частинне зв'язування, control за типом колонки), `viewModelConfigDiff`/`modelConfigDiff`, `pageBusinessRules`/`entityBusinessRules` (FILTRATION→entity apply-static-filter; BINDPARAMETER→page make-* + **зворотне**), `details` (композит «Expanded list» + dependency), `handlerStubs`, `needsDecision[]` (judgment 20%: кастомні компоненти/графіки, методи, видалення, невідомі типи).
-- **container-role mapping** (урок #6): `ProfileContainer`→`SideAreaProfileContainer`.
-- Запуск: `node .migration/engine/run-mapper.mjs` — **golden 12/12 ✅**.
-- Для SupportUnit код генерує ChangeSet, **структурно еквівалентний зрізу**, зібраному вручну (`poc/body_full6.js`), для полів/контролів/профілю/деталі/правил. Він **не байт-у-байт**: mapper поки не має seed базового шаблону (тому немає поля `Name`) і віддає деталь як composite-спеку, а не повне тіло Expanded list із тулбаром. Це відомі прогалини — див. нижче.
+- **container-role mapping** (урок #6): `ProfileContainer`/`Header`→`SideAreaProfileContainer`.
+- **F3 — дерево вкладок/контейнерів:** кожне поле маршрутизується **підйомом по предках** (`resolveOwner`): tab-предок→вкладка (емітимо `crt.Tab`+`…Grid` раз і лише коли вкладка тримає ≥1 поле), Header/Profile→бічний профіль, інакше→fallback+`needsDecision`. Плоскої «GeneralInfoTabContainer»-звалки більше нема.
+- **F9 — payload vs context:** коли seed = повний parent-ланцюг, у payload беруться лише елементи, яких торкнувся schema-шар (`!fromTemplate`); базові фреймворк-методи/деталі/компоненти лишаються layout-контекстом. `baseContextExcluded` рапортує відкинуте. (На реальному SupportUnit: 348 методів→1, 4 деталі→3, 12 компонентів→9.)
+- Запуск: `node .migration/engine/run-mapper.mjs` (або `npm test` у `engine/` — ганяє обидва раннери, `exit 1` при фейлі) — **golden 30/30 ✅**.
+- Для SupportUnit код генерує ChangeSet, **структурно еквівалентний зрізу**, зібраному вручну (`poc/body_full6.js`), для полів/контролів/профілю/деталі/правил. Він **не байт-у-байт**: базовий seed подається окремо (F2, ще не тягнемо реальний parent-template зі стенду — тому немає поля `Name`), а деталь віддається як composite-спека, не повне тіло Expanded list із тулбаром. Це відомі прогалини — див. нижче.
 
-## Обмеження прототипу (доробити на Ф2→продукт)
-- Символьні enum-и (`Terrasoft.ContentType.LOOKUP`, `ViewItemType.*`) через Proxy стають нечисловими → у моделі беремо лише числові `contentType/itemType`; символьні декодуються окремою таблицею на етапі mapper (Ф3).
-- Порядок шарів наразі передається вручну; у проді — з `SysPackageInDependency`.
+## Обмеження прототипу (доробити → продукт)
+- Символьні enum-и (`Terrasoft.ContentType.LOOKUP`, `ViewItemType.*`) через Proxy стають нечисловими → у моделі беремо лише числові `contentType/itemType`; символьні декодуються окремою таблицею на етапі mapper.
+- Порядок шарів (F1): подається у порядку `HierarchyLevel` зі стенду (авторитетна топо-глибина). `SysPackageInDependency` **не** ESQ-читабельна, тож сирі DAG-ребра недоступні — двозначність (однаковий рівень) позначається `warnings`, не топосортиться.
+- Seed бази (F2): механізм є (`seedLayers`), але офлайн-fixture — скелет; реальний parent-template ще не тягнеться зі стенду (тому немає, напр., `Name`).
 - Функції у `attributes`/`methods` фіксуються за наявністю (provenance), тіла не аналізуються (це вхід для mapper/handler-заготовок).

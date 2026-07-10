@@ -20,8 +20,8 @@
 
 ## 3. Шар 2 — деталі
 ### 3.1 Merge Engine (pure; у тулі `get-effective-classic-schema`)
-Вхід: упорядкований (base→top з `SysPackageInDependency`) список розпарсених шарів + seed базового шаблону.
-Алгоритм: топосорт → seed → merge non-diff секцій по ключу (attributes/details/rules/businessRules; масиви заміщуються; methods → стек override з `callParent`; tombstone `removed`/`enabled:false`) → replay `diff` (insert/merge/move/remove по `name`, missing-target=skip) → finalize (tombstones геть, таби за `order`, метод=top-of-stack).
+Вхід: упорядкований (base→top за `SysPackage.HierarchyLevel` — див. §4/F1) список розпарсених шарів + `seedLayers` (parent-template skeleton, F2).
+Алгоритм: seed → merge non-diff секцій по ключу (attributes/details/rules/businessRules; масиви заміщуються; methods → стек override з `callParent`; tombstone `removed`/`enabled:false`) → replay `diff` (insert/merge/move/remove по `name`; **missing-target → `warnings` + `unresolvedParents`**, не тихий skip) → finalize (tombstones геть, таби за `order`, метод=top-of-stack). Порядок шарів **не** топосортиться в рушії — він приходить уже впорядкований від `list-schema-layers` (HierarchyLevel — авторитетна топо-глибина стенду); рушій лише валідує (`warnings`).
 Вихід: `EffectiveClassicPage` + **provenance** (звідки кожен елемент, `isClientEditable`).
 Edge-cases: дві системи правил (numeric `businessRules` + legacy `rules`) — парсити обидві; `ruleKey` = ім'я або uId; аномалії зберігати вербатимно; numeric↔symbolic enums через decode-таблицю; tombstone базового елемента = B6-сигнал **лише якщо шар-видаляч client-editable**.
 
@@ -37,12 +37,15 @@ entity/section → sections → edit pages (типізовані за `SysModule
 **Структурне збереження (обов'язкове; урок PoC):** цільовий контейнер визначається **роллю контейнера-джерела в Classic**, а НЕ «першим порожнім/зручним». Мапа: Classic `ProfileContainer`/ліва-панель→`SideAreaProfileContainer`; вкладка→`TabPanel`/`TabContainer` (та сама); `CONTROL_GROUP`→`ExpansionPanel`/`GridContainer`; `GRID_LAYOUT`→`GridContainer`; деталь-у-вкладці→«Expanded list» у відповідній вкладці. Зріз змінює лише КІЛЬКІСТЬ елементів, ніколи РОЗКЛАДКУ. (PoC-дефект: поля кинуто в першу вкладку scaffold замість профілю — mapper мусить мати крок container-role mapping.)
 `needsDecision[]`: кастомні компоненти, нетривіальні методи, base↔Freedom розбіжності, неоднозначності, base-видалення від product-шару.
 
+**Payload vs context (F9, урок повного прогону):** seed parent-template потрібен для резолву layout, але НЕ є payload. Кожен елемент тегається `fromTemplate` (provenance ⊆ seed-пакети); мігруємо лише елементи, яких торкнувся schema-шар сторінки — базові фреймворк-методи (300+ на BaseEntityPage), базові деталі/компоненти лишаються контекстом. `baseContextExcluded` рапортує відкинуте (прозоро). Це відповідає принципу 2 (переносимо base+customization СХЕМИ), але не тягне платформний template-ланцюг, бо його Freedom-аналог дає цільовий Freedom-шаблон.
+
 ### 3.4 Межа рушій/агент і дім модулів
 Read (layers/graph зі стенду) — у `clio` (розширення його схема-тулів). Transform (mapper + reconcile-diff) — **окремий pure-модуль без залежності від Creatio** (ізольовано тестований). Спільна мова — нормалізована модель ([`normalized-model.md`](normalized-model.md)).
 
 ## 4. Валідовані основи (факти з тестового стенду `workbuild103_15688915_0726`)
 - GetSchema по UId повертає повне тіло (перевірено; 62KB на CoreContracts/ContractPageV2).
-- Merge на 9 шарах Contract: зірка-топологія (усі replacing → base row), порядок із `SysPackageInDependency`; правила Owner-filter + Parent-required-if-`Type.IsSlave` лежать у `WorkContractsProcess`.
+- Merge на 9 шарах Contract: зірка-топологія (усі replacing → base row), порядок за `HierarchyLevel` (виміряно: 299<320<329<357<358<533<541<596<607, **строго без дублів**); правила Owner-filter + Parent-required-if-`Type.IsSlave` лежать у `WorkContractsProcess`.
+- **F1-знахідка:** `SysPackageInDependency` **не** ESQ-ObjectSchema (сирі DAG-ребра не читаються); `useFullHierarchy=true` на GetSchema — **no-op** (тіло лишається власним diff шару). Тож платформа не композить, merge-рушій необхідний, а авторитетний сигнал порядку — `SysPackage.HierarchyLevel` (не проксі).
 - Граф ролей: типізовані сторінки (`SysModuleEntity.TypeColumnUId`), mini (`MiniPageSchemaUId`), деталі (`details{}`+`SysDetail`), Freedom-counterpart (base `Parent`-шаблон).
 - Editable-пакет: `Maintainer ∉ {Creatio,Terrasoft} AND InstallType=0`.
 - Freedom write: 6-маркерний AMD, diff-only; поле=3 правки; деталь=config; правила=окремі артефакти.
@@ -53,8 +56,8 @@ Read (layers/graph зі стенду) — у `clio` (розширення йог
 
 - **Ф0 Фундамент:** нормалізована модель + фікстури ([`normalized-model.md`](normalized-model.md), [`fixtures/`](fixtures/)).
 - **Ф1 Read-примітиви (MCP):** `get-classic-schema`, `list-schema-layers`, `resolve-migration-unit`.
-- **Ф2 Merge-рушій (pure):** + обгортка `get-effective-classic-schema`. Тест офлайн на фікстурах. ✅ **прототип готовий, golden 15/15** ([engine/](engine/)): SupportUnit + Contract(9 шарів) зливаються детерміновано, з provenance; те, що LLM рахував ~142k токенів, код робить миттєво.
-- **Ф3 Mapper (pure):** + reconcile-diff. → 🎯 демо-віха: показати ефективну Classic + чернетку Freedom **без запису**.
+- **Ф2 Merge-рушій (pure):** + обгортка `get-effective-classic-schema`. Тест офлайн на фікстурах. ✅ **прототип готовий, golden 29/29** ([engine/](engine/)): SupportUnit + Contract(9 шарів) зливаються детерміновано, з provenance; те, що LLM рахував ~142k токенів, код робить миттєво. **F1** (порядок за HierarchyLevel + `warnings`) і **F2** (`seedLayers` + `unresolvedParents`) закриті.
+- **Ф3 Mapper (pure):** ✅ **прототип готовий, golden 30/30** ([engine/mapper.mjs](engine/mapper.mjs)): **F3** — повне дерево вкладок/контейнерів (маршрут поля підйомом по предках; вкладка+grid емітяться раз і лише коли тримають поле); **F9** — payload лише зі schema-шарів, base-template = layout-контекст. Лишаються reconcile-diff (A3/F4) → 🎯 демо-віха: показати ефективну Classic + чернетку Freedom **без запису**.
 - **Ф4 Оркестрація (скіл):** ролі, рекурсія, A3.1/A3.2, full-merge, B9/B10, approval-gate, living-docs.
 - **Ф5 Наскрізний пілот на стенді:** запис у клієнтський пакет + read-back + browser.
 - **Ф6 Загартування + ширина.**
@@ -65,7 +68,7 @@ Read (layers/graph зі стенду) — у `clio` (розширення йог
 2. **`Contract`** — типізовані правила, глибока рекурсія, 9 шарів, A3-reconcile. Золотий складний еталон. *Фікстури: [`fixtures/contract/`](fixtures/contract/).*
 
 ## 7. Відкриті рішення / ризики
-- Порядок шарів брати з `SysPackageInDependency` (не з `HierarchyLevel`-проксі).
+- ~~Порядок шарів брати з `SysPackageInDependency` (не з `HierarchyLevel`-проксі).~~ **ВИРІШЕНО (F1):** `SysPackageInDependency` не читається з ESQ; `HierarchyLevel` — це і є авторитетна топо-глибина стенду (виміряно: строго впорядковує шари). Порядок за HierarchyLevel + `warnings` на однаковий рівень.
 - Freedom↔entity binding читати з тіла сторінки (не ESQ-колонка).
 - Custom-компоненти й base-видалення від product-шару — завжди через людину.
 - Provenance має нести layer+package+editable (для A3/B6); за потреби — індекс diff-операції для точних позицій.

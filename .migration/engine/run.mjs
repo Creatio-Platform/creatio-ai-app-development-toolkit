@@ -26,6 +26,8 @@ function report(title, eff) {
   for (const r of eff.rules) console.log(`   ${r.attr} · ${r.ruleType}${r.property ? "/" + r.property : ""} · ${r.system} · from ${r.provenance.join(">")}`);
   console.log(`removed (${eff.removed.length}): ${eff.removed.map(r => `${r.name}(by ${r.removedBy})`).join(", ")}`);
   console.log(`methods (${eff.methods.length}): ${eff.methods.map(m => m.name).join(", ")}`);
+  console.log(`unresolvedParents (${eff.unresolvedParents.length}) [F2 seed list]: ${eff.unresolvedParents.join(", ") || "—"}`);
+  console.log(`warnings (${eff.warnings.length}): ${eff.warnings.map(w => `${w.op}:${w.name}@${w.layer}`).join(", ") || "—"}`);
 }
 
 let pass = 0, fail = 0;
@@ -46,10 +48,14 @@ check("ParentSupportUnit FILTRATION", su.rules.some(r => r.attr === "ParentSuppo
 check("Contact BINDPARAMETER/Required", su.rules.some(r => r.attr === "Contact" && r.ruleType === "BINDPARAMETER" && r.property === "Required"));
 check("method setName", su.methods.some(m => m.name === "setName"));
 
-/* ---- Contract (9 layers) — sanity ---- */
+/* ---- Contract (9 layers) — sanity ----
+   Layer order is the TRUE dependency order measured from SysPackage.HierarchyLevel on the stand
+   (F1): 299 < 320 < 329 < 357 < 358 < 533 < 541 < 596 < 607. An earlier hand-guessed order here
+   (ContractInOrder before SalesContracts, WorkCompliance before WorkOverride) was wrong and is the
+   very defect F1 corrects — last-writer-wins depends on getting this order right. */
 const co = mergeLayers(load("contract", [
-  "CoreContracts.js", "ContractInOrder.js", "ContractInInvoice.js", "DocumentInContract.js",
-  "SalesContracts.js", "WorkCompliance.js", "WorkOverride.js", "WorkSalesBase.js", "WorkContractsProcess.js",
+  "CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
+  "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js",
 ]));
 report("ContractPageV2 (9 layers)", co);
 console.log("assertions:");
@@ -58,6 +64,64 @@ check("State removed", co.removed.some(r => r.name === "State"));
 check("Owner FILTRATION rule present", co.rules.some(r => r.attr === "Owner" && r.ruleType === "FILTRATION"));
 check("Parent REQUIRED rule present", co.rules.some(r => r.attr === "Parent" && r.property === "Required"));
 check("has Product & Visa details", ["Product","Visa"].every(k => co.details.some(d => d.key === k)));
+
+/* ---- F2: base-template seed ----
+   Prepending the base skeleton must make the base containers resolve (unresolvedParents empties),
+   pull base tabs (ESNTab) into the effective page, and clear the merge-onto-absent warnings for
+   the elements the skeleton now provides. */
+const seed = load("_base", ["BaseModulePageV2_skeleton.js"]);
+const suSeeded = mergeLayers(load("supportunitemployee", ["SupportCalendar_base.js", "SupportService.js"]), { seedLayers: seed });
+report("SupportUnit + base seed (F2)", suSeeded);
+console.log("assertions:");
+check("F2: seed resolves all base containers (unresolvedParents empty)", suSeeded.unresolvedParents.length === 0);
+check("F2: base tab ESNTab now in effective page", suSeeded.tabs.some(t => t.name === "ESNTab"));
+check("F2: ESNTab/ChangesHistoryTab merge-warnings cleared", !suSeeded.warnings.some(w => w.name === "ESNTab" || w.name === "ChangesHistoryTab"));
+check("F2: client tabs still present after seed", ["ScheduleTab","KpiTab","HistoryTab"].every(n => suSeeded.tabs.some(t => t.name === n)));
+
+const coSeeded = mergeLayers(load("contract", [
+  "CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
+  "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js",
+]), { seedLayers: seed });
+check("F2: Contract Header/Tabs resolved by seed (no longer unresolved)",
+  !coSeeded.unresolvedParents.includes("Header") && !coSeeded.unresolvedParents.includes("Tabs"));
+// #2 on real data: ContractSumGroup is REMOVED by WorkOverride yet ContractSumBlock still nests under
+// it — a genuine orphan the old (tombstone-as-defined) diagnostic masked. It must now surface.
+check("F2/#2: a group removed by a layer surfaces as unresolved (real Contract orphan, not masked)",
+  coSeeded.unresolvedParents.includes("ContractSumGroup"));
+check("F2: Contract entity survives seed (seed has no entitySchemaName)", coSeeded.entity === "Contract");
+
+/* ---- F1: POSITIVE warning assertions (the mechanism must fire, not just clear after seeding) ---- */
+// Unseeded runs merge onto base-template elements no layer defines -> warnings MUST be raised.
+check("F1: unseeded SupportUnit warns on merge-onto-absent ESNTab",
+  su.warnings.some(w => w.op === "merge" && w.name === "ESNTab" && w.layer === "SupportCalendar"));
+check("F1: unseeded Contract raises merge-onto-absent warnings (base tabs/buttons)",
+  co.warnings.length > 0 && co.warnings.some(w => w.op === "merge" && (w.name === "ESNTab" || w.name === "PrintButton")));
+
+/* ---- F1: move/remove-onto-absent branches (synthetic layers pin the drop + tombstone outcomes) ---- */
+const op = (o) => ({ operation: o.operation, name: o.name, parentName: o.parentName ?? null,
+  propertyName: o.propertyName ?? null, bindTo: o.bindTo ?? null, itemType: o.itemType ?? null,
+  contentType: o.contentType ?? null, isTab: !!o.isTab, order: o.order ?? null });
+const synth = (pkg, ops) => ({ pkg, error: null, entitySchemaName: "X",
+  diff: ops.map(op), businessRules: {}, rules: {}, details: {}, methods: [], attributes: [], modules: [] });
+
+const moved = mergeLayers([synth("T", [{ operation: "move", name: "Ghost", parentName: "Nowhere" }])]);
+check("F1: move-onto-absent is dropped (item never materialises)", !moved.items.some(i => i.name === "Ghost"));
+check("F1: move-onto-absent raises a 'move' warning", moved.warnings.some(w => w.op === "move" && w.name === "Ghost"));
+
+const removedGhost = mergeLayers([synth("T", [{ operation: "remove", name: "Zombie" }])]);
+check("F1: remove-onto-absent becomes a tombstone in removed[]", removedGhost.removed.some(r => r.name === "Zombie"));
+check("F1: remove-onto-absent raises a 'remove' warning", removedGhost.warnings.some(w => w.op === "remove" && w.name === "Zombie"));
+
+/* ---- F2: a parent removed by a lower layer must surface as unresolved (no false all-clear) ---- */
+const tomb = mergeLayers([
+  synth("base", [
+    { operation: "insert", name: "Grp", itemType: 15 },
+    { operation: "insert", name: "F", parentName: "Grp", propertyName: "items", bindTo: "Col" },
+  ]),
+  synth("top", [{ operation: "remove", name: "Grp" }]),
+]);
+check("F2: parent surviving only as a tombstone is reported unresolved (engine⇄mapper consistent)",
+  tomb.unresolvedParents.includes("Grp") && !tomb.items.some(i => i.name === "Grp"));
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

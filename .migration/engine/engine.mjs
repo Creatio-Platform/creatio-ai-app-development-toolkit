@@ -146,15 +146,42 @@ function sanitizeConditions(conds) {
   });
 }
 
-export function mergeLayers(layers /* base->top */) {
+// mergeLayers(layers, opts)
+//   layers    — the schema's own layers, base->top in true dependency order (F1).
+//   opts.seedLayers — parsed parent-TEMPLATE layers (e.g. the BaseModulePageV2→…→BaseEntityPage
+//     chain) merged FIRST, so base containers (Header/ProfileContainer/Tabs) and base tabs (ESNTab…)
+//     exist before the schema's own layers patch them (F2). Seed packages define only LAYOUT context:
+//     every produced element is tagged `fromTemplate` (F9) so the mapper migrates only the page's own
+//     content (fields/rules/details/methods/components touched by a schema layer) and treats
+//     template-only elements — e.g. the 300+ framework methods on BaseEntityPage — as context, not
+//     payload. Without this, seeding the full chain floods the ChangeSet with base noise.
+export function mergeLayers(layers /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
   const details = new Map();   // key -> record
   const methods = new Map();   // name -> [pkgs] (override stack)
   const components = new Map(); // module key -> {moduleName, provenance} (widgets/charts → B9/B10)
+  // Non-fatal diagnostics. A merge/move/remove that targets an item NO lower layer defined means
+  // either the layers were passed out of dependency order (F1) or the base-template element it
+  // patches was never seeded (F2). We surface these instead of silently dropping/orphaning them.
+  const warnings = [];
+  const seedLayers = Array.isArray(opts.seedLayers) ? opts.seedLayers : [];
+  const allLayers = [...seedLayers, ...layers]; // template skeleton first, then client layers
+  // F9: packages that are template context (seed) vs the page's own schema layers. An element is
+  // `fromTemplate` iff EVERY package in its provenance is a seed package — i.e. no schema layer ever
+  // touched it. Such elements are layout context only, never migration payload. With no seed the set
+  // is empty, nothing is fromTemplate, and behaviour is unchanged.
+  const seedPkgs = new Set(seedLayers.map(l => l.pkg));
+  const fromTemplate = (prov) => Array.isArray(prov) && prov.length > 0 && prov.every(p => seedPkgs.has(p));
+  // `fromTemplate` classifies by package NAME. If a package appears in BOTH the seed and the schema's
+  // own layers, an element touched only by that package would be misattributed as template context and
+  // silently dropped from the payload. Surface the overlap so the split can't quietly go wrong.
+  const overlap = [...new Set(layers.map(l => l.pkg))].filter(p => seedPkgs.has(p));
+  if (overlap.length) warnings.push({ op: "seed-overlap", name: overlap.join(", "),
+    hint: "package(s) appear in BOTH seed and schema layers — fromTemplate (payload vs context) is keyed by package name and may misattribute their elements; disambiguate seed vs schema origin before trusting the split" });
   const entity = layers.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
-  for (const L of layers) {
+  for (const L of allLayers) {
     // diff replay
     for (const op of L.diff) {
       const cur = items.get(op.name);
@@ -166,11 +193,21 @@ export function mergeLayers(layers /* base->top */) {
         });
       } else if (op.operation === "merge") {
         if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; cur.provenance.push(L.pkg); }
-        else items.set(op.name, { name: op.name, parent: op.parentName, propertyName: op.propertyName, bindTo: op.bindTo, itemType: op.itemType, isTab: op.isTab, removed: false, provenance: [L.pkg], external: true, order: op.order });
+        else {
+          // external stub carries the SAME shape as an insert (incl. contentType) so the mapper's
+          // control selection keeps the classic hint (e.g. contentType 5 = lookup) on this path too.
+          items.set(op.name, { name: op.name, parent: op.parentName, propertyName: op.propertyName, bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, isTab: op.isTab, removed: false, provenance: [L.pkg], external: true, order: op.order });
+          warnings.push({ op: "merge", name: op.name, layer: L.pkg, hint: "merge onto an item no lower layer defined — base-template element not seeded (F2) or layers out of order (F1)" });
+        }
       } else if (op.operation === "move") {
         if (cur) { if (op.parentName) cur.parent = op.parentName; cur.provenance.push(L.pkg); }
+        else warnings.push({ op: "move", name: op.name, layer: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / layer order (F1)` });
       } else if (op.operation === "remove") {
-        if (cur) { cur.removed = true; cur.removedBy = L.pkg; } else items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, provenance: [L.pkg] });
+        if (cur) { cur.removed = true; cur.removedBy = L.pkg; }
+        else {
+          items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, provenance: [L.pkg] });
+          warnings.push({ op: "remove", name: op.name, layer: L.pkg, hint: "remove of an item no lower layer defined — recorded as tombstone; check base seed / layer order" });
+        }
       }
     }
     // businessRules + legacy rules (merge by attribute::ruleKey)
@@ -219,15 +256,34 @@ export function mergeLayers(layers /* base->top */) {
   const removed = [...items.values()].filter(i => i.removed);
   const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);
 
+  // Parent containers referenced by an ALIVE item but never defined by an ALIVE item == base-template
+  // elements the client's layers sit inside (e.g. Header, GeneralInfoTab from BaseModulePageV2).
+  // This is the precise seed list F2 must supply so layout targets resolve and base tabs survive.
+  // Computed over the ALIVE set only (NOT items.keys(), which includes remove-tombstones): the mapper's
+  // routing index is alive-only, so a parent that survives only as a tombstone must still count as
+  // unresolved here — otherwise the diagnostic gives a false all-clear the mapper contradicts.
+  const aliveNames = new Set(alive.map(i => i.name));
+  const unresolvedParents = [...new Set(
+    alive.map(i => i.parent).filter(p => p && !aliveNames.has(p))
+  )].sort();
+
   return {
     entity,
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, provenance: i.provenance })),
-    tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance })),
-    detailItems: alive.filter(i => i.itemType === 2).map(i => ({ name: i.name, parent: i.parent, provenance: i.provenance })),
-    details: [...details.values()],
-    rules: activeRules,
+    // Full alive layout tree (containers, groups, tabs, fields) with parent links — the input F3's
+    // mapper walks to route each field to its owning tab/group and to rebuild the container nesting.
+    // The projections below (fields/tabs/detailItems) are convenience views over the same items.
+    items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
+      itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
+      isTab: i.isTab, order: i.order, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
+    tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
+    detailItems: alive.filter(i => i.itemType === 2).map(i => ({ name: i.name, parent: i.parent, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
+    details: [...details.values()].map(d => ({ ...d, fromTemplate: fromTemplate(d.provenance) })),
+    rules: activeRules.map(r => ({ ...r, fromTemplate: fromTemplate(r.provenance) })),
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy })),
-    methods: [...methods.entries()].map(([n, stack]) => ({ name: n, stack })),
-    components: [...components.values()],
+    methods: [...methods.entries()].map(([n, stack]) => ({ name: n, stack, fromTemplate: fromTemplate(stack) })),
+    components: [...components.values()].map(c => ({ ...c, fromTemplate: fromTemplate(c.provenance) })),
+    warnings,
+    unresolvedParents,
   };
 }

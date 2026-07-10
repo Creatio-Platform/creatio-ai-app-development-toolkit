@@ -3,8 +3,27 @@
 // + needsDecision[] for the judgment 20%. See .migration/solution-design.md §3.3.
 
 // Lesson #6 — structural preservation: target container derives from the SOURCE container role.
-const CONTAINER = { ProfileContainer: "SideAreaProfileContainer", Header: "SideAreaProfileContainer" };
+// Single source of truth for the profile-role containers (consumed by both CONTAINER and resolveOwner).
+const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header"]);
+const CONTAINER = Object.fromEntries([...PROFILE_CONTAINERS].map(n => [n, "SideAreaProfileContainer"]));
 const toContainer = (parent) => CONTAINER[parent] || "GeneralInfoTabContainer";
+
+// F3 — resolve which Freedom region a field belongs to by CLIMBING the classic item tree from the
+// field's parent: hitting Header/ProfileContainer => the side profile; hitting a tab => that tab;
+// running off the tree (parent never defined) => unresolved (caller flags + falls back). This is
+// what turns the old "everything flattens to one tab" into faithful tab/group placement.
+function resolveOwner(startParent, index) {
+  let parent = startParent, hops = 0;
+  while (parent && hops++ < 32) {
+    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile" };
+    const p = index.get(parent);
+    if (!p) return { kind: "unresolved", parent };
+    if (p.isTab) return { kind: "tab", tab: p.name, tabFromTemplate: !!p.fromTemplate };
+    parent = p.parent;
+  }
+  return { kind: "unresolved", parent: startParent };
+}
+const tabGridName = (tab) => `${tab}Grid`;
 
 // entity column dataType (+ classic contentType) -> Freedom control
 function control(dataType, contentType) {
@@ -35,16 +54,67 @@ export function mapToFreedom(eff, opts = {}) {
   const attributes = {};
   const pdsColumns = {};
 
+  // F9: migrate only the page's OWN content, not the platform template chain seeded for layout.
+  // `fromTemplate` elements (e.g. BaseEntityPage's framework methods, base-template details) are
+  // context — kept in eff.items for ancestry routing, but excluded from the payload. The full layout
+  // tree (index below) still uses ALL items so base containers resolve. `baseContextExcluded` reports
+  // the counts so the exclusion is transparent, not silent.
+  const notTpl = (x) => !x.fromTemplate;
+  const payloadFields = eff.fields.filter(notTpl);
+  const payloadRules = eff.rules.filter(notTpl);
+  const payloadDetails = eff.details.filter(notTpl);
+  const payloadMethods = eff.methods.filter(notTpl);
+  const payloadComponents = (eff.components || []).filter(notTpl);
+  const baseContextExcluded = {
+    fields: eff.fields.length - payloadFields.length,
+    rules: eff.rules.length - payloadRules.length,
+    details: eff.details.length - payloadDetails.length,
+    methods: eff.methods.length - payloadMethods.length,
+    components: (eff.components || []).length - payloadComponents.length,
+  };
+
   // ---- fields (3-part binding: control + attribute + dataSource) ----
   const rowByContainer = {};
   const nameCount = {};
-  for (const f of eff.fields) {
-    const parent = toContainer(f.parent);
-    // #3/F4: only ProfileContainer/Header have a role mapping; anything else lands in the main tab.
-    // Flag it — tabs/groups/grid-layout container tree is NOT built yet (deferred to Ф3 build-out).
-    if (f.parent && !(f.parent in CONTAINER))
+  const index = eff.items ? new Map(eff.items.map(i => [i.name, i])) : null; // layout tree for F3 routing
+  const structural = [];            // tab + tab-grid container inserts (emitted once, only when used)
+  const emittedTabs = new Map(); // tab -> resolved parent container for routed fields
+  function ensureTab(tab, fromTpl) {
+    if (emittedTabs.has(tab)) return emittedTabs.get(tab);
+    let parentName;
+    if (fromTpl) {
+      // F9×F3: a BASE-TEMPLATE tab (e.g. ESNTab) is provided by the Freedom counterpart template —
+      // synthesizing a fresh crt.Tab here would duplicate/conflict with it. Route the field to the
+      // EXISTING tab and flag placement; never emit a new crt.Tab/grid for a template-owned tab.
+      parentName = tab;
+      needsDecision.push({ kind: "base-tab-placement", item: tab,
+        reason: `payload field(s) target base-template tab '${tab}' — place into the Freedom template's existing equivalent (do NOT create a new tab); confirm the target container` });
+    } else {
+      // client-owned tab: the page defines it, so we build it. Its grid holds the routed fields.
+      parentName = tabGridName(tab);
+      structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
+        values: { type: "crt.Tab", caption: "$Resources.Strings." + tab + "Caption" } });
+      structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
+        values: { type: "crt.GridContainer" } });
+      // no-silent-guess: the classic caption TEXT isn't carried in the model (only hasCaption), so the
+      // resource key above is a placeholder — flag it like every other synthesized value in this mapper.
+      needsDecision.push({ kind: "tab-caption", item: tab,
+        reason: `synthesized caption key '$Resources.Strings.${tab}Caption' — classic caption text not in model; confirm/replace with the real localized string` });
+    }
+    emittedTabs.set(tab, parentName);
+    return parentName;
+  }
+  for (const f of payloadFields) {
+    // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
+    let parent;
+    const own = index ? resolveOwner(f.parent, index) : { kind: f.parent in CONTAINER ? "profile" : "unresolved", parent: f.parent };
+    if (own.kind === "profile") parent = "SideAreaProfileContainer";
+    else if (own.kind === "tab") parent = ensureTab(own.tab, own.tabFromTemplate);
+    else {
+      parent = toContainer(f.parent); // fall back to the flat main container
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
-        reason: `classic container '${f.parent}' has no role mapping — placed in ${parent}; confirm target tab/group (tab/group tree not yet built)` });
+        reason: `classic container '${own.parent || f.parent}' is not defined by any layer or template — placed in ${parent}; seed the base template (F2) or confirm target tab/group` });
+    }
     rowByContainer[parent] = (rowByContainer[parent] || 0) + 1;
     const col = f.bindTo || f.name || "Field";
     const ctl = control(cols[col], f.contentType);
@@ -72,7 +142,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- rules ----
   const pageBusinessRules = [], entityBusinessRules = [];
-  for (const r of eff.rules) {
+  for (const r of payloadRules) {
     if (r.ruleType === "FILTRATION") {
       entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr,
         filter: r.filterColumn ? { columnPath: r.filterColumn, comparisonType: r.comparison, value: r.value, dataValueType: r.dataValueType } : null,
@@ -93,7 +163,7 @@ export function mapToFreedom(eff, opts = {}) {
   }
 
   // ---- details -> "Expanded list" composite spec (full contract; lesson #8) ----
-  const details = eff.details.map(d => ({
+  const details = payloadDetails.map(d => ({
     composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
     dataSourceScope: "viewElement",
     dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
@@ -102,12 +172,12 @@ export function mapToFreedom(eff, opts = {}) {
   }));
 
   // ---- methods -> handler stubs (judgment) ----
-  const handlerStubs = eff.methods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
-  for (const m of eff.methods)
+  const handlerStubs = payloadMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
+  for (const m of payloadMethods)
     needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
 
   // ---- components (charts/widgets) -> B9/B10 ----
-  for (const c of eff.components || [])
+  for (const c of payloadComponents)
     needsDecision.push({ kind: "component", item: c.key,
       reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
@@ -122,10 +192,13 @@ export function mapToFreedom(eff, opts = {}) {
 
   return {
     entity: eff.entity,
-    viewConfigDiff,
+    // structural (tab + grid containers) first so field inserts resolve their parentName.
+    viewConfigDiff: [...structural, ...viewConfigDiff],
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: pdsColumns }],
     pageBusinessRules, entityBusinessRules, details, handlerStubs, needsDecision,
+    // F9: how many effective elements were platform-template context excluded from the payload.
+    baseContextExcluded,
   };
 }
 

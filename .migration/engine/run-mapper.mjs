@@ -52,18 +52,85 @@ check("3 details as Expanded list with dependency",
 check("setName -> handler stub", cs.handlerStubs.some(h => h.sourceMethod === "setName"));
 check("chart widgets flagged as needsDecision (component)", cs.needsDecision.some(n => n.kind === "component"));
 
-// Contract sanity
-const co = mapToFreedom(mergeLayers(load("contract", [
-  "CoreContracts.js", "ContractInOrder.js", "ContractInInvoice.js", "DocumentInContract.js",
-  "SalesContracts.js", "WorkCompliance.js", "WorkOverride.js", "WorkSalesBase.js", "WorkContractsProcess.js"])));
+// Contract sanity — TRUE dependency order (F1), with base-template seed (F2).
+const seed = load("_base", ["BaseModulePageV2_skeleton.js"]);
+const coEff = mergeLayers(load("contract", [
+  "CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
+  "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js"]),
+  { seedLayers: seed });
+const co = mapToFreedom(coEff);
 console.log(`\n===== Contract sanity =====`);
-console.log(`fields=${co.viewConfigDiff.length} entityRules=${co.entityBusinessRules.length} pageRules=${co.pageBusinessRules.length} details=${co.details.length} handlerStubs=${co.handlerStubs.length} needsDecision=${co.needsDecision.length}`);
+console.log(`viewConfigDiff=${co.viewConfigDiff.length} entityRules=${co.entityBusinessRules.length} pageRules=${co.pageBusinessRules.length} details=${co.details.length} handlerStubs=${co.handlerStubs.length} needsDecision=${co.needsDecision.length}`);
 check("Contract: Owner apply-static-filter present", co.entityBusinessRules.some(r => r.targetAttribute === "Owner"));
 check("Contract: Parent make-required present", co.pageBusinessRules.some(r => r.element === "Parent" && r.action === "make-required"));
 // Regression guard for the symbolic-enum BLOCKER fix: legacy FILTRATION rules (declared via
 // BusinessRuleModule.enums.RuleType.FILTRATION) must resolve, not collapse to BINDPARAMETER/1-rule.
 check("Contract: legacy FILTRATION rules resolved (entityRules > 1)", co.entityBusinessRules.length > 1);
 check("Contract: no rules mis-mapped to 'symbolic'", !co.needsDecision.some(n => n.kind === "rule" && /symbolic|unresolved/.test(n.reason)));
+
+// ---- F3: container/tab tree (not flattened) ----
+const vop = (name) => co.viewConfigDiff.find(o => o.name === name);
+const parentOf = (name) => vop(name)?.parentName;
+console.log("F3 routing:");
+console.log(`   tab containers: ${co.viewConfigDiff.filter(o => o.values?.type === "crt.Tab").map(o => o.name).join(", ")}`);
+console.log(`   Account -> ${parentOf("Account")}; Number -> ${parentOf("Number")}`);
+check("F3: GeneralInfoTab emitted as a tab (crt.Tab)", vop("GeneralInfoTab")?.values.type === "crt.Tab");
+check("F3: GeneralInfoTabGrid container emitted under the tab", parentOf("GeneralInfoTabGrid") === "GeneralInfoTab");
+check("F3: GeneralInfoTab fields routed into its grid (Account, CustomerBillingInfo)",
+  parentOf("Account") === "GeneralInfoTabGrid" && parentOf("CustomerBillingInfo") === "GeneralInfoTabGrid");
+check("F3: Header fields routed to the side profile (Number, Owner)",
+  parentOf("Number") === "SideAreaProfileContainer" && parentOf("Owner") === "SideAreaProfileContainer");
+check("F3: layout is NOT flattened (≥2 distinct field containers)",
+  new Set(co.viewConfigDiff.filter(o => o.values?.control).map(o => o.parentName)).size >= 2);
+check("F3: no field left in the old catch-all GeneralInfoTabContainer",
+  !co.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
+
+/* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
+const L = (pkg, o) => ({ pkg, error: null, entitySchemaName: o.entity || "?", diff: o.diff || [],
+  businessRules: o.businessRules || {}, rules: {}, details: o.details || {}, methods: o.methods || [], attributes: [], modules: o.modules || [] });
+const di = (o) => ({ operation: "insert", name: o.name, parentName: o.parentName ?? null, propertyName: o.propertyName ?? null,
+  bindTo: o.bindTo ?? null, itemType: o.itemType ?? null, contentType: o.contentType ?? null, isTab: !!o.isTab, order: o.order ?? null });
+// Seed contributes a bound FIELD and a business RULE too (the primary payload) — not only methods/details/
+// components — so their exclusion is asserted POSITIVELY, not "0 by accident".
+const f9seed = L("Tpl", {
+  diff: [di({ name: "Header", itemType: 15 }), di({ name: "TplField", parentName: "Header", propertyName: "items", bindTo: "TplCol" })],
+  methods: ["frameworkInit", "getActions"],
+  businessRules: { TplCol: { tplRule: { ruleType: 0, property: 0 } } },        // base BINDPARAMETER/Visible rule
+  details: { TplDetail: { schemaName: "TplDetail", entitySchemaName: "TplE" } }, modules: [{ key: "TplChart", moduleName: "DashboardModule" }] });
+const f9client = L("Client", { entity: "X",
+  diff: [di({ name: "Name", parentName: "Header", propertyName: "items", bindTo: "Name" })],
+  methods: ["clientSave"],
+  businessRules: { Name: { reqRule: { ruleType: 0, property: 2 } } },          // client BINDPARAMETER/Required rule
+  details: { ClientDetail: { schemaName: "ClientDetail", entitySchemaName: "ClientE", detailColumn: "X", masterColumn: "Id" } } });
+const f9cs = mapToFreedom(mergeLayers([f9client], { seedLayers: [f9seed] }));
+check("F9: seed method is context, only the client method is payload",
+  f9cs.handlerStubs.length === 1 && f9cs.handlerStubs[0].sourceMethod === "clientSave");
+check("F9: seed FIELD excluded, client field kept",
+  f9cs.viewConfigDiff.some(o => o.name === "Name") && !f9cs.viewConfigDiff.some(o => o.name === "TplField"));
+check("F9: seed RULE excluded, client rule kept",
+  f9cs.pageBusinessRules.some(r => r.element === "Name") && !f9cs.pageBusinessRules.some(r => r.element === "TplCol"));
+check("F9: seed detail excluded, client detail kept",
+  f9cs.details.length === 1 && f9cs.details[0].detailSchema === "ClientDetail");
+check("F9: seed chart/widget excluded from payload",
+  !f9cs.needsDecision.some(n => n.kind === "component"));
+check("F9: baseContextExcluded reports ALL template categories (field+rule+method+detail+component)",
+  f9cs.baseContextExcluded.fields === 1 && f9cs.baseContextExcluded.rules === 1 &&
+  f9cs.baseContextExcluded.methods === 2 && f9cs.baseContextExcluded.details === 1 && f9cs.baseContextExcluded.components === 1);
+check("F9: the client field still routes into the layout (Header→profile)",
+  f9cs.viewConfigDiff.some(o => o.name === "Name" && o.parentName === "SideAreaProfileContainer"));
+
+/* ---- F9×F3: a payload field under a SEEDED base tab must NOT spawn a fresh crt.Tab ---- */
+const btSeed = L("Tpl", { diff: [di({ name: "Tabs", itemType: 15 }),
+  di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true })] });
+const btClient = L("Client", { entity: "X",
+  diff: [di({ name: "Note", parentName: "ESNTab", propertyName: "items", bindTo: "Note" })] });
+const btcs = mapToFreedom(mergeLayers([btClient], { seedLayers: [btSeed] }));
+check("F9×F3: no fresh crt.Tab insert synthesized for a base-template tab (ESNTab)",
+  !btcs.viewConfigDiff.some(o => o.name === "ESNTab" && o.values?.type === "crt.Tab"));
+check("F9×F3: base-template tab placement flagged as needsDecision",
+  btcs.needsDecision.some(n => n.kind === "base-tab-placement" && n.item === "ESNTab"));
+check("F9×F3: the field routes into the EXISTING base tab, not a synthesized grid",
+  btcs.viewConfigDiff.some(o => o.name === "Note" && o.parentName === "ESNTab"));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
