@@ -115,8 +115,10 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        lookup-path attribute's type) and `update-page` refuses to save.
      - `relocate-children` → do not recreate this container; its children are placed in `parentName`
        (each child entry already carries that `parentName`).
-     - `drop` → skip it; tell the user what was dropped and why. (Empty containers are still inserted —
-       the user can delete them.)
+     - `drop` → skip it entirely — it is NOT inserted. Tell the user what was dropped and why. Only leaf
+       components are ever `drop` entries (an unsupported type, or one bound to a non-primary data
+       source); a container is never a `drop`, so an empty container comes through as its own
+       `merge`/`insert` instead — the user can delete it in the designer if it is unwanted.
    - **Data sections — paste the prebuilt diffs, do NOT rebuild by hand.** Both metadata sections have
      identical structural support on mobile, and the guide hands them to you ready to paste:
      - Paste `guide.modelConfigDiff` VERBATIM as the page's `modelConfigDiff`, and `guide.viewModelConfigDiff`
