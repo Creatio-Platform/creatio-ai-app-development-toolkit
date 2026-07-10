@@ -46,7 +46,10 @@ The tools used in this flow:
   default mobile edit page (`schema-type=mobile`, `is-default=true` → `MobileRelatedPage` add-on; also
   supports `schema-type=web` and `is-default=false`). Only after Gate S.
 
-Read `get-guidance` with name `freedom-page-web-to-mobile-conversion` before acting on the guide.
+Read `get-guidance` with name `freedom-page-web-to-mobile-conversion` before acting on the guide. This
+is the SAME one-time load the SKILL Load order and Flow step 1 name — its content does not change
+between calls, so load it once per run and reuse it; do not re-issue the `get-guidance` call in later
+steps.
 
 ## Flow
 
@@ -55,7 +58,8 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
 
 1. **Select the source page and resolve the environment.** Identify the Web page the developer wants
    in the Creatio Mobile app and the target **registered environment name** (Runbook 01 rules:
-   registered environment name, never a raw URL). Read `get-guidance freedom-page-web-to-mobile-conversion`.
+   registered environment name, never a raw URL). If not already loaded (SKILL Load order step 2), read
+   `get-guidance freedom-page-web-to-mobile-conversion` ONCE here and reuse it for the rest of the run.
 2. **Analyze the source page:** run `get-mobile-page-conversion-guide` with the source `schema-name`.
    It reads the page and returns the conversion guide. It writes nothing.
 3. **Determine the source page type** from the returned `sourceType`:
