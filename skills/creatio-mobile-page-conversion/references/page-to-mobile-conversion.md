@@ -268,8 +268,10 @@ After `validate-page`, deliver a report:
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet), whether the developer adjusted or declined it, and that the child placement
   was applied via `mobileValues` and the container columns via each `adaptiveLayout[].adaptiveDiff`.
-- **Remaining manual steps:** dropped business rules, flagged/dropped requests, mobile manifest / wizard
-  registration, and any `requiresManualDecision` items still open.
+- **Remaining manual steps:** dropped business rules, dropped action components (a component whose
+  request the mobile app does not support is removed from the page entirely — elementMap `drop`, not a
+  "flagged" component that stayed on the page), mobile manifest / wizard registration, and any
+  `requiresManualDecision` items still open.
 - **Hand off** to Freedom UI Mobile Designer (step 9) for final layout review and manual refinement.
 
 ## Mobile constraints (carry into every step)
