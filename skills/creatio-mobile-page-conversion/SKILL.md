@@ -33,7 +33,12 @@ NOT gated — but on their own they are not enough to run this flow correctly.)
 Before the Load order below, verify the converter is available: list the server tools (or call
 `get-tool-contract`) and check for `get-mobile-page-conversion-guide`.
 
-- **If present** → proceed with the Load order and the flow.
+- **If present** → also confirm the paired guidance article loads before proceeding: Load order step 2
+  calls `get-guidance` with name `freedom-page-web-to-mobile-conversion`. If that call falls back to
+  `availableGuides` (the article is absent or was renamed) instead of returning the real conversion
+  guidance, **STOP** with the same enable message below — do NOT proceed with the tool but no guidance,
+  or you will build the body missing the paste-verbatim data-section and hard mobile rules with no
+  warning. Otherwise proceed with the Load order and the flow.
 - **If absent** → the feature is turned off. **STOP** and tell the user verbatim:
 
   > The Web→Mobile converter is not enabled in your clio. Enable it once with:
