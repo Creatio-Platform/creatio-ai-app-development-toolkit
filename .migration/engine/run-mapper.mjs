@@ -244,5 +244,16 @@ check("static visible:false is respected on the Freedom field (not forced true)"
 check("feature toggles flagged (feature-toggle) — mapping is the full union, page shows one state",
   visCs.needsDecision.some(n => n.kind === "feature-toggle" && /UseNewProductCatalogue/.test(n.item)));
 
+/* ---- getActions custom action surfaced into cardActions + real caption used (no synth flag) ---- */
+const actCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", actionHints: ["navigateToTaxesByCountriesLookup"],
+  methods: ["getActions"], diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true, caption: "Resources.Strings.MyTabCap" }),
+  di({ name: "F", parentName: "MyTab", propertyName: "items", bindTo: "F" })] })]));
+check("getActions custom action surfaced into cardActions (not lost)",
+  actCs.cardActions.includes("navigateToTaxesByCountriesLookup"));
+check("real tab caption used → no synthesized tab-caption decision",
+  actCs.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCap"
+  && !actCs.needsDecision.some(n => n.kind === "tab-caption" && n.item === "MyTab"));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

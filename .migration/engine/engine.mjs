@@ -100,6 +100,10 @@ export function parseLayer(src, pkg) {
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
     features: [...new Set([...src.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
+    // custom card-ACTION hints — the ACTIONS menu is built imperatively in getActions (addAction/navigate*),
+    // so static parsing can't fully reconstruct it; surface the navigate/goTo action names so a real
+    // action (e.g. navigateToTaxesByCountriesLookup) isn't silently lost.
+    actionHints: [...new Set([...src.matchAll(/\b((?:navigateTo|goTo|GoTo)[A-Z]\w+)/g)].map(mt => mt[1]))],
   };
 }
 
@@ -123,6 +127,9 @@ function normalizeDiff(diff) {
       contentType: isNum(v.contentType) ? v.contentType : null,
       isTab: op.propertyName === "tabs",
       hasCaption: !!(v.caption),
+      // caption resource key (tab/group/detail label) — carried so the real caption is shown for
+      // cross-check instead of only a synthesized placeholder.
+      caption: (v.caption && isStr(v.caption.bindTo)) ? v.caption.bindTo : (isStr(v.caption) ? v.caption : null),
       order: v && isNum(v.order) ? v.order : null,
       // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
       // (e.g. a wide 3-column header) instead of inventing a single narrow column.
@@ -229,13 +236,13 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
           name: op.name, parent: op.parentName, propertyName: op.propertyName,
           bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
           isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
-          tip: op.tip, generator: op.generator, visible: op.visible,
+          tip: op.tip, generator: op.generator, visible: op.visible, caption: op.caption,
           templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
         });
       } else if (op.operation === "merge") {
         // patch in place; carry contentType/itemType too — a later layer can introduce a control hint
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
-        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; if (op.visible != null) cur.visible = op.visible; if (op.tip) cur.tip = op.tip; cur.provenance.push(L.pkg); }
+        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; if (op.visible != null) cur.visible = op.visible; if (op.tip) cur.tip = op.tip; if (op.caption) cur.caption = op.caption; cur.provenance.push(L.pkg); }
         else {
           // merge onto an item no lower layer defined: record a stub with the SAME shape as an insert
           // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
@@ -319,6 +326,7 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   // feature toggles referenced by the SCHEMA layers (not the base template) — they gate element
   // visibility at runtime; the rendered page shows one feature-state while this is the full union.
   const features = [...new Set(layers.flatMap(l => l.features || []))].sort();
+  const cardActionHints = [...new Set(layers.flatMap(l => l.actionHints || []))].sort();
 
   return {
     entity,
@@ -329,14 +337,14 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, generator: i.generator || null,
-      visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, tip: i.tip || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
-    tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).
     details: [...details.values()].map(d => {
       const it = items.get(d.key);
-      return { ...d, fromTemplate: !d.schemaTouched, parent: it?.parent ?? null, order: it?.order ?? null };
+      return { ...d, fromTemplate: !d.schemaTouched, parent: it?.parent ?? null, order: it?.order ?? null, caption: it?.caption ?? null };
     }),
     rules: activeRules.map(r => ({ ...r, fromTemplate: !r.schemaTouched })),
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
@@ -345,5 +353,6 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     warnings,
     unresolvedParents,
     features, // feature toggles gating runtime visibility (the rendered page shows one feature-state)
+    cardActionHints, // custom card actions found in getActions bodies (imperative — surfaced for review)
   };
 }

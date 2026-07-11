@@ -123,14 +123,15 @@ export function mapToFreedom(eff, opts = {}) {
     } else {
       // client-owned tab: the page defines it, so we build it. Its grid holds the routed fields.
       parentName = tabGridName(tab);
+      const tItem = index.get(tab);
+      const cap = tItem && tItem.caption ? "$" + tItem.caption : "$Resources.Strings." + tab + "Caption";
       structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
-        values: { type: "crt.Tab", caption: "$Resources.Strings." + tab + "Caption" } });
+        values: { type: "crt.Tab", caption: cap } });
       structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
         values: { type: "crt.GridContainer" } });
-      // no-silent-guess: the classic caption TEXT isn't carried in the model (only hasCaption), so the
-      // resource key above is a placeholder — flag it like every other synthesized value in this mapper.
-      needsDecision.push({ kind: "tab-caption", item: tab,
-        reason: `synthesized caption key '$Resources.Strings.${tab}Caption' — classic caption text not in model; confirm/replace with the real localized string` });
+      // only flag when we had to SYNTHESIZE the caption key (classic carried no caption resource).
+      if (!(tItem && tItem.caption)) needsDecision.push({ kind: "tab-caption", item: tab,
+        reason: `synthesized caption key '$Resources.Strings.${tab}Caption' — classic caption not in model; confirm/replace with the real localized string` });
     }
     emittedTabs.set(tab, parentName);
     return parentName;
@@ -141,12 +142,13 @@ export function mapToFreedom(eff, opts = {}) {
     let inner;
     if (g.itemType === 15) {
       // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
+      const cap = g.caption ? "$" + g.caption : "$Resources.Strings." + g.name + "Caption";
       structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
-        values: { type: "crt.ExpansionPanel", caption: "$Resources.Strings." + g.name + "Caption", collapsible: true } });
+        values: { type: "crt.ExpansionPanel", caption: cap, collapsible: true } });
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
         values: { type: "crt.GridContainer" } });
-      needsDecision.push({ kind: "group-caption", item: g.name,
+      if (!g.caption) needsDecision.push({ kind: "group-caption", item: g.name,
         reason: `synthesized ExpansionPanel caption '$Resources.Strings.${g.name}Caption' for classic group — confirm/replace with the real localized string` });
     } else {
       // GRID_LAYOUT / generic structural container -> crt.GridContainer.
@@ -286,7 +288,7 @@ export function mapToFreedom(eff, opts = {}) {
       reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
     details.push({
       composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
-      tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      caption: d.caption || null, tab, order: d.order ?? null, dataSourceScope: "viewElement",
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
@@ -314,10 +316,13 @@ export function mapToFreedom(eff, opts = {}) {
   }
 
   // ---- Moment 5: card actions / ACTIONS menu → Freedom card actions (B7) ----
-  const cardActions = (eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name);
+  // static toolbar buttons + custom actions surfaced from getActions bodies (navigate*/goTo*), so a real
+  // action like navigateToTaxesByCountriesLookup isn't silently lost (its body is imperative → review).
+  const cardActions = [...(eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name), ...(eff.cardActionHints || [])];
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
-    reason: `card actions / ACTIONS-menu (${cardActions.join(", ") || "getActions"}) → Freedom card actions (B7); standard menu items (Set up access rights / Send for approval / Follow the feed) and Print/View to wire — action bodies live in getActions (imperative, needs review)` });
+    reason: `card actions / ACTIONS-menu → Freedom card actions (B7): ${cardActions.join(", ") || "getActions"}. ` +
+      `Custom getActions items${(eff.cardActionHints || []).length ? " incl. " + eff.cardActionHints.join(", ") : ""} are built imperatively — review the getActions body to wire them.` });
 
   // feature toggles gate WHICH elements render — the ChangeSet is the full static UNION of blocks/fields;
   // the rendered page shows one feature-state (e.g. old ProductCategoryBlock vs new one). Flag for review;
