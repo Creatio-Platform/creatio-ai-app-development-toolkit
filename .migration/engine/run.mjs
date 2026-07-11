@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
+import { makeLayer } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(DIR, "..", "fixtures");
@@ -20,7 +21,8 @@ function report(title, eff) {
   console.log(`entity: ${eff.entity}`);
   console.log(`fields (${eff.fields.length}): ${eff.fields.map(f => f.bindTo).join(", ")}`);
   console.log(`tabs (${eff.tabs.length}): ${eff.tabs.map(t => t.name).join(", ")}`);
-  console.log(`detailItems (${eff.detailItems.length}): ${eff.detailItems.map(d => d.name).join(", ")}`);
+  const detailItems = eff.items.filter(i => i.itemType === 2); // derived from the layout tree
+  console.log(`detailItems (${detailItems.length}): ${detailItems.map(d => d.name).join(", ")}`);
   console.log(`details (${eff.details.length}): ${eff.details.map(d => `${d.key}→${d.schemaName || "?"}[${d.entitySchemaName || "?"}]`).join(", ")}`);
   console.log(`rules (${eff.rules.length}):`);
   for (const r of eff.rules) console.log(`   ${r.attr} · ${r.ruleType}${r.property ? "/" + r.property : ""} · ${r.system} · from ${r.provenance.join(">")}`);
@@ -98,11 +100,7 @@ check("F1: unseeded Contract raises merge-onto-absent warnings (base tabs/button
   co.warnings.length > 0 && co.warnings.some(w => w.op === "merge" && (w.name === "ESNTab" || w.name === "PrintButton")));
 
 /* ---- F1: move/remove-onto-absent branches (synthetic layers pin the drop + tombstone outcomes) ---- */
-const op = (o) => ({ operation: o.operation, name: o.name, parentName: o.parentName ?? null,
-  propertyName: o.propertyName ?? null, bindTo: o.bindTo ?? null, itemType: o.itemType ?? null,
-  contentType: o.contentType ?? null, isTab: !!o.isTab, order: o.order ?? null });
-const synth = (pkg, ops) => ({ pkg, error: null, entitySchemaName: "X",
-  diff: ops.map(op), businessRules: {}, rules: {}, details: {}, methods: [], attributes: [], modules: [] });
+const synth = (pkg, ops) => makeLayer(pkg, { entity: "X", diff: ops }); // shared shape (see _testkit.mjs)
 
 const moved = mergeLayers([synth("T", [{ operation: "move", name: "Ghost", parentName: "Nowhere" }])]);
 check("F1: move-onto-absent is dropped (item never materialises)", !moved.items.some(i => i.name === "Ghost"));
@@ -122,6 +120,22 @@ const tomb = mergeLayers([
 ]);
 check("F2: parent surviving only as a tombstone is reported unresolved (engine⇄mapper consistent)",
   tomb.unresolvedParents.includes("Grp") && !tomb.items.some(i => i.name === "Grp"));
+
+/* ---- C2: a merge that introduces contentType on an ALREADY-defined field must carry it (not drop) ---- */
+const c2 = mergeLayers([
+  synth("base", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", bindTo: "Col" }]),
+  synth("top", [{ operation: "merge", name: "F", contentType: 5 }]),  // later layer marks it a lookup
+]);
+check("C2: merge introduces contentType (5=lookup) on an existing item — carried, not dropped",
+  c2.items.find(i => i.name === "F")?.contentType === 5);
+
+/* ---- F9/C6 origin: a base field the client only MOVES stays templateOwned (insert origin = seed),
+   so it is NOT re-emitted as client payload — the client only repositioned template content. ---- */
+const mvSeed = makeLayer("Tpl", { diff: [{ operation: "insert", name: "BF", parentName: "Header", propertyName: "items", bindTo: "BCol" }] });
+const mvClient = makeLayer("Client", { entity: "X", diff: [{ operation: "move", name: "BF", parentName: "MyTab" }] });
+const mvEff = mergeLayers([mvClient], { seedLayers: [mvSeed] });
+check("F9/C6: a base field the client only MOVED stays templateOwned (origin=seed insert)",
+  mvEff.fields.find(f => f.bindTo === "BCol")?.templateOwned === true);
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

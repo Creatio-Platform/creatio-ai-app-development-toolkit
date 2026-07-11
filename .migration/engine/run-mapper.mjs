@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
+import { makeLayer as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(DIR, "..", "fixtures");
@@ -86,10 +87,7 @@ check("F3: no field left in the old catch-all GeneralInfoTabContainer",
   !co.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
 
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
-const L = (pkg, o) => ({ pkg, error: null, entitySchemaName: o.entity || "?", diff: o.diff || [],
-  businessRules: o.businessRules || {}, rules: {}, details: o.details || {}, methods: o.methods || [], attributes: [], modules: o.modules || [] });
-const di = (o) => ({ operation: "insert", name: o.name, parentName: o.parentName ?? null, propertyName: o.propertyName ?? null,
-  bindTo: o.bindTo ?? null, itemType: o.itemType ?? null, contentType: o.contentType ?? null, isTab: !!o.isTab, order: o.order ?? null });
+// L/di are the shared layer/op builders (see _testkit.mjs), aliased to keep the assertions terse.
 // Seed contributes a bound FIELD and a business RULE too (the primary payload) — not only methods/details/
 // components — so their exclusion is asserted POSITIVELY, not "0 by accident".
 const f9seed = L("Tpl", {
@@ -131,6 +129,54 @@ check("F9×F3: base-template tab placement flagged as needsDecision",
   btcs.needsDecision.some(n => n.kind === "base-tab-placement" && n.item === "ESNTab"));
 check("F9×F3: the field routes into the EXISTING base tab, not a synthesized grid",
   btcs.viewConfigDiff.some(o => o.name === "Note" && o.parentName === "ESNTab"));
+
+/* ---- B1 (Blocker): a base tab a CLIENT layer merges is STILL template-owned (origin=insert) — the
+   common reorder/re-caption case the prior fix missed. Must not synthesize a duplicate crt.Tab. ---- */
+const b1seed = L("Tpl", { diff: [di({ name: "Tabs", itemType: 15 }),
+  di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true })] });
+const b1client = L("Client", { entity: "X", diff: [
+  di({ operation: "merge", name: "ESNTab", order: 5 }),                                  // client re-orders the base tab
+  di({ name: "Note", parentName: "ESNTab", propertyName: "items", bindTo: "Note" })] }); // and adds a field to it
+const b1eff = mergeLayers([b1client], { seedLayers: [b1seed] });
+const b1tab = b1eff.tabs.find(t => t.name === "ESNTab");
+const b1cs = mapToFreedom(b1eff);
+check("B1: client-merged base tab keeps templateOwned=true (origin=seed insert, provenance has both)",
+  b1tab?.templateOwned === true && b1tab?.provenance.length === 2);
+check("B1: NO fresh crt.Tab synthesized for the client-merged base tab (the missed common case)",
+  !b1cs.viewConfigDiff.some(o => o.name === "ESNTab" && o.values?.type === "crt.Tab"));
+check("B1: field routes into the existing base tab + base-tab-placement flagged",
+  b1cs.viewConfigDiff.some(o => o.name === "Note" && o.parentName === "ESNTab")
+  && b1cs.needsDecision.some(n => n.kind === "base-tab-placement" && n.item === "ESNTab"));
+
+/* ---- C3: a template-internal remove (by a seed layer) is context, not a client B6 decision ---- */
+const c3seed = L("Tpl", { diff: [di({ name: "BaseA", itemType: 15 }), di({ name: "BaseB", itemType: 15 }),
+  di({ operation: "remove", name: "BaseB" })] });                    // seed removes its OWN base element
+const c3client = L("Client", { entity: "X", diff: [di({ operation: "remove", name: "BaseA" })] }); // client removes a base element
+const c3cs = mapToFreedom(mergeLayers([c3client], { seedLayers: [c3seed] }));
+check("C3: client remove of a base element surfaces as a removal decision (BaseA)",
+  c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseA"));
+check("C3: template-internal remove (seed removed its own element) is NOT a removal decision (BaseB)",
+  !c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseB"));
+
+/* ---- C5: a field nested in a classic group inside a tab is flagged (nesting flattened, not silent) ---- */
+const c5client = L("Client", { entity: "X", diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+  di({ name: "Grp1", parentName: "MyTab", itemType: 15 }),
+  di({ name: "GF", parentName: "Grp1", propertyName: "items", bindTo: "ColG" })] });
+const c5cs = mapToFreedom(mergeLayers([c5client]));
+check("C5: group nesting inside a tab is flagged (group-nesting), not silently flattened",
+  c5cs.needsDecision.some(n => n.kind === "group-nesting" && n.item === "ColG"));
+check("C5: the grouped field still routes into the tab grid",
+  c5cs.viewConfigDiff.some(o => o.name === "ColG" && o.parentName === "MyTabGrid"));
+
+/* ---- C4: a rule targeting a field not inserted in the ChangeSet is flagged (dangling) ---- */
+const c4seed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }),
+  di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" })] });
+const c4client = L("Client", { entity: "X", diff: [], businessRules: { BaseCol: { r: { ruleType: 0, property: 2 } } } });
+const c4cs = mapToFreedom(mergeLayers([c4client], { seedLayers: [c4seed] }));
+check("C4: rule on a base (excluded) field is flagged rule-target-missing",
+  c4cs.needsDecision.some(n => n.kind === "rule-target-missing" && n.item === "BaseCol")
+  && !c4cs.viewConfigDiff.some(o => o.name === "BaseCol"));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

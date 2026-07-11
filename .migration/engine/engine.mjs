@@ -59,8 +59,12 @@ export function parseLayer(src, pkg) {
       try { captured = factory.apply(thisProxy, deps.map(resolveDep)); }
       catch (e) { parseError = "factory threw: " + String(e && e.message || e); }
     },
-    // window/console are PROXY (NOT plain host objects) so a body cannot reach the host realm via
-    // window.constructor.constructor / console.log.constructor (sandbox-escape hardening).
+    // window/console are PROXY (not plain host objects) to close the obvious window.constructor.constructor
+    // vector — but this is NOT a security boundary. `define` (and the enum proxies) are real host-realm
+    // functions, so a body can still escape via define.constructor.constructor("return process")(). node:vm
+    // is not a sandbox for untrusted code; today's inputs are OFFLINE fixtures only. Before any production
+    // seed-fetch feeds stand-sourced bodies here, replace this with a non-executing parser / real isolation
+    // (see F8 in SELF-REVIEW.md). Do not treat parseLayer as safe for untrusted input.
     Terrasoft: PROXY, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
   };
   try { vm.runInNewContext(src, sandbox, { timeout: 4000 }); }
@@ -166,22 +170,21 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   // patches was never seeded (F2). We surface these instead of silently dropping/orphaning them.
   const warnings = [];
   const seedLayers = Array.isArray(opts.seedLayers) ? opts.seedLayers : [];
-  const allLayers = [...seedLayers, ...layers]; // template skeleton first, then client layers
-  // F9: packages that are template context (seed) vs the page's own schema layers. An element is
-  // `fromTemplate` iff EVERY package in its provenance is a seed package — i.e. no schema layer ever
-  // touched it. Such elements are layout context only, never migration payload. With no seed the set
-  // is empty, nothing is fromTemplate, and behaviour is unchanged.
-  const seedPkgs = new Set(seedLayers.map(l => l.pkg));
-  const fromTemplate = (prov) => Array.isArray(prov) && prov.length > 0 && prov.every(p => seedPkgs.has(p));
-  // `fromTemplate` classifies by package NAME. If a package appears in BOTH the seed and the schema's
-  // own layers, an element touched only by that package would be misattributed as template context and
-  // silently dropped from the payload. Surface the overlap so the split can't quietly go wrong.
-  const overlap = [...new Set(layers.map(l => l.pkg))].filter(p => seedPkgs.has(p));
-  if (overlap.length) warnings.push({ op: "seed-overlap", name: overlap.join(", "),
-    hint: "package(s) appear in BOTH seed and schema layers — fromTemplate (payload vs context) is keyed by package name and may misattribute their elements; disambiguate seed vs schema origin before trusting the split" });
+  // F9 origin: tag each layer by WHERE it came from — parent-template seed vs the page's own schema
+  // layers. This is the authoritative signal, known HERE from which list the layer is in; we do NOT
+  // reconstruct it from package names later (names collide when one package is both a template layer
+  // and a schema layer). Diff-items carry `templateOwned` = their DEFINING insert came from a seed
+  // layer — used for STRUCTURAL identity: a base tab a client merely re-captions is still template-
+  // owned, so we never re-synthesize it (the Freedom template still provides it). Keyed elements
+  // (rules/methods/details/components) carry `schemaTouched` = ≥1 schema layer contributed — a client
+  // override IS payload. Payload = items a schema layer authored; template-only = layout context.
+  const tagged = [
+    ...seedLayers.map(L => ({ L, seed: true })),   // parent-template skeleton first
+    ...layers.map(L => ({ L, seed: false })),      // then the schema's own layers
+  ];
   const entity = layers.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
-  for (const L of allLayers) {
+  for (const { L, seed } of tagged) {
     // diff replay
     for (const op of L.diff) {
       const cur = items.get(op.name);
@@ -190,22 +193,27 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
           name: op.name, parent: op.parentName, propertyName: op.propertyName,
           bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
           isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order,
+          templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
         });
       } else if (op.operation === "merge") {
-        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; cur.provenance.push(L.pkg); }
+        // patch in place; carry contentType/itemType too — a later layer can introduce a control hint
+        // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
+        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; cur.provenance.push(L.pkg); }
         else {
-          // external stub carries the SAME shape as an insert (incl. contentType) so the mapper's
-          // control selection keeps the classic hint (e.g. contentType 5 = lookup) on this path too.
-          items.set(op.name, { name: op.name, parent: op.parentName, propertyName: op.propertyName, bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, isTab: op.isTab, removed: false, provenance: [L.pkg], external: true, order: op.order });
+          // merge onto an item no lower layer defined: record a stub with the SAME shape as an insert
+          // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
+          items.set(op.name, { name: op.name, parent: op.parentName, propertyName: op.propertyName, bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, templateOwned: seed });
           warnings.push({ op: "merge", name: op.name, layer: L.pkg, hint: "merge onto an item no lower layer defined — base-template element not seeded (F2) or layers out of order (F1)" });
         }
       } else if (op.operation === "move") {
         if (cur) { if (op.parentName) cur.parent = op.parentName; cur.provenance.push(L.pkg); }
         else warnings.push({ op: "move", name: op.name, layer: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / layer order (F1)` });
       } else if (op.operation === "remove") {
-        if (cur) { cur.removed = true; cur.removedBy = L.pkg; }
+        // removedBySeed: a template-internal remove (base template dropping a base element) is context,
+        // not a client B6 decision — the mapper filters it out like every other template-only element.
+        if (cur) { cur.removed = true; cur.removedBy = L.pkg; cur.removedBySeed = seed; }
         else {
-          items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, provenance: [L.pkg] });
+          items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, removedBySeed: seed, provenance: [L.pkg] });
           warnings.push({ op: "remove", name: op.name, layer: L.pkg, hint: "remove of an item no lower layer defined — recorded as tombstone; check base seed / layer order" });
         }
       }
@@ -229,25 +237,27 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
             value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
             dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null,
             enabled: r.enabled !== false, removed: r.removed === true,
-            provenance: [L.pkg],
+            provenance: [L.pkg], schemaTouched: !seed,
           };
-          if (rules.has(id)) { const p = rules.get(id); rec.provenance = [...p.provenance, L.pkg]; }
+          if (rules.has(id)) { const p = rules.get(id); rec.provenance = [...p.provenance, L.pkg]; rec.schemaTouched = p.schemaTouched || !seed; }
           rules.set(id, rec);
         }
       }
     }
     // details
     for (const k of Object.keys(L.details)) {
-      const rec = { key: k, ...L.details[k], provenance: [L.pkg] };
-      if (details.has(k)) rec.provenance = [...details.get(k).provenance, L.pkg];
+      const prev = details.get(k);
+      const rec = { key: k, ...L.details[k], provenance: [L.pkg], schemaTouched: !seed };
+      if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
       details.set(k, rec);
     }
-    // methods (override stack)
-    for (const m of L.methods) methods.set(m, [...(methods.get(m) || []), L.pkg]);
+    // methods (override stack) — track whether any schema layer contributed
+    for (const m of L.methods) { const prev = methods.get(m); methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed }); }
     // modules (widgets/charts) — merge by key
     for (const c of L.modules || []) {
-      const rec = { ...c, provenance: [L.pkg] };
-      if (components.has(c.key)) rec.provenance = [...components.get(c.key).provenance, L.pkg];
+      const prev = components.get(c.key);
+      const rec = { ...c, provenance: [L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed };
+      if (prev) rec.provenance = [...prev.provenance, L.pkg];
       components.set(c.key, rec);
     }
   }
@@ -270,19 +280,19 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   return {
     entity,
     // Full alive layout tree (containers, groups, tabs, fields) with parent links — the input F3's
-    // mapper walks to route each field to its owning tab/group and to rebuild the container nesting.
-    // The projections below (fields/tabs/detailItems) are convenience views over the same items.
+    // mapper walks to route each field to its owning tab/group. Diff-items carry `templateOwned`
+    // (defining insert came from a seed layer): payload = client-authored items, structural identity =
+    // template ownership. Keyed projections below carry `fromTemplate` (= no schema layer contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
-      isTab: i.isTab, order: i.order, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
-    tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
-    detailItems: alive.filter(i => i.itemType === 2).map(i => ({ name: i.name, parent: i.parent, provenance: i.provenance, fromTemplate: fromTemplate(i.provenance) })),
-    details: [...details.values()].map(d => ({ ...d, fromTemplate: fromTemplate(d.provenance) })),
-    rules: activeRules.map(r => ({ ...r, fromTemplate: fromTemplate(r.provenance) })),
-    removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy })),
-    methods: [...methods.entries()].map(([n, stack]) => ({ name: n, stack, fromTemplate: fromTemplate(stack) })),
-    components: [...components.values()].map(c => ({ ...c, fromTemplate: fromTemplate(c.provenance) })),
+      isTab: i.isTab, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    details: [...details.values()].map(d => ({ ...d, fromTemplate: !d.schemaTouched })),
+    rules: activeRules.map(r => ({ ...r, fromTemplate: !r.schemaTouched })),
+    removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
+    methods: [...methods.entries()].map(([n, m]) => ({ name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched })),
+    components: [...components.values()].map(c => ({ ...c, fromTemplate: !c.schemaTouched })),
     warnings,
     unresolvedParents,
   };

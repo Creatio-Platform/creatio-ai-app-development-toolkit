@@ -2,23 +2,26 @@
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%. See .migration/solution-design.md §3.3.
 
-// Lesson #6 — structural preservation: target container derives from the SOURCE container role.
-// Single source of truth for the profile-role containers (consumed by both CONTAINER and resolveOwner).
-const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header"]);
-const CONTAINER = Object.fromEntries([...PROFILE_CONTAINERS].map(n => [n, "SideAreaProfileContainer"]));
-const toContainer = (parent) => CONTAINER[parent] || "GeneralInfoTabContainer";
+// Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
+const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header"]); // classic → SideAreaProfileContainer
+const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its parent chain is unresolvable
 
 // F3 — resolve which Freedom region a field belongs to by CLIMBING the classic item tree from the
 // field's parent: hitting Header/ProfileContainer => the side profile; hitting a tab => that tab;
 // running off the tree (parent never defined) => unresolved (caller flags + falls back). This is
-// what turns the old "everything flattens to one tab" into faithful tab/group placement.
+// what turns the old "everything flattens to one tab" into faithful tab placement.
+// `tabTemplateOwned` = the owning tab's DEFINING insert came from a seed layer (so the Freedom template
+// already provides it — don't re-synthesize even if a client layer re-captioned it). `throughGroup` =
+// the climb passed an intermediate non-tab container (a classic field-group) whose nesting the single
+// flat grid drops — surfaced as a decision (no-silent-guess) rather than silently lost.
 function resolveOwner(startParent, index) {
-  let parent = startParent, hops = 0;
+  let parent = startParent, hops = 0, throughGroup = false;
   while (parent && hops++ < 32) {
-    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile" };
+    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", throughGroup };
     const p = index.get(parent);
     if (!p) return { kind: "unresolved", parent };
-    if (p.isTab) return { kind: "tab", tab: p.name, tabFromTemplate: !!p.fromTemplate };
+    if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, throughGroup };
+    throughGroup = true; // this ancestor is a group/container, not a tab or the profile
     parent = p.parent;
   }
   return { kind: "unresolved", parent: startParent };
@@ -59,8 +62,8 @@ export function mapToFreedom(eff, opts = {}) {
   // context — kept in eff.items for ancestry routing, but excluded from the payload. The full layout
   // tree (index below) still uses ALL items so base containers resolve. `baseContextExcluded` reports
   // the counts so the exclusion is transparent, not silent.
-  const notTpl = (x) => !x.fromTemplate;
-  const payloadFields = eff.fields.filter(notTpl);
+  const notTpl = (x) => !x.fromTemplate;                          // keyed categories + removals
+  const payloadFields = eff.fields.filter(f => !f.templateOwned); // diff-items: by INSERT origin (C6)
   const payloadRules = eff.rules.filter(notTpl);
   const payloadDetails = eff.details.filter(notTpl);
   const payloadMethods = eff.methods.filter(notTpl);
@@ -76,13 +79,13 @@ export function mapToFreedom(eff, opts = {}) {
   // ---- fields (3-part binding: control + attribute + dataSource) ----
   const rowByContainer = {};
   const nameCount = {};
-  const index = eff.items ? new Map(eff.items.map(i => [i.name, i])) : null; // layout tree for F3 routing
+  const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const structural = [];            // tab + tab-grid container inserts (emitted once, only when used)
   const emittedTabs = new Map(); // tab -> resolved parent container for routed fields
-  function ensureTab(tab, fromTpl) {
+  function ensureTab(tab, templateOwned) {
     if (emittedTabs.has(tab)) return emittedTabs.get(tab);
     let parentName;
-    if (fromTpl) {
+    if (templateOwned) {
       // F9×F3: a BASE-TEMPLATE tab (e.g. ESNTab) is provided by the Freedom counterpart template —
       // synthesizing a fresh crt.Tab here would duplicate/conflict with it. Route the field to the
       // EXISTING tab and flag placement; never emit a new crt.Tab/grid for a template-owned tab.
@@ -107,11 +110,15 @@ export function mapToFreedom(eff, opts = {}) {
   for (const f of payloadFields) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
     let parent;
-    const own = index ? resolveOwner(f.parent, index) : { kind: f.parent in CONTAINER ? "profile" : "unresolved", parent: f.parent };
+    const own = resolveOwner(f.parent, index);
     if (own.kind === "profile") parent = "SideAreaProfileContainer";
-    else if (own.kind === "tab") parent = ensureTab(own.tab, own.tabFromTemplate);
-    else {
-      parent = toContainer(f.parent); // fall back to the flat main container
+    else if (own.kind === "tab") {
+      parent = ensureTab(own.tab, own.tabTemplateOwned);
+      // C5: the flat grid drops classic field-group nesting inside the tab — flag it, don't lose it silently.
+      if (own.throughGroup) needsDecision.push({ kind: "group-nesting", item: f.bindTo || f.name,
+        reason: `field sits in a classic field-group inside tab '${own.tab}'; flattened into one grid — confirm grouping (ExpansionPanel/GridContainer) or accept flat layout` });
+    } else {
+      parent = FLAT_FALLBACK; // parent chain unresolvable
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
         reason: `classic container '${own.parent || f.parent}' is not defined by any layer or template — placed in ${parent}; seed the base template (F2) or confirm target tab/group` });
     }
@@ -161,6 +168,14 @@ export function mapToFreedom(eff, opts = {}) {
         reason: `rule '${r.attr}' ruleType is '${r.ruleType}' (enum unresolved) — resolve and re-map, do not assume` });
     }
   }
+  // C4: a rule whose target column has NO field insert in this ChangeSet (its field is template context
+  // excluded from payload, or an entity-only column) would dangle on a non-existent element — flag it.
+  const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
+  const ruleTargets = new Set(
+    [...pageBusinessRules.map(r => r.element), ...entityBusinessRules.map(r => r.targetAttribute)].filter(Boolean));
+  for (const t of ruleTargets) if (!emittedCols.has(t))
+    needsDecision.push({ kind: "rule-target-missing", item: t,
+      reason: `business rule targets '${t}' but no field for it is inserted (base/template field or entity-only column) — ensure the Freedom target provides the element` });
 
   // ---- details -> "Expanded list" composite spec (full contract; lesson #8) ----
   const details = payloadDetails.map(d => ({
@@ -181,8 +196,8 @@ export function mapToFreedom(eff, opts = {}) {
     needsDecision.push({ kind: "component", item: c.key,
       reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
-  // ---- removals (B6) — only honor if the removing layer is client-editable ----
-  for (const rm of eff.removed) {
+  // ---- removals (B6) — client removals only; template-internal removes are context (F9, C3) ----
+  for (const rm of eff.removed.filter(notTpl)) {
     const clientRemoved = clientEditableLayers.has(rm.removedBy);
     needsDecision.push({ kind: "removal", item: rm.name,
       reason: clientRemoved
