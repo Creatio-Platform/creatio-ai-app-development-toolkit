@@ -37,6 +37,22 @@ const BUSINESS_RULE_MODULE = new Proxy({}, {
   }) : PROXY,
   apply: () => PROXY,
 });
+// ViewItemType — ONLY members CONFIRMED from real stand data (0/2/15 seen as numeric literals on the
+// same pages); others stay PROXY->null, never guessed (E1 lesson: a wrong enum value silently corrupts).
+// Seeded so symbolic `Terrasoft.controls.ViewItemType.CONTROL_GROUP` resolves to a number instead of
+// null — otherwise most group/grid containers lose their itemType and the mapper can't tell a
+// CONTROL_GROUP (→ ExpansionPanel) from a GRID_LAYOUT (→ GridContainer).
+const VIEW_ITEM_TYPE = enumProxy({ GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 });
+const enumHolder = (member, val) => new Proxy({}, { get: (_t, p) => p === member ? val : PROXY, apply: () => PROXY, construct: () => PROXY });
+// Terrasoft stub: resolves `.ViewItemType`, `.controls.ViewItemType`, `.core.enums.ViewItemType` to the
+// seeded table; everything else stays the universal PROXY (unchanged behaviour).
+const TERRASOFT = new Proxy({}, {
+  get: (_t, p) => p === "ViewItemType" ? VIEW_ITEM_TYPE
+    : p === "controls" ? enumHolder("ViewItemType", VIEW_ITEM_TYPE)
+    : p === "core" ? new Proxy({}, { get: (_t2, c) => c === "enums" ? enumHolder("ViewItemType", VIEW_ITEM_TYPE) : PROXY, apply: () => PROXY })
+    : PROXY,
+  apply: () => PROXY, construct: () => PROXY,
+});
 // Resolve an AMD dependency name to a stub. Only BusinessRuleModule needs real values (for rule enums);
 // everything else (terrasoft, Ext, helpers) is the universal Proxy.
 function resolveDep(name) {
@@ -65,7 +81,7 @@ export function parseLayer(src, pkg) {
     // is not a sandbox for untrusted code; today's inputs are OFFLINE fixtures only. Before any production
     // seed-fetch feeds stand-sourced bodies here, replace this with a non-executing parser / real isolation
     // (see F8 in SELF-REVIEW.md). Do not treat parseLayer as safe for untrusted input.
-    Terrasoft: PROXY, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
+    Terrasoft: TERRASOFT, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
   };
   try { vm.runInNewContext(src, sandbox, { timeout: 4000 }); }
   catch (e) { parseError = parseError || ("eval failed: " + String(e && e.message || e)); }
@@ -288,7 +304,12 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
       isTab: i.isTab, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
-    details: [...details.values()].map(d => ({ ...d, fromTemplate: !d.schemaTouched })),
+    // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
+    // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).
+    details: [...details.values()].map(d => {
+      const it = items.get(d.key);
+      return { ...d, fromTemplate: !d.schemaTouched, parent: it?.parent ?? null, order: it?.order ?? null };
+    }),
     rules: activeRules.map(r => ({ ...r, fromTemplate: !r.schemaTouched })),
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
     methods: [...methods.entries()].map(([n, m]) => ({ name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched })),

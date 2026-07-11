@@ -11,17 +11,18 @@ const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its
 // running off the tree (parent never defined) => unresolved (caller flags + falls back). This is
 // what turns the old "everything flattens to one tab" into faithful tab placement.
 // `tabTemplateOwned` = the owning tab's DEFINING insert came from a seed layer (so the Freedom template
-// already provides it — don't re-synthesize even if a client layer re-captioned it). `throughGroup` =
-// the climb passed an intermediate non-tab container (a classic field-group) whose nesting the single
-// flat grid drops — surfaced as a decision (no-silent-guess) rather than silently lost.
+// already provides it — don't re-synthesize even if a client layer re-captioned it). `groups` = the
+// intermediate non-tab containers between the field and its tab (outermost→innermost), which the mapper
+// rebuilds as ExpansionPanel (CONTROL_GROUP, itemType 15) / GridContainer, preserving classic grouping
+// (e.g. a "Delivery" group) instead of flattening every field into one grid.
 function resolveOwner(startParent, index) {
-  let parent = startParent, hops = 0, throughGroup = false;
+  let parent = startParent, hops = 0; const groups = [];
   while (parent && hops++ < 32) {
-    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", throughGroup };
+    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", groups: groups.reverse() };
     const p = index.get(parent);
     if (!p) return { kind: "unresolved", parent };
-    if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, throughGroup };
-    throughGroup = true; // this ancestor is a group/container, not a tab or the profile
+    if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, groups: groups.reverse() };
+    groups.push(p); // intermediate container between the field and its tab/profile
     parent = p.parent;
   }
   return { kind: "unresolved", parent: startParent };
@@ -107,16 +108,38 @@ export function mapToFreedom(eff, opts = {}) {
     emittedTabs.set(tab, parentName);
     return parentName;
   }
+  const emittedGroups = new Map(); // group name -> inner container fields route into (emitted once)
+  function ensureGroup(g, parentName) {
+    if (emittedGroups.has(g.name)) return emittedGroups.get(g.name);
+    let inner;
+    if (g.itemType === 15) {
+      // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
+      structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
+        values: { type: "crt.ExpansionPanel", caption: "$Resources.Strings." + g.name + "Caption", collapsible: true } });
+      inner = g.name + "Grid";
+      structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
+        values: { type: "crt.GridContainer" } });
+      needsDecision.push({ kind: "group-caption", item: g.name,
+        reason: `synthesized ExpansionPanel caption '$Resources.Strings.${g.name}Caption' for classic group — confirm/replace with the real localized string` });
+    } else {
+      // GRID_LAYOUT / generic structural container -> crt.GridContainer.
+      inner = g.name;
+      structural.push({ operation: "insert", name: inner, parentName, propertyName: "items",
+        values: { type: "crt.GridContainer" } });
+    }
+    emittedGroups.set(g.name, inner);
+    return inner;
+  }
   for (const f of payloadFields) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
     let parent;
     const own = resolveOwner(f.parent, index);
-    if (own.kind === "profile") parent = "SideAreaProfileContainer";
+    if (own.kind === "profile") parent = "SideAreaProfileContainer"; // side area is flat — groups collapse here
     else if (own.kind === "tab") {
       parent = ensureTab(own.tab, own.tabTemplateOwned);
-      // C5: the flat grid drops classic field-group nesting inside the tab — flag it, don't lose it silently.
-      if (own.throughGroup) needsDecision.push({ kind: "group-nesting", item: f.bindTo || f.name,
-        reason: `field sits in a classic field-group inside tab '${own.tab}'; flattened into one grid — confirm grouping (ExpansionPanel/GridContainer) or accept flat layout` });
+      // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
+      // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
+      if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent);
     } else {
       parent = FLAT_FALLBACK; // parent chain unresolvable
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
@@ -151,10 +174,17 @@ export function mapToFreedom(eff, opts = {}) {
   const pageBusinessRules = [], entityBusinessRules = [];
   for (const r of payloadRules) {
     if (r.ruleType === "FILTRATION") {
-      entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr,
-        filter: r.filterColumn ? { columnPath: r.filterColumn, comparisonType: r.comparison, value: r.value, dataValueType: r.dataValueType } : null,
+      const filter = r.filterColumn
+        ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
+        : null;
+      // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
+      // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
+      const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
+      entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
         conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
         provenance: r.provenance });
+      if (!complete) needsDecision.push({ kind: "entity-filter", item: r.attr,
+        reason: `FILTRATION on '${r.attr}' has no resolved static value (dynamic / column-reference / macro filter) — resolve the target column, comparison and value (or column ref) before applying` });
     } else if (r.ruleType === "BINDPARAMETER") {
       const acts = PROP_ACTION[r.property];
       if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); continue; }
@@ -178,13 +208,25 @@ export function mapToFreedom(eff, opts = {}) {
       reason: `business rule targets '${t}' but no field for it is inserted (base/template field or entity-only column) — ensure the Freedom target provides the element` });
 
   // ---- details -> "Expanded list" composite spec (full contract; lesson #8) ----
-  const details = payloadDetails.map(d => ({
-    composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
-    dataSourceScope: "viewElement",
-    dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
-    toolbar: ["add", "refresh", "import-export", "search"],
-    note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
-  }));
+  const details = payloadDetails.map(d => {
+    // Gap 1: place the detail in its owning TAB (ancestry-resolved from the detail's diff-item parent),
+    // preserving order — instead of a flat tab-less list.
+    const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
+    const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? "SideAreaProfileContainer" : null);
+    if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+      reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
+    // Gap 2: editability (view-only vs add/edit/delete) is NOT reliably on the master page — it lives in
+    // the detail's OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
+    needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
+      reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
+    return {
+      composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
+      tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
+      actions: "unresolved", // toolbar/CRUD to be confirmed (see detail-editability) — not assumed
+      note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
+    };
+  });
 
   // ---- methods -> handler stubs (judgment) ----
   const handlerStubs = payloadMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));

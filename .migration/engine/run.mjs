@@ -137,5 +137,14 @@ const mvEff = mergeLayers([mvClient], { seedLayers: [mvSeed] });
 check("F9/C6: a base field the client only MOVED stays templateOwned (origin=seed insert)",
   mvEff.fields.find(f => f.bindTo === "BCol")?.templateOwned === true);
 
+/* ---- ViewItemType seed: symbolic itemType resolves (E1-class fix, now for layout containers) ---- */
+const vitBody = `define("T",[],function(){return{entitySchemaName:"X",diff:[` +
+  `{operation:"insert",name:"G",values:{itemType:Terrasoft.controls.ViewItemType.CONTROL_GROUP}},` +
+  `{operation:"insert",name:"GL",values:{itemType:Terrasoft.core.enums.ViewItemType.GRID_LAYOUT}}]};});`;
+const vit = parseLayer(vitBody, "T");
+check("ViewItemType: symbolic CONTROL_GROUP -> 15 (not null)", vit.diff.find(d => d.name === "G")?.itemType === 15);
+check("ViewItemType: symbolic GRID_LAYOUT (core.enums path) -> 0", vit.diff.find(d => d.name === "GL")?.itemType === 0);
+check("ViewItemType: no parse error from the Terrasoft stub", !vit.error);
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

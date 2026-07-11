@@ -77,8 +77,13 @@ console.log(`   tab containers: ${co.viewConfigDiff.filter(o => o.values?.type =
 console.log(`   Account -> ${parentOf("Account")}; Number -> ${parentOf("Number")}`);
 check("F3: GeneralInfoTab emitted as a tab (crt.Tab)", vop("GeneralInfoTab")?.values.type === "crt.Tab");
 check("F3: GeneralInfoTabGrid container emitted under the tab", parentOf("GeneralInfoTabGrid") === "GeneralInfoTab");
-check("F3: GeneralInfoTab fields routed into its grid (Account, CustomerBillingInfo)",
-  parentOf("Account") === "GeneralInfoTabGrid" && parentOf("CustomerBillingInfo") === "GeneralInfoTabGrid");
+check("F3: GeneralInfoTab fields routed into their nested group grid (Account, CustomerBillingInfo)",
+  parentOf("Account") === "group_gridLayout" && parentOf("CustomerBillingInfo") === "group_gridLayout");
+check("F3/C5: the classic CONTROL_GROUP is built as a crt.ExpansionPanel (the 'Delivery' group)",
+  vop("GeneralInfoTabGroupe00b109d")?.values.type === "crt.ExpansionPanel");
+check("F3/C5: the group's fields route inside its panel grid (ContractReturnDate, DeliveryType)",
+  parentOf("ContractReturnDate") === "GeneralInfoTabGridLayoutc608aa43"
+  && parentOf("DeliveryType") === "GeneralInfoTabGridLayoutc608aa43");
 check("F3: Header fields routed to the side profile (Number, Owner)",
   parentOf("Number") === "SideAreaProfileContainer" && parentOf("Owner") === "SideAreaProfileContainer");
 check("F3: layout is NOT flattened (≥2 distinct field containers)",
@@ -158,16 +163,18 @@ check("C3: client remove of a base element surfaces as a removal decision (BaseA
 check("C3: template-internal remove (seed removed its own element) is NOT a removal decision (BaseB)",
   !c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseB"));
 
-/* ---- C5: a field nested in a classic group inside a tab is flagged (nesting flattened, not silent) ---- */
+/* ---- C5 build-out: a classic CONTROL_GROUP inside a tab becomes a crt.ExpansionPanel (not flattened) ---- */
 const c5client = L("Client", { entity: "X", diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
-  di({ name: "Grp1", parentName: "MyTab", itemType: 15 }),
+  di({ name: "Grp1", parentName: "MyTab", itemType: 15 }),                          // CONTROL_GROUP
   di({ name: "GF", parentName: "Grp1", propertyName: "items", bindTo: "ColG" })] });
 const c5cs = mapToFreedom(mergeLayers([c5client]));
-check("C5: group nesting inside a tab is flagged (group-nesting), not silently flattened",
-  c5cs.needsDecision.some(n => n.kind === "group-nesting" && n.item === "ColG"));
-check("C5: the grouped field still routes into the tab grid",
-  c5cs.viewConfigDiff.some(o => o.name === "ColG" && o.parentName === "MyTabGrid"));
+check("C5: CONTROL_GROUP is BUILT as a crt.ExpansionPanel under the tab",
+  c5cs.viewConfigDiff.some(o => o.name === "Grp1" && o.values?.type === "crt.ExpansionPanel"));
+check("C5: field routes into the GROUP's grid (nesting preserved, not flattened to the tab grid)",
+  c5cs.viewConfigDiff.some(o => o.name === "ColG" && o.parentName === "Grp1Grid"));
+check("C5: synthesized group caption flagged (group-caption)",
+  c5cs.needsDecision.some(n => n.kind === "group-caption" && n.item === "Grp1"));
 
 /* ---- C4: a rule targeting a field not inserted in the ChangeSet is flagged (dangling) ---- */
 const c4seed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }),
@@ -177,6 +184,32 @@ const c4cs = mapToFreedom(mergeLayers([c4client], { seedLayers: [c4seed] }));
 check("C4: rule on a base (excluded) field is flagged rule-target-missing",
   c4cs.needsDecision.some(n => n.kind === "rule-target-missing" && n.item === "BaseCol")
   && !c4cs.viewConfigDiff.some(o => o.name === "BaseCol"));
+
+/* ---- Detail placement (tab + order) + editability not assumed ---- */
+const dClient = L("Client", { entity: "X", diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+  di({ name: "Prod", parentName: "MyTab", itemType: 2, order: 3 })],           // detail grid placed in MyTab, pos 3
+  details: { Prod: { schemaName: "ProdDetailV2", entitySchemaName: "OrderProduct", detailColumn: "X", masterColumn: "Id" } } });
+const dcs = mapToFreedom(mergeLayers([dClient]));
+const prod = dcs.details.find(d => d.detailSchema === "ProdDetailV2");
+check("Detail: resolved to its owning tab (MyTab) with order", prod?.tab === "MyTab" && prod?.order === 3);
+check("Detail: editability NOT hardcoded to 'add' — actions unresolved + flagged",
+  prod?.actions === "unresolved" && dcs.needsDecision.some(n => n.kind === "detail-editability" && n.item === "ProdDetailV2"));
+
+/* ---- entity-filter: dynamic (no static value) flagged incomplete; static one complete ---- */
+const efClient = L("Client", { entity: "X",
+  diff: [di({ name: "Lk", parentName: "Header", propertyName: "items", bindTo: "Lk" }),
+         di({ name: "St", parentName: "Header", propertyName: "items", bindTo: "St" })],
+  businessRules: {
+    Lk: { r: { ruleType: 1, baseAttributePatch: "OtherCol" } },                                              // FILTRATION, dynamic (no value)
+    St: { r: { ruleType: 1, baseAttributePatch: "Active", comparisonType: 3, value: true, dataValueType: 12 } } } }); // static
+const efcs = mapToFreedom(mergeLayers([efClient]));
+const lk = efcs.entityBusinessRules.find(r => r.targetAttribute === "Lk");
+const st = efcs.entityBusinessRules.find(r => r.targetAttribute === "St");
+check("entity-filter: dynamic filter marked incomplete + flagged (entity-filter)",
+  lk?.complete === false && efcs.needsDecision.some(n => n.kind === "entity-filter" && n.item === "Lk"));
+check("entity-filter: static filter marked complete + NOT flagged",
+  st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && n.item === "St"));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
