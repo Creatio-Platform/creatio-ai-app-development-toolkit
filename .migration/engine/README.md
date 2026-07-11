@@ -25,7 +25,7 @@ node .migration/engine/run.mjs
 - **container-role mapping** (урок #6): `ProfileContainer`/`Header`→`SideAreaProfileContainer`.
 - **F3 — дерево вкладок/контейнерів:** кожне поле маршрутизується **підйомом по предках** (`resolveOwner`): tab-предок→вкладка (емітимо `crt.Tab`+`…Grid` раз і лише коли вкладка тримає ≥1 поле), Header/Profile→бічний профіль, інакше→fallback+`needsDecision`. Плоскої «GeneralInfoTabContainer»-звалки більше нема.
 - **F9 — payload vs context (за походженням):** елемент належить payload, лише якщо його визначив schema-шар — diff-items за `templateOwned` (insert-походження), keyed-категорії за `schemaTouched`. Базові фреймворк-методи/деталі/компоненти + базові вкладки, які клієнт лише перекомпонував, лишаються layout-контекстом (`crt.Tab` для них не синтезуємо). `baseContextExcluded` рапортує відкинуте. (На реальному SupportUnit: 348 методів→1, 4 деталі→3, 12 компонентів→9.)
-- Запуск: `node .migration/engine/run-mapper.mjs` (або `npm test` у `engine/` — ганяє обидва раннери, `exit 1` при фейлі) — **golden 45/45 ✅**.
+- Запуск: `node .migration/engine/run-mapper.mjs` (або `npm test` у `engine/` — ганяє обидва раннери, `exit 1` при фейлі) — **golden 50/50 ✅**.
 - Для SupportUnit код генерує ChangeSet, **структурно еквівалентний зрізу**, зібраному вручну (`poc/body_full6.js`), для полів/контролів/профілю/деталі/правил. Він **не байт-у-байт**: базовий seed подається окремо (F2, ще не тягнемо реальний parent-template зі стенду — тому немає поля `Name`), а деталь віддається як composite-спека, не повне тіло Expanded list із тулбаром. Це відомі прогалини — див. нижче.
 
 ## Обмеження прототипу (доробити → продукт)

@@ -84,8 +84,22 @@ check("F3/C5: the classic CONTROL_GROUP is built as a crt.ExpansionPanel (the 'D
 check("F3/C5: the group's fields route inside its panel grid (ContractReturnDate, DeliveryType)",
   parentOf("ContractReturnDate") === "GeneralInfoTabGridLayoutc608aa43"
   && parentOf("DeliveryType") === "GeneralInfoTabGridLayoutc608aa43");
-check("F3: Header fields routed to the side profile (Number, Owner)",
-  parentOf("Number") === "SideAreaProfileContainer" && parentOf("Owner") === "SideAreaProfileContainer");
+check("F3/layout: WIDE Header → full-width header grid, not the narrow profile (Number, Owner)",
+  parentOf("Number") === "HeaderContainer" && parentOf("Owner") === "HeaderContainer");
+check("F3/layout: wide-header flagged (layout-type) + HeaderContainer built",
+  co.needsDecision.some(n => n.kind === "layout-type") && !!vop("HeaderContainer"));
+check("F3/layout: classic multi-column coords preserved (Owner at Freedom column > 1)",
+  vop("Owner")?.values.layoutConfig.column > 1);
+check("F3/features: Approvals(Visa)/Attachments(Files)/Activities are standard features, NOT generic details",
+  co.standardFeatures.some(s => s.feature === "Approvals") && !co.details.some(d => d.detailSchema === "VisaDetailV2"));
+check("F3/actions: card actions / ACTIONS-menu flagged (B7)",
+  co.needsDecision.some(n => n.kind === "card-action"));
+// widgets: synthetic (the curated fixture lacks the dashboard modules the real page has)
+const wCs = mapToFreedom(mergeLayers([L("Client", { entity: "X",
+  modules: [{ key: "ActionsDashboardModule", moduleName: "ActionsDashboardModule" }],
+  diff: [di({ name: "DuplicatesWidgetContainer", itemType: 0, parentName: "LeftModulesContainer" })] })]));
+check("F3/widgets: Action Dashboard (module) + Duplicates (container) recognized → Freedom analogs",
+  wCs.widgets.some(w => w.widget === "ActionDashboard") && wCs.widgets.some(w => w.widget === "Duplicates"));
 check("F3: layout is NOT flattened (≥2 distinct field containers)",
   new Set(co.viewConfigDiff.filter(o => o.values?.control).map(o => o.parentName)).size >= 2);
 check("F3: no field left in the old catch-all GeneralInfoTabContainer",

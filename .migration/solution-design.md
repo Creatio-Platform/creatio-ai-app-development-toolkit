@@ -57,7 +57,7 @@ Read (layers/graph зі стенду) — у `clio` (розширення йог
 - **Ф0 Фундамент:** нормалізована модель + фікстури ([`normalized-model.md`](normalized-model.md), [`fixtures/`](fixtures/)).
 - **Ф1 Read-примітиви (MCP):** `get-classic-schema`, `list-schema-layers`, `resolve-migration-unit`.
 - **Ф2 Merge-рушій (pure):** + обгортка `get-effective-classic-schema`. Тест офлайн на фікстурах. ✅ **прототип готовий, golden 34/34** ([engine/](engine/)): SupportUnit + Contract(9 шарів) зливаються детерміновано, з provenance; те, що LLM рахував ~142k токенів, код робить миттєво. **F1** (порядок за HierarchyLevel + `warnings`) і **F2** (`seedLayers` + `unresolvedParents`) закриті.
-- **Ф3 Mapper (pure):** ✅ **прототип готовий, golden 45/45** ([engine/mapper.mjs](engine/mapper.mjs)): **F3** — повне дерево вкладок/контейнерів (маршрут поля підйомом по предках; вкладка+grid емітяться раз і лише коли тримають поле); **F9** — payload лише зі schema-шарів (за походженням insert), base-template = layout-контекст. Лишаються reconcile-diff (A3/F4) → 🎯 демо-віха: показати ефективну Classic + чернетку Freedom **без запису**.
+- **Ф3 Mapper (pure):** ✅ **прототип готовий, golden 50/50** ([engine/mapper.mjs](engine/mapper.mjs)): **F3** — повне дерево вкладок/контейнерів (маршрут поля підйомом по предках; вкладка+grid емітяться раз і лише коли тримають поле); **F9** — payload лише зі schema-шарів (за походженням insert), base-template = layout-контекст. Лишаються reconcile-diff (A3/F4) → 🎯 демо-віха: показати ефективну Classic + чернетку Freedom **без запису**.
 - **Ф4 Оркестрація (скіл):** ролі, рекурсія, A3.1/A3.2, full-merge, B9/B10, approval-gate, living-docs.
 - **Ф5 Наскрізний пілот на стенді:** запис у клієнтський пакет + read-back + browser.
 - **Ф6 Загартування + ширина.**

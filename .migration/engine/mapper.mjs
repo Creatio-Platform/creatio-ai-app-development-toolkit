@@ -18,7 +18,7 @@ const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its
 function resolveOwner(startParent, index) {
   let parent = startParent, hops = 0; const groups = [];
   while (parent && hops++ < 32) {
-    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", groups: groups.reverse() };
+    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", via: parent, groups: groups.reverse() };
     const p = index.get(parent);
     if (!p) return { kind: "unresolved", parent };
     if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, groups: groups.reverse() };
@@ -49,6 +49,33 @@ const PROP_ACTION = {
   Enabled: ["make-editable", "make-read-only"],
   Visible: ["show-element", "hide-element"],
 };
+
+// Шар-3 knowledge: STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as
+// a generic detail/widget. Matched by classic detail/module/container name. The Freedom analog is named
+// descriptively (the exact crt.* component is confirmed on-stand — never fabricated here; E1 lesson).
+const FEATURE_CATALOG = {
+  VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)" },
+  FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes" },
+  ActivityDetailV2: { feature: "Activities", freedom: "Freedom Activities / Timeline" },
+  EmailDetailV2: { feature: "Emails", freedom: "Freedom Email component" },
+};
+// header/analytical widgets — recognised by MODULE key and by CONTAINER name.
+const WIDGET_BY_MODULE = {
+  ActionsDashboardModule: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps" },
+  DcmActionsDashboardModule: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator" },
+  Timeline: { widget: "Timeline", freedom: "Freedom Timeline" },
+};
+const WIDGET_BY_CONTAINER = {
+  ActionDashboardContainer: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps" },
+  DcmActionsDashboardContainer: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator" },
+  RecommendationModuleContainer: { widget: "Recommendations", freedom: "Freedom recommendations widget" },
+  DuplicatesWidgetContainer: { widget: "Duplicates", freedom: "Freedom duplicates widget" },
+  ESNFeedContainer: { widget: "Feed (ESN)", freedom: "Freedom Feed" },
+};
+// standard card actions (from the classic ACTIONS menu / toolbar) -> Freedom card actions (B7).
+const KNOWN_ACTION_ITEMS = new Set([
+  "PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton",
+]);
 
 export function mapToFreedom(eff, opts = {}) {
   const cols = opts.entityColumns || {};       // { column: dataType }
@@ -130,11 +157,26 @@ export function mapToFreedom(eff, opts = {}) {
     emittedGroups.set(g.name, inner);
     return inner;
   }
-  for (const f of payloadFields) {
+  // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
+  const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index) }));
+  // Moment 1 — layout type: classic `Header` fields spanning >1 grid column == a WIDE multi-column
+  // header (like Contract), NOT the narrow left profile island. In that case route them to a full-width
+  // header GridContainer (preserving the multi-column grid) instead of cramming them into colSpan-1.
+  const headerCols = new Set(resolved
+    .filter(r => r.own.kind === "profile" && r.own.via === "Header" && r.f.layout && r.f.layout.column != null)
+    .map(r => r.f.layout.column));
+  const headerIsWide = headerCols.size > 1;
+  if (headerIsWide) {
+    structural.push({ operation: "insert", name: "HeaderContainer", parentName: "Header", propertyName: "items",
+      values: { type: "crt.GridContainer" } });
+    needsDecision.push({ kind: "layout-type", item: "Header",
+      reason: `classic Header is a WIDE ${headerCols.size}-column block, not the default left profile island — mapped to a full-width header grid; confirm the target Freedom page uses a header region (no left profile) and the column layout` });
+  }
+  const profileRegion = (own) => (own.via === "Header" && headerIsWide) ? "HeaderContainer" : "SideAreaProfileContainer";
+  for (const { f, own } of resolved) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
     let parent;
-    const own = resolveOwner(f.parent, index);
-    if (own.kind === "profile") parent = "SideAreaProfileContainer"; // side area is flat — groups collapse here
+    if (own.kind === "profile") parent = profileRegion(own);
     else if (own.kind === "tab") {
       parent = ensureTab(own.tab, own.tabTemplateOwned);
       // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
@@ -156,11 +198,19 @@ export function mapToFreedom(eff, opts = {}) {
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
     if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
       reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
+    // Moment 1 — preserve the classic grid coordinates (24-col grid, 0-based) instead of inventing them;
+    // classic column N -> Freedom column N+1. Fall back to sequential/full-width only when absent.
+    const cl = f.layout || {};
+    const narrow = parent === "SideAreaProfileContainer";
+    const layoutConfig = {
+      column: cl.column != null ? cl.column + 1 : 1,
+      row: cl.row != null ? cl.row + 1 : rowByContainer[parent],
+      colSpan: cl.colSpan != null ? cl.colSpan : (narrow ? 1 : 24),
+      rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
+    };
     const values = {
       type: c.type, control: "$" + col, label: "$Resources.Strings." + col,
-      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: true,
-      layoutConfig: { column: 1, row: rowByContainer[parent],
-        colSpan: parent === "SideAreaProfileContainer" ? 1 : 24, rowSpan: 1 },
+      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: true, layoutConfig,
     };
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
@@ -207,36 +257,61 @@ export function mapToFreedom(eff, opts = {}) {
     needsDecision.push({ kind: "rule-target-missing", item: t,
       reason: `business rule targets '${t}' but no field for it is inserted (base/template field or entity-only column) — ensure the Freedom target provides the element` });
 
-  // ---- details -> "Expanded list" composite spec (full contract; lesson #8) ----
-  const details = payloadDetails.map(d => {
-    // Gap 1: place the detail in its owning TAB (ancestry-resolved from the detail's diff-item parent),
-    // preserving order — instead of a flat tab-less list.
+  // ---- details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list) ----
+  const details = [];              // genuine custom details
+  const standardFeatures = [];     // Approvals/Attachments/Activities/Emails → their Freedom feature
+  for (const d of payloadDetails) {
+    // place the detail in its owning TAB (ancestry-resolved), preserving order.
     const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
-    const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? "SideAreaProfileContainer" : null);
+    const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? profileRegion(own) : null);
+    const feat = FEATURE_CATALOG[d.schemaName];
+    if (feat) {
+      // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
+      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: d.entitySchemaName, tab });
+      needsDecision.push({ kind: "standard-feature", item: d.schemaName,
+        reason: `classic '${d.schemaName}' is the ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail); confirm the exact Freedom component + wiring` });
+      continue;
+    }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
-    // Gap 2: editability (view-only vs add/edit/delete) is NOT reliably on the master page — it lives in
-    // the detail's OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
+    // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
+    // OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
     needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
       reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
-    return {
+    details.push({
       composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
       tab, order: d.order ?? null, dataSourceScope: "viewElement",
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
-      actions: "unresolved", // toolbar/CRUD to be confirmed (see detail-editability) — not assumed
+      actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
-    };
-  });
+    });
+  }
+
+  // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
+  const widgets = [];
+  const seenWidget = new Set();
+  const addWidget = (w, classic, base) => { if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base });
+    needsDecision.push({ kind: "widget", item: w.widget,
+      reason: `${w.widget}${base ? " (base-provided)" : ""} → ${w.freedom}${base ? " — usually provided by the Freedom template; confirm or re-apply any customization" : "; confirm the Freedom component"}` }); } };
+  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
+  for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
+
+  // ---- Moment 5: card actions / ACTIONS menu → Freedom card actions (B7) ----
+  const cardActions = (eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name);
+  const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
+  if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
+    reason: `card actions / ACTIONS-menu (${cardActions.join(", ") || "getActions"}) → Freedom card actions (B7); standard menu items (Set up access rights / Send for approval / Follow the feed) and Print/View to wire — action bodies live in getActions (imperative, needs review)` });
+
+  // ---- charts/widgets not in the catalog -> B9/B10 (generic) ----
+  for (const c of payloadComponents)
+    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName])) needsDecision.push({ kind: "component", item: c.key,
+      reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
   // ---- methods -> handler stubs (judgment) ----
   const handlerStubs = payloadMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
   for (const m of payloadMethods)
     needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
-
-  // ---- components (charts/widgets) -> B9/B10 ----
-  for (const c of payloadComponents)
-    needsDecision.push({ kind: "component", item: c.key,
-      reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
   // ---- removals (B6) — client removals only; template-internal removes are context (F9, C3) ----
   for (const rm of eff.removed.filter(notTpl)) {
@@ -254,6 +329,12 @@ export function mapToFreedom(eff, opts = {}) {
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: pdsColumns }],
     pageBusinessRules, entityBusinessRules, details, handlerStubs, needsDecision,
+    // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
+    standardFeatures,
+    // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
+    widgets,
+    // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
+    cardActions,
     // F9: how many effective elements were platform-template context excluded from the payload.
     baseContextExcluded,
   };

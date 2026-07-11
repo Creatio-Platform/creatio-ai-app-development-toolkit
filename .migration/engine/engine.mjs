@@ -121,8 +121,18 @@ function normalizeDiff(diff) {
       isTab: op.propertyName === "tabs",
       hasCaption: !!(v.caption),
       order: v && isNum(v.order) ? v.order : null,
+      // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
+      // (e.g. a wide 3-column header) instead of inventing a single narrow column.
+      layout: normalizeLayout(v.layout),
     };
   }).filter(op => op.name !== "?");
+}
+
+function normalizeLayout(l) {
+  if (!l || typeof l !== "object") return null;
+  const n = (x) => (isNum(x) ? x : null);
+  const out = { column: n(l.column), colSpan: n(l.colSpan), row: n(l.row), rowSpan: n(l.rowSpan) };
+  return Object.values(out).some(v => v !== null) ? out : null;
 }
 
 function normalizeDetails(d) {
@@ -208,13 +218,13 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
         items.set(op.name, {
           name: op.name, parent: op.parentName, propertyName: op.propertyName,
           bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
-          isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order,
+          isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
           templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
         });
       } else if (op.operation === "merge") {
         // patch in place; carry contentType/itemType too — a later layer can introduce a control hint
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
-        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; cur.provenance.push(L.pkg); }
+        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; cur.provenance.push(L.pkg); }
         else {
           // merge onto an item no lower layer defined: record a stub with the SAME shape as an insert
           // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
@@ -301,8 +311,8 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema layer contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
-      isTab: i.isTab, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+      isTab: i.isTab, order: i.order, layout: i.layout || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).
