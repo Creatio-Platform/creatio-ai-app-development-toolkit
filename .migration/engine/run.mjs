@@ -146,5 +146,21 @@ check("ViewItemType: symbolic CONTROL_GROUP -> 15 (not null)", vit.diff.find(d =
 check("ViewItemType: symbolic GRID_LAYOUT (core.enums path) -> 0", vit.diff.find(d => d.name === "GL")?.itemType === 0);
 check("ViewItemType: no parse error from the Terrasoft stub", !vit.error);
 
+/* ---- move-after-remove RESURRECTS (classic reposition idiom) — a displayed field must not vanish
+   (real bug: Product IsArchive/"Inactive" was insert→…→remove→move and silently dropped) ---- */
+const rez = mergeLayers([
+  synth("base", [{ operation: "insert", name: "Fld", parentName: "Header", propertyName: "items", bindTo: "Col" }]),
+  synth("top", [{ operation: "remove", name: "Fld" }, { operation: "move", name: "Fld", parentName: "Header" }]),
+]);
+check("move-after-remove resurrects the item (alive, not tombstoned)",
+  rez.fields.some(f => f.bindTo === "Col") && !rez.removed.some(r => r.name === "Fld"));
+
+/* ---- tooltip captured from the classic body (tip.content.bindTo) ---- */
+const tipBody = `define("T",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Code",` +
+  `values:{bindTo:"Code",tip:{content:{bindTo:"Resources.Strings.CodeTip"}}}}]};});`;
+const tl = parseLayer(tipBody, "T");
+check("tooltip captured from classic tip.content.bindTo",
+  tl.diff.find(d => d.name === "Code")?.tip === "Resources.Strings.CodeTip");
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

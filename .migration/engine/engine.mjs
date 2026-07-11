@@ -124,6 +124,11 @@ function normalizeDiff(diff) {
       // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
       // (e.g. a wide 3-column header) instead of inventing a single narrow column.
       layout: normalizeLayout(v.layout),
+      // tooltip resource key (classic `tip.content.bindTo = "Resources.Strings.XTip"`) — carried to the
+      // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
+      // recognising non-field components the mapper otherwise drops.
+      tip: (v.tip && v.tip.content && isStr(v.tip.content.bindTo)) ? v.tip.content.bindTo : null,
+      generator: isStr(v.generator) ? v.generator : null,
     };
   }).filter(op => op.name !== "?");
 }
@@ -219,6 +224,7 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
           name: op.name, parent: op.parentName, propertyName: op.propertyName,
           bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
           isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
+          tip: op.tip, generator: op.generator,
           templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
         });
       } else if (op.operation === "merge") {
@@ -232,7 +238,10 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
           warnings.push({ op: "merge", name: op.name, layer: L.pkg, hint: "merge onto an item no lower layer defined — base-template element not seeded (F2) or layers out of order (F1)" });
         }
       } else if (op.operation === "move") {
-        if (cur) { if (op.parentName) cur.parent = op.parentName; cur.provenance.push(L.pkg); }
+        // classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
+        // spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
+        // e.g. Product's IsArchive/"Inactive" checkbox).
+        if (cur) { if (op.parentName) cur.parent = op.parentName; if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; } cur.provenance.push(L.pkg); }
         else warnings.push({ op: "move", name: op.name, layer: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / layer order (F1)` });
       } else if (op.operation === "remove") {
         // removedBySeed: a template-internal remove (base template dropping a base element) is context,
@@ -311,8 +320,9 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema layer contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
-      isTab: i.isTab, order: i.order, layout: i.layout || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+      isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, generator: i.generator || null,
+      provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, tip: i.tip || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).

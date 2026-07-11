@@ -33,7 +33,7 @@
 
 ## F3 fidelity build-out (layout+detail точність, за зауваженнями зі скрінів)
 
-Після скрінів реальної Contract-сторінки закрито 4 прогалини Ф3 (golden: merge **34/34**, mapper **50/50**):
+Після скрінів реальної Contract-сторінки закрито 4 прогалини Ф3 (golden: merge **36/36**, mapper **52/52**):
 1. **Групи → ExpansionPanel.** Корінь: `itemType` губився для контейнерів через символьний `Terrasoft.controls.ViewItemType` (той самий клас, що E1). Фікс: засідив **ViewItemType** (лише підтверджені 0/2/15, без вгадування) → `itemType` резолвиться; mapper `resolveOwner` віддає ланцюг груп, `ensureGroup` будує **CONTROL_GROUP(15)→`crt.ExpansionPanel`** / **GRID_LAYOUT(0)→`crt.GridContainer`**, вкладено. На реальному Contract «Delivery» (`GeneralInfoTabGroupe00b109d`) тепер ExpansionPanel з полями всередині.
 2. **Деталь → таб + порядок.** Engine приєднує кожну деталь до її diff-item (parent+order); mapper резолвить таб предками. 13/14 деталей Contract лягли у свої таби (1 flagged `detail-placement`).
 3. **Editability деталі.** Прибрано хардкод тулбара `["add",…]`; `actions:"unresolved"` + `detail-editability` decision — view-vs-editable резолвиться з власного конфігу деталі (B2-рекурсія).
@@ -41,7 +41,7 @@
 
 ## Page-level fidelity build-out (за скрінами реальної Contract-сторінки)
 
-Скріни показали, що mapper покривав лише скелет (поля/таби/деталі), а реальна сторінка має більше. Закрито 5 page-moments (golden: merge **34/34**, mapper **50/50**):
+Скріни показали, що mapper покривав лише скелет (поля/таби/деталі), а реальна сторінка має більше. Закрито 5 page-moments (golden: merge **36/36**, mapper **52/52**):
 1. **Тип розкладки — широкий хедер, не лівий острів.** Engine захоплює класичні layout-координати (`column/colSpan/row/rowSpan`, 24-col grid); mapper детектить «Header з >1 колонкою» → повноширинний header-grid (`HeaderContainer`), зберігаючи багатоколонковість (класична col 0-based → Freedom col+1), + `layout-type` decision. Вузький профіль (SupportUnit) лишається `SideAreaProfileContainer`.
 2. **Штатні фічі = A3-заміна, не деталь.** Feature-catalog (Шар-3): `VisaDetailV2→Approvals`, `FileDetailV2→Attachments`, `ActivityDetailV2→Activities`, `EmailDetailV2→Emails` → окремий `standardFeatures[]` + `standard-feature` decision (exact crt-компонент — на стенді, не вигадуємо).
 3. **Header/аналітичні віджети → Freedom-аналоги.** `ActionsDashboardModule→ActionDashboard`, `Dcm…→CaseStages`, `Timeline`, `Recommendations`, `Duplicates`, `ESNFeed→Feed` (за module-key і container-ім'ям) → `widgets[]` + `widget` decision; base-provided **позначені**, не дропнуті.
@@ -49,6 +49,13 @@
 5. Усі — з `needsDecision`, де аналог/значення неоднозначні; жодних вигаданих `crt.*`-імен (урок E1).
 
 На реальному Contract: HeaderContainer (Owner col 13 colSpan 12), 4 standard-features, 6 widgets, 5 card-actions, 10 справжніх кастомних деталей лишаються generic Expanded list.
+
+## Generalization test on ProductPageV2 (unseen page) — 3 gaps found + fixed
+
+Прогін конвеєра на `ProductPageV2` (9 шарів, не бачив раніше) пройшов без змін коду (0 parse-errors, `unresolvedParents:0`, `warnings:0`) — генералізація підтверджена. Звірка зі скріном хедера виявила 3 прогалини (golden: merge **36/36**, mapper **52/52**):
+1. **MERGE-БАГ (коректність): `remove`+`move` не воскрешав елемент.** Класична ідіома «remove потім move = переставити» лишає елемент присутнім. Мій `move` не знімав `removed` → відображуване поле `IsArchive` («Inactive» чекбокс) тихо зникало. Фікс: `move` на tombstone-елементі знімає `removed` (воскрешає). Тепер IsArchive → `crt.Checkbox` присутній.
+2. **Тултіпи не захоплювались.** Класика: `values.tip.content.bindTo = "Resources.Strings.XTip"`. Фікс: engine захоплює `tip`; mapper несе `values.tip.content` на Freedom-поле (Code→CodeTip, IsArchive→IsArchiveTip).
+3. **Image/photo-компонент дропався.** `Photo` (generator `ImageCustomGeneratorV2…`, без bindTo) → mapper його викидав. Фікс: engine захоплює `generator`; mapper розпізнає image (generator ~image / ім'я Photo/Image/Logo) → `images[]` + `image` decision.
 
 ## Відкладено у фази (архітектурне, дороге — не «швидкий фікс»)
 
@@ -61,7 +68,7 @@
 | F8 | **`node:vm` — НЕ security-межа** (`parseLayer`): конкретний вектор — `define` (host-функція в sandbox) досяжна з будь-якого тіла: `define.constructor.constructor("return process")()` → host-realm → RCE. window/console→PROXY та timeout НЕ закривають це. Для golden-фікстур ризик низький, але F2 `seedLayers` у проді тягне **реальні parent-template тіла зі стенду** (недовірений вхід). | Перед wiring продового fetch: неісполнюваний парсер (AST-екстракт `define(...)` літералу) або `isolated-vm`/короткоживучий child-process без host-функцій у scope; трактувати вхід `parseLayer` як untrusted; поки — гарантувати, що `seedLayers` лише з офлайн-джерела | **Ф5** (перед runtime-wiring) |
 
 ## Вердикт
-Прототип рушія/mapper — **звучний, без тихої корупції правил** (E1) і тепер **із коректним порядком шарів (F1), seed бази (F2) і повним деревом вкладок/контейнерів (F3)**. Ключова архітектурна знахідка F1: платформа не композить схему на GetSchema (`useFullHierarchy` — no-op), а DAG-ребра не читаються з ESQ — тому авторитетний сигнал порядку це `HierarchyLevel`, і merge-рушій лишається необхідним. Golden підсилено: merge **34/34**, mapper **50/50**, clio **16/16**. Далі — F4 (A3-reconcile) і F5 (runtime-дім) перед скілом; тести варто ще розширити на A3 та справжній parent-template seed зі стенду.
+Прототип рушія/mapper — **звучний, без тихої корупції правил** (E1) і тепер **із коректним порядком шарів (F1), seed бази (F2) і повним деревом вкладок/контейнерів (F3)**. Ключова архітектурна знахідка F1: платформа не композить схему на GetSchema (`useFullHierarchy` — no-op), а DAG-ребра не читаються з ESQ — тому авторитетний сигнал порядку це `HierarchyLevel`, і merge-рушій лишається необхідним. Golden підсилено: merge **36/36**, mapper **52/52**, clio **16/16**. Далі — F4 (A3-reconcile) і F5 (runtime-дім) перед скілом; тести варто ще розширити на A3 та справжній parent-template seed зі стенду.
 
 ## Рев'ю-раунд 2 (по коміту 2702d49) + F9 origin-refactor
 Два незалежні рев'ю (creatio-code-review воркфлоу + вбудований /code-review) **зійшлися на Blocker**: `fromTemplate` (усі-провенанс за іменем пакета) — хибний сигнал для **структурної ідентичності вкладки**; базову вкладку майже завжди merge-ить схема-шар → `fromTemplate=false` → `ensureTab` синтезував **дублікат `crt.Tab`**. Виправлено фундаментально: **штампуємо походження на replay** (`templateOwned` = визначальний insert зі seed-шару; за списком, не іменем). Ідентичність вкладки й payload полів — по `templateOwned`; keyed-категорії (методи/правила/деталі/компоненти) — по `schemaTouched`. Це разом закрило: Blocker (дублікат вкладки), C6 (переміщене base-поле не тягнеться в payload), overlap-misattribution (name-collision зникла — warning прибрано). Плюс: C2 (merge ніс `contentType`), C3 (template-internal remove не тече в removal-рішення), C4 (`rule-target-missing` для правила на не-payload полі), C5 (`group-nesting` замість тихого flatten), vm-коментар чесний (F8 лишається), чистка мертвого коду (`CONTAINER`/`toContainer`/`external`/`detailItems`), спільний test-helper (`_testkit.mjs`), +2 clio test-пінги. Нові регрес-голдени під кожен фікс (B1 — саме поширений merge-кейс, який минулий фікс пропускав).

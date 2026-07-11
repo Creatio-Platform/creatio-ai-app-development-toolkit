@@ -215,6 +215,7 @@ export function mapToFreedom(eff, opts = {}) {
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;
+    if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
@@ -297,6 +298,16 @@ export function mapToFreedom(eff, opts = {}) {
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
 
+  // ---- image / photo components (generator-based, no bindTo) → Freedom image component ----
+  const images = [];
+  for (const i of (eff.items || [])) {
+    const isImg = (i.generator && /image/i.test(i.generator)) || (!i.bindTo && /^(Photo|Image|Logo)$/i.test(i.name));
+    if (!isImg) continue;
+    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
+    needsDecision.push({ kind: "image", item: i.name,
+      reason: `image/photo component '${i.name}'${i.generator ? ` (generator ${i.generator})` : ""} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
+  }
+
   // ---- Moment 5: card actions / ACTIONS menu → Freedom card actions (B7) ----
   const cardActions = (eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name);
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
@@ -333,6 +344,8 @@ export function mapToFreedom(eff, opts = {}) {
     standardFeatures,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
     widgets,
+    // image/photo components (generator-based) → Freedom image component.
+    images,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
     // F9: how many effective elements were platform-template context excluded from the payload.

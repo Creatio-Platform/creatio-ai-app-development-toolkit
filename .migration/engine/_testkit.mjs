@@ -6,6 +6,7 @@ export const makeOp = (o) => ({
   parentName: o.parentName ?? null, propertyName: o.propertyName ?? null,
   bindTo: o.bindTo ?? null, itemType: o.itemType ?? null, contentType: o.contentType ?? null,
   isTab: !!o.isTab, order: o.order ?? null,
+  layout: o.layout ?? null, tip: o.tip ?? null, generator: o.generator ?? null,
 });
 export const makeLayer = (pkg, o = {}) => ({
   pkg, error: null, entitySchemaName: o.entity || "?", diff: (o.diff || []).map(makeOp),

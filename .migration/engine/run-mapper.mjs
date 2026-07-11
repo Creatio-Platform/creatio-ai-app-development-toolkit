@@ -225,5 +225,14 @@ check("entity-filter: dynamic filter marked incomplete + flagged (entity-filter)
 check("entity-filter: static filter marked complete + NOT flagged",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && n.item === "St"));
 
+/* ---- image component + tooltip carry (Product gaps) ---- */
+const imgCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+  di({ name: "Photo", parentName: "Header", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
+  di({ name: "Code", parentName: "Header", propertyName: "items", bindTo: "Code", tip: "Resources.Strings.CodeTip" })] })]));
+check("image component (generator-based, no bindTo) recognized → images[] + needsDecision",
+  imgCs.images.some(i => i.classic === "Photo") && imgCs.needsDecision.some(n => n.kind === "image" && n.item === "Photo"));
+check("tooltip carried onto the Freedom field (tip.content)",
+  imgCs.viewConfigDiff.find(o => o.name === "Code")?.values.tip?.content === "$Resources.Strings.CodeTip");
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
