@@ -172,10 +172,11 @@ const fe = mergeLayers([fl]);
 check("mergeLayers aggregates features", (fe.features || []).includes("UseNewProductCatalogue"));
 
 /* ---- card-action hints (getActions navigate/goTo methods) + caption key captured from the body ---- */
-const actBody = `define("T",[],function(){ this.getActions=function(){ this.navigateToTaxesByCountriesLookup(); }; return{entitySchemaName:"X",` +
+const actBody = `define("T",[],function(){ this.getActions=function(){ this.navigateToTaxesByCountriesLookup(); var a={"Tag":"runEscalation"}; }; return{entitySchemaName:"X",` +
   `diff:[{operation:"insert",name:"MyTab",values:{caption:{bindTo:"Resources.Strings.MyTabCaption"}}}]};});`;
 const al = parseLayer(actBody, "T");
-check("card-action hint captured (navigateTo… from getActions body)", (al.actionHints || []).includes("navigateToTaxesByCountriesLookup"));
+check("card-action hints captured (navigateTo… + action Tag from getActions body)",
+  (al.actionHints || []).includes("navigateToTaxesByCountriesLookup") && (al.actionHints || []).includes("runEscalation"));
 check("caption resource key captured from the body", al.diff.find(d => d.name === "MyTab")?.caption === "Resources.Strings.MyTabCaption");
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);

@@ -100,10 +100,13 @@ export function parseLayer(src, pkg) {
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
     features: [...new Set([...src.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
-    // custom card-ACTION hints — the ACTIONS menu is built imperatively in getActions (addAction/navigate*),
-    // so static parsing can't fully reconstruct it; surface the navigate/goTo action names so a real
-    // action (e.g. navigateToTaxesByCountriesLookup) isn't silently lost.
-    actionHints: [...new Set([...src.matchAll(/\b((?:navigateTo|goTo|GoTo)[A-Z]\w+)/g)].map(mt => mt[1]))],
+    // custom card-ACTION hints — the ACTIONS menu is built imperatively in getActions, so static parsing
+    // can't fully reconstruct it. Surface (a) navigate/goTo handlers and (b) action `Tag` values (the
+    // menu-item handler tags, e.g. runEscalation / runSearchForSimilarCases) so real actions aren't lost.
+    actionHints: [...new Set([
+      ...[...src.matchAll(/\b((?:navigateTo|goTo|GoTo)[A-Z]\w+)/g)].map(mt => mt[1]),
+      ...[...src.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
+    ])],
   };
 }
 
