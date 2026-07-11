@@ -208,9 +208,14 @@ export function mapToFreedom(eff, opts = {}) {
       colSpan: cl.colSpan != null ? cl.colSpan : (narrow ? 1 : 24),
       rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
     };
+    // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
+    // → visible + a decision (the rendered page shows one runtime state — see feature-toggle note too).
+    const vis = f.visible === false ? false : true;
+    if (f.visible === "dynamic") needsDecision.push({ kind: "visibility-rule", item: col,
+      reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
     const values = {
       type: c.type, control: "$" + col, label: "$Resources.Strings." + col,
-      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: true, layoutConfig,
+      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
@@ -313,6 +318,12 @@ export function mapToFreedom(eff, opts = {}) {
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
     reason: `card actions / ACTIONS-menu (${cardActions.join(", ") || "getActions"}) → Freedom card actions (B7); standard menu items (Set up access rights / Send for approval / Follow the feed) and Print/View to wire — action bodies live in getActions (imperative, needs review)` });
+
+  // feature toggles gate WHICH elements render — the ChangeSet is the full static UNION of blocks/fields;
+  // the rendered page shows one feature-state (e.g. old ProductCategoryBlock vs new one). Flag for review;
+  // which feature gates which element lives in method bodies (imperative → judgment).
+  if ((eff.features || []).length) needsDecision.push({ kind: "feature-toggle", item: eff.features.join(", "),
+    reason: `page uses feature toggles (${eff.features.join(", ")}) that gate element visibility — mapping is the full union of blocks/fields; the live page renders one feature-state. Review which feature-gated blocks/fields to migrate (gating is in method bodies).` });
 
   // ---- charts/widgets not in the catalog -> B9/B10 (generic) ----
   for (const c of payloadComponents)

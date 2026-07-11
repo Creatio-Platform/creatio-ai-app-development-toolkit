@@ -162,5 +162,14 @@ const tl = parseLayer(tipBody, "T");
 check("tooltip captured from classic tip.content.bindTo",
   tl.diff.find(d => d.name === "Code")?.tip === "Resources.Strings.CodeTip");
 
+/* ---- feature toggles detected from the body (getIsFeatureEnabled) + static visible captured ---- */
+const featBody = `define("T",[],function(){ if(this.getIsFeatureEnabled("UseNewProductCatalogue")){} return{entitySchemaName:"X",` +
+  `diff:[{operation:"insert",name:"F",values:{bindTo:"F",visible:false}}]};});`;
+const fl = parseLayer(featBody, "T");
+check("feature toggle name captured from body", (fl.features || []).includes("UseNewProductCatalogue"));
+check("static visible:false captured on the item", fl.diff.find(d => d.name === "F")?.visible === false);
+const fe = mergeLayers([fl]);
+check("mergeLayers aggregates features", (fe.features || []).includes("UseNewProductCatalogue"));
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

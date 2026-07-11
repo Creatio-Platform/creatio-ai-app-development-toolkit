@@ -57,6 +57,13 @@
 2. **Тултіпи не захоплювались.** Класика: `values.tip.content.bindTo = "Resources.Strings.XTip"`. Фікс: engine захоплює `tip`; mapper несе `values.tip.content` на Freedom-поле (Code→CodeTip, IsArchive→IsArchiveTip).
 3. **Image/photo-компонент дропався.** `Photo` (generator `ImageCustomGeneratorV2…`, без bindTo) → mapper його викидав. Фікс: engine захоплює `generator`; mapper розпізнає image (generator ~image / ім'я Photo/Image/Logo) → `images[]` + `image` decision.
 
+## Runtime-render vs static-schema: feature toggles + visibility (звірка Product зі скріном)
+
+Звірка з живою Product-сторінкою: деякі блоки (`ProductCategoryBlockNew`, `PartnershipBlock`) є в мапінгу, але НЕ на сторінці; в інших блоках полів менше. Корінь — **сторінка це ОДИН runtime-стан** (feature-toggles + тип продукту + rules), а мапінг — **повна статична УНІЯ**. Виявлено `getIsFeatureEnabled('UseNewProductCatalogue'/'UseNewProductSelection')` — старий/новий блоки за фіче-флагом. Виправлено (golden: merge **39/39**, mapper **54/54**):
+- **`visible` більше не хардкодиться `true`** — engine захоплює статичний `visible:false` / динамічний вираз; mapper віддає `visible:false` як є, а динамічний → `visible:true` + `visibility-rule` decision.
+- **Feature toggles детектяться** (`eff.features` з тіл) → `feature-toggle` decision зі списком фіч; мапінг лишається повною унією блоків, а рішення «яку фіче-гілку мігрувати» — за людиною.
+- **Чесний ліміт:** ЯКА фіча гейтить ЯКИЙ блок — у тілах методів (`getIsFeatureEnabled`+`setVisible`, imperative) → 20% судження (B5), статично не резолвиться. Тому mapper 1:1 не збігається з одним рендером — він дає унію + прапори.
+
 ## Відкладено у фази (архітектурне, дороге — не «швидкий фікс»)
 
 | # | Знахідка | Чому відкладено | Фаза |

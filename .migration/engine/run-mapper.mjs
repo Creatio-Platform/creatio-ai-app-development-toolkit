@@ -234,5 +234,15 @@ check("image component (generator-based, no bindTo) recognized → images[] + ne
 check("tooltip carried onto the Freedom field (tip.content)",
   imgCs.viewConfigDiff.find(o => o.name === "Code")?.values.tip?.content === "$Resources.Strings.CodeTip");
 
+/* ---- visibility respected (not hardcoded true) + feature toggles flagged ---- */
+const visCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", features: ["UseNewProductCatalogue"], diff: [
+  di({ name: "Hidden", parentName: "Header", propertyName: "items", bindTo: "Hidden", visible: false }),
+  di({ name: "Shown", parentName: "Header", propertyName: "items", bindTo: "Shown" })] })]));
+check("static visible:false is respected on the Freedom field (not forced true)",
+  visCs.viewConfigDiff.find(o => o.name === "Hidden")?.values.visible === false
+  && visCs.viewConfigDiff.find(o => o.name === "Shown")?.values.visible === true);
+check("feature toggles flagged (feature-toggle) — mapping is the full union, page shows one state",
+  visCs.needsDecision.some(n => n.kind === "feature-toggle" && /UseNewProductCatalogue/.test(n.item)));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
