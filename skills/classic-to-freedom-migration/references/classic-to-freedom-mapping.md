@@ -103,6 +103,8 @@ For each Classic page/detail, record:
 
 ## Classic layout & business rules: read ALL package layers, not just the top one
 
+> **Preferred: run the bundled deterministic engine (`engine/migrate.mjs`, see SKILL.md step 4) instead of merging layers by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across layers with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
+
 `get-client-unit-schema` (and any single-schema read) returns only the OWN body of the
 top-most replacing schema for that name. For a base-product Classic page that top layer is
 frequently a thin override whose `diff`, `details`, and `businessRules` blocks are EMPTY

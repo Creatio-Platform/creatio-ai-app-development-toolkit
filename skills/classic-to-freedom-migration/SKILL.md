@@ -131,6 +131,7 @@ Runtime discovery, when available:
 - `list_app_sections` for app section metadata.
 - `list_pages` and `get_page` for existing Freedom UI pages.
 - `get_client_unit_schema` for Classic client-unit schemas.
+- `list-schema-layers` + `get-classic-schema` to enumerate the full replacing-schema chain (ordered by `HierarchyLevel`) and read every layer body — the input the deterministic merge in step 4 consumes.
 - `get_schema` and `get_sql_schema` for referenced C# or SQL schemas.
 - package/application tools such as `list_packages`, `list_apps`, `get_app_info`, and app-section metadata to verify package ownership, lock/editability, installed-app ownership, and whether the same package can safely own Freedom artifacts.
 - `get_component_info` and `list_page_templates` to verify Freedom UI capabilities.
@@ -173,13 +174,20 @@ Build a structured inventory of the Classic implementation:
 - backend dependencies: C# source schemas, web services, processes, SQL scripts, integrations, feature flags, and package dependencies
 - security and access: operation permissions, record permissions, role-based UI logic, and restricted actions
 
-Read ALL package layers for every Classic page/section/detail, not just the top one: `get-client-unit-schema` returns only the top replacing schema's own body, which for base-product pages is often a thin override with empty `diff`/`details`/`businessRules`. An empty block in one layer is NOT evidence the page has none — never report "no business rules / no layout / no details" from a single layer. Enumerate the full package chain and merge layers per `references/classic-to-freedom-mapping.md`, and mark each item CONFIRMED only when its source layer body was actually read.
+**Reconstruct the effective Classic page — prefer the deterministic engine over hand-merging.** `get-client-unit-schema` returns only the top replacing schema's own body, which for base-product pages is often a thin override with empty `diff`/`details`/`businessRules`. An empty block in one layer is NOT evidence the page has none — never report "no business rules / no layout / no details" from a single layer. You must reconstruct the *effective* page by merging the whole layer chain. Do it in two steps, both deterministic — do not eyeball-merge:
+
+1. **Acquire the layer bodies, base→top.** Prefer `list-schema-layers` (orders the chain by `HierarchyLevel` — the authoritative dependency order) + `get-classic-schema` per layer, plus the parent-template seed chain. If those tools are unavailable on the environment, enumerate the replacing schemas yourself and read each body via `get-client-unit-schema` / `download-configuration` / the Client Unit Schema designer (procedure in `references/classic-to-freedom-mapping.md`).
+2. **Merge + map with the bundled engine — do NOT hand-merge when Node is available.** Write a manifest `{ "entity", "entityColumns", "layers":[{"pkg","body"}], "seed":[{"pkg","body"}] }` (paste each `get-classic-schema` body inline) and run `node engine/migrate.mjs <manifest.json>` (the `engine/` directory bundled beside this SKILL.md; resolve its absolute path in the plugin dir). It returns the effective page + the Freedom **ChangeSet** + `needsDecision[]` (your 20% worklist) + `parseErrors` / `warnings` / `unresolvedParents` diagnostics. This is the deterministic 80% — layer merge with provenance (F1 order, F2 base seed, F9 payload-vs-template), symbolic-enum-safe rule decoding — that this step used to ask you to do by eye. Treat non-empty `parseErrors` as a body that failed to parse (fix before trusting the output); treat non-empty `warnings` / `unresolvedParents` as a discovery defect — wrong layer order (F1) or a missing base-template seed (F2) — not a finding. Mark each item CONFIRMED only when its source layer body was actually read and parsed.
+
+**Fallback — hand-merge (only when Node is unavailable):** merge `diff` / `details` / `businessRules` across the full package chain per `references/classic-to-freedom-mapping.md`, attributing each item to the layer it came from.
 
 Do not assume Classic logic has a direct Freedom equivalent. Classify each behavior using the categories from `references/classic-to-freedom-mapping.md`. Distinguish declarative `businessRules` (→ page/entity business rules) from imperative logic in `attributes`/`methods` (→ Freedom handlers, converters, virtual attributes), and report the two separately so one is not silently converted into the other.
 
 ### 5. Map To Freedom UI
 
 Create a Classic to Freedom mapping table before planning implementation.
+
+**If you ran `engine/migrate.mjs` (step 4), its ChangeSet IS the mapping** — `viewConfigDiff` (fields/tabs/groups/containers with placement), `pageBusinessRules`/`entityBusinessRules`, `details`, `standardFeatures`, `widgets`, `images`, `cardActions`, plus `needsDecision[]` for the judgment 20%. Do not re-derive the table by hand; review and enrich the engine's output and work each `needsDecision` item (its `kind` tells you the category — e.g. `field-control`, `standard-feature`, `unmapped-component`, `referenced-module`, `entity-filter`, `method`). The tables below are the reference for classifying what the engine flags, and the mapping you build by hand in the fallback when the engine was not run.
 
 Before mapping individual controls, choose the Freedom page strategy:
 
