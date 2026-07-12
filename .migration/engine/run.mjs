@@ -179,5 +179,19 @@ check("card-action hints captured (navigateTo… + action Tag from getActions bo
   (al.actionHints || []).includes("navigateToTaxesByCountriesLookup") && (al.actionHints || []).includes("runEscalation"));
 check("caption resource key captured from the body", al.diff.find(d => d.name === "MyTab")?.caption === "Resources.Strings.MyTabCaption");
 
+/* ---- Fix 1: classic `hint` (field tooltip, a DIFFERENT property from `tip`) captured + carried ---- */
+const hintBody = `define("T",["FormatUtils","CasesEstimateLabel","css!CasesEstimateLabel","BusinessRuleModule"],function(){ return{entitySchemaName:"X",` +
+  `diff:[{operation:"insert",name:"F",values:{bindTo:"Col",hint:{bindTo:"Resources.Strings.FHint"}}}]};});`;
+const hl = parseLayer(hintBody, "T");
+check("classic `hint` captured on the diff item", hl.diff.find(d => d.name === "F")?.hint === "Resources.Strings.FHint");
+const he = mergeLayers([hl]);
+check("merge carries `hint` onto the field", he.fields.find(f => f.bindTo === "Col")?.hint === "Resources.Strings.FHint");
+
+/* ---- Fix 3: referenced UI modules from define() deps — css-backed / UI-named only, utils excluded ---- */
+check("refModules captures the css-backed UI module", (hl.refModules || []).includes("CasesEstimateLabel"));
+check("refModules EXCLUDES framework utils (FormatUtils, BusinessRuleModule)",
+  !(hl.refModules || []).includes("FormatUtils") && !(hl.refModules || []).includes("BusinessRuleModule"));
+check("mergeLayers aggregates referencedModules", (he.referencedModules || []).includes("CasesEstimateLabel"));
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

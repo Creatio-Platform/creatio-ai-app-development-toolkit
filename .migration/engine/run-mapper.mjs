@@ -255,5 +255,41 @@ check("real tab caption used → no synthesized tab-caption decision",
   actCs.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCap"
   && !actCs.needsDecision.some(n => n.kind === "tab-caption" && n.item === "MyTab"));
 
+/* ---- Fix 1: classic `hint` → field tooltip (static) vs field-hint decision (dynamic) ---- */
+const hintCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+  di({ name: "S", parentName: "Header", propertyName: "items", bindTo: "S", hint: "Resources.Strings.SHint" }),
+  di({ name: "D", parentName: "Header", propertyName: "items", bindTo: "D", hint: "getDynamicHint" })] })]));
+check("static `hint` (Resources.Strings.*) → Freedom field tooltip (tip.content)",
+  hintCs.viewConfigDiff.find(o => o.name === "S")?.values.tip?.content === "$Resources.Strings.SHint"
+  && !hintCs.needsDecision.some(n => n.kind === "field-hint" && n.item === "S"));
+check("dynamic `hint` (method-bound) → field-hint decision, not a broken static tip",
+  hintCs.needsDecision.some(n => n.kind === "field-hint" && n.item === "D")
+  && !hintCs.viewConfigDiff.find(o => o.name === "D")?.values.tip);
+
+/* ---- Fix 2: LOUD unmapped-component (client content the mapper produced nothing for) ---- */
+const umCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", refModules: ["CasesEstimateLabel"], diff: [
+  di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" }),                        // field → mapped
+  di({ name: "TimerLabel", parentName: "Header", propertyName: "items", caption: "getTimer" }),       // LABEL, no bindTo → unmapped
+  di({ name: "MyGrid", parentName: "Header", propertyName: "items" }),                                // scaffolding (Grid$) → skipped
+  di({ name: "EscalateButton", parentName: "Header", propertyName: "items" })] })]));                 // custom button → unmapped
+check("unmapped-component: a client LABEL/container with no Freedom element is surfaced (LOUD, not silent)",
+  umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "TimerLabel"));
+check("unmapped-component: a custom *Button is surfaced with card-action guidance",
+  umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "EscalateButton" && /card action/.test(n.reason)));
+check("unmapped-component: grid/tab scaffolding the mapper rebuilds is NOT flagged (no noise)",
+  !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "MyGrid"));
+check("unmapped-component: a mapped field is NOT flagged as unmapped",
+  !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "F"));
+const umTpl = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [di({ name: "CF", parentName: "Header", propertyName: "items", bindTo: "CF" })] })],
+  { seedLayers: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
+check("unmapped-component: template-owned items are NOT flagged (payload = client content only, F9)",
+  !umTpl.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "BaseLabel"));
+
+/* ---- Fix 3: referenced UI modules (define() deps) surfaced + exposed on the ChangeSet ---- */
+check("referenced-module: define()-dep UI module flagged (outside the page-schema migration unit)",
+  umCs.needsDecision.some(n => n.kind === "referenced-module" && n.item === "CasesEstimateLabel"));
+check("referenced-module: exposed on the ChangeSet for the migration report",
+  (umCs.referencedModules || []).includes("CasesEstimateLabel"));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -108,10 +108,15 @@ export function mapToFreedom(eff, opts = {}) {
   const rowByContainer = {};
   const nameCount = {};
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
+  // Fix 2 — every classic item name the mapper EMITS or knowingly recognizes. Whatever survives the merge
+  // as client content but is NOT in here produced no Freedom element → surfaced as unmapped-component
+  // (LOUD) at the end instead of silently vanishing (e.g. the SLA-timer LABEL/CONTAINER micro-widgets).
+  const accountedFor = new Set();
   const structural = [];            // tab + tab-grid container inserts (emitted once, only when used)
   const emittedTabs = new Map(); // tab -> resolved parent container for routed fields
   function ensureTab(tab, templateOwned) {
     if (emittedTabs.has(tab)) return emittedTabs.get(tab);
+    accountedFor.add(tab);
     let parentName;
     if (templateOwned) {
       // F9×F3: a BASE-TEMPLATE tab (e.g. ESNTab) is provided by the Freedom counterpart template —
@@ -133,12 +138,14 @@ export function mapToFreedom(eff, opts = {}) {
       if (!(tItem && tItem.caption)) needsDecision.push({ kind: "tab-caption", item: tab,
         reason: `synthesized caption key '$Resources.Strings.${tab}Caption' — classic caption not in model; confirm/replace with the real localized string` });
     }
+    accountedFor.add(parentName);
     emittedTabs.set(tab, parentName);
     return parentName;
   }
   const emittedGroups = new Map(); // group name -> inner container fields route into (emitted once)
   function ensureGroup(g, parentName) {
     if (emittedGroups.has(g.name)) return emittedGroups.get(g.name);
+    accountedFor.add(g.name);
     let inner;
     if (g.itemType === 15) {
       // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
@@ -184,6 +191,7 @@ export function mapToFreedom(eff, opts = {}) {
       // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
       // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
       if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent);
+      else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
     } else {
       parent = FLAT_FALLBACK; // parent chain unresolvable
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
@@ -223,6 +231,14 @@ export function mapToFreedom(eff, opts = {}) {
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;
     if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
+    // classic `hint` is ALSO a field tooltip (a DIFFERENT property from `tip`). A Resources.Strings.*
+    // hint is a static localized string → map to the Freedom tooltip; a hint bound to a computed method
+    // is dynamic → flag it (like a visibility rule) rather than emit a broken static tip.
+    if (f.hint && !values.tip) {
+      if (/^Resources\.Strings\./.test(f.hint)) values.tip = { content: "$" + f.hint };
+      else needsDecision.push({ kind: "field-hint", item: col,
+        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource) — wire the Freedom tooltip via a handler/converter` });
+    }
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
@@ -269,6 +285,7 @@ export function mapToFreedom(eff, opts = {}) {
   const details = [];              // genuine custom details
   const standardFeatures = [];     // Approvals/Attachments/Activities/Emails → their Freedom feature
   for (const d of payloadDetails) {
+    accountedFor.add(d.key); if (d.schemaName) accountedFor.add(d.schemaName);
     // place the detail in its owning TAB (ancestry-resolved), preserving order.
     const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
     const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? profileRegion(own) : null);
@@ -298,7 +315,7 @@ export function mapToFreedom(eff, opts = {}) {
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
   const widgets = [];
   const seenWidget = new Set();
-  const addWidget = (w, classic, base) => { if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
+  const addWidget = (w, classic, base) => { if (w) accountedFor.add(classic); if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
     widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base });
     needsDecision.push({ kind: "widget", item: w.widget,
       reason: `${w.widget}${base ? " (base-provided)" : ""} → ${w.freedom}${base ? " — usually provided by the Freedom template; confirm or re-apply any customization" : "; confirm the Freedom component"}` }); } };
@@ -310,6 +327,7 @@ export function mapToFreedom(eff, opts = {}) {
   for (const i of (eff.items || [])) {
     const isImg = (i.generator && /image/i.test(i.generator)) || (!i.bindTo && /^(Photo|Image|Logo)$/i.test(i.name));
     if (!isImg) continue;
+    accountedFor.add(i.name);
     images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
     needsDecision.push({ kind: "image", item: i.name,
       reason: `image/photo component '${i.name}'${i.generator ? ` (generator ${i.generator})` : ""} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
@@ -319,6 +337,7 @@ export function mapToFreedom(eff, opts = {}) {
   // static toolbar buttons + custom actions surfaced from getActions bodies (navigate*/goTo*), so a real
   // action like navigateToTaxesByCountriesLookup isn't silently lost (its body is imperative → review).
   const cardActions = [...(eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name), ...(eff.cardActionHints || [])];
+  for (const i of (eff.items || [])) if (KNOWN_ACTION_ITEMS.has(i.name)) accountedFor.add(i.name);
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
     reason: `card actions / ACTIONS-menu → Freedom card actions (B7): ${cardActions.join(", ") || "getActions"}. ` +
@@ -349,6 +368,43 @@ export function mapToFreedom(eff, opts = {}) {
         : `removed by '${rm.removedBy}' (not confirmed client-editable) — KEEP on Freedom unless confirmed` });
   }
 
+  // ---- Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff) ----
+  // e.g. CasesEstimateLabel → the SLA response/solution timer + its START/END buttons. The migration
+  // unit is the page schema, so these modules' rendered controls are invisible to layer analysis and are
+  // NOT in this ChangeSet. Surface them for a manual Freedom port instead of under-reporting the surface.
+  for (const rm of (eff.referencedModules || []))
+    needsDecision.push({ kind: "referenced-module", item: rm,
+      reason: `page composes UI from referenced module '${rm}' (declared in define() deps + own CSS) — its rendered controls (buttons/labels/timers) are OUTSIDE the page-schema migration unit and are NOT in this ChangeSet; port it manually to Freedom or confirm the target template provides it` });
+
+  // ---- Fix 2: LOUD unmapped-component drop ----
+  // Any alive, CLIENT-authored (non-template) item the mapper produced NOTHING for is surfaced instead of
+  // silently vanishing: the SLA-timer LABEL/CONTAINER micro-widgets, custom buttons, etc. Skip fields
+  // (handled), details (itemType 2 → detail logic), the grid/tab scaffolding the mapper itself rebuilds,
+  // and anything already emitted/recognized (accountedFor).
+  // Candidate = alive, CLIENT-authored (non-template) item the mapper produced NOTHING for. Skip STRUCTURAL
+  // containers the mapper builds on demand: a tab (isTab), a CONTROL_GROUP (itemType 15) or detail
+  // (itemType 2), and grid/tab/group scaffolding by name (itemType isn't always resolvable, so back it
+  // with the naming convention). An unpopulated organizer isn't "dropped content" — its fields/details/
+  // features surface via their own paths. What remains — LABEL/CONTAINER/value micro-widgets and custom
+  // buttons — is real client content with no Freedom element.
+  const STRUCT_RX = /(?:_gridLayout|Grid|Tabs|Tab|TabContainer|ControlGroup|Group)$/;
+  const dropped = new Set();
+  for (const i of (eff.items || [])) {
+    if (i.templateOwned || i.bindTo || i.itemType === 2 || i.itemType === 15 || i.isTab) continue;
+    if (accountedFor.has(i.name) || STRUCT_RX.test(i.name)) continue;
+    dropped.add(i.name);
+  }
+  // Flag only the ROOT of each dropped subtree (whose parent is not itself dropped) → ONE decision per
+  // block, not one per leaf: the SLA timer surfaces as a single "port this block" item, not six.
+  for (const i of (eff.items || [])) {
+    if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
+    const isBtn = /Button$/.test(i.name);
+    needsDecision.push({ kind: "unmapped-component", item: i.name,
+      reason: isBtn
+        ? `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`
+        : `classic component '${i.name}'${i.caption ? ` (caption ${i.caption})` : ""}${i.generator ? ` (generator ${i.generator})` : ""} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop` });
+  }
+
   return {
     entity: eff.entity,
     // structural (tab + grid containers) first so field inserts resolve their parentName.
@@ -364,6 +420,8 @@ export function mapToFreedom(eff, opts = {}) {
     images,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
+    // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
+    referencedModules: eff.referencedModules || [],
     // F9: how many effective elements were platform-template context excluded from the payload.
     baseContextExcluded,
   };

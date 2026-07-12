@@ -61,7 +61,7 @@ function resolveDep(name) {
 
 // Extract the schema object literal from a layer body by capturing define().
 export function parseLayer(src, pkg) {
-  let captured = null, parseError = null;
+  let captured = null, parseError = null, amdDeps = [];
   // factory `this` also exposes BusinessRuleModule (bodies reference this.BusinessRuleModule too).
   const thisProxy = new Proxy(function () {}, {
     get: (_t, p) => p === "BusinessRuleModule" ? BUSINESS_RULE_MODULE : PROXY,
@@ -71,6 +71,7 @@ export function parseLayer(src, pkg) {
     define(_name, depsOrFactory, maybeFactory) {
       const factory = typeof depsOrFactory === "function" ? depsOrFactory : maybeFactory;
       const deps = Array.isArray(depsOrFactory) ? depsOrFactory : [];
+      amdDeps = deps; // AMD dependency list — captured for referenced-UI-module detection (Fix 3)
       if (typeof factory !== "function") { parseError = "define() has no factory function"; return; }
       try { captured = factory.apply(thisProxy, deps.map(resolveDep)); }
       catch (e) { parseError = "factory threw: " + String(e && e.message || e); }
@@ -107,7 +108,23 @@ export function parseLayer(src, pkg) {
       ...[...src.matchAll(/\b((?:navigateTo|goTo|GoTo)[A-Z]\w+)/g)].map(mt => mt[1]),
       ...[...src.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
     ])],
+    // referenced UI modules from the define() dep list (Fix 3): custom modules that RENDER UI outside
+    // this page's own diff (e.g. CasesEstimateLabel → the SLA timer + its START/END buttons). Surfaced
+    // so the mapper flags them — the page-schema migration unit cannot see their rendered surface.
+    refModules: referencedUiModules(amdDeps),
   };
+}
+
+// AMD define() dependency list → the CUSTOM modules that likely RENDER UI (ship their own CSS, or have a
+// UI-ish name). A page composes such modules OUTSIDE its own diff, so their UI (buttons/labels/timers) is
+// invisible to layer analysis. Framework utils (FormatUtils, BusinessRuleModule, ConfigurationEnums…) are
+// excluded — only css-backed or UI-named deps qualify, keeping the signal high (E1: never flag noise).
+const UI_MODULE_RX = /Label|Widget|Dashboard|Timeline|MiniPage|Generator|Gallery|Chart|Diagram/;
+function referencedUiModules(deps) {
+  const names = (Array.isArray(deps) ? deps : []).filter(isStr);
+  const css = new Set(names.filter(d => d.startsWith("css!")).map(d => d.slice(4).replace(/CSS$/, "")));
+  return [...new Set(names.filter(d => !d.startsWith("css!"))
+    .filter(m => css.has(m) || css.has(m.replace(/CSS$/, "")) || UI_MODULE_RX.test(m)))].sort();
 }
 
 const isNum = (v) => typeof v === "number";
@@ -141,6 +158,12 @@ function normalizeDiff(diff) {
       // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
       // recognising non-field components the mapper otherwise drops.
       tip: (v.tip && v.tip.content && isStr(v.tip.content.bindTo)) ? v.tip.content.bindTo : null,
+      // field help/tooltip — classic uses `hint` (a DIFFERENT property from `tip`; missing it dropped
+      // every hint-based field tooltip, e.g. the SLA "Service agreements" help). Accept `hint.bindTo`
+      // (resource key OR a computed method), `hint.content.bindTo`, or a bare string.
+      hint: (v.hint && isStr(v.hint.bindTo)) ? v.hint.bindTo
+          : (v.hint && v.hint.content && isStr(v.hint.content.bindTo)) ? v.hint.content.bindTo
+          : (isStr(v.hint) ? v.hint : null),
       generator: isStr(v.generator) ? v.generator : null,
       // visibility: static false / a dynamic expression (bind/rule) / true. null = this op didn't set it.
       visible: typeof v.visible === "boolean" ? v.visible : (v.visible && typeof v.visible === "object" ? "dynamic" : null),
@@ -239,13 +262,13 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
           name: op.name, parent: op.parentName, propertyName: op.propertyName,
           bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
           isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
-          tip: op.tip, generator: op.generator, visible: op.visible, caption: op.caption,
+          tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
           templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
         });
       } else if (op.operation === "merge") {
         // patch in place; carry contentType/itemType too — a later layer can introduce a control hint
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
-        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; if (op.visible != null) cur.visible = op.visible; if (op.tip) cur.tip = op.tip; if (op.caption) cur.caption = op.caption; cur.provenance.push(L.pkg); }
+        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; if (op.visible != null) cur.visible = op.visible; if (op.tip) cur.tip = op.tip; if (op.hint) cur.hint = op.hint; if (op.caption) cur.caption = op.caption; cur.provenance.push(L.pkg); }
         else {
           // merge onto an item no lower layer defined: record a stub with the SAME shape as an insert
           // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
@@ -330,6 +353,9 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   // visibility at runtime; the rendered page shows one feature-state while this is the full union.
   const features = [...new Set(layers.flatMap(l => l.features || []))].sort();
   const cardActionHints = [...new Set(layers.flatMap(l => l.actionHints || []))].sort();
+  // referenced UI modules the SCHEMA's own layers pull in via define() (not the base template) — their
+  // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
+  const referencedModules = [...new Set(layers.flatMap(l => l.refModules || []))].sort();
 
   return {
     entity,
@@ -339,9 +365,9 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema layer contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
-      isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, generator: i.generator || null,
+      isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
       visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, tip: i.tip || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).
@@ -357,5 +383,6 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     unresolvedParents,
     features, // feature toggles gating runtime visibility (the rendered page shows one feature-state)
     cardActionHints, // custom card actions found in getActions bodies (imperative — surfaced for review)
+    referencedModules, // custom UI-rendering modules pulled via define() deps — outside the migration unit
   };
 }
