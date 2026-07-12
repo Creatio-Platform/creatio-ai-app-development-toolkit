@@ -1,0 +1,10 @@
+{
+  "name": "classic-freedom-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic Classic→Freedom merge engine + mapper (prototype). Golden runners are the regression gate.",
+  "scripts": {
+    "test": "node run.mjs && node run-mapper.mjs"
+  }
+}
