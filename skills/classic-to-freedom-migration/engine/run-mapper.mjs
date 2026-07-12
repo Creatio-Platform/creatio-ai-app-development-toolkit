@@ -7,7 +7,7 @@ import { mapToFreedom } from "./mapper.mjs";
 import { makeLayer as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const FIX = path.join(DIR, "..", "fixtures");
+const FIX = path.join(DIR, "fixtures");
 const load = (dir, order) => order.map(fn =>
   parseLayer(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 

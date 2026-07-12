@@ -6,7 +6,7 @@ import { parseLayer, mergeLayers } from "./engine.mjs";
 import { makeLayer } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const FIX = path.join(DIR, "..", "fixtures");
+const FIX = path.join(DIR, "fixtures");
 
 function load(dir, order) {
   return order.map(fn => {

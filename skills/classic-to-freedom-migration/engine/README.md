@@ -8,8 +8,10 @@
 
 ## Запуск
 ```
-node .migration/engine/run.mjs
+node run.mjs        # merge golden
+npm test            # обидва раннери (merge + mapper), exit 1 при фейлі
 ```
+(запускати з теки `skills/classic-to-freedom-migration/engine/`)
 
 ## Golden-результат (merge 46/46 ✅)
 - **SupportUnit** (SupportCalendar + SupportService): entity=SupportUnit; 8 полів; 3 вкладки; 3 деталі (вкл. `SupportScheduleEmployeeDetail`); 4 правила (ParentSupportUnit/SupportWorkingDayType FILTRATION, Contact/Calendar Required); метод `setName`.
@@ -25,9 +27,9 @@ node .migration/engine/run.mjs
 - **container-role mapping** (урок #6): `ProfileContainer`/`Header`→`SideAreaProfileContainer`.
 - **F3 — дерево вкладок/контейнерів:** кожне поле маршрутизується **підйомом по предках** (`resolveOwner`): tab-предок→вкладка (емітимо `crt.Tab`+`…Grid` раз і лише коли вкладка тримає ≥1 поле), Header/Profile→бічний профіль, інакше→fallback+`needsDecision`. Плоскої «GeneralInfoTabContainer»-звалки більше нема.
 - **F9 — payload vs context (за походженням):** елемент належить payload, лише якщо його визначив schema-шар — diff-items за `templateOwned` (insert-походження), keyed-категорії за `schemaTouched`. Базові фреймворк-методи/деталі/компоненти + базові вкладки, які клієнт лише перекомпонував, лишаються layout-контекстом (`crt.Tab` для них не синтезуємо). `baseContextExcluded` рапортує відкинуте. (На реальному SupportUnit: 348 методів→1, 4 деталі→3, 12 компонентів→9.)
-- Запуск: `node .migration/engine/run-mapper.mjs` (або `npm test` у `engine/` — ганяє обидва раннери, `exit 1` при фейлі) — **golden 65/65 ✅**.
-- **«Зробити гучно» (звірка Case):** `unmapped-component` (корінь кожного викинутого не-field піддерева — SLA-таймер, кастомні кнопки), `referenced-module` (UI-модулі з `define()`-залежностей поза юнітом сторінки), `field-hint` (динамічний `hint`) — жоден нестандартний елемент не зникає тихо, усе → `needsDecision`. Див. «Межа non-BaseModulePageV2» у [SELF-REVIEW](../SELF-REVIEW.md).
-- Для SupportUnit код генерує ChangeSet, **структурно еквівалентний зрізу**, зібраному вручну (`poc/body_full6.js`), для полів/контролів/профілю/деталі/правил. Він **не байт-у-байт**: базовий seed подається окремо (F2, ще не тягнемо реальний parent-template зі стенду — тому немає поля `Name`), а деталь віддається як composite-спека, не повне тіло Expanded list із тулбаром. Це відомі прогалини — див. нижче.
+- Запуск: `node run-mapper.mjs` (або `npm test` — ганяє обидва раннери, `exit 1` при фейлі) — **golden 65/65 ✅**.
+- **«Зробити гучно» (звірка Case):** `unmapped-component` (корінь кожного викинутого не-field піддерева — SLA-таймер, кастомні кнопки), `referenced-module` (UI-модулі з `define()`-залежностей поза юнітом сторінки), `field-hint` (динамічний `hint`) — жоден нестандартний елемент не зникає тихо, усе → `needsDecision`. Див. «Межа non-BaseModulePageV2» у [SELF-REVIEW](../../../.migration/SELF-REVIEW.md).
+- Для SupportUnit код генерує ChangeSet, **структурно еквівалентний зрізу**, зібраному вручну (`.migration/poc/body_full6.js`), для полів/контролів/профілю/деталі/правил. Він **не байт-у-байт**: базовий seed подається окремо (F2, ще не тягнемо реальний parent-template зі стенду — тому немає поля `Name`), а деталь віддається як composite-спека, не повне тіло Expanded list із тулбаром. Це відомі прогалини — див. нижче.
 
 ## Обмеження прототипу (доробити → продукт)
 - Символьні enum-и: `BusinessRuleModule` (RuleType/Property) і `ViewItemType` (лише підтверджені 0/2/15) **засіджені** → резолвляться. Інші члени `ViewItemType` та `Terrasoft.ContentType.*` ще символьні → нечислові (null); дозасідити за підтвердженими значеннями (ніколи не вгадувати — урок E1).
