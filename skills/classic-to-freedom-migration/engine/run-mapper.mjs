@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
+import { runMigration } from "./migrate.mjs";
 import { makeLayer as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -290,6 +291,19 @@ check("referenced-module: define()-dep UI module flagged (outside the page-schem
   umCs.needsDecision.some(n => n.kind === "referenced-module" && n.item === "CasesEstimateLabel"));
 check("referenced-module: exposed on the ChangeSet for the migration report",
   (umCs.referencedModules || []).includes("CasesEstimateLabel"));
+
+/* ---- migrate.mjs CLI driver: end-to-end on the real SupportUnit fixtures (file-reading path) ---- */
+const cli = runMigration({
+  entity: "SupportUnit", entityColumns: SU_COLS,
+  layers: [
+    { pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" },
+    { pkg: "SupportService", file: "supportunitemployee/SupportService.js" },
+  ],
+}, { baseDir: FIX });
+check("migrate.mjs: runMigration produces a ChangeSet (entity + non-empty viewConfigDiff)",
+  cli.entity === "SupportUnit" && cli.changeSet.viewConfigDiff.length > 0);
+check("migrate.mjs: no parse errors + effective counts + decisionSummary surfaced",
+  cli.parseErrors.length === 0 && cli.effective.fields > 0 && typeof cli.decisionSummary === "object" && Object.keys(cli.decisionSummary).length > 0);
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
