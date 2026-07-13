@@ -57,7 +57,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
 - [ ] When editing an existing page, new components match the styles already there (panel style, `labelPosition`, spacing/padding/radius, widget size, column count).
 - [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even.
-- [ ] Reference context (customer summary, tools) uses a closable contextual side panel, not extra fields on the record or a blocking modal.
+- [ ] Reference context or tools (customer summary, connected accounts) use a closable contextual side panel, not inline in the page body or a blocking modal.
 - [ ] Long-form content pages use a full-width reading column + meta/byline row, not the field grid or side islands.
 
 ### Fields and data entry
