@@ -20,3 +20,5 @@ output/
 .tmp-tests/
 .serena/
 .clio-pages/
+# Classic→Freedom migration engine (migrate.mjs) I/O artifacts — may contain stand-sourced Classic schema/config
+scratch_*
