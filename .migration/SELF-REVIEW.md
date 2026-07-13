@@ -99,3 +99,22 @@
 - **`referenced-module` (грань 3 — гучно).** `parseLayer` тепер захоплює `define([...])`-залежності; css-backed / UI-названі кастомні модулі (`CasesEstimateLabel`) → `referenced-module` decision + поле `referencedModules` у ChangeSet. Framework-утиліти (FormatUtils, BusinessRuleModule) відсіяно (високий сигнал, E1).
 
 **Чесний висновок:** зі скріна (`3 острови / червоний нотіфікейшн / hint-тултіпи / лейблові розрахунки строків / START-END кнопки`) mapper початково ловив ≈нічого з цього — тепер усе **або мапиться, або гучно виноситься в `needsDecision`**. Багатопанельний layout (грань 1) і резолв caption-resource-ключів у текст лишаються відкладеними (косметика/окремий клас), *явно позначені*, не приховані.
+
+## Ф4 — wiring скіла до движка + рев'ю-раунд 3 (`/creatio-code-review`)
+
+**Контекст Ф4.** Виявлено, що движок (гілка `claude/…`) і **скіл** (`skills/classic-to-freedom-migration/`, remote `feature/…-skill`) розійшлися на двох гілках; скіл робив merge шарів **вручну (LLM)** — саме те, що движок замінює. Звели гілки, **перенесли движок у `skills/…/engine/`** (доставка: release-manifest ships лише `skills/`, не `.migration/`), додали CLI-вхід **`migrate.mjs`** (manifest → ефективна сторінка + ChangeSet + `needsDecision`), і **перевели Step 4 скіла** на детермінований шлях (`list-schema-layers` → `get-classic-schema` ×N → `migrate.mjs`) з ручним merge як **fallback**. `migrate.mjs` наскрізь на реальних Case/Contract/Product: 0 parse-errors.
+
+**Рев'ю-раунд 3** (workflow `/creatio-code-review`, 5 лінз, high-effort, локальний self-review) — вердикт **request changes**, 8 findings. Виправлено **7**, один (#3) свідомо відкладено:
+
+| # | Sev | Знахідка | Фікс |
+|---|---|---|---|
+| 1 | Major | `STRUCT_RX` за суфіксом імені міг **тихо глушити** контент з `itemType:null` (той самий silent-drop, який фікс мав прибрати) | Розбито на `HARD_SCAFFOLD` (грід/root-Tabs — завжди skip) vs `SOFT_STRUCT` (…Group/Tab — skip лише якщо **parent з дітьми**); childless struct-named контент сюрфаситься. Contract: `SaaSMetricsTab` був тихий → тепер видимий |
+| 2 | Major | Engine-goldens — єдиний regression-gate, але **CI їх не ганяв** (`pr.yml` = pytest + version-check) | Додано CI-джобу `engine-goldens` (`npm test` → зламаний golden валить PR) |
+| 3 | Major | Скіл направляє тіла зі стенду → `node:vm` (не sandbox) = local code-exec | **ВІДКЛАДЕНО = F8** (vm-ізоляція/AST-парсер). Попередження не додавали (рішення власника) |
+| 4 | Major | CLI-обгортка `migrate.mjs` без тестів; кривий вхід → сирий stack | try/catch → чіткий stderr + exit 1 (missing file / bad JSON / empty layers); + goldens (entity-`?` fallback, spawn malformed) |
+| 5 | Minor | `"Tag"`-regex сканував **весь** файл → шум | Заскоуплено на тіло `getActions` (`extractFnBody`, brace-match); + негативний golden. Case-екшини збережено |
+| 6 | Minor | `UI_MODULE_RX` — незаякорена підстрока (`LabelHelper` хибно) | Заякорено на суфікс `…$`; + негативний golden. css-backed не зачеплено |
+| 7 | Minor | Динамічний `hint` губився, якщо є `tip` | Decoupled: динамічний hint **завжди** → `field-hint`, навіть з tip; + golden |
+| 8 | Minor | `scratch_*` (Classic-тіла зі стенду) не в `.gitignore` | Додано `scratch_*` |
+
+Кожен фікс закрито **таргетованим golden'ом**. **Golden: merge 46→49, mapper 67→72.** Регресія на реальних Case/Contract/Product чиста (0 parse-errors; Case getActions-теги збережено). Позитив рев'ю: AC1–AC5 покрито+верифіковано; «solid prototype». Комміти: `b7e87ce` (код), `c0d3403` (CI+gitignore).
