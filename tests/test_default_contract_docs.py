@@ -104,6 +104,19 @@ WRITABLE_PACKAGE_CONTEXT_DOCS = [
     ROOT / "skills/creatio-app-orchestrator/SKILL.md",
 ]
 
+# ENG-91558: a prompt URL with no matching environment is auto-registered with
+# default Supervisor/Supervisor credentials, no confirmation turn; auth failure stops.
+AUTO_REGISTER_PROMPT_URL_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "runbooks/01-environment-setup.md",
+]
+
+# ENG-91558: adding a section for a named entity creates the app without an extra
+# confirmation turn when no custom app exists yet.
+DEFAULT_APP_CREATION_DOCS = [
+    ROOT / "AGENTS.md",
+]
+
 
 def read_text(path):
     return path.read_text(encoding="utf-8")
@@ -354,6 +367,100 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("writable package context", content, str(path))
             self.assertIn("up front", content, str(path))
             self.assertIn("mid-run", content, str(path))
+
+    def test_docs_auto_register_unregistered_prompt_url(self):
+        # ENG-91558: a Creatio URL in the prompt with no matching environment is
+        # auto-registered with default Supervisor/Supervisor credentials and no
+        # confirmation turn; an auth/registration failure stops with a clear error.
+        for path in AUTO_REGISTER_PROMPT_URL_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("auto-register", content, str(path))
+            self.assertIn("supervisor", content, str(path))
+            self.assertIn("without a confirmation turn", content, str(path))
+            self.assertIn("stop with a clear error", content, str(path))
+
+    def test_docs_auto_register_is_host_pattern_guarded(self):
+        # ENG-91558 (review RC-1): auto-register with default credentials must be
+        # gated on a known Creatio host pattern and fall back to asking for
+        # credentials otherwise (prompt-injection / untrusted-URL guard).
+        for path in AUTO_REGISTER_PROMPT_URL_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("known creatio host pattern", content, str(path))
+            # ENG-91558 (review RC-6/RC-7): the host pattern is a closed enumeration
+            # of concrete patterns, not an open-ended "intranet" category.
+            self.assertIn(".creatio.com", content, str(path))
+            self.assertIn("tscrm.com", content, str(path))
+            self.assertIn("ts1-", content, str(path))
+            self.assertIn("localhost", content, str(path))
+            # ENG-91558 (review RC-13): 127.0.0.1 is part of the closed enumeration
+            self.assertIn("127.0.0.1", content, str(path))
+            self.assertNotIn("intranet", content, str(path))
+            # ENG-91558 (review RC-16): the security-critical "no dots" single-label
+            # narrowing for ts1-* must be locked so it cannot silently regress.
+            self.assertIn("no dots", content, str(path))
+            # ENG-91558 (review RC-15): host taken from the authority component only,
+            # with counter-examples for the cloud wildcards and the userinfo bypass.
+            self.assertIn("authority", content, str(path))
+            self.assertIn("creatio.com.attacker", content, str(path))
+            self.assertIn("creatio.com@", content, str(path))
+            # ENG-91558 (review minor): AC2 "do not retry with guessed credentials"
+            self.assertIn("do not retry", content, str(path))
+            # ENG-91558 (review RC-17): cloud *.creatio.com is NOT in the
+            # zero-confirmation tier — it requires a confirmation turn because the
+            # subdomain provisioner is not guaranteed (tenancy trust boundary).
+            self.assertIn("zero-confirmation", content, str(path))
+            # ENG-91558 (review RC-21): the :port suffix is stripped before host
+            # matching, so the common local/dev case (host:88) still matches.
+            self.assertIn(":port", content, str(path))
+            self.assertIn("does match", content, str(path))
+            # ENG-91558 (review RC-22): the URL is passed as a discrete argv arg,
+            # never shell-interpolated (path/query cannot inject metacharacters).
+            self.assertIn("argv", content, str(path))
+            # carve-out boundary that bounds the rule
+            self.assertIn("ambiguous", content, str(path))
+
+    def test_docs_host_pattern_enumeration_consistent_across_docs(self):
+        # ENG-91558 (review RC-23): the host-pattern trust boundary is stated in
+        # both AGENTS.md and the runbook; assert the pattern set is identical in
+        # both so a future edit to one copy cannot silently drift from the other.
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        runbook = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        host_pattern_tokens = [
+            "*.creatio.com", "*.tscrm.com", "ts1-", "localhost", "127.0.0.1",
+            "no dots", "zero-confirmation", ":port", "authority",
+        ]
+        for token in host_pattern_tokens:
+            self.assertIn(token, agents, f"AGENTS.md missing host-pattern token: {token}")
+            self.assertIn(token, runbook, f"runbook missing host-pattern token: {token}")
+
+    def test_docs_require_env_name_slug_sanitization(self):
+        # ENG-91558 (review RC-12/RC-14): the URL-derived <env_name> must be
+        # sanitized to a safe slug before reaching reg-web-app, and the canonical
+        # AGENTS.md contract must state it (not only the runbook).
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        runbook = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        for content in (agents, runbook):
+            self.assertIn("slug", content)
+            self.assertIn("metacharacter", content)
+
+    def test_docs_remind_default_password_rotation_after_auto_register(self):
+        # ENG-91558 (review RC-8): the runbook must remind the developer to rotate
+        # the default Supervisor password after auto-registering a non-local env.
+        content = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        self.assertIn("change the default", content)
+        self.assertIn("supervisor", content)
+        self.assertIn("password", content)
+
+    def test_docs_default_app_creation_without_confirmation(self):
+        # ENG-91558: adding a section for a named entity creates the app named after
+        # that entity without an extra confirmation turn when no custom app exists.
+        for path in DEFAULT_APP_CREATION_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("add a section for a named entity", content, str(path))
+            self.assertIn("without an extra confirmation turn", content, str(path))
+            self.assertIn("askuserquestion", content, str(path))
+            # ENG-91558 (review RC-4): the "ambiguous" carve-out bounds the rule
+            self.assertIn("ambiguous", content, str(path))
 
 
 if __name__ == "__main__":
