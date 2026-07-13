@@ -57,6 +57,8 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
 - [ ] When editing an existing page, new components match the styles already there (panel style, `labelPosition`, spacing/padding/radius, widget size, column count).
 - [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even.
+- [ ] Reference context (customer summary, tools) uses a closable contextual side panel, not extra fields on the record or a blocking modal.
+- [ ] Long-form content pages use a full-width reading column + meta/byline row, not the field grid or side islands.
 
 ### Fields and data entry
 
@@ -76,6 +78,12 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Default values, validation, and auto-substitution are configured where helpful.
 - [ ] Checkboxes/logical fields are placed after related fields.
 - [ ] Status/stage/order uses DCM/progress bar where appropriate.
+- [ ] Field guidance uses the right channel — placeholder (format) / tooltip (on-demand) / permanent description line (must-see) — not all three at once.
+- [ ] Empty optional fields show an actionable "Add …" placeholder, not a blank.
+- [ ] Toggles are used for settings/modes, checkboxes for plain record booleans.
+- [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
+- [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
+- [ ] The primary display name is auto-composed from key fields where derivable, and kept editable.
 
 ### Buttons, actions, and dialogs
 
@@ -95,6 +103,10 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M).
 - [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin.
 - [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
+- [ ] Record-level actions acting on a profile/summary island's record sit in that island's footer (flex), not the page header.
+- [ ] Primary actions with close variants use a split button; it still counts as the single primary per context.
+- [ ] A semantic-green primary is used only for launch/activate actions, with the meaning in the label; no ad-hoc button colors.
+- [ ] An operation needing a focused set of parameters gathers them in a modal (only the needed fields, required marked, instructions above) — not a full page.
 
 ### Copy and content
 
@@ -103,6 +115,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Error messages explain what the user can do next.
 - [ ] Admin technical details are not exposed to regular users unless necessary.
 - [ ] User-facing text is in one language or intentionally localized.
+- [ ] Non-obvious sections/tabs have a one-line localizable intro under the heading (skipped where self-explanatory).
 
 ### Typography and visual style
 
@@ -110,6 +123,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Font sizes/styles are minimized and based on Headline 1-4, Body, Caption.
 - [ ] Colors are minimized and based on predefined palette.
 - [ ] Color is not the only indication of status or meaning.
+- [ ] Status colors follow one semantic scale (green = on-track/ready/done, amber = draft/paused, red = stopped/overdue/lost, gray = inactive); same state = same color everywhere, always paired with a text label and adequate contrast.
 - [ ] Custom global styles/themes have a clear business reason.
 - [ ] Components keep the default Creatio appearance — no global restyle (e.g. `crt.Input` switched to `appearance: "outline"`, custom borders/fonts) that makes the form look different from the base product; no restyle done just to satisfy another rule (e.g. label position).
 
