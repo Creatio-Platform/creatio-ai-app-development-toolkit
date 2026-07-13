@@ -118,3 +118,22 @@
 | 8 | Minor | `scratch_*` (Classic-тіла зі стенду) не в `.gitignore` | Додано `scratch_*` |
 
 Кожен фікс закрито **таргетованим golden'ом**. **Golden: merge 46→49, mapper 67→72.** Регресія на реальних Case/Contract/Product чиста (0 parse-errors; Case getActions-теги збережено). Позитив рев'ю: AC1–AC5 покрито+верифіковано; «solid prototype». Комміти: `b7e87ce` (код), `c0d3403` (CI+gitignore).
+
+## Ф4 — перший реальний прогін скіла (Applicant) + review
+
+Скіл прогнано наскрізь на реальній секції **Applicants** (`Applicant1Section`/`Applicant1Page`, база `HRApplicant`→`HRRequest`→`WorkHrBase`, Terrasoft-locked). **Флоу спрацював:** агент знайшов fork-тули (hidden, через `clio-run`), зробив `resolve-migration-unit`→`list-schema-layers`→`get-classic-schema`, **використав детермінований `migrate.mjs`** (не ручний merge), дотримав approval-gate, збудував Freedom-сторінку `UsrApplicantsFreedom_FormPage`. Перевірка плану + **збудованої сторінки** (get-page + скріни) дала **16 знахідок** (1 моя — #17 «hollow shell» — знято: правила/модель присутні, просто в окремому механізмі — **урок: не читати get-page ownBodySummary-лічильники як «нічого нема»**).
+
+**Keystone — #1 (F2-seed):** агент **пропустив** seed parent-template → `unresolvedParents:[LeftModulesContainer,Tabs]`, ESNTab-warning, `container:12`; каскадом: профільні поля впали у fallback-таб (5 полів/1 острів замість 2 островів), `ProcessButton` (Run process) зник. Движок це **гучно підсвітив**, але агент сказав «ran cleanly» й проігнорував.
+
+**Пріоритезований беклог (16):** 🔑#1 seed-каскад · **A** стандартні фічі/шаблони (#3 generic-first, #6 Activities≠Timeline, #7 Feed/Attachments template-provided, #16 Approvals=generic-grid) · **B** секція (#2 grid-колонки, #8 process-launch/section-actions) · **C** деталізація (#10 page-design-spec, #9b multi-island) · **D** built-page (#11 деталі дропаються вибірково: Email/Communication/Files + `Schema1Detail` unresolved-name, #12 профіль=каскад#1, #13 caption, #14 grid не 24-col, #15 назви деталей≠Classic) · дрібні (#4 lookup-тул, #5 caption-резолв).
+
+**Виконано зараз (Фаза 1+2):**
+- **#1** SKILL step 4: seed parent-template chain **обов'язковий** + **HARD GATE** (non-empty `warnings`/`unresolvedParents` ⇒ СТОП, дозасідь, не йди далі).
+- **#6** `ActivityDetailV2→Activities (Tasks) related list`, «Timeline» прибрано; Timeline лишається окремим (`WIDGET_BY_MODULE`).
+- **#6/#11** `matchFeature()` — суфікс-матч (`ApplicantEmailDetailV2`→`EmailDetailV2`), щоб prefix-варіанти не падали як generic (і не губились).
+- **#7** `FileDetailV2` (+Feed) позначено `templateProvided` → «do NOT create, merge onto existing».
+- **#14** структурні `GridContainer` емітяться з явним **24-col** `columns` (класичні `column/colSpan` рендеряться 1:1).
+- **#15** resource-key caption деталі → `detail-caption` decision («resolve, don't invent»).
+Кожен + golden. **Golden: merge 49/49, mapper 77/77.** Офлайн-регресія (Contract/Product/Case): 0 parse-err, усі GridContainer 24-col, Activities-лейбл без Timeline.
+
+**Відкладено на верифікацію/наступні фази:** #11(i) точний резолв `Schema1Detail` + повний #15 (потребують реального detail-блоку Applicant — fork-тули, re-fetch); Фаза 3 (#3/#16/#8c/#10/#4 + `freedom-templates.md`); Фаза 4 (#2/#8b/#11-B2/#9b/#5/F8). **Наскрізна верифікація:** перепрогнати скіл на Applicant **із seed** (fork активний) — очікуємо: 2 острови з повними полями, ProcessButton, деталі нативні/недропнуті, grid не ламається.

@@ -53,12 +53,29 @@ const PROP_ACTION = {
 // Шар-3 knowledge: STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as
 // a generic detail/widget. Matched by classic detail/module/container name. The Freedom analog is named
 // descriptively (the exact crt.* component is confirmed on-stand — never fabricated here; E1 lesson).
+// `templateProvided` = most Freedom FORM templates already ship this component → account for it / merge
+// onto the existing one, do NOT create a new one (#7).
 const FEATURE_CATALOG = {
   VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)" },
-  FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes" },
-  ActivityDetailV2: { feature: "Activities", freedom: "Freedom Activities / Timeline" },
+  FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true },
+  // Activities is the related TASKS/activities list — NOT the Timeline widget (Timeline is a separate
+  // classic component, mapped via WIDGET_BY_MODULE.Timeline). Do not conflate the two (#6).
+  ActivityDetailV2: { feature: "Activities", freedom: "Freedom Activities (Tasks) related list" },
   EmailDetailV2: { feature: "Emails", freedom: "Freedom Email component" },
 };
+// Match a classic detail schema to a standard feature by exact name OR entity-prefixed suffix — e.g.
+// `ApplicantEmailDetailV2` → `EmailDetailV2`, `ApplicantVisaDetail` → (no)…: prefixed variants of the
+// standard details were previously missed and fell through as generic details (then dropped). (#6/#11)
+function matchFeature(schemaName) {
+  if (!schemaName) return null;
+  if (FEATURE_CATALOG[schemaName]) return FEATURE_CATALOG[schemaName];
+  const key = Object.keys(FEATURE_CATALOG).find(k => schemaName.endsWith(k));
+  return key ? FEATURE_CATALOG[key] : null;
+}
+// Freedom GridContainer column model matching Classic's 24-column grid, so classic column/colSpan
+// coordinates render 1:1. A bare crt.GridContainer defaults to a different (narrow) width → wide classic
+// coordinates overflow and the layout breaks; emitting the 24-track template fixes it (#14).
+const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
 // header/analytical widgets — recognised by MODULE key and by CONTAINER name.
 const WIDGET_BY_MODULE = {
   ActionsDashboardModule: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps" },
@@ -133,7 +150,7 @@ export function mapToFreedom(eff, opts = {}) {
       structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
         values: { type: "crt.Tab", caption: cap } });
       structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
-        values: { type: "crt.GridContainer" } });
+        values: { type: "crt.GridContainer", columns: GRID_24 } });
       // only flag when we had to SYNTHESIZE the caption key (classic carried no caption resource).
       if (!(tItem && tItem.caption)) needsDecision.push({ kind: "tab-caption", item: tab,
         reason: `synthesized caption key '$Resources.Strings.${tab}Caption' — classic caption not in model; confirm/replace with the real localized string` });
@@ -154,14 +171,14 @@ export function mapToFreedom(eff, opts = {}) {
         values: { type: "crt.ExpansionPanel", caption: cap, collapsible: true } });
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
-        values: { type: "crt.GridContainer" } });
+        values: { type: "crt.GridContainer", columns: GRID_24 } });
       if (!g.caption) needsDecision.push({ kind: "group-caption", item: g.name,
         reason: `synthesized ExpansionPanel caption '$Resources.Strings.${g.name}Caption' for classic group — confirm/replace with the real localized string` });
     } else {
       // GRID_LAYOUT / generic structural container -> crt.GridContainer.
       inner = g.name;
       structural.push({ operation: "insert", name: inner, parentName, propertyName: "items",
-        values: { type: "crt.GridContainer" } });
+        values: { type: "crt.GridContainer", columns: GRID_24 } });
     }
     emittedGroups.set(g.name, inner);
     return inner;
@@ -177,7 +194,7 @@ export function mapToFreedom(eff, opts = {}) {
   const headerIsWide = headerCols.size > 1;
   if (headerIsWide) {
     structural.push({ operation: "insert", name: "HeaderContainer", parentName: "Header", propertyName: "items",
-      values: { type: "crt.GridContainer" } });
+      values: { type: "crt.GridContainer", columns: GRID_24 } });
     needsDecision.push({ kind: "layout-type", item: "Header",
       reason: `classic Header is a WIDE ${headerCols.size}-column block, not the default left profile island — mapped to a full-width header grid; confirm the target Freedom page uses a header region (no left profile) and the column layout` });
   }
@@ -292,12 +309,12 @@ export function mapToFreedom(eff, opts = {}) {
     // place the detail in its owning TAB (ancestry-resolved), preserving order.
     const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
     const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? profileRegion(own) : null);
-    const feat = FEATURE_CATALOG[d.schemaName];
+    const feat = matchFeature(d.schemaName);
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: d.entitySchemaName, tab });
+      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: d.entitySchemaName, tab, templateProvided: !!feat.templateProvided });
       needsDecision.push({ kind: "standard-feature", item: d.schemaName,
-        reason: `classic '${d.schemaName}' is the ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail); confirm the exact Freedom component + wiring` });
+        reason: `classic '${d.schemaName}' is the ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}` });
       continue;
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
@@ -306,6 +323,10 @@ export function mapToFreedom(eff, opts = {}) {
     // OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
     needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
       reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
+    // caption fidelity (#15): a resource-key caption must be RESOLVED to the localized string (read the
+    // schema resources) — never invent one (e.g. classic "Requests", not a made-up "Current vacancies").
+    if (d.caption && /^Resources\.Strings\./.test(d.caption)) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
+      reason: `detail caption is the resource key '${d.caption}' — resolve it to the localized string from the schema's resources; do NOT invent a caption` });
     details.push({
       composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
       caption: d.caption || null, tab, order: d.order ?? null, dataSourceScope: "viewElement",

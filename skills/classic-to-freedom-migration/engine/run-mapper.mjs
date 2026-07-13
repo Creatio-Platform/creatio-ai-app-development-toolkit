@@ -324,5 +324,33 @@ const migBad = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-"],
 check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdout (not a raw stack)",
   migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
 
+/* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
+const featCs = mapToFreedom(mergeLayers([L("Client", { entity: "X",
+  details: {
+    MyAct:   { schemaName: "ApplicantActivityDetailV2", entitySchemaName: "Activity" },
+    MyEmail: { schemaName: "ApplicantEmailDetailV2",    entitySchemaName: "Activity" },
+    MyFiles: { schemaName: "FileDetailV2",              entitySchemaName: "File" },
+    MyReq:   { schemaName: "SomeRequestDetail",         entitySchemaName: "Request" },
+  },
+  diff: [
+    di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+    di({ name: "MyAct", parentName: "T", propertyName: "items" }),
+    di({ name: "MyEmail", parentName: "T", propertyName: "items" }),
+    di({ name: "MyFiles", parentName: "T", propertyName: "items" }),
+    di({ name: "MyReq", parentName: "T", propertyName: "items", caption: "Resources.Strings.ReqCap" }),
+    di({ name: "TF", parentName: "T", propertyName: "items", bindTo: "TF" })] })]));
+const sf = (c) => featCs.standardFeatures.find(s => s.classicDetail === c);
+check("#6: ActivityDetailV2 → Activities feature, freedom label does NOT say Timeline",
+  sf("ApplicantActivityDetailV2")?.feature === "Activities" && !/Timeline/i.test(sf("ApplicantActivityDetailV2")?.freedom ?? ""));
+check("#6/#11: entity-prefixed variant (ApplicantEmailDetailV2) matched as Emails via suffix",
+  sf("ApplicantEmailDetailV2")?.feature === "Emails");
+check("#7: FileDetailV2 (Attachments) flagged templateProvided + 'do NOT create' note",
+  sf("FileDetailV2")?.templateProvided === true
+  && featCs.needsDecision.some(n => n.kind === "standard-feature" && n.item === "FileDetailV2" && /do NOT create/i.test(n.reason)));
+check("#14: structural GridContainer carries a 24-column grid config",
+  featCs.viewConfigDiff.some(o => o.values?.type === "crt.GridContainer" && Array.isArray(o.values.columns) && o.values.columns.length === 24));
+check("#15: a resource-key detail caption → detail-caption decision (resolve, don't invent)",
+  featCs.needsDecision.some(n => n.kind === "detail-caption" && n.item === "SomeRequestDetail"));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
