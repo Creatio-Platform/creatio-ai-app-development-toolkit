@@ -102,12 +102,18 @@ export function parseLayer(src, pkg) {
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
     features: [...new Set([...src.matchAll(/getIsFeatureEnabled\(\s*["']([\w.]+)["']/g)].map(mt => mt[1]))],
     // custom card-ACTION hints — the ACTIONS menu is built imperatively in getActions, so static parsing
-    // can't fully reconstruct it. Surface (a) navigate/goTo handlers and (b) action `Tag` values (the
-    // menu-item handler tags, e.g. runEscalation / runSearchForSimilarCases) so real actions aren't lost.
-    actionHints: [...new Set([
-      ...[...src.matchAll(/\b((?:navigateTo|goTo|GoTo)[A-Z]\w+)/g)].map(mt => mt[1]),
-      ...[...src.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
-    ])],
+    // can't fully reconstruct it. Scan ONLY the getActions body, not the whole file: `"Tag"` is a common
+    // diff-item/button/config property elsewhere, and scanning globally over-captured non-action strings
+    // into the decision worklist. Surface (a) navigate/goTo handlers and (b) action `Tag` values (menu-item
+    // handler tags, e.g. runEscalation / runSearchForSimilarCases) from that body so real actions aren't lost.
+    actionHints: (() => {
+      const body = extractFnBody(src, "getActions");
+      if (!body) return [];
+      return [...new Set([
+        ...[...body.matchAll(/\b((?:navigateTo|goTo|GoTo)[A-Z]\w+)/g)].map(mt => mt[1]),
+        ...[...body.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
+      ])];
+    })(),
     // referenced UI modules from the define() dep list (Fix 3): custom modules that RENDER UI outside
     // this page's own diff (e.g. CasesEstimateLabel → the SLA timer + its START/END buttons). Surfaced
     // so the mapper flags them — the page-schema migration unit cannot see their rendered surface.
@@ -119,12 +125,35 @@ export function parseLayer(src, pkg) {
 // UI-ish name). A page composes such modules OUTSIDE its own diff, so their UI (buttons/labels/timers) is
 // invisible to layer analysis. Framework utils (FormatUtils, BusinessRuleModule, ConfigurationEnums…) are
 // excluded — only css-backed or UI-named deps qualify, keeping the signal high (E1: never flag noise).
-const UI_MODULE_RX = /Label|Widget|Dashboard|Timeline|MiniPage|Generator|Gallery|Chart|Diagram/;
+// The UI-name test is ANCHORED to a trailing role suffix so a utility like `LabelHelper` / `GeneratorUtils`
+// (contains a token but doesn't END in it) is NOT misflagged — only css-backed deps or true role names pass.
+const UI_MODULE_RX = /(?:Label|Widget|Dashboard|Timeline|MiniPage|Generator|Gallery|Chart|Diagram)$/;
 function referencedUiModules(deps) {
   const names = (Array.isArray(deps) ? deps : []).filter(isStr);
   const css = new Set(names.filter(d => d.startsWith("css!")).map(d => d.slice(4).replace(/CSS$/, "")));
   return [...new Set(names.filter(d => !d.startsWith("css!"))
     .filter(m => css.has(m) || css.has(m.replace(/CSS$/, "")) || UI_MODULE_RX.test(m)))].sort();
+}
+
+// Extract a named function/method BODY by brace-matching (a regex can't balance braces) — used to scope
+// the getActions scan to that method only. Returns "" when the function isn't found (→ no hints, no noise).
+function extractFnBody(src, name) {
+  const openers = [
+    new RegExp(name + "\\s*[:=]\\s*function\\s*\\([^)]*\\)\\s*\\{"), // name: function(){  |  name = function(){
+    new RegExp(name + "\\s*\\([^)]*\\)\\s*\\{"),                       // name(){  (ES6 method shorthand)
+  ];
+  for (const re of openers) {
+    const m = re.exec(src);
+    if (!m) continue;
+    const open = m.index + m[0].length - 1; // index of the opening {
+    let depth = 0;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === "{") depth++;
+      else if (src[j] === "}" && --depth === 0) return src.slice(open + 1, j);
+    }
+    return src.slice(open + 1); // unbalanced source — return the remainder defensively
+  }
+  return "";
 }
 
 const isNum = (v) => typeof v === "number";

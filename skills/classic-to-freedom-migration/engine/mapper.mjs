@@ -231,13 +231,16 @@ export function mapToFreedom(eff, opts = {}) {
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;
     if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
-    // classic `hint` is ALSO a field tooltip (a DIFFERENT property from `tip`). A Resources.Strings.*
-    // hint is a static localized string → map to the Freedom tooltip; a hint bound to a computed method
-    // is dynamic → flag it (like a visibility rule) rather than emit a broken static tip.
-    if (f.hint && !values.tip) {
-      if (/^Resources\.Strings\./.test(f.hint)) values.tip = { content: "$" + f.hint };
+    // classic `hint` is ALSO a field tooltip (a DIFFERENT property from `tip`). Decouple the two effects so
+    // a dynamic hint is never silently swallowed when the field already has a `tip`:
+    //  • a static Resources.Strings.* hint fills the Freedom tooltip only if no tip already occupies it;
+    //  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision — even when
+    //    a tip is present — so the competing non-static tooltip doesn't vanish without a reviewer signal.
+    if (f.hint) {
+      const staticHint = /^Resources\.Strings\./.test(f.hint);
+      if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
       else needsDecision.push({ kind: "field-hint", item: col,
-        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource) — wire the Freedom tooltip via a handler/converter` });
+        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
     }
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
@@ -383,15 +386,19 @@ export function mapToFreedom(eff, opts = {}) {
   // and anything already emitted/recognized (accountedFor).
   // Candidate = alive, CLIENT-authored (non-template) item the mapper produced NOTHING for. Skip STRUCTURAL
   // containers the mapper builds on demand: a tab (isTab), a CONTROL_GROUP (itemType 15) or detail
-  // (itemType 2), and grid/tab/group scaffolding by name (itemType isn't always resolvable, so back it
-  // with the naming convention). An unpopulated organizer isn't "dropped content" — its fields/details/
-  // features surface via their own paths. What remains — LABEL/CONTAINER/value micro-widgets and custom
-  // buttons — is real client content with no Freedom element.
-  const STRUCT_RX = /(?:_gridLayout|Grid|Tabs|Tab|TabContainer|ControlGroup|Group)$/;
+  // (itemType 2). itemType isn't always resolvable, so back it with the naming convention — but a name
+  // suffix ALONE must never silently suppress content (a childless block misnamed `SlaGroup` is real UI):
+  //  • HARD_SCAFFOLD (grids / the root tab panel) is pure layout the mapper rebuilds — always skip.
+  //  • SOFT_STRUCT (…Group/Tab/ControlGroup/TabContainer) is skipped ONLY when it is a real parent (has a
+  //    child routed through it); a childless one IS surfaced, so nothing vanishes on name convention alone.
+  const HARD_SCAFFOLD_RX = /(?:_gridLayout|Grid)$|^Tabs$/;
+  const SOFT_STRUCT_RX = /(?:Tabs|Tab|TabContainer|ControlGroup|Group)$/;
+  const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
   const dropped = new Set();
   for (const i of (eff.items || [])) {
     if (i.templateOwned || i.bindTo || i.itemType === 2 || i.itemType === 15 || i.isTab) continue;
-    if (accountedFor.has(i.name) || STRUCT_RX.test(i.name)) continue;
+    if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
+    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
     dropped.add(i.name);
   }
   // Flag only the ROOT of each dropped subtree (whose parent is not itself dropped) → ONE decision per

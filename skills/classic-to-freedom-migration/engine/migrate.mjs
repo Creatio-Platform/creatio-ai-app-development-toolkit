@@ -54,12 +54,23 @@ export function runMigration(manifest, opts = {}) {
 }
 
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
-// stdout = the result JSON (parseable); nothing else is written to stdout.
+// stdout = the result JSON (parseable); diagnostics go to stderr. Bad input exits 1 with a clear message
+// (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
   const arg = process.argv[2];
-  const fromFile = arg && arg !== "-";
-  const raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8");
-  const manifest = JSON.parse(raw);
-  const baseDir = fromFile ? path.dirname(path.resolve(arg)) : process.cwd();
-  process.stdout.write(JSON.stringify(runMigration(manifest, { baseDir }), null, 2) + "\n");
+  const fromFile = !!arg && arg !== "-";
+  let raw;
+  try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
+  catch (e) { fail(`cannot read manifest ${fromFile ? `'${arg}'` : "from stdin"}: ${e.message}`); }
+  let manifest;
+  try { manifest = JSON.parse(raw); }
+  catch (e) { fail(`manifest is not valid JSON: ${e.message}`); }
+  if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.layers) || manifest.layers.length === 0) {
+    fail("manifest must be an object with a non-empty `layers` array (see the header of this file for the shape)");
+  }
+  let result;
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
+  catch (e) { fail(e.message); } // e.g. a layer `file` that does not exist
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }

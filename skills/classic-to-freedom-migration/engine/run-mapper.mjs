@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
 import { runMigration } from "./migrate.mjs";
+import { spawnSync } from "node:child_process";
 import { makeLayer as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -259,20 +260,27 @@ check("real tab caption used → no synthesized tab-caption decision",
 /* ---- Fix 1: classic `hint` → field tooltip (static) vs field-hint decision (dynamic) ---- */
 const hintCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
   di({ name: "S", parentName: "Header", propertyName: "items", bindTo: "S", hint: "Resources.Strings.SHint" }),
-  di({ name: "D", parentName: "Header", propertyName: "items", bindTo: "D", hint: "getDynamicHint" })] })]));
+  di({ name: "D", parentName: "Header", propertyName: "items", bindTo: "D", hint: "getDynamicHint" }),
+  di({ name: "B", parentName: "Header", propertyName: "items", bindTo: "B", tip: "Resources.Strings.BTip", hint: "getDynB" })] })]));
 check("static `hint` (Resources.Strings.*) → Freedom field tooltip (tip.content)",
   hintCs.viewConfigDiff.find(o => o.name === "S")?.values.tip?.content === "$Resources.Strings.SHint"
   && !hintCs.needsDecision.some(n => n.kind === "field-hint" && n.item === "S"));
 check("dynamic `hint` (method-bound) → field-hint decision, not a broken static tip",
   hintCs.needsDecision.some(n => n.kind === "field-hint" && n.item === "D")
   && !hintCs.viewConfigDiff.find(o => o.name === "D")?.values.tip);
+check("field-hint: a dynamic hint is flagged EVEN when a static tip already occupies the tooltip (not swallowed)",
+  hintCs.needsDecision.some(n => n.kind === "field-hint" && n.item === "B")
+  && hintCs.viewConfigDiff.find(o => o.name === "B")?.values.tip?.content === "$Resources.Strings.BTip");
 
 /* ---- Fix 2: LOUD unmapped-component (client content the mapper produced nothing for) ---- */
 const umCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", refModules: ["CasesEstimateLabel"], diff: [
   di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" }),                        // field → mapped
   di({ name: "TimerLabel", parentName: "Header", propertyName: "items", caption: "getTimer" }),       // LABEL, no bindTo → unmapped
   di({ name: "MyGrid", parentName: "Header", propertyName: "items" }),                                // scaffolding (Grid$) → skipped
-  di({ name: "EscalateButton", parentName: "Header", propertyName: "items" })] })]));                 // custom button → unmapped
+  di({ name: "EscalateButton", parentName: "Header", propertyName: "items" }),                        // custom button → unmapped
+  di({ name: "SlaGroup", parentName: "Header", propertyName: "items", caption: "getSla" }),           // childless + struct NAME + content → must surface
+  di({ name: "RealGroup", parentName: "Header", propertyName: "items" }),                             // struct NAME parent (child below) → skip
+  di({ name: "RealGroupLabel", parentName: "RealGroup", propertyName: "items", caption: "x" })] })])); // non-field child → makes RealGroup a parent
 check("unmapped-component: a client LABEL/container with no Freedom element is surfaced (LOUD, not silent)",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "TimerLabel"));
 check("unmapped-component: a custom *Button is surfaced with card-action guidance",
@@ -281,6 +289,10 @@ check("unmapped-component: grid/tab scaffolding the mapper rebuilds is NOT flagg
   !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "MyGrid"));
 check("unmapped-component: a mapped field is NOT flagged as unmapped",
   !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "F"));
+check("unmapped-component: a CHILDLESS struct-named content item (SlaGroup) IS surfaced — no silent drop on name alone",
+  umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaGroup"));
+check("unmapped-component: a struct-named PARENT container (RealGroup, has a child) is NOT surfaced (no noise)",
+  !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroup"));
 const umTpl = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [di({ name: "CF", parentName: "Header", propertyName: "items", bindTo: "CF" })] })],
   { seedLayers: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
 check("unmapped-component: template-owned items are NOT flagged (payload = client content only, F9)",
@@ -304,6 +316,13 @@ check("migrate.mjs: runMigration produces a ChangeSet (entity + non-empty viewCo
   cli.entity === "SupportUnit" && cli.changeSet.viewConfigDiff.length > 0);
 check("migrate.mjs: no parse errors + effective counts + decisionSummary surfaced",
   cli.parseErrors.length === 0 && cli.effective.fields > 0 && typeof cli.decisionSummary === "object" && Object.keys(cli.decisionSummary).length > 0);
+check("migrate.mjs: entity '?' falls back to the merged effective entity",
+  runMigration({ entity: "?", layers: [
+    { pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" },
+    { pkg: "SupportService", file: "supportunitemployee/SupportService.js" }] }, { baseDir: FIX }).entity === "SupportUnit");
+const migBad = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-"], { input: "{ not json", encoding: "utf8" });
+check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdout (not a raw stack)",
+  migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

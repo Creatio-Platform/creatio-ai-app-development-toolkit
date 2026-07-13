@@ -173,24 +173,30 @@ check("mergeLayers aggregates features", (fe.features || []).includes("UseNewPro
 
 /* ---- card-action hints (getActions navigate/goTo methods) + caption key captured from the body ---- */
 const actBody = `define("T",[],function(){ this.getActions=function(){ this.navigateToTaxesByCountriesLookup(); var a={"Tag":"runEscalation"}; }; return{entitySchemaName:"X",` +
-  `diff:[{operation:"insert",name:"MyTab",values:{caption:{bindTo:"Resources.Strings.MyTabCaption"}}}]};});`;
+  `diff:[{operation:"insert",name:"MyTab",values:{caption:{bindTo:"Resources.Strings.MyTabCaption"},"Tag":"strayNotAnAction"}}]};});`;
 const al = parseLayer(actBody, "T");
-check("card-action hints captured (navigateTo… + action Tag from getActions body)",
+check("card-action hints captured (navigateTo… + action Tag from the getActions body)",
   (al.actionHints || []).includes("navigateToTaxesByCountriesLookup") && (al.actionHints || []).includes("runEscalation"));
+check("card-action scan scoped to getActions — a `Tag` elsewhere in the body is NOT captured (no noise)",
+  !(al.actionHints || []).includes("strayNotAnAction"));
 check("caption resource key captured from the body", al.diff.find(d => d.name === "MyTab")?.caption === "Resources.Strings.MyTabCaption");
 
 /* ---- Fix 1: classic `hint` (field tooltip, a DIFFERENT property from `tip`) captured + carried ---- */
-const hintBody = `define("T",["FormatUtils","CasesEstimateLabel","css!CasesEstimateLabel","BusinessRuleModule"],function(){ return{entitySchemaName:"X",` +
+const hintBody = `define("T",["FormatUtils","CasesEstimateLabel","css!CasesEstimateLabel","BusinessRuleModule","SlaGeneratorUtils","OrderTimeline"],function(){ return{entitySchemaName:"X",` +
   `diff:[{operation:"insert",name:"F",values:{bindTo:"Col",hint:{bindTo:"Resources.Strings.FHint"}}}]};});`;
 const hl = parseLayer(hintBody, "T");
 check("classic `hint` captured on the diff item", hl.diff.find(d => d.name === "F")?.hint === "Resources.Strings.FHint");
 const he = mergeLayers([hl]);
 check("merge carries `hint` onto the field", he.fields.find(f => f.bindTo === "Col")?.hint === "Resources.Strings.FHint");
 
-/* ---- Fix 3: referenced UI modules from define() deps — css-backed / UI-named only, utils excluded ---- */
+/* ---- Fix 3: referenced UI modules from define() deps — css-backed / UI-named (anchored) only ---- */
 check("refModules captures the css-backed UI module", (hl.refModules || []).includes("CasesEstimateLabel"));
 check("refModules EXCLUDES framework utils (FormatUtils, BusinessRuleModule)",
   !(hl.refModules || []).includes("FormatUtils") && !(hl.refModules || []).includes("BusinessRuleModule"));
+check("refModules: UI token NOT at the end (SlaGeneratorUtils) is excluded — anchored match, E1 no-noise",
+  !(hl.refModules || []).includes("SlaGeneratorUtils"));
+check("refModules: a true role-suffix name (OrderTimeline) is captured even without css backing",
+  (hl.refModules || []).includes("OrderTimeline"));
 check("mergeLayers aggregates referencedModules", (he.referencedModules || []).includes("CasesEstimateLabel"));
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
