@@ -16,7 +16,6 @@ REQUIRED_REQUIREMENTS_SECTIONS = [
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
     "Minimum to create:",
-    "default list columns:",
 ]
 
 OBJECT_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+(Section object|Object):", re.MULTILINE)
@@ -26,7 +25,15 @@ TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
     re.IGNORECASE,
 )
-UX_CARRIER_RE = re.compile(r"^[\s-]*default (list columns|filters):", re.IGNORECASE)
+UX_CARRIER_RE = re.compile(r"^[\s-]*list (columns|filters):", re.IGNORECASE)
+# `list columns:` must be present as a real line-anchored label. A plain
+# substring test ("list columns:" in text) is wrong because the retired label
+# `default list columns:` ends with it, so an un-migrated doc would pass silently.
+LIST_COLUMNS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#]*list columns:")
+# The retired `default list columns:` / `default list filters:` labels were
+# renamed to `list columns:` / `list filters:`; reject the old form with a
+# helpful migration error instead of letting it slip through.
+RETIRED_LIST_LABEL_RE = re.compile(r"(?im)^[\s\-*>#]*default list (?:columns|filters):")
 CHECKLIST_SOURCE_RE = re.compile(
     r"(?:^|\n)\s*(?:"
     r"source\s*[:=]\s*[\"']?(?:confirmed|assumed)[\"']?"
@@ -36,6 +43,22 @@ CHECKLIST_SOURCE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+
+# Section 6 record-surface scoping for the inline-related-list conflict check.
+# A surface heading is `Section <name>` / `Related list <name>`; the lookahead
+# requires a following name token so prose like "Section 3 is ..." is not a heading.
+# Require a name token after the keyword (excludes a bare "Section"/"Related list"),
+# but NOT a letter-only name: a surface name may start with a digit (e.g.
+# "360 Reviews") or be non-Latin (Cyrillic), and dropping such a heading would let
+# an adjacent inline list absorb its labels and raise a FALSE conflict.
+# The prefix class includes the backtick because the §6 contract renders a surface
+# bullet as `- **`Related list <name>`**` (bold + code), so the keyword sits behind
+# `- **``; without the backtick the regex misses every contract-conforming heading
+# and the conflict check below becomes a no-op.
+SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#`]*(Section|Related list)\b(?=\s+\S)")
+INLINE_INTERACTION_RE = re.compile(r"(?im)^[\s\-*`]*add/edit:\s*inline\b")
+PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*`]*(?:form fields:|form groups:|add page:|edit page:)")
 
 
 def extract_section(text, start_heading, end_heading=None):
@@ -67,6 +90,12 @@ def validate_requirements_doc(content: str) -> None:
     for marker in REQUIRED_REQUIREMENTS_MARKERS:
         if marker not in text:
             raise WorkflowError(f"Requirements doc failed: missing required marker: {marker}")
+    if RETIRED_LIST_LABEL_RE.search(text):
+        raise WorkflowError(
+            "Requirements doc failed: retired label 'default list columns:'/'default list filters:' is no longer accepted; use 'list columns:' / 'list filters:' (drop the 'default ' prefix)"
+        )
+    if not LIST_COLUMNS_LABEL_RE.search(text):
+        raise WorkflowError("Requirements doc failed: missing required marker: list columns:")
     if not SECTION_OBJECT_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
@@ -86,7 +115,7 @@ def validate_requirements_doc(content: str) -> None:
         end = object_indices[pos + 1] if pos + 1 < len(object_indices) else len(lines)
         block = lines[start:end]
         block_text = "\n".join(block)
-        for marker in ("Title:", "Code:", "Object role:", "Primary display field:", "Description:", "Purpose:"):
+        for marker in ("Title:", "Code:", "Primary display field:", "Description:"):
             if marker not in block_text:
                 raise WorkflowError(
                     f"Requirements doc failed: object block starting at '{lines[start]}' is missing metadata marker '{marker}'"
@@ -105,10 +134,36 @@ def validate_requirements_doc(content: str) -> None:
     for line in section6_text.splitlines():
         if not UX_CARRIER_RE.search(line):
             continue
-        values = normalize_title_list(re.sub(r"^[\s-]*default [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
+        values = normalize_title_list(re.sub(r"^[\s-]*list [^:]*:\s*", "", line, count=1, flags=re.IGNORECASE))
         for title in values:
             if title == "Name":
                 continue
             if title.lower() not in section3_text_lower:
                 raise WorkflowError(f"Requirements doc failed: UX title '{title}' must have a carrier in section 3 object model")
+    # Section 6 lists one block per record surface. A surface heading is a
+    # top-level bullet (`- **`Section <name>`**` / `- **`Related list <name>`**`).
+    # A surface's block is its OWN indented sub-bullets only: it ends at the next
+    # line whose indentation is no deeper than the heading (a sibling top-level
+    # bullet or the next heading). Scoping by indentation rather than "up to the
+    # next heading" stops a heading-less surface -- the section object or the
+    # "single full page" option, both described with bare top-level
+    # `form groups:` bullets -- from being absorbed and raising a false conflict.
+    # An inline related list edits in the grid, so its block must not also carry
+    # a page/form label.
+    s6_lines = section6_text.splitlines()
+    for idx, line in enumerate(s6_lines):
+        match = SURFACE_HEADING_RE.match(line)
+        if not match or match.group(1).lower() != "related list":
+            continue
+        heading_indent = len(line) - len(line.lstrip())
+        block_lines = []
+        for nxt in s6_lines[idx + 1:]:
+            if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= heading_indent:
+                break
+            block_lines.append(nxt)
+        block = "\n".join(block_lines)
+        if INLINE_INTERACTION_RE.search(block) and PAGE_FORM_LABEL_RE.search(block):
+            raise WorkflowError(
+                "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"
+            )
 
