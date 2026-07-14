@@ -126,6 +126,38 @@ export function parseLayer(src, pkg) {
       const names = [...new Set([...src.matchAll(/["']([A-Za-z][\w.]*(?:Process|SecurityCheck|Recruiting)[\w.]*)["']/g)].map(mt => mt[1]))];
       return { names };
     })(),
+    // ---- SECTION-schema signals (meaningful for *Section schemas; empty/null for pages) ----
+    // add-record mini page: whether the section adds records via a quick-add MINI PAGE (and which one),
+    // vs opening the full edit page. `getAddRecordMiniPage()` returning a quoted schema name = that mini
+    // page; returning empty/null = none; a bare `useAddRecordMiniPage: true` = uses one (name unknown).
+    addRecordMiniPage: (() => {
+      const body = extractFnBody(src, "getAddRecordMiniPage");
+      if (body) {
+        const m = /return\s+["']([A-Za-z]\w+)["']/.exec(body);
+        if (m) return m[1];
+        if (/return\s+(?:null|""|'')/.test(body)) return null;
+        return true;
+      }
+      return /useAddRecordMiniPage\s*[:=]\s*true/.test(src) ? true : null;
+    })(),
+    // section-level actions (bulk / section-toolbar) built in getSectionActions — a SEPARATE surface from
+    // the record page's getActions. Surface the handler tags / navigate hints (#8b).
+    sectionActions: (() => {
+      const body = extractFnBody(src, "getSectionActions");
+      if (!body) return [];
+      return [...new Set([
+        ...[...body.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
+        ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
+      ])];
+    })(),
+    // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
+    // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
+    // it as data-driven (#2).
+    listColumns: (() => {
+      const body = extractFnBody(src, "getGridDataColumns") || extractFnBody(src, "initColumnsConfig") || "";
+      if (!body) return [];
+      return [...new Set([...body.matchAll(/(?:"?(?:path|bindTo)"?)\s*:\s*["']([A-Za-z][\w.]*)["']/g)].map(mt => mt[1]))];
+    })(),
   };
 }
 

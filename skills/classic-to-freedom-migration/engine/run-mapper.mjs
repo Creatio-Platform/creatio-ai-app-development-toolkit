@@ -471,6 +471,25 @@ check("design-spec: Logic table lists the handler (onContactChanged → Contact 
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
 
+/* ---- Section-schema analysis: add-record mini page + section actions (#8b) + list columns (#2) ---- */
+const secRun = runMigration({ entity: "Applicant",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getAddRecordMiniPage:function(){return "ApplicantMiniPage";},getSectionActions:function(){var a=this.callParent(arguments);a.addItem({"Tag":"runBulkAssign"});return a;},getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
+}, { baseDir: FIX });
+check("section: add-record mini page detected (name)", secRun.section?.addRecordMiniPage === "ApplicantMiniPage");
+check("section: getSectionActions hint captured (#8b)", secRun.section?.sectionActions.includes("runBulkAssign"));
+check("section: list columns from getGridDataColumns (#2)", (secRun.section?.listColumns || []).join(",") === "Name,Stage");
+check("section: design spec has a Section (list page) block naming the mini page",
+  /### Section \(list page\)/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec));
+const noSec = runMigration({ entity: "X",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("section: absent when no section input (block omitted)", noSec.section === null && !/### Section \(list page\)/.test(noSec.designSpec));
+check("section: no add-record mini page → 'full edit page' + list columns flagged data-driven",
+  (() => { const r = runMigration({ entity: "Applicant",
+    layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
+    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /profile data/.test(r.designSpec); })());
+
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
 const skelSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
   { seedLayers: [L("Base", { diff: [di({ name: "Header", itemType: 15 })] })] });        // seed = bare containers, no methods

@@ -15,7 +15,8 @@
 //     "clientEditableLayers": ["WorkOverride", …], // optional; drives B6 removal confidence
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
-//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … } // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ] // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //   }
 // Prefer inline "body" (paste the clio get-classic-schema output) over "file" to avoid path fragility.
 import fs from "node:fs";
@@ -32,6 +33,9 @@ export function runMigration(manifest, opts = {}) {
   const parse = (list) => (Array.isArray(list) ? list : []).map((e) => parseLayer(bodyOf(e), e.pkg));
   const layers = parse(manifest.layers);
   const seedLayers = parse(manifest.seed);
+  // section-schema layers (optional) — the *Section chain. Analyzed for list-page concerns the page
+  // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
+  const sectionLayers = parse(manifest.section);
   const eff = mergeLayers(layers, { seedLayers });
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns, so the
   // mapper can resolve auto-named (SchemaNDetail) details and show the related-list columns in the spec.
@@ -53,7 +57,15 @@ export function runMigration(manifest, opts = {}) {
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
   });
-  const parseErrors = [...layers, ...seedLayers].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
+  const parseErrors = [...layers, ...seedLayers, ...sectionLayers].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
+  // section analysis — union the signals across the section layer chain (last-wins for the mini page).
+  const section = sectionLayers.length ? {
+    addRecordMiniPage: sectionLayers.map((l) => l.addRecordMiniPage).filter((v) => v != null).pop() ?? null,
+    sectionActions: [...new Set(sectionLayers.flatMap((l) => l.sectionActions || []))],
+    listColumns: [...new Set(sectionLayers.flatMap((l) => l.listColumns || []))],
+    processLaunch: sectionLayers.some((l) => l.processLaunch),
+    processNames: [...new Set(sectionLayers.flatMap((l) => (l.processLaunch && l.processLaunch.names) || []))],
+  } : null;
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   const out = {
@@ -71,6 +83,7 @@ export function runMigration(manifest, opts = {}) {
     },
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
+    section,         // section-schema analysis (list page): add-record mini page, section actions, columns
   };
   // The design spec is the "what goes where" the user approves at the gate. It is GENERATED here (not
   // hand-written by the agent, which only ever produced a loose paraphrase) and presented verbatim.

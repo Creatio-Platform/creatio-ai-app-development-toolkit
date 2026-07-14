@@ -223,3 +223,14 @@
 **Зроблено (флаг, merge 49/49, mapper 114/114):** mapper тепер на КОЖНУ кастомну деталь кидає `detail-editpage` — «related list відкриває форму `<child entity>` на add/edit → окрема міграція: підтвердь наявну Freedom-форму або мігруй follow-on». Стандартні фічі (Approvals/Attachments/Activities/Emails) флаг НЕ отримують (нативні форми). SKILL крок 7 + page-design-spec оновлено.
 
 **Лишилось (більше):** повна **рекурсивна** міграція дочірніх сторінок (single-section → дерево сторінок) — не зроблено; поки лише гучний флаг.
+
+## Section-schema analysis (#2 + #8b + add-record mini page) — закрито
+
+Раніше все section-рівня було поза аналізом (рушій обробляв лише сторінку). Додано вхід маніфесту `section` (тіла *Section-чейну), і рушій з них дістає (merge 49/49, mapper 120/120, +6 goldens):
+- **add-record mini page** — `getAddRecordMiniPage()` → назва mini-page (або «via mini page, name unresolved», або «full edit page»);
+- **section actions (#8b)** — хінти з `getSectionActions` (Tag/navigate) + section process-launch;
+- **list columns (#2)** — з `getGridDataColumns`/`initColumnsConfig`, ЯКЩО в схемі; інакше чесно «⚠ profile data — confirm» (бо зазвичай у SysProfileData, не в схемі).
+
+Вивід — новий блок `### Section (list page)` у design-spec (self-contained, ⚠ inline). SKILL: `section` у входах маніфесту + оновлена нота #8b (тепер engine-підтримка, не лише проза).
+
+**Межа:** list-колонки з profile-data не читаються (потрібні дані стенду) — флаг; mini-page/section-actions самі НЕ мігруються — це follow-on (як detail-editpage).

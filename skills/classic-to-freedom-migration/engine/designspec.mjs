@@ -44,6 +44,7 @@ const triggerOf = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? `${mt
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const eff = result.effective || {};
+  const section = result.section || null;
   const entity = result.entity || "?";
   const vcd = cs.viewConfigDiff || [];
   const regionOf = regionResolver(vcd);
@@ -113,6 +114,17 @@ export function renderDesignSpec(result, opts = {}) {
     for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
   }
   L.push("");
+
+  // ---- Section (list page) — concerns the section migration doesn't cover from the record page ----
+  if (section) {
+    L.push("### Section (list page)");
+    const ar = section.addRecordMiniPage;
+    L.push(`- **Add record:** ${ar === true ? "⚠ via a mini page (name unresolved) — confirm and migrate it as a Freedom mini page / quick-add" : (ar ? `via mini page \`${esc(ar)}\` — migrate it as a Freedom mini page / quick-add` : "full edit page (no add-record mini page detected)")}`);
+    L.push(`- **List columns:** ${(section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns"}`);
+    if ((section.sectionActions || []).length) L.push(`- **Section actions:** ${section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ")} — migrate as Freedom list-page actions`);
+    if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).join(", ") || "a process"} — wire as a list-page run-process action`);
+    L.push("");
+  }
 
   // ---- Logic (behaviour that is not layout): entity filters, handlers, process launch ----
   const logic = [];
