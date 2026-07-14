@@ -118,6 +118,14 @@ export function parseLayer(src, pkg) {
     // this page's own diff (e.g. CasesEstimateLabel → the SLA timer + its START/END buttons). Surfaced
     // so the mapper flags them — the page-schema migration unit cannot see their rendered surface.
     refModules: referencedUiModules(amdDeps),
+    // #8c — does this layer LAUNCH a business process imperatively (a "Run process" action / handler)?
+    // Detected by the classic process-launch APIs. The process NAMES (when quoted) are captured so the
+    // mapper can name them; a run-process action maps to a Freedom "Run process" card action / handler.
+    processLaunch: (() => {
+      if (!/ProcessModuleUtilities|executeProcess|RunProcessRequest|\brunProcess\b|showProcessPage|openProcessByRecord|ProcessSchemaManager/.test(src)) return null;
+      const names = [...new Set([...src.matchAll(/["']([A-Za-z][\w.]*(?:Process|SecurityCheck|Recruiting)[\w.]*)["']/g)].map(mt => mt[1]))];
+      return { names };
+    })(),
   };
 }
 
@@ -382,6 +390,10 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   // visibility at runtime; the rendered page shows one feature-state while this is the full union.
   const features = [...new Set(layers.flatMap(l => l.features || []))].sort();
   const cardActionHints = [...new Set(layers.flatMap(l => l.actionHints || []))].sort();
+  // #8c — process launch detected in the SCHEMA's OWN layers (not the seed: the base template's "Run
+  // process by record" is template-provided; here we surface the CLIENT page's own process launch).
+  const processLaunch = layers.some(l => l.processLaunch);
+  const processNames = [...new Set(layers.flatMap(l => (l.processLaunch && l.processLaunch.names) || []))].sort();
   // referenced UI modules the SCHEMA's own layers pull in via define() (not the base template) — their
   // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
   const referencedModules = [...new Set(layers.flatMap(l => l.refModules || []))].sort();
@@ -432,6 +444,7 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     seedQuality, // #19 — whether the seed is a real fetched template body vs a hand-authored skeleton
     features, // feature toggles gating runtime visibility (the rendered page shows one feature-state)
     cardActionHints, // custom card actions found in getActions bodies (imperative — surfaced for review)
+    processLaunch, processNames, // #8c — the page launches a business process (a "Run process" action)
     referencedModules, // custom UI-rendering modules pulled via define() deps — outside the migration unit
   };
 }

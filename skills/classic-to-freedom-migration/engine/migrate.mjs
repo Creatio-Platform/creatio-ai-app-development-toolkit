@@ -12,7 +12,9 @@
 //     "entityColumns": { "Col": "Lookup", … },// optional; from describe-entity — sharpens control choice
 //     "layers": [ { "pkg": "Case", "body": "<define(...) source>" } | { "pkg": "Case", "file": "..." }, … ],
 //     "seed":   [ { "pkg": "BaseModulePageV2/CrtUIPlatform7x", "body"|"file": … }, … ],  // parent template chain
-//     "clientEditableLayers": ["WorkOverride", …]   // optional; drives B6 removal confidence
+//     "clientEditableLayers": ["WorkOverride", …], // optional; drives B6 removal confidence
+//     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → resolve captions (#5/#13)
+//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file": … }, … } // optional; detail bodies → real entity + list columns (#11ii)
 //   }
 // Prefer inline "body" (paste the clio get-classic-schema output) over "file" to avoid path fragility.
 import fs from "node:fs";
@@ -30,9 +32,23 @@ export function runMigration(manifest, opts = {}) {
   const layers = parse(manifest.layers);
   const seedLayers = parse(manifest.seed);
   const eff = mergeLayers(layers, { seedLayers });
+  // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns, so the
+  // mapper can resolve auto-named (SchemaNDetail) details and show the related-list columns in the spec.
+  const detailSchemas = {};
+  for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
+    const body = typeof e === "string" ? e : bodyOf(e);
+    const p = parseLayer(body, name);
+    detailSchemas[name] = {
+      entity: p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null,
+      columns: [...new Set((p.diff || []).filter((d) => d.bindTo).map((d) => d.bindTo))],
+      error: p.error || null,
+    };
+  }
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     clientEditableLayers: manifest.clientEditableLayers || [],
+    resources: manifest.resources || {},   // #5/#13 — localizable strings for caption resolution
+    detailSchemas,                          // #11(ii)/B2 — parsed detail bodies (entity + columns)
   });
   const parseErrors = [...layers, ...seedLayers].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
   const decisionSummary = {};

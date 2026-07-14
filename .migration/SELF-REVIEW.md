@@ -177,3 +177,16 @@
 - goldens: 2-острови → поля у свої контейнери + контейнери під SideArea; 1 острів → плоско. (+2)
 
 **Межа (чесно):** чи `SideAreaProfileContainer` приймає вкладені `GridContainer` як 2 картки — не звірено на стенді; тому це flagged decision, не мовчазне припущення. Якщо шаблон вимагає одну картку — merge (рішення в decision).
+
+## Ф4 — п'ятий пакет: дорезолв ⚠-decisions (#5/#13, #11ii, #8b/#8c, #3, ancestor-vis)
+
+Мета: прибрати більшість ⚠ у spec — щоб він був майже «готовий», без ручного дорезолву. Спільний хід: рушій резолвить лише те, що **дали на вхід**, тож розширено маніфест (`resources`, `detailSchemas`).
+
+**Виконано (merge 49/49, mapper 103/103, +7 goldens):**
+- **#5/#13** caption-резолв: `manifest.resources` → таби/групи/деталі-caption'и стають реальним текстом; **флагаються лише нерезолвлені** ключі (раніше present-key вважався «ок» — тепер #13 гучний, поки не резолвлено). Field-labels свідомо поза scope (потребують entity-ресурсів).
+- **#11(ii)/B2** рекурсія в деталь: `manifest.detailSchemas` (тіла деталей) → рушій парсить дочірню entity + **колонки related-list**; авто-ім'я `SchemaNDetail` більше не флагається, якщо тіло дано; колонки показані в spec. Editability лишається flagged (чесно — не в master).
+- **#8c** process-launch: скан тіл методів (`ProcessModuleUtilities`/`executeProcess`/…) у **власних шарах** сторінки (не seed) → `RunProcess` card-action + `process-launch` decision з іменем процесу.
+- **ancestor-visibility**: поле в схованому (static) контейнері мапиться `visible:false`; у dynamic — флагається; більше не «unconditionally visible».
+- **#3** native>generic + **#8b** section-actions: SKILL явно — `standardFeatures` будувати нативно (не generic-grid); section-дії (`getSectionActions` у `*Section`) — окрема поверхня, поза page-unit.
+
+**Лишилось (свідомо НЕ брав цього разу):** #2 (section list-колонки з DATA), #4 (lookup-тул у fork), F8 (vm-boundary). Editability деталі (частина #11) — потребує detail data-config. Наскрізна верифікація на стенді + 2 PR.

@@ -113,8 +113,13 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("| --- | --- | --- | --- |");
     for (const s of cs.standardFeatures || [])
       L.push(`| ${esc(s.classicDetail || s.entity)} | ★ ${esc(s.feature)} — ${esc(s.freedom)} | ${esc(s.tab || "⚠ unplaced")} | ${s.templateProvided ? "template-provided — do NOT recreate" : ""}${s.inferredFromEntity ? " · inferred from entity, confirm" : ""} |`);
-    for (const d of cs.details || [])
-      L.push(`| ${esc(d.detailSchema || d.entity)} | ▤ Expanded list (${esc(d.entity)}) | ${esc(d.tab || "⚠ unplaced")} | ${d.dependency ? `by ${esc(d.dependency.attributePath)}` : "⚠ FK unresolved"} |`);
+    for (const d of cs.details || []) {
+      const note = [
+        d.dependency ? `by ${esc(d.dependency.attributePath)}` : "⚠ FK unresolved",
+        d.columns && d.columns.length ? `cols: ${d.columns.map(esc).join(", ")}` : null,
+      ].filter(Boolean).join(" · ");
+      L.push(`| ${esc(d.detailSchema || d.entity)} | ▤ Expanded list (${esc(d.entity)}) | ${esc(d.tab || "⚠ unplaced")} | ${note} |`);
+    }
     L.push("");
   }
 

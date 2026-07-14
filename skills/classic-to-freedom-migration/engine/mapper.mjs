@@ -105,6 +105,26 @@ const KNOWN_ACTION_ITEMS = new Set([
 export function mapToFreedom(eff, opts = {}) {
   const cols = opts.entityColumns || {};       // { column: dataType }
   const clientEditableLayers = new Set(opts.clientEditableLayers || []); // for B6 removals
+  // #5/#13 — localizable strings from the manifest (page + detail resources). Lets the mapper resolve a
+  // classic `Resources.Strings.X` caption to its real localized text instead of shipping an opaque key.
+  const resources = opts.resources || {};
+  const resolveText = (raw) => {
+    if (!raw) return null;
+    const key = String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*$/, "");
+    return resources[key] ?? resources[raw] ?? null;
+  };
+  // Produce a Freedom caption VALUE from a classic caption reference: the resolved literal text if the
+  // manifest carries the string, else the `$`-binding as-is, else a synthesized key from the fallback
+  // name. `resolved` gates whether the caller still flags it for manual resolution (#5/#13).
+  const caption = (raw, fallbackName) => {
+    const txt = resolveText(raw) ?? resolveText((fallbackName || "") + "Caption");
+    if (txt != null) return { value: txt, resolved: true, synthesized: false };
+    if (raw) return { value: "$" + raw, resolved: false, synthesized: false };
+    return { value: "$Resources.Strings." + fallbackName + "Caption", resolved: false, synthesized: true };
+  };
+  // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
+  // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
+  const detailSchemas = opts.detailSchemas || {};
   const needsDecision = [];
   const viewConfigDiff = [];
   const attributes = {};
@@ -154,14 +174,17 @@ export function mapToFreedom(eff, opts = {}) {
       // client-owned tab: the page defines it, so we build it. Its grid holds the routed fields.
       parentName = tabGridName(tab);
       const tItem = index.get(tab);
-      const cap = tItem && tItem.caption ? "$" + tItem.caption : "$Resources.Strings." + tab + "Caption";
+      const c = caption(tItem && tItem.caption, tab);
       structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
-        values: { type: "crt.Tab", caption: cap } });
+        values: { type: "crt.Tab", caption: c.value } });
       structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_24 } });
-      // only flag when we had to SYNTHESIZE the caption key (classic carried no caption resource).
-      if (!(tItem && tItem.caption)) needsDecision.push({ kind: "tab-caption", item: tab,
-        reason: `synthesized caption key '$Resources.Strings.${tab}Caption' — classic caption not in model; confirm/replace with the real localized string` });
+      // flag only when the caption is NOT resolved to real text (synthesized key, or an unresolved key
+      // because no manifest.resources was supplied). A resolved literal caption needs no decision (#5/#13).
+      if (!c.resolved) needsDecision.push({ kind: "tab-caption", item: tab,
+        reason: c.synthesized
+          ? `synthesized caption key '${c.value}' — classic caption not in model; confirm/replace with the real localized string`
+          : `tab caption '${c.value}' is an unresolved resource key — pass the schema's localizable strings as manifest.resources to resolve it, or confirm the real label` });
     }
     accountedFor.add(parentName);
     emittedTabs.set(tab, parentName);
@@ -174,14 +197,16 @@ export function mapToFreedom(eff, opts = {}) {
     let inner;
     if (g.itemType === 15) {
       // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
-      const cap = g.caption ? "$" + g.caption : "$Resources.Strings." + g.name + "Caption";
+      const c = caption(g.caption, g.name);
       structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
-        values: { type: "crt.ExpansionPanel", caption: cap, collapsible: true } });
+        values: { type: "crt.ExpansionPanel", caption: c.value, collapsible: true } });
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_24 } });
-      if (!g.caption) needsDecision.push({ kind: "group-caption", item: g.name,
-        reason: `synthesized ExpansionPanel caption '$Resources.Strings.${g.name}Caption' for classic group — confirm/replace with the real localized string` });
+      if (!c.resolved) needsDecision.push({ kind: "group-caption", item: g.name,
+        reason: c.synthesized
+          ? `synthesized ExpansionPanel caption '${c.value}' for classic group — confirm/replace with the real localized string`
+          : `group caption '${c.value}' is an unresolved resource key — pass manifest.resources to resolve it, or confirm the real label` });
     } else {
       // GRID_LAYOUT / generic structural container -> crt.GridContainer.
       inner = g.name;
@@ -274,9 +299,17 @@ export function mapToFreedom(eff, opts = {}) {
     };
     // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
     // → visible + a decision (the rendered page shows one runtime state — see feature-toggle note too).
-    const vis = f.visible === false ? false : true;
+    // ancestor-visibility: a field inside a container that is itself hidden (static) or conditionally
+    // shown (dynamic/rule) does NOT become unconditionally visible just because the field's own `visible`
+    // is unset — it inherits the container's visibility. Surface it so the container-level condition is
+    // wired onto the Freedom field/group rather than silently dropped.
+    const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
+    let vis = f.visible === false ? false : true;
+    if (hiddenAncestor && hiddenAncestor.visible === false) vis = false; // inherits a statically-hidden ancestor
     if (f.visible === "dynamic") needsDecision.push({ kind: "visibility-rule", item: col,
       reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
+    if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
+      reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
     const values = {
       type: c.type, control: "$" + col, label: "$Resources.Strings." + col,
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
@@ -363,37 +396,42 @@ export function mapToFreedom(eff, opts = {}) {
     else if (!cur.d.caption && d.caption) cur.d.caption = d.caption;         // else keep first, backfill caption
   }
   for (const { d, tab } of bySig.values()) {
+    // #11(ii)/B2 — the detail's OWN schema (when passed in manifest.detailSchemas) gives its real child
+    // entity + list columns, resolving even an auto-named SchemaNDetail.
+    const dinfo = detailSchemas[d.schemaName];
+    const dentity = d.entitySchemaName || dinfo?.entity || null;
     // A standard feature is recognised by the detail SCHEMA name (matchFeature), OR — when the schema
     // carries an auto-generated placeholder name (SchemaNDetail) that hides it — by its file-storage
     // ENTITY (`*File`, which always backs the Attachments detail). Entity-inferred matches are flagged
     // as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
     let feat = matchFeature(d.schemaName), featByEntity = false;
-    if (!feat && /File$/.test(d.entitySchemaName || "")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
+    if (!feat && /File$/.test(dentity || "")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: d.entitySchemaName, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity });
-      needsDecision.push({ kind: "standard-feature", item: d.schemaName || d.entitySchemaName,
-        reason: `${featByEntity ? `detail over the file-storage entity '${d.entitySchemaName}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}` });
+      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity });
+      needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
+        reason: `${featByEntity ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}` });
       continue;
     }
-    // #11: an auto-generated detail schema name (SchemaNDetail) cannot be resolved from the master — its
-    // real caption/columns/actions live in the detail's OWN schema. Surface it LOUDLY (do not ship a
-    // related list under a placeholder name) so the agent fetches the detail schema (B2 recursion).
-    if (/^Schema\d+Detail$/.test(d.schemaName || "")) needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
-      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${d.entitySchemaName ? ` (child entity '${d.entitySchemaName}')` : ""} — fetch its schema (get-classic-schema) to resolve the real caption, columns, and allowed actions before building; do NOT ship a related list under a placeholder name` });
+    // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied
+    // (real entity + columns known). Only flag detail-unresolved when the schema was NOT provided.
+    if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
+      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${dentity ? ` (child entity '${dentity}')` : ""} — fetch its schema (get-classic-schema) and pass it as manifest.detailSchemas to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
     // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
     // OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
     needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
       reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
-    // caption fidelity (#15): a resource-key caption must be RESOLVED to the localized string (read the
-    // schema resources) — never invent one (e.g. classic "Requests", not a made-up "Current vacancies").
-    if (d.caption && /^Resources\.Strings\./.test(d.caption)) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
-      reason: `detail caption is the resource key '${d.caption}' — resolve it to the localized string from the schema's resources; do NOT invent a caption` });
+    // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
+    // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
+    const resolvedDcap = d.caption ? resolveText(d.caption) : null;
+    if (d.caption && /^Resources\.Strings\./.test(d.caption) && resolvedDcap == null) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
+      reason: `detail caption is the unresolved resource key '${d.caption}' — pass the schema's localizable strings as manifest.resources, or confirm the real label; do NOT invent a caption` });
     details.push({
-      composite: "Expanded list", entity: d.entitySchemaName, detailSchema: d.schemaName,
-      caption: d.caption || null, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      composite: "Expanded list", entity: dentity, detailSchema: d.schemaName,
+      caption: resolvedDcap ?? d.caption ?? null, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      columns: dinfo?.columns?.length ? dinfo.columns : null, // #11(ii) — the related-list columns, when the detail schema was supplied
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
@@ -426,6 +464,13 @@ export function mapToFreedom(eff, opts = {}) {
   // action like navigateToTaxesByCountriesLookup isn't silently lost (its body is imperative → review).
   const cardActions = [...(eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name), ...(eff.cardActionHints || [])];
   for (const i of (eff.items || [])) if (KNOWN_ACTION_ITEMS.has(i.name)) accountedFor.add(i.name);
+  // #8c — the page launches a business process imperatively (a "Run process" action). Surface it as a
+  // Freedom "Run process" card action + a decision naming the process(es) so it isn't lost.
+  if (eff.processLaunch) {
+    if (!cardActions.includes("RunProcess")) cardActions.push("RunProcess");
+    needsDecision.push({ kind: "process-launch", item: (eff.processNames && eff.processNames.length) ? eff.processNames.join(", ") : "RunProcess",
+      reason: `the classic page launches a business process imperatively${(eff.processNames && eff.processNames.length) ? ` (${eff.processNames.join(", ")})` : ""} — map it to a Freedom "Run process" card action / handler (ProcessModuleUtilities → run-process request); confirm the process schema name` });
+  }
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
     reason: `card actions / ACTIONS-menu → Freedom card actions (B7): ${cardActions.join(", ") || "getActions"}. ` +

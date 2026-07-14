@@ -253,9 +253,9 @@ const actCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", actionHints: 
   di({ name: "F", parentName: "MyTab", propertyName: "items", bindTo: "F" })] })]));
 check("getActions custom action surfaced into cardActions (not lost)",
   actCs.cardActions.includes("navigateToTaxesByCountriesLookup"));
-check("real tab caption used → no synthesized tab-caption decision",
+check("real tab caption kept as the classic binding (not synthesized) + flagged UNRESOLVED when no resources supplied (#13)",
   actCs.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCap"
-  && !actCs.needsDecision.some(n => n.kind === "tab-caption" && n.item === "MyTab"));
+  && actCs.needsDecision.some(n => n.kind === "tab-caption" && n.item === "MyTab" && /unresolved/.test(n.reason)));
 
 /* ---- Fix 1: classic `hint` → field tooltip (static) vs field-hint decision (dynamic) ---- */
 const hintCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
@@ -464,6 +464,54 @@ check("#19: real seed (methods incl. getActions) → not skeletal, no skeletal-s
   && !realSeed.warnings.some(w => w.name === "skeletal-seed"));
 check("#19: no seed at all → seedQuality.seeded=false, not flagged skeletal",
   mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })]).seedQuality.seeded === false);
+
+/* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
+const capClient = () => L("Client", { entity: "X", diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.MyTabCaption" }),
+  di({ name: "Grp", parentName: "MyTab", itemType: 15, caption: "Resources.Strings.GrpCaption" }),
+  di({ name: "GF", parentName: "Grp", propertyName: "items", bindTo: "GF" })] });
+const capResolved = mapToFreedom(mergeLayers([capClient()]), { resources: { MyTabCaption: "Vacancies", GrpCaption: "Details" } });
+check("#5/#13: resolved tab caption becomes literal text + no tab-caption decision",
+  capResolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "Vacancies"
+  && !capResolved.needsDecision.some(n => n.kind === "tab-caption"));
+check("#5/#13: resolved group caption becomes literal text + no group-caption decision",
+  capResolved.viewConfigDiff.find(o => o.name === "Grp")?.values.caption === "Details"
+  && !capResolved.needsDecision.some(n => n.kind === "group-caption"));
+const capUnresolved = mapToFreedom(mergeLayers([capClient()]));
+check("#5/#13: without resources, captions keep the binding + are flagged unresolved (tab + group)",
+  capUnresolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCaption"
+  && capUnresolved.needsDecision.some(n => n.kind === "tab-caption")
+  && capUnresolved.needsDecision.some(n => n.kind === "group-caption"));
+
+/* ---- #11(ii)/B2: a supplied detail schema resolves the related-list columns + kills detail-unresolved ---- */
+const detCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
+    Reqs: { schemaName: "Schema7Detail", entitySchemaName: "InternalRequest", detailColumn: "Emp", masterColumn: "Id" } },
+  diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+         di({ name: "Reqs", parentName: "T", propertyName: "items", itemType: 2 })] })]),
+  { detailSchemas: { Schema7Detail: { entity: "InternalRequest", columns: ["Number", "Status", "Job"] } } });
+check("#11(ii): detail schema supplied → related-list columns resolved on the detail + no detail-unresolved flag",
+  detCs.details.find(d => d.detailSchema === "Schema7Detail")?.columns?.join(",") === "Number,Status,Job"
+  && !detCs.needsDecision.some(n => n.kind === "detail-unresolved"));
+
+/* ---- #8c: process-launch detected in a real body → RunProcess card action + process-launch decision ---- */
+const plRun = runMigration({ entity: "X", layers: [{ pkg: "P", body:
+  `define("P",[],function(){return{entitySchemaName:"X",diff:[],methods:{onRun:function(){ProcessModuleUtilities.executeProcess({sysProcessName:"RecruitingSecurityCheckProcess"});}}};});` }] }, { baseDir: FIX });
+check("#8c: process-launch → RunProcess card action + process-launch decision naming the process",
+  plRun.changeSet.cardActions.includes("RunProcess")
+  && plRun.changeSet.needsDecision.some(n => n.kind === "process-launch" && /RecruitingSecurityCheckProcess/.test(n.item)));
+
+/* ---- ancestor-visibility: a field inside a hidden/dynamic container inherits + is flagged ---- */
+const avCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+  di({ name: "AvTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.AvCap" }),
+  di({ name: "HiddenGrp", parentName: "AvTab", itemType: 15, visible: false }),
+  di({ name: "GF2", parentName: "HiddenGrp", propertyName: "items", bindTo: "GF2" }),
+  di({ name: "DynGrp", parentName: "AvTab", itemType: 15, visible: "dynamic" }),
+  di({ name: "DF", parentName: "DynGrp", propertyName: "items", bindTo: "DF" })] })]));
+check("ancestor-visibility: field in a statically-hidden container is mapped hidden + flagged",
+  avCs.viewConfigDiff.find(o => o.name === "GF2")?.values.visible === false
+  && avCs.needsDecision.some(n => n.kind === "ancestor-visibility" && n.item === "GF2"));
+check("ancestor-visibility: field in a dynamically-shown container is flagged (condition to wire)",
+  avCs.needsDecision.some(n => n.kind === "ancestor-visibility" && n.item === "DF"));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
