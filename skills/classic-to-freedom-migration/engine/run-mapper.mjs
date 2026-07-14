@@ -362,16 +362,33 @@ const lmClient = L("Client", { entity: "X", diff: [
   di({ name: "Email", parentName: "ContactContainer", propertyName: "items", bindTo: "Email" }),
   di({ name: "ReqNo", parentName: "InternalRequestContainer", propertyName: "items", bindTo: "ReqNo" })] });
 const lmcs = mapToFreedom(mergeLayers([lmClient], { seedLayers: [lmSeed] }));
-check("#18: island fields under LeftModulesContainer route to SideAreaProfileContainer (not the fallback tab)",
-  ["Phone", "Email", "ReqNo"].every(n => lmcs.viewConfigDiff.find(o => o.name === n)?.parentName === "SideAreaProfileContainer"));
-check("#18: no bogus container decision + nothing left in the GeneralInfoTabContainer fallback",
+check("#18: island fields resolve to the side profile, NOT the fallback tab (+ no bogus container decision)",
   !lmcs.needsDecision.some(n => n.kind === "container")
   && !lmcs.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
 check("#18: the island wrappers are NOT mis-flagged as unmapped-component (their fields were migrated)",
   !lmcs.needsDecision.some(n => n.kind === "unmapped-component" && /Container$/.test(n.item)));
-check("#18/#9b: multi-island flattening surfaced as ONE profile-island decision naming both islands",
+// #9b — with >1 island, each field routes into its OWN island container (the classic split is preserved,
+// not flattened into one stack). This is the "second island" the user could not see before.
+check("#9b: with 2 islands, fields route into their own island container (split preserved)",
+  lmcs.viewConfigDiff.find(o => o.name === "Phone")?.parentName === "ContactContainer"
+  && lmcs.viewConfigDiff.find(o => o.name === "Email")?.parentName === "ContactContainer"
+  && lmcs.viewConfigDiff.find(o => o.name === "ReqNo")?.parentName === "InternalRequestContainer");
+check("#9b: each island built as a crt.GridContainer under SideAreaProfileContainer",
+  ["ContactContainer", "InternalRequestContainer"].every(n => {
+    const o = lmcs.viewConfigDiff.find(x => x.name === n);
+    return o?.values?.type === "crt.GridContainer" && o.parentName === "SideAreaProfileContainer"; }));
+check("#9b: multi-island surfaced as ONE profile-island decision naming both islands",
   lmcs.needsDecision.some(n => n.kind === "profile-island"
     && /ContactContainer/.test(n.item) && /InternalRequestContainer/.test(n.item)));
+// a SINGLE island must NOT be split (no redundant wrapper, no nag) — fields stay flat in the profile.
+const oneIsland = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+  di({ name: "ContactContainer", parentName: "LeftModulesContainer", itemType: 0 }),
+  di({ name: "A", parentName: "ContactContainer", propertyName: "items", bindTo: "A" }),
+  di({ name: "B", parentName: "ContactContainer", propertyName: "items", bindTo: "B" })] })], { seedLayers: [lmSeed] }));
+check("#9b: a SINGLE island stays flat in SideAreaProfileContainer (no wrapper container, no profile-island nag)",
+  ["A", "B"].every(n => oneIsland.viewConfigDiff.find(o => o.name === n)?.parentName === "SideAreaProfileContainer")
+  && !oneIsland.viewConfigDiff.some(o => o.name === "ContactContainer")
+  && !oneIsland.needsDecision.some(n => n.kind === "profile-island"));
 
 /* ---- #18: an unresolved chain that never reaches an anchor is flagged with the ACCURATE reason
    (the container IS defined, but climbs to root) — not the misleading "not defined by any layer" ---- */

@@ -21,14 +21,15 @@ function regionResolver(viewConfigDiff) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
   const label = (o) => esc(o.values && o.values.caption ? strip(o.values.caption) : o.name);
   return (parentName) => {
-    let p = parentName, hops = 0;
+    let p = parentName, hops = 0, first = null; // `first` = container directly holding the field (the island, #9b)
     while (p && hops++ < 64) {
-      if (p === "SideAreaProfileContainer") return "Side profile";
+      if (p === "SideAreaProfileContainer") return first ? `Side profile › ${first}` : "Side profile";
       if (p === "HeaderContainer") return "Header";
       if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
       const o = byName.get(p);
       if (!o) return esc(p);
       if (o.values && o.values.type === "crt.Tab") return `Tab "${label(o)}"`;
+      if (!first) first = label(o); // remember the innermost container so profile islands read distinctly
       p = o.parentName;
     }
     return esc(parentName);

@@ -166,3 +166,14 @@
 - **#19 seed-quality — МАШИННА валідація.** `mergeLayers` рахує `seedQuality.looksSkeletal` (seed є, але 0 методів / нема `getActions` = ручний скелет) і кидає `skeletal-seed` **warning** → існуючий HARD GATE (warnings порожні) блокує білд, доки не підтягнуть реальне тіло base через `get-classic-schema`. Це enforcement, не проза.
 
 **Принцип на майбутнє:** де агент стабільно «недотягує» за інструкцією — переносити з прози в детермінований вивід рушія (генерувати артефакт) або в машинну перевірку (warning у gate), а не додавати ще тексту. Див. [[skill-dominant-vs-buried-instruction]].
+
+## Ф4 — четвертий прогін: #9b (два острови) реалізовано
+
+Прогін на `cc8c4bf` (генератор spec активний) підтвердив: spec тепер таблицею, поля другого острова (InternalRequest/Department/StaffUnit/Job) **захоплені**, `profile-island` decision є — АЛЕ region map показував їх **одним «Side profile»** (2 острови сплющені). Юзер (зі скріном classic — 2 окремі картки ліворуч) справедливо: «здається, другий острів не побачив». Це #9b, який був відкладений — потреба показана.
+
+**Виконано (#9b — merge 49/49, mapper 96/96):**
+- mapper: якщо в лівій зоні >1 **distinct island** (outermost group під profile-якорем), кожен острів будується як **окремий `crt.GridContainer`** під `SideAreaProfileContainer`, і поля роутяться у свій острів (не в один стек). Один острів лишається плоским (без зайвого wrapper, без nag). `profile-island` decision тепер описує спліт + просить підтвердити представлення лівої зони.
+- designspec: region map показує `Side profile › ‹island›` — острови читаються окремо (Contact-острів vs Request-острів).
+- goldens: 2-острови → поля у свої контейнери + контейнери під SideArea; 1 острів → плоско. (+2)
+
+**Межа (чесно):** чи `SideAreaProfileContainer` приймає вкладені `GridContainer` як 2 картки — не звірено на стенді; тому це flagged decision, не мовчазне припущення. Якщо шаблон вимагає одну картку — merge (рішення в decision).

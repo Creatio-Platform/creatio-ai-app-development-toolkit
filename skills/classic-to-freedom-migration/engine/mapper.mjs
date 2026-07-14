@@ -207,16 +207,36 @@ export function mapToFreedom(eff, opts = {}) {
       reason: `classic Header is a WIDE ${headerCols.size}-column block, not the default left profile island — mapped to a full-width header grid; confirm the target Freedom page uses a header region (no left profile) and the column layout` });
   }
   const profileRegion = (own) => (own.via === "Header" && headerIsWide) ? "HeaderContainer" : "SideAreaProfileContainer";
-  const profileIslands = new Set(); // classic left-area island wrappers flattened into the side profile (#18/#9b)
+  // #9b — the classic left area can group fields into MORE THAN ONE island container (e.g. ContactContainer
+  // + InternalRequestContainer, both under LeftModulesContainer). The island = the OUTERMOST group between
+  // the field and the profile anchor (groups[0]). If there is >1 distinct island, rebuild each as its own
+  // container in the side profile instead of flattening every field into one stack (which loses the split
+  // the user sees on the classic page). A single island stays flat (no redundant wrapper).
+  const islandOf = (own) => (own.groups && own.groups.length) ? own.groups[0].name : null;
+  const distinctProfileIslands = new Set(resolved
+    .filter(r => r.own.kind === "profile" && !(r.own.via === "Header" && headerIsWide))
+    .map(r => islandOf(r.own)).filter(Boolean));
+  const splitIslands = distinctProfileIslands.size > 1;
+  const emittedIslands = new Map();
+  function ensureProfileIsland(name) {
+    if (emittedIslands.has(name)) return emittedIslands.get(name);
+    structural.push({ operation: "insert", name, parentName: "SideAreaProfileContainer", propertyName: "items",
+      values: { type: "crt.GridContainer", columns: GRID_24 } });
+    accountedFor.add(name);
+    emittedIslands.set(name, name);
+    return name;
+  }
   for (const { f, own } of resolved) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
     let parent;
     if (own.kind === "profile") {
       parent = profileRegion(own);
-      // the island/group wrappers between the field and the profile anchor (e.g. ContactContainer under
-      // LeftModulesContainer) are ACCOUNTED FOR — their fields are migrated into the profile — so they are
-      // not later mis-flagged as "produced no Freedom element". Their distinct-island rebuild is #9b.
-      for (const g of own.groups) { accountedFor.add(g.name); if (parent === "SideAreaProfileContainer") profileIslands.add(g.name); }
+      // the island/group wrappers between the field and the profile anchor are ACCOUNTED FOR — their
+      // fields are migrated into the profile — so they are not mis-flagged as "produced no Freedom element".
+      for (const g of own.groups) accountedFor.add(g.name);
+      // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
+      const island = islandOf(own);
+      if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island);
     } else if (own.kind === "tab") {
       parent = ensureTab(own.tab, own.tabTemplateOwned);
       // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
@@ -280,11 +300,11 @@ export function mapToFreedom(eff, opts = {}) {
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
   }
-  // #18/#9b: surface the flattening of classic left-area islands into the single-column side profile so
-  // it is a KNOWN decision, not a silent structural loss (the user literally sees "2 islands" on the
-  // classic page). Only for >1 island — a single profile group is the normal case and must not nag.
-  if (profileIslands.size > 1) needsDecision.push({ kind: "profile-island", item: [...profileIslands].join(", "),
-    reason: `classic left profile area groups fields into ${profileIslands.size} island containers (${[...profileIslands].join(", ")}) — their fields are placed in the Freedom side profile as ONE flat stack; if the distinct visual islands must be preserved, split them manually (the Freedom side profile is a single-column region)` });
+  // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
+  // preserving the split the user sees on the classic page. Surface it as a KNOWN decision so the exact
+  // Freedom left-area representation (stacked containers vs one profile card) is confirmed, not assumed.
+  if (splitIslands) needsDecision.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
+    reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — each is rebuilt as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Confirm the Freedom left area supports stacked containers; if it must be one profile card, merge them.` });
 
   // ---- rules ----
   const pageBusinessRules = [], entityBusinessRules = [];
