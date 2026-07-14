@@ -137,3 +137,22 @@
 Кожен + golden. **Golden: merge 49/49, mapper 77/77.** Офлайн-регресія (Contract/Product/Case): 0 parse-err, усі GridContainer 24-col, Activities-лейбл без Timeline.
 
 **Відкладено на верифікацію/наступні фази:** #11(i) точний резолв `Schema1Detail` + повний #15 (потребують реального detail-блоку Applicant — fork-тули, re-fetch); Фаза 3 (#3/#16/#8c/#10/#4 + `freedom-templates.md`); Фаза 4 (#2/#8b/#11-B2/#9b/#5/F8). **Наскрізна верифікація:** перепрогнати скіл на Applicant **із seed** (fork активний) — очікуємо: 2 острови з повними полями, ProcessButton, деталі нативні/недропнуті, grid не ламається.
+
+## Ф4 — другий реальний прогін (Applicant, після Фази 1+2) + верифікація
+
+Перепрогін на тій самій секції після оновлення плагіна до Фази 1+2. **Що фікс #1 дав (підтверджено ChangeSet-ом `batt78afe`):** агент **тепер сідить базу** й **HARD GATE пройдено** — `parseErrors:[]`, `warnings:0`, `unresolvedParents:[]` (було `[LeftModulesContainer,Tabs]`+ESN). Ще: **Emails розпізнано** (`Emails<-ApplicantEmailDetailV2`, suffix #6/#11 — не дропнуто), Attachments/Feed з шаблону (#7), **grids 24-col 3/3** (#14), дійшов до імплементації + **11 page-rules**.
+
+**Але верифікація ізолювала справжні корені** (ChangeSet показав більше, ніж no-seed-прогін маскував):
+- **#18 [Major, mapper]** — `PROFILE_CONTAINERS` не містив `LeftModulesContainer` → ланцюг `ContactContainer→LeftModulesContainer→root` не досягав profile-якоря → 12 профільних полів усе одно в `GeneralInfoTabContainer` (fallback), `container:12`. **Це і був справжній корінь «профіль не той»**, а не seed (seed уже ОК). Container-reason був ще й брехливий («ContactContainer is not defined», хоча він визначений).
+- **#19 [Med, skill]** — seed = **ручний скелет** `_seed_BaseModulePageV2.js` (мав `PrintButton`, не мав `ProcessButton`) → gate пройдено «пусто», але `Run process` зник (`cardActions:PrintButton`).
+- **#11 [detail]** — та сама деталь виходить **двічі** (`Schema1Detail`/`ApplicantFile`: `tab:null` + `tab:Tab67ea…`) — дедуп-баг; авто-ім'я `SchemaNDetail` сховало, що entity `*File` = **Attachments**.
+- **#10 [skill]** — план без per-field «що і де» (юзер: «дуже поганий план»).
+
+**Виконано зараз (Фаза 3, ця сесія):**
+- **#18** `PROFILE_CONTAINERS += LeftModulesContainer`; `resolveOwner` тепер повертає `why` (`undefined-parent` vs `no-anchor`) → container-decision має **точну** причину; острівні wrapper'и `accountedFor` (не хибний unmapped); сплющення >1 острова → **одне** `profile-island`-рішення (чесний сигнал про #9b).
+- **#19** SKILL step 4.1: seed **МУСИТЬ** бути реальним тілом `get-classic-schema`, **не** ручним скелетом; HARD GATE отримав ⚠ про «FALSE all-clear від скелета».
+- **#11** mapper: **дедуп деталей** за (schema+entity+FK), лишаємо резолвлену вкладку; entity `*File` → **Attachments (templateProvided, inferred)**; авто-ім'я `SchemaNDetail` → гучне `detail-unresolved` («fetch schema first»). SKILL step 7: доданий **обов'язковий build-крок** «details/related lists/standard features — нічого не пропускати мовчки, інакше loud TODO/BLOCKED».
+- **#10** SKILL step 5+6 + `page-design-spec.md`: per-page design-spec **обов'язковий** пункт плану, **populate з ChangeSet** (`viewConfigDiff`→field-рядок з контейнером+colSpan; `details`/`standardFeatures`/`cardActions`→рядки); план без нього неповний → не показувати на approval.
+- Кожен + golden. **Golden: merge 49/49, mapper 86/86** (77→86, +9). Регресій нема.
+
+**Лишається:** ProcessButton остаточно закриється, коли #19 змусить брати реальний base (fork re-fetch, наскрізний прогін); #9b (2 острови окремо), #16 (Approvals нативний), #8 (process-launch/section-actions), #2 (section grid), #5/#13 (caption-резолв), F8.
