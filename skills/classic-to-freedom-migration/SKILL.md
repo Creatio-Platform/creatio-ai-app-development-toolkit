@@ -9,7 +9,7 @@ Use this skill to guide a coding agent through migration of a Creatio Classic UI
 
 The skill is approval-gated. Do not create or edit Freedom UI artifacts until the migration plan has been reviewed and explicitly approved by the user.
 
-**Always present the migration plan to the user before any implementation — for every scope (single-section, whole-package, and existing-Freedom reconcile), with no exceptions.** Never jump from analysis straight to building, and never treat a task as "too small" or "obvious" to skip the plan. The plan is shown as the readable, section-grouped structure-analysis summary (`references/analysis-summary.md`); the dense detail lives in `plan.md`. For the reconcile scope, the plan must include the reconciliation diff (what will be added, modified, and removed/hidden on the existing Freedom section). Presenting the plan and stopping for approval is a required step, not an optional one.
+**Always present the migration plan to the user before any implementation — for every scope (single-section, whole-package, and existing-Freedom reconcile), with no exceptions.** Never jump from analysis straight to building, and never treat a task as "too small" or "obvious" to skip the plan. At the approval gate the user is shown TWO things in chat: first the readable, section-grouped structure-analysis summary (`references/analysis-summary.md`) for orientation, then — for every page to Rebuild/Delta — its **per-page design spec** (`references/page-design-spec.md`): the concrete "what goes where" (each field's container/tab + colSpan, each profile island, each detail's tab + Freedom component, card actions, page rules), populated from the engine ChangeSet. Only the exhaustive tables and provenance stay in `plan.md`. **A gate that shows only the high-level summary is NOT sufficient — the user approves the design spec, not the rollup.** For the reconcile scope, the plan must include the reconciliation diff (what will be added, modified, and removed/hidden on the existing Freedom section). Presenting the plan and stopping for approval is a required step, not an optional one.
 
 ## Inputs
 
@@ -257,6 +257,8 @@ For whole-package scope, produce one consolidated plan:
 
 Alongside the plan, present a short user-facing structure-analysis summary in chat, following `references/analysis-summary.md`. It is the readable companion to `plan.md`: grouped by section, with each page's business rule shown on the page it belongs to and processes/code as section-level items, each carrying its migration call. Render it as plain Markdown in chat — never as HTML or a rendered artifact.
 
+**Then, in the same message, present the per-page design spec for each Rebuild/Delta page** (`references/page-design-spec.md`, populated from the engine ChangeSet). The summary is orientation only; the design spec — each field's target container/tab + colSpan, each island, each detail's tab + Freedom component, the card actions, the page rules — is the concrete "what goes where" the user actually approves. Presenting the summary alone is the recurring failure mode: the reader cannot see where anything lands, so do not stop for approval on the summary by itself. (Whole-package scope with many pages: present the summary plus the design specs for the pages in the current phase; keep the rest in `plan.md`.)
+
 Stop after presenting the plan and ask for explicit approval. Do not edit code, create pages, update schemas, deploy, compile, or push before approval.
 
 ### 7. Implement The Approved Plan
@@ -307,6 +309,6 @@ Only move a task to `VALIDATED` after the Definition of Done in `references/migr
 - Include concrete schema names, package names, page names, and tool evidence when known.
 - Separate confirmed facts from inferences.
 - Do not hide fallback gaps; put them in the missing-source risks section.
-- Always show the migration plan before implementing, for every scope — present it as the structure-analysis summary in plain Markdown in chat per `references/analysis-summary.md` (do not render it as HTML or a page artifact), and stop for explicit approval. Never skip the plan, even for a single small section or an obvious reconcile.
+- Always show the migration plan before implementing, for every scope — present it in plain Markdown in chat as the structure-analysis summary (`references/analysis-summary.md`) **followed by the per-page design spec for each Rebuild/Delta page** (`references/page-design-spec.md`, populated from the ChangeSet — the concrete what-goes-where), **not the summary alone**; do not render it as HTML or a page artifact, and stop for explicit approval. Never skip the plan, even for a single small section or an obvious reconcile.
 - Do not commit or push without explicit user approval.
 - Keep the migration documentation set current; it is the shared source of truth for progress, not the chat history.

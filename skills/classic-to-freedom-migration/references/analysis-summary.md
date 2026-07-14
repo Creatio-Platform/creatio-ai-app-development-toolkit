@@ -87,7 +87,10 @@ Scope: <single-section | whole-package> · Environment: <name or "repository onl
 - <risks, missing-source gaps, platform limitations, decisions needed — each one line.>
 
 ### Next
-Stop here and ask for explicit approval before creating or editing any Freedom UI artifact.
+This summary is orientation only. Immediately after it, present the per-page design spec
+(`references/page-design-spec.md`) for each Rebuild/Delta page — the concrete "what goes where",
+populated from the engine ChangeSet — then stop and ask for explicit approval. Do not stop on the
+summary alone; the user approves the design spec, not the rollup.
 ```
 
 ## Worked Example (abbreviated)
