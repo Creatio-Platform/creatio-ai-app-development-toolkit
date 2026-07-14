@@ -584,5 +584,28 @@ check("ancestor-visibility: field in a statically-hidden container is mapped hid
 check("ancestor-visibility: field in a dynamically-shown container is flagged (condition to wire)",
   avCs.needsDecision.some(n => n.kind === "ancestor-visibility" && n.item === "DF"));
 
+/* ---- --plan: whole plan skeleton (Overview/Pages placeholders + generated spec + recursive child pages) ---- */
+check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Pages + design spec + Layout)",
+  typeof cli.plan === "string" && /— Classic → Freedom UI/.test(cli.plan)
+  && /### Overview/.test(cli.plan) && /<FILL:/.test(cli.plan)
+  && /### Pages/.test(cli.plan) && /## Design spec/.test(cli.plan) && /### Layout/.test(cli.plan));
+check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)",
+  /\*\*Size:\*\* \d+ fields/.test(cli.plan));
+check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
+  /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
+check("child pages (recursion): custom details → result.childPages + a Child-pages table in the plan",
+  Array.isArray(cli.childPages) && cli.childPages.length >= 1 && /### Child pages to migrate/.test(cli.plan));
+const planRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--plan"], {
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
+    { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
+    { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
+check("migrate.mjs --plan: prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope",
+  planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || ""));
+check("child pages: detail schema editPage flows into the recursion target",
+  runMigration({ entity: "X",
+    layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{R:{schemaName:"ReqDetail",entitySchemaName:"InternalRequest",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R",parentName:"T",values:{itemType:2}}]};});` }],
+    detailSchemas: { ReqDetail: { entity: "InternalRequest", columns: ["Number"], editPage: "InternalRequestPage" } } }, { baseDir: FIX })
+    .childPages.some(c => c.entity === "InternalRequest" && c.editPage === "InternalRequestPage"));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -154,3 +154,48 @@ export function renderDesignSpec(result, opts = {}) {
 
   return L.join("\n");
 }
+
+// renderPlan — the WHOLE plan skeleton the agent presents at the gate: an Overview/What-it-does/Pages
+// header with `<FILL: …>` placeholders for the few AGENT decisions (scope, environment, package, approach,
+// business sentence, template choices), the GENERATED design spec, and the recursive child-pages table.
+// The agent fills the placeholders and pastes VERBATIM — it cannot drop or restructure the generated
+// sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
+export function renderPlan(result, opts = {}) {
+  const cs = result.changeSet || {};
+  const entity = result.entity || "?";
+  const fields = (cs.viewConfigDiff || []).filter(isField);
+  const childs = result.childPages || [];
+  const P = [];
+  P.push(`## ${entity} — Classic → Freedom UI`);
+  P.push("");
+  P.push("### Overview");
+  P.push("**Scope:** <FILL: single-section | whole-package> ·");
+  P.push("**Environment:** <FILL: environment name> ·");
+  P.push("**Package:** <FILL: owning package(s) + lock state → target package>");
+  P.push("");
+  P.push(`- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`);
+  P.push("- **Approach:** <FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>");
+  P.push("");
+  P.push("### What it does");
+  P.push("<FILL: 1–2 sentences, business language — what it is for and who uses it>");
+  P.push("");
+  P.push("### Pages");
+  P.push("| Classic | Freedom target | Call |");
+  P.push("| --- | --- | --- |");
+  P.push("| <FILL: section schema> | <FILL: Freedom list template> | Rebuild |");
+  P.push(`| ${entity} form page | <FILL: Freedom form template> | Rebuild |`);
+  P.push("| entity · details · lookups · backend | reused as-is | Reuse |");
+  P.push("");
+  P.push(renderDesignSpec(result, opts));
+  if (childs.length) {
+    P.push("");
+    P.push("### Child pages to migrate (recursive)");
+    P.push("> Each related list opens the child entity's form on add/edit — migrate each as its OWN sub-plan (run the pipeline on its page). The plan is a TREE, not one page.");
+    P.push("| Child entity | Opened by | Edit page | Editable |");
+    P.push("| --- | --- | --- | --- |");
+    for (const c of childs) P.push(`| ${esc(c.entity)} | ${esc(c.via)} | ${esc(c.editPage || "⚠ resolve (list-pages)")} | ${c.editable === false ? "view-only" : "add/edit/delete (confirm)"} |`);
+  }
+  P.push("");
+  P.push("> **Fill every `<FILL: …>` above, then present this VERBATIM.** Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit or drop the generated tables/sections (Layout · Section · Logic · Confirm · Child pages).");
+  return P.join("\n");
+}

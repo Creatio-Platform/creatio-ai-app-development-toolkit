@@ -24,7 +24,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
-import { renderDesignSpec } from "./designspec.mjs";
+import { renderDesignSpec, renderPlan } from "./designspec.mjs";
 
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
@@ -42,11 +42,19 @@ export function runMigration(manifest, opts = {}) {
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
     const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-    const p = hasBody ? parseLayer(typeof e === "string" ? e : bodyOf(e), name) : { entitySchemaName: "?", diff: [] };
+    const body = hasBody ? (typeof e === "string" ? e : bodyOf(e)) : "";
+    const p = hasBody ? parseLayer(body, name) : { entitySchemaName: "?", diff: [] };
+    // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
+    // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages).
+    const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(body);
+    // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown.
+    const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body) || /"?addRecordButtonVisible"?\s*:\s*false/.test(body);
     detailSchemas[name] = {
       entity: (e && typeof e === "object" && e.entity) || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
       columns: [...new Set((p.diff || []).filter((d) => d.bindTo).map((d) => d.bindTo))],
       title: (e && typeof e === "object" && e.title) || null, // human detail title (from its resources)
+      editPage: (e && typeof e === "object" && e.editPage) || (epM ? epM[1] : null),
+      editable: viewOnly ? false : null, // null = unknown (default add/edit/delete)
       error: p.error || null,
     };
   }
@@ -66,6 +74,14 @@ export function runMigration(manifest, opts = {}) {
     processLaunch: sectionLayers.some((l) => l.processLaunch),
     processNames: [...new Set(sectionLayers.flatMap((l) => (l.processLaunch && l.processLaunch.names) || []))],
   } : null;
+  // child pages (recursion): each CUSTOM detail's related list opens the child entity's edit form on
+  // add/edit — a separate migration. Enumerate them so the plan is a tree (parent + one sub-plan each).
+  const childPages = (changeSet.details || []).map((d) => ({
+    entity: d.entity || null,
+    via: d.caption || d.detailSchema || d.entity,
+    editPage: (detailSchemas[d.detailSchema] && detailSchemas[d.detailSchema].editPage) || null,
+    editable: detailSchemas[d.detailSchema] ? detailSchemas[d.detailSchema].editable : null,
+  })).filter((c) => c.entity);
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   const out = {
@@ -84,10 +100,14 @@ export function runMigration(manifest, opts = {}) {
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns
+    childPages,      // custom-detail child entities whose edit page is a recursive sub-migration
   };
-  // The design spec is the "what goes where" the user approves at the gate. It is GENERATED here (not
-  // hand-written by the agent, which only ever produced a loose paraphrase) and presented verbatim.
-  out.designSpec = renderDesignSpec(out, { template: manifest.template, targetPackage: manifest.targetPackage });
+  // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
+  //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
+  //   plan       = the WHOLE plan skeleton (Overview/Pages placeholders + the design spec + child pages)
+  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage };
+  out.designSpec = renderDesignSpec(out, specOpts);
+  out.plan = renderPlan(out, specOpts);
   return out;
 }
 
@@ -97,8 +117,9 @@ export function runMigration(manifest, opts = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
   const argv = process.argv.slice(2);
-  const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown (for verbatim presentation)
-  const arg = argv.find((a) => a !== "--spec");
+  const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
+  const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
+  const arg = argv.find((a) => a !== "--spec" && a !== "--plan");
   const fromFile = !!arg && arg !== "-";
   let raw;
   try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
@@ -112,6 +133,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a layer `file` that does not exist
-  // `--spec` ⇒ pure design-spec Markdown (present verbatim / write to design-spec.md); default ⇒ full JSON.
-  process.stdout.write(specMode ? result.designSpec + "\n" : JSON.stringify(result, null, 2) + "\n");
+  // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
+  process.stdout.write(planMode ? result.plan + "\n" : specMode ? result.designSpec + "\n" : JSON.stringify(result, null, 2) + "\n");
 }
