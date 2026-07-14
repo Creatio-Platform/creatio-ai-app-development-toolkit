@@ -440,18 +440,34 @@ check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unr
 // feature labels). The engine emits the table itself; the skill presents it verbatim.
 check("design-spec: runMigration returns a Markdown design spec string",
   typeof cli.designSpec === "string" && cli.designSpec.startsWith("## Design spec"));
-check("design-spec: has a per-field table with Container + colSpan columns (not prose)",
-  /### Fields/.test(cli.designSpec) && /Container \| Col · colSpan/.test(cli.designSpec));
-check("design-spec: one field row (PDS attribute) per effective field — nothing dropped/invented",
+check("design-spec: ONE Layout table (Region · Element · Type · Source · Rule · Additional)",
+  /### Layout/.test(cli.designSpec) && /Region \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
+check("design-spec: one Layout row (PDS attribute) per effective field — nothing dropped/invented",
   cli.designSpec.split("\n").filter(l => /\| PDS\./.test(l)).length === cli.effective.fields);
-check("design-spec: region map + details + decisions sections present",
-  /### Region map/.test(cli.designSpec) && /### Details & standard features/.test(cli.designSpec) && /### Decisions/.test(cli.designSpec));
+check("design-spec: legacy split tables gone (no Region map / Fields / Details & standard features)",
+  !/### Region map/.test(cli.designSpec) && !/### Fields/.test(cli.designSpec) && !/### Details & standard features/.test(cli.designSpec));
+check("design-spec: Confirm section present (⚠ worklist)",
+  /### ⚠ Confirm before I build/.test(cli.designSpec));
 const specRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--spec"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
     { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
 check("migrate.mjs --spec: prints pure design-spec Markdown (## Design spec…), no JSON envelope",
   specRun.status === 0 && /^## Design spec/.test((specRun.stdout || "").trim()) && !/"changeSet"/.test(specRun.stdout || ""));
+
+/* ---- design-spec Layout: uiShape (list vs component), lookup ref, type+length, Logic handlers ---- */
+const dsCs = runMigration({ entity: "X",
+  entityColumns: { Contact: { type: "Lookup", ref: "Contact", title: "Contact" }, Note: { type: "text", length: 250 } },
+  layers: [{ pkg: "P", body:
+    `define("P",[],function(){return{entitySchemaName:"X",details:{V:{schemaName:"VisaDetailV2",entitySchemaName:"XVisa"},A:{schemaName:"ActivityDetailV2",entitySchemaName:"Activity"}},methods:{onContactChanged:function(){}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"Contact",parentName:"T",propertyName:"items",values:{bindTo:"Contact"}},{operation:"insert",name:"Note",parentName:"T",propertyName:"items",values:{bindTo:"Note"}},{operation:"insert",name:"V",parentName:"T",values:{itemType:2}},{operation:"insert",name:"A",parentName:"T",values:{itemType:2}}]};});` }],
+}, { baseDir: FIX });
+const spec = dsCs.designSpec;
+check("design-spec: lookup Type shows the referenced object — Lookup (Contact)", /Lookup \(Contact\)/.test(spec));
+check("design-spec: text Type shows length — Text (250)", /Text \(250\)/.test(spec));
+check("design-spec: component feature (Approvals) shown by name; list feature (Activities) as Related list",
+  /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
+check("design-spec: Logic table lists the handler (onContactChanged → Contact changes)",
+  /### Logic/.test(spec) && /onContactChanged \| Contact changes/.test(spec));
 
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
 const skelSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],

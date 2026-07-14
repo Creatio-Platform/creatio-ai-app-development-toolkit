@@ -3,7 +3,7 @@
 For every page that will be **Rebuilt** (a new Freedom page) or changed as a **Delta** (additive on an
 existing Freedom page), produce one design spec per page. The structure-analysis summary
 (`references/analysis-summary.md`) tells the user *what* moves; this spec tells the agent *how to
-build the page* — it is detailed enough that the build step is mechanical.
+build the page* — detailed enough that the build step is mechanical.
 
 Produce it during step 5 (Map To Freedom UI) for each Rebuild/Delta page, attach it to that page's
 sub-plan in `plan.md`, and follow it during step 7 (implement). Present it as plain Markdown — never
@@ -12,130 +12,85 @@ HTML or a rendered artifact.
 ## What makes a good spec
 
 - **GENERATE it — do not hand-write it.** When `engine/migrate.mjs` was run, `node engine/migrate.mjs
-  <manifest> --spec` prints this whole spec as Markdown straight from the ChangeSet (region map,
-  per-field table, details/standard-features, card actions, business rules, ⚠ decisions). Present that
-  output verbatim; your only edits RESOLVE the ⚠ decisions. Hand-writing it is the recurring failure —
-  loose prose, no per-field placement, features mislabelled (Activities→"Timeline", Approvals→"Expanded
-  list") that the engine had already resolved. The sections below are the FORMAT the generator emits and
-  the fallback template for when the engine was not run (no Node / hand-merge path).
-- **Region by region, not field-dumped.** Walk the Classic page top to bottom — header, side/profile
-  area, tabs, field groups, details, files/notes/feed, actions — and give each a Freedom home.
-- **Every Classic field gets one row** with its Freedom component, data-source attribute, and grid
-  placement (container + colSpan on the 24-column grid). Nothing is left to "figure out later".
-- **Behavior is mapped, not just layout.** Page rules, handlers, validators, and actions each get a
-  line with their Freedom target (use the categories in `references/classic-to-freedom-mapping.md`).
-- **End with a wireframe** of the finished Freedom page so the agent and the user can see the layout
-  before a single tool call, and a build order so the implementation is deterministic.
-- Separate confirmed Classic facts (read from runtime/repository) from inferred placement choices.
+  <manifest> --spec` prints this whole spec as Markdown straight from the ChangeSet. Present that output
+  verbatim; your only edits RESOLVE the ⚠ items and append discovery risks to `⚠ Confirm`. Hand-writing
+  it is the recurring failure — loose prose, no per-field placement, features mislabelled. The format
+  below is what the generator emits (and the fallback template when Node was not run).
+- **One `Layout` table = structure + contents.** The `Region` column is the page structure (side-profile
+  islands, tabs, card actions) and REPEATS down its rows (Markdown can't merge cells). Every field,
+  related list, native component and card action is ONE row — nothing is listed twice.
+- **`Logic` is behaviour, not layout** — entity/lookup filters, handlers/converters, process launch. A
+  field's own declarative state (required / read-only / visible-when) stays in the Layout `Rule` column;
+  imperative multi-field logic goes here.
+- **`⚠ Confirm before I build`** collects everything needing a human answer (the engine's ⚠ worklist plus
+  any discovery risks/gaps you append).
+- Feed the resolution inputs so names are real, not codes: `resources` (captions), `columnTitles` (field
+  labels), `detailSchemas` (detail entity/columns/title). Separate confirmed facts from inferences.
 
 ## Spec template
 
 ```
-## Page: <Classic schema> → Freedom <page name>
+## Design spec — <Classic page> → Freedom <form name> (generated)
 
-- Entity: <entity schema>
-- Classic parent template: <parent chain>
-- Freedom template: <chosen template> — <one-line reason; rejected candidates if not obvious>
-- Target package: <package>
-- Page type: <list | form | detail | mini>
+- Entity: <entity> · Template: <chosen Freedom template> · Package: <target package>
+- Size: <P> pages · <F> fields · <D> details/features · <R> rules · <A> actions
 
-### Region map (Classic → Freedom)
-| Classic region | Contents | Freedom home | Notes |
-| --- | --- | --- | --- |
-| Header / caption | <title field, status, stage> | Page header + <top area / status component> | |
-| Side / profile area | <key fields> | <right area / profile container or "none"> | |
-| Tab: <name> | <groups it holds> | TabPanel → tab "<name>" | |
-| Field group: <name> | <fields> | <FlexContainer / GridContainer / ExpansionPanel> | |
-| Detail: <name> | <child entity> | Related list (data source + list component) | |
-| Files / Notes / Feed | <which are present> | Files component / Notes / Feed (or dropped) | |
-| Action menu | <actions> | Page actions / buttons / handler commands | |
-
-### Fields
-| Classic field (caption) | Type | Freedom component | Data-source attribute | Container · colSpan | State rule |
+### Layout
+| Region | Element | Type | Source | Rule | Additional |
 | --- | --- | --- | --- | --- | --- |
-| <caption> | <text/number/lookup/date/bool/money> | <crt.Input / dropdown / date / lookup / checkbox / number> | <PDS attribute> | <container · n/24> | <required / read-only / visible-when ...> |
+| Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Date / Number / Boolean | PDS.<col> | required / read-only / visible-when … | tip: … |
+| Tab · <name> | <field label> | … | PDS.<col> | … | … |
+| Tab · <name> | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
+| Tab · <name> | <feature> | Approvals / Attachments / Feed (component) | template-provided / native — confirm component on-stand | — | — |
+| Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
+| Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
-### Page rules (business rules on this page)
-| Rule | Trigger | Effect | Freedom target |
+### Logic
+| Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
-| <what it does> | <field/condition> | <visibility / required / value / filter> | Page business rule / handler / validator |
+| Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
+| <handler method> | <trigger> | imperative (<category>) — review | request handler / converter / virtual attr |
+| Run process | Run process action | launch <process> | ⚠ run-process handler — which process |
 
-### Handlers / converters / validators
-| Classic logic | Freedom target | Notes |
-| --- | --- | --- |
-| <method / subscription / save override> | <request handler / converter / validator> | |
-
-### Freedom layout (wireframe)
-<nested-list or boxed sketch of the final page: header, tabs, groups with fields and their colSpans,
-details, files/feed. This is the picture the agent builds to.>
-
-### Build order
-1. Create the page from <template> (or get_page for a Delta target).
-2. Add containers/tabs, then fields in grid order; validate_page before saving.
-3. Add page business rules.
-4. Add handlers / converters / validators.
-5. Wire detail data sources and related lists (parent-column binding, add/edit/delete rules).
-6. Localization/resources for custom captions only.
-7. Read-back validation per references/migration-documentation.md Definition of Done.
+### ⚠ Confirm before I build
+- **[<kind>]** <item> — <what to confirm / resolve>
+- **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
-## Worked example (abbreviated)
+## Worked example (single-section, abbreviated)
 
 ```
-## Page: UsrWorkOrderPage → Freedom "Work Order"
+## Design spec — Applicant1Page → Freedom "Applicant" (generated)
 
-- Entity: UsrWorkOrder
-- Classic parent template: BaseModulePageV2 (tabs + details + files)
-- Freedom template: PageWithTopAreaAndTabsFreedomTemplate — status/stage is central to the workflow; top area carries it. (Rejected PageWithTabs: no first-class status region.)
-- Target package: UsrFieldServiceFreedom
-- Page type: form
+- Entity: Applicant · Template: PageWithTabsFreedomTemplate · Package: UsrApplicantFreedom
+- Size: 1 page · 19 fields · 8 details/features · 6 rules · 2 actions
 
-### Region map (Classic → Freedom)
-| Classic region | Contents | Freedom home | Notes |
-| --- | --- | --- | --- |
-| Header | Number, Status | Top area: title = Number, status indicator = Status | Status drives field visibility |
-| Tab "General" | Customer/asset/schedule groups | TabPanel → "General" | |
-| Tab "Labour & Parts" | Time, parts detail | TabPanel → "Labour & Parts" | |
-| Detail "Parts used" | UsrWorkOrderPart | Related list on "Labour & Parts" | parent = UsrWorkOrder |
-| Files / Feed | both present | Files + Feed components | |
-| Actions | "Complete", "Reassign" | Page buttons → handler commands | |
-
-### Fields (General tab — abbreviated)
-| Classic field | Type | Freedom component | Attribute | Container · colSpan | State rule |
+### Layout
+| Region | Element | Type | Source | Rule | Additional |
 | --- | --- | --- | --- | --- | --- |
-| Number | text | crt.Input (read-only) | UsrNumber | Top area · — | read-only |
-| Customer | lookup | Lookup | UsrCustomer | "Customer" group · 12/24 | required |
-| Asset | lookup | Lookup | UsrAsset | "Customer" group · 12/24 | filtered by Customer |
-| Priority | lookup | Dropdown | UsrPriority | "Schedule" group · 8/24 | required when Type = Emergency |
-| Planned start | datetime | Date/Time | UsrPlannedStart | "Schedule" group · 8/24 | |
-| Total cost | money | Number (currency) | UsrTotalCost | "Schedule" group · 8/24 | visible when Status = Completed |
+| Side profile › Contact | Contact | Lookup (Contact) | PDS.Contact | — | — |
+| Side profile › Contact | Mobile phone | Phone | PDS.MobilePhone | read-only | — |
+| Side profile › Contact | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | required @ Stage = Job Offer | — |
+| Side profile › Request | Request | Lookup (InternalRequest) | PDS.InternalRequest | required @ Stage ∈ {Job Offer, Attendance} | — |
+| Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | — |
+| Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | required @ Stage ∈ {Rejected, Refusal} | — |
+| Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
+| Tab · Basic information | Attachments | Attachments | template-provided | — | — |
+| Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
+| Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
+| Tab · History | Activities | Related list | Activity · native | — | — |
+| Tab · Approvals | Visas | Approvals | native — confirm component on-stand | — | — |
+| Card actions | Run process | Action | — | — | ⚠ which process — confirm |
 
-### Page rules
-| Rule | Trigger | Effect | Freedom target |
+### Logic
+| Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
-| Emergency needs priority + on-call tech | Type = Emergency | Priority + Technician required | Page business rule |
-| Hide cost until done | Status ≠ Completed | Total cost hidden | Page business rule |
+| Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
+| onContactChanged | Contact changes | imperative — fill Mobile phone / Email / Skype | request handler + virtual attrs |
+| onInternalRequestChanged | Request changes | imperative — fill Department / Staff unit | request handler + virtual attrs |
 
-### Handlers
-| Classic logic | Freedom target | Notes |
-| --- | --- | --- |
-| onSaved → recompute SLA | reuse backend; handler calls existing process | SLA logic stays server-side (C#) |
-| "Complete" button method | button → request handler | runs completion validator first |
-
-### Freedom layout (wireframe)
-[ Top area ]  Number (title)        [Status ●]      [ Complete ] [ Reassign ]
-[ Tabs ]  General | Labour & Parts | Files | Feed
-  General
-    ▸ Customer group      Customer (12) · Asset (12)
-    ▸ Schedule group      Priority (8) · Planned start (8) · Total cost (8, when Completed)
-  Labour & Parts
-    ▸ Parts used (related list: Part · Qty · Cost)
-
-### Build order
-1. create_page from PageWithTopAreaAndTabsFreedomTemplate in UsrFieldServiceFreedom.
-2. Add tabs, then General-tab containers and fields in the order above; validate_page.
-3. Add the two page business rules.
-4. Add the Complete/Reassign button handlers; reuse the SLA process call.
-5. Wire the "Parts used" related list to UsrWorkOrderPart (parent = UsrWorkOrder).
-6. Read-back: confirm schema UId, package, merged view items, rules, validation.
+### ⚠ Confirm before I build
+- **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.
+- **[detail-editability]** ContactCommunication — view-only vs add/edit/delete not on the master; resolve from the detail schema.
+- **risk/gap:** created Freedom pages can't yet be re-opened in the visual designer — edits go via the agent.
 ```

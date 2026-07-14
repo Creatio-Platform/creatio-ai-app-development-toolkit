@@ -50,6 +50,23 @@ function control(dataType, contentType) {
   return null; // unknown -> needsDecision
 }
 
+// Short, human data-type label for the design-spec Type column. Lookups are flagged by `ctl.lookup` (the
+// caller adds the referenced object separately); email/phone are inferred from the column name (Creatio
+// stores them as text); text carries its length when the column metadata provides it.
+function fieldTypeLabel(col, meta, ctl) {
+  if (ctl.lookup) return "Lookup";
+  const t = String(meta.type || "").toLowerCase();
+  if (/email/i.test(col)) return "Email";
+  if (/phone|mobile/i.test(col)) return "Phone";
+  if (ctl.type === "crt.Checkbox" || t === "boolean") return "Boolean";
+  if (ctl.picker === "datetime" || t === "datetime") return "Date/time";
+  if (ctl.picker === "date" || t === "date") return "Date";
+  if (["integer", "32"].includes(t)) return "Integer";
+  if (["decimal", "float", "money"].includes(t)) return "Decimal";
+  if (ctl.multiline) return "Rich text";
+  return meta.length ? `Text (${meta.length})` : "Text";
+}
+
 // BINDPARAMETER property -> [action, inverseAction] (rules are one-way -> always emit the inverse)
 const PROP_ACTION = {
   Required: ["make-required", "make-optional"],
@@ -63,13 +80,17 @@ const PROP_ACTION = {
 // descriptively (the exact crt.* component is confirmed on-stand — never fabricated here; E1 lesson).
 // `templateProvided` = most Freedom FORM templates already ship this component → account for it / merge
 // onto the existing one, do NOT create a new one (#7).
+// `uiShape` distinguishes how the feature RENDERS (for the design-spec Layout table): `list` = it looks
+// like a regular related list (Activities/Emails — same UI as any child list); `component` = a distinct
+// native Freedom component with its own UI (Approvals, Attachments). This drives whether the spec marks it
+// "Related list" vs the component name — the two are NOT visually interchangeable.
 const FEATURE_CATALOG = {
-  VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)" },
-  FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true },
+  VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)", uiShape: "component" },
+  FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component" },
   // Activities is the related TASKS/activities list — NOT the Timeline widget (Timeline is a separate
   // classic component, mapped via WIDGET_BY_MODULE.Timeline). Do not conflate the two (#6).
-  ActivityDetailV2: { feature: "Activities", freedom: "Freedom Activities (Tasks) related list" },
-  EmailDetailV2: { feature: "Emails", freedom: "Freedom Email component" },
+  ActivityDetailV2: { feature: "Activities", freedom: "Freedom Activities (Tasks) related list", uiShape: "list" },
+  EmailDetailV2: { feature: "Emails", freedom: "Freedom Email component", uiShape: "list" },
 };
 // Match a classic detail schema to a standard feature by exact name OR entity-prefixed suffix — e.g.
 // `ApplicantEmailDetailV2` → `EmailDetailV2`, `ApplicantVisaDetail` → (no)…: prefixed variants of the
@@ -128,7 +149,11 @@ export function mapToFreedom(eff, opts = {}) {
   // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from describe-entity, so a field's
   // LABEL is the human title, not the raw column code. Falls back to the page resources, then the code.
   const columnTitles = opts.columnTitles || {};
-  const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? null;
+  // entityColumns entries may be a plain dataType STRING (back-compat) OR an object { type, length, ref, title }
+  // (from describe-entity) — the richer form lets the design-spec Type column show "Text (250)" and a
+  // lookup's referenced object "Lookup (Contact)".
+  const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
+  const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
   let fieldsWithTitle = 0;
   const needsDecision = [];
   const viewConfigDiff = [];
@@ -283,7 +308,8 @@ export function mapToFreedom(eff, opts = {}) {
     }
     rowByContainer[parent] = (rowByContainer[parent] || 0) + 1;
     const col = f.bindTo || f.name || "Field";
-    const ctl = control(cols[col], f.contentType);
+    const meta = colMeta(col);
+    const ctl = control(meta.type, f.contentType);
     if (!ctl) needsDecision.push({ kind: "field-control", item: col,
       reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });
     const c = ctl || { type: "crt.Input" };
@@ -321,6 +347,11 @@ export function mapToFreedom(eff, opts = {}) {
       type: c.type, control: "$" + col, label: lbl != null ? lbl : "$Resources.Strings." + col,
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
+    // design-spec Type column: a short human data type ("Text (250)", "Lookup", "Email") + the lookup's
+    // referenced object when known — carried on the field so designspec.mjs renders it without re-deriving.
+    values.typeLabel = fieldTypeLabel(col, meta, c);
+    if (c.lookup && meta.ref) values.refSchema = meta.ref;
+    if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;
@@ -423,7 +454,7 @@ export function mapToFreedom(eff, opts = {}) {
     if (!feat && /File$/.test(dentity || "")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity });
+      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list" });
       needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
         reason: `${featByEntity ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}` });
       continue;

@@ -202,3 +202,16 @@
 - **Detail titles** (#13): `manifest.detailSchemas[x].title` → caption деталі = людська назва («Stage history»); designspec показує `caption||schema`.
 - **Detail-only tab bug**: таб лише з деталлю (без полів) раніше **не емітився** (ensureTab лише з field-routing) → related list нема куди лягти + region показував код. Тепер деталь/фіча **гарантує свій owning tab** (+ caption резолвиться). Golden оновлено на field-scoped count.
 - SKILL: три resolution-входи (`resources`, `columnTitles`, `detailSchemas` з `title`) з поясненням, звідки їх брати (SysLocalizableValue / describe-entity).
+
+## Ф4 — реструктуризація формату ПЛАНУ (спільно з юзером, ітеративно)
+
+Юзер прогнав шостий успішний план і сказав: структура плану дублююча/шумна. Пройшлись по блоках і переробили формат (merge 49/49, mapper 112/112, +5 goldens):
+- **Overview** (був «At a glance» + окрема шапка-мета): жирні `Scope/Environment/Package` (3 рядки) + `Size` + `Approach`. Прибрано `Calls` (дубль колонки Call), «Good to know» (шум + вказівники на рішення), і сплющено з мета-шапкою. Кожен факт — в одному місці.
+- **What we're migrating (fat table) → `Pages`**: лише сторінка→Freedom-темплейт+call (+reuse). Поля/деталі більше НЕ перелічуються тут.
+- **Region map + Fields + Details & features + Card actions → ОДНА `Layout`-таблиця** (`Region · Element · Type · Source · Rule · Additional`; Region повторюється по рядках — markdown не вміє merge). Кожен елемент **раз**. `Type` = дані-тип (`Lookup (Ref)` / `Text (250)` / `Email` / …); read-only → в `Rule`; tooltip → `Additional`. Activities/Emails = «Related list» (той самий UI); Attachments/Feed/**Approvals** = окремий native-компонент (`uiShape` у `FEATURE_CATALOG`). Card actions поіменно з прапорцями (Print=verify data-driven, Run process=⚠ which process).
+- **`Logic`** — поведінка не-лейаут: entity-фільтри, **хендлери** (`methods`→request handler/virtual attrs), process-launch.
+- **`⚠ Confirm before I build`** — ⚠-worklist (needsDecision) + ризики/gaps (агент дописує).
+
+**Двигун:** `designspec.mjs` переписаний на Layout/Logic/Confirm; `entityColumns` тепер приймає об'єкт `{type,length,ref,title}` (Type-колонка); `FEATURE_CATALOG.uiShape` (list vs component); detail-only tab тепер емітиться. `analysis-summary.md` + `page-design-spec.md` + SKILL синхронізовано.
+
+**Межа (чесно):** злиті комірки Region — лише в HTML-макеті для перегляду; у реальному плані (plain markdown) Region повторюється. Реальні `Type`-деталі (`Text(250)`, `Lookup(Ref)`) вимагають багатшого `entityColumns` з `describe-entity` — degrade-нейтрально (без нього показує базовий тип).

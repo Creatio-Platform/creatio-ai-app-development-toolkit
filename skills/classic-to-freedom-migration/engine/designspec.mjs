@@ -1,45 +1,45 @@
 // engine/designspec.mjs — render the per-page design spec (references/page-design-spec.md format) as a
 // ready-to-present Markdown artifact, DETERMINISTICALLY, from the Freedom ChangeSet.
 //
-// Why this exists: telling the agent (in prose) to "produce a per-page design spec populated from the
-// ChangeSet" repeatedly produced a loose PARAPHRASE — fields dumped as prose, no per-field table, no
-// container/colSpan, standard features re-labelled wrong ("Timeline", "Expanded list"). The agent cannot
-// paraphrase a table it did not write. So the engine emits the table itself and the skill presents it
-// verbatim. This is the "what goes where" the user approves at the gate.
+// Why this exists: telling the agent (in prose) to "produce a per-page design spec" repeatedly produced a
+// loose PARAPHRASE — no per-field table, features mislabelled. The agent cannot paraphrase a table it did
+// not write, so the engine emits it and the skill presents it verbatim.
 //
-// Input = the runMigration() result (entity, changeSet, effective, decisionSummary). Output = a Markdown
-// string. It invents NOTHING the ChangeSet does not contain; unresolved items become ⚠ rows/decisions.
+// The spec is ONE layout table (structure + contents, no repetition) + a Logic table (behaviour that is
+// not layout) + a Confirm list (the ⚠ worklist). Input = the runMigration() result. Output = Markdown.
+// Markdown tables cannot merge cells, so the Region column REPEATS per row (grouped, first-seen order).
 
 const strip = (s) => (s == null ? "" : String(s).replace(/^\$/, ""));
 const esc = (s) => strip(s).replace(/\|/g, "\\|"); // keep table cells from breaking on a literal pipe
 const isField = (o) => !!(o && o.values && o.values.control);
+const DASH = "—";
 
-// Climb the emitted insert tree from a field's parentName to the region that holds it: a crt.Tab → that
-// tab, SideAreaProfileContainer → the side profile, HeaderContainer → the header, else the raw container
-// name (a base-template container not re-emitted here).
+// Climb the emitted insert tree from a container to the region that holds it: crt.Tab → that tab,
+// SideAreaProfileContainer → the side profile (with the island container appended, #9b), Header → header,
+// else the raw container name (a base-template container not re-emitted here).
 function regionResolver(viewConfigDiff) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
   const label = (o) => esc(o.values && o.values.caption ? strip(o.values.caption) : o.name);
   return (parentName) => {
-    let p = parentName, hops = 0, first = null; // `first` = container directly holding the field (the island, #9b)
+    let p = parentName, hops = 0, first = null;
     while (p && hops++ < 64) {
       if (p === "SideAreaProfileContainer") return first ? `Side profile › ${first}` : "Side profile";
       if (p === "HeaderContainer") return "Header";
       if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
       const o = byName.get(p);
       if (!o) return esc(p);
-      if (o.values && o.values.type === "crt.Tab") return `Tab "${label(o)}"`;
-      if (!first) first = label(o); // remember the innermost container so profile islands read distinctly
+      if (o.values && o.values.type === "crt.Tab") return `Tab · ${label(o)}`;
+      if (!first) first = label(o);
       p = o.parentName;
     }
     return esc(parentName);
   };
 }
 
-const COMPONENT_LABEL = {
-  "crt.Input": "Input", "crt.ComboBox": "Dropdown/Lookup", "crt.Checkbox": "Checkbox",
-  "crt.DateTimePicker": "Date/Time", "crt.NumberInput": "Number",
-};
+// field display name = its resolved label (human title) when available, else the column code.
+const dispLabel = (o) => { const l = o.values && o.values.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
+const humanizeAction = (a) => ({ "make-required": "required", "make-optional": "optional", "make-read-only": "read-only", "make-editable": "editable", "show-element": "visible", "hide-element": "hidden" }[a] || a);
+const triggerOf = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? `${mt[1]} changes` : (/init/i.test(m) ? "on load" : (/save/i.test(m) ? "on save" : "—")); };
 
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -47,115 +47,98 @@ export function renderDesignSpec(result, opts = {}) {
   const entity = result.entity || "?";
   const vcd = cs.viewConfigDiff || [];
   const regionOf = regionResolver(vcd);
+  const tabRegion = (tab) => regionOf(tab);
   const fields = vcd.filter(isField);
 
-  // rule lookup: element/column -> the page rule(s) that target it
+  // page-rule effect per element (declarative field state)
   const ruleByEl = new Map();
   for (const r of cs.pageBusinessRules || []) {
-    const line = `${r.action}${r.inverseAction ? ` (+${r.inverseAction})` : ""}`;
-    ruleByEl.set(r.element, (ruleByEl.get(r.element) ? ruleByEl.get(r.element) + "; " : "") + line);
-  }
-  for (const r of cs.entityBusinessRules || []) {
-    const line = `filter${r.complete ? "" : " ⚠"}`;
-    ruleByEl.set(r.targetAttribute, (ruleByEl.get(r.targetAttribute) ? ruleByEl.get(r.targetAttribute) + "; " : "") + line);
+    const line = humanizeAction(r.action) + (Array.isArray(r.conditions) && r.conditions.length ? " (conditional)" : "");
+    ruleByEl.set(r.element, ruleByEl.has(r.element) ? ruleByEl.get(r.element) + "; " + line : line);
   }
 
   const L = [];
-  L.push(`## Design spec — ${entity} form page (generated from the ChangeSet)`);
+  L.push(`## Design spec — ${entity} form page (generated)`);
   L.push("");
-  L.push("> Auto-generated by `migrate.mjs` from the merged Classic layers. Every field's container,");
-  L.push("> colSpan, component, attribute, plus the details, actions and rules below are the ENGINE's");
-  L.push("> output — **present verbatim, do not paraphrase**. Items needing human judgment are marked ⚠");
-  L.push("> and collected under *Decisions*.");
+  L.push("> Generated by `migrate.mjs --spec` from the merged Classic layers — **present verbatim, do not");
+  L.push("> paraphrase**. Layout = structure + contents (one table). Logic = behaviour. ⚠ = confirm before build.");
   L.push("");
-  L.push(`- **Entity:** ${entity}`);
-  if (opts.template) L.push(`- **Freedom template:** ${opts.template}`);
-  if (opts.targetPackage) L.push(`- **Target package:** ${opts.targetPackage}`);
-  L.push(`- **Counts:** ${fields.length} fields · ${(cs.details || []).length} custom details · ${(cs.standardFeatures || []).length} standard features · ${(cs.cardActions || []).length} card actions · ${(cs.pageBusinessRules || []).length} page rules · ${(cs.entityBusinessRules || []).length} entity rules`);
+  L.push(`- **Entity:** ${entity}${opts.template ? ` · **Template:** ${opts.template}` : ""}${opts.targetPackage ? ` · **Package:** ${opts.targetPackage}` : ""}`);
+  L.push(`- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`);
   if (eff.unresolvedParents && eff.unresolvedParents.length)
-    L.push(`- ⚠ **unresolvedParents:** ${eff.unresolvedParents.join(", ")} — the seed is incomplete; DO NOT build until this is empty`);
+    L.push(`- ⚠ **unresolvedParents:** ${eff.unresolvedParents.join(", ")} — the seed is incomplete; DO NOT build until empty`);
   L.push("");
 
-  // ---- Region map ----
-  const regionOrder = [];
-  const regionHolds = new Map();
-  const addTo = (region, item) => {
-    if (!regionHolds.has(region)) { regionHolds.set(region, []); regionOrder.push(region); }
-    regionHolds.get(region).push(item);
-  };
-  // a field's display name = its resolved label (human title) when available, else the column code.
-  const dispLabel = (o) => { const l = o.values && o.values.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
-  for (const f of fields) addTo(regionOf(f.parentName), esc(dispLabel(f)));
-  for (const d of cs.details || []) addTo(d.tab ? tabRegion(d.tab, vcd) : "⚠ unplaced", `▤ ${esc(d.caption || d.detailSchema || d.entity)} (list)`);
-  for (const s of cs.standardFeatures || []) addTo(s.tab ? tabRegion(s.tab, vcd) : "⚠ unplaced", `★ ${esc(s.feature)}`);
-  L.push("### Region map");
-  L.push("| Region | Holds |");
-  L.push("| --- | --- |");
-  for (const r of regionOrder) L.push(`| ${r} | ${regionHolds.get(r).join(" · ")} |`);
-  L.push("");
-
-  // ---- Fields ----
-  L.push("### Fields");
-  L.push("| Field | Freedom component | Attribute | Container | Col · colSpan | Rule |");
-  L.push("| --- | --- | --- | --- | --- | --- |");
+  // ---- ONE Layout table (structure + contents) ----
+  const rows = []; // { region, sort, cells:[element,type,source,rule,additional] }
   for (const f of fields) {
     const col = strip(f.values.control);
-    const lc = f.values.layoutConfig || {};
-    const comp = COMPONENT_LABEL[f.values.type] || f.values.type;
-    const cell = `${lc.column ?? "?"} · ${lc.colSpan ?? "?"}`;
-    const vis = f.values.visible === false ? " · hidden" : "";
-    L.push(`| ${esc(dispLabel(f))} | ${esc(comp)}${vis} | PDS.${esc(col)} | ${esc(f.parentName)} | ${cell} | ${ruleByEl.get(col) || "—"} |`);
+    const v = f.values || {};
+    const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
+    const rule = v.readOnly ? "read-only" : (ruleByEl.get(col) || DASH);
+    const tip = v.tip && v.tip.content ? `tip: ${esc(v.tip.content)}` : DASH;
+    rows.push({ region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, tip] });
+  }
+  for (const d of cs.details || []) {
+    const src = `${esc(d.entity || "?")}${d.dependency ? ` · by ${esc(d.dependency.attributePath)}` : " · ⚠ FK"}`;
+    const add = d.columns && d.columns.length ? `cols: ${d.columns.map(esc).join(" · ")}` : DASH;
+    rows.push({ region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), "Related list", src, DASH, add] });
+  }
+  for (const s of cs.standardFeatures || []) {
+    const isList = s.uiShape === "list";
+    const type = isList ? "Related list" : esc(s.feature);
+    const src = isList ? `${esc(s.entity || "Activity")} · native` : (s.templateProvided ? "template-provided" : "native — confirm component on-stand");
+    const add = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
+    rows.push({ region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] });
+  }
+  for (const w of cs.widgets || []) {
+    rows.push({ region: esc(w.widget), sort: 2, cells: [esc(w.widget), "Component", w.base ? "template-provided" : "native — confirm on-stand", DASH, DASH] });
+  }
+  for (const a of cs.cardActions || []) {
+    const isProc = /process/i.test(a);
+    const isPrint = /print/i.test(a);
+    const add = isProc ? "⚠ which process — confirm" : (isPrint ? "⚠ only if print reports exist — verify" : DASH);
+    rows.push({ region: "Card actions", sort: 3, cells: [esc(a.replace(/Button$/, "")), "Action", DASH, DASH, add] });
+  }
+  // group by region (first-seen order), stable by `sort` then insertion within region
+  const order = [];
+  const byRegion = new Map();
+  rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
+
+  L.push("### Layout");
+  L.push("| Region | Element | Type | Source | Rule | Additional |");
+  L.push("| --- | --- | --- | --- | --- | --- |");
+  for (const region of order) {
+    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
+    for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
   }
   L.push("");
 
-  // ---- Details & standard features ----
-  if ((cs.details || []).length || (cs.standardFeatures || []).length) {
-    L.push("### Details & standard features");
-    L.push("| Classic detail | Freedom target | Tab | Note |");
+  // ---- Logic (behaviour that is not layout): entity filters, handlers, process launch ----
+  const logic = [];
+  for (const r of cs.entityBusinessRules || [])
+    logic.push([`Filter · ${esc(r.targetAttribute)}`, `${esc(r.targetAttribute)} lookup`, r.complete ? "static filter" : "⚠ dynamic — resolve value", "entity business rule / lookup filter"]);
+  for (const h of cs.handlerStubs || [])
+    logic.push([esc(h.sourceMethod), triggerOf(h.sourceMethod), `imperative (${esc(h.category)}) — review`, "request handler / converter / virtual attr"]);
+  if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
+    const pn = (cs.needsDecision.find((n) => n.kind === "process-launch") || {}).item;
+    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, "⚠ run-process handler — which process?"]);
+  }
+  if (logic.length) {
+    L.push("### Logic");
+    L.push("| Behaviour | Trigger | Effect | Freedom target |");
     L.push("| --- | --- | --- | --- |");
-    for (const s of cs.standardFeatures || [])
-      L.push(`| ${esc(s.classicDetail || s.entity)} | ★ ${esc(s.feature)} — ${esc(s.freedom)} | ${esc(s.tab || "⚠ unplaced")} | ${s.templateProvided ? "template-provided — do NOT recreate" : ""}${s.inferredFromEntity ? " · inferred from entity, confirm" : ""} |`);
-    for (const d of cs.details || []) {
-      const note = [
-        d.dependency ? `by ${esc(d.dependency.attributePath)}` : "⚠ FK unresolved",
-        d.columns && d.columns.length ? `cols: ${d.columns.map(esc).join(", ")}` : null,
-      ].filter(Boolean).join(" · ");
-      L.push(`| ${esc(d.caption || d.detailSchema || d.entity)} | ▤ Expanded list (${esc(d.entity)}) | ${esc(d.tab || "⚠ unplaced")} | ${note} |`);
-    }
+    for (const row of logic) L.push(`| ${row.join(" | ")} |`);
     L.push("");
   }
 
-  // ---- Card actions ----
-  if ((cs.cardActions || []).length) {
-    L.push("### Card actions");
-    L.push(cs.cardActions.map((a) => `\`${esc(a)}\``).join(" · "));
-    L.push("");
-  }
-
-  // ---- Page rules ----
-  if ((cs.pageBusinessRules || []).length || (cs.entityBusinessRules || []).length) {
-    L.push("### Business rules");
-    L.push("| Target | Kind | Action | Complete |");
-    L.push("| --- | --- | --- | --- |");
-    for (const r of cs.pageBusinessRules || [])
-      L.push(`| ${esc(r.element)} | page | ${esc(r.action)} (+${esc(r.inverseAction)}) | yes |`);
-    for (const r of cs.entityBusinessRules || [])
-      L.push(`| ${esc(r.targetAttribute)} | entity | ${esc(r.action)} | ${r.complete ? "yes" : "⚠ resolve value"} |`);
-    L.push("");
-  }
-
-  // ---- Decisions (the 20%) ----
-  const nd = cs.needsDecision || [];
+  // ---- Confirm before I build (the ⚠ worklist) — the agent appends discovery risks/gaps here ----
+  const nd = (cs.needsDecision || []).filter((n) => n.kind !== "process-launch"); // process-launch shown in Logic
   if (nd.length) {
-    L.push(`### Decisions — ⚠ needs human judgment (${nd.length})`);
+    L.push(`### ⚠ Confirm before I build (${nd.length})`);
     for (const d of nd) L.push(`- **[${esc(d.kind)}]** ${esc(d.item)} — ${strip(d.reason)}`);
     L.push("");
   }
 
   return L.join("\n");
-}
-
-// map a detail's `tab` (a container/tab NAME) to its region label using the emitted tree
-function tabRegion(tab, viewConfigDiff) {
-  return regionResolver(viewConfigDiff)(tab);
 }
