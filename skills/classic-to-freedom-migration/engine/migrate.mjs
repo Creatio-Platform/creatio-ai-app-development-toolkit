@@ -13,8 +13,9 @@
 //     "layers": [ { "pkg": "Case", "body": "<define(...) source>" } | { "pkg": "Case", "file": "..." }, … ],
 //     "seed":   [ { "pkg": "BaseModulePageV2/CrtUIPlatform7x", "body"|"file": … }, … ],  // parent template chain
 //     "clientEditableLayers": ["WorkOverride", …], // optional; drives B6 removal confidence
-//     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → resolve captions (#5/#13)
-//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file": … }, … } // optional; detail bodies → real entity + list columns (#11ii)
+//     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
+//     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
+//     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … } // optional; detail body → entity + list columns; title → detail display name (#11ii)
 //   }
 // Prefer inline "body" (paste the clio get-classic-schema output) over "file" to avoid path fragility.
 import fs from "node:fs";
@@ -36,19 +37,21 @@ export function runMigration(manifest, opts = {}) {
   // mapper can resolve auto-named (SchemaNDetail) details and show the related-list columns in the spec.
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
-    const body = typeof e === "string" ? e : bodyOf(e);
-    const p = parseLayer(body, name);
+    const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
+    const p = hasBody ? parseLayer(typeof e === "string" ? e : bodyOf(e), name) : { entitySchemaName: "?", diff: [] };
     detailSchemas[name] = {
-      entity: p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null,
+      entity: (e && typeof e === "object" && e.entity) || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
       columns: [...new Set((p.diff || []).filter((d) => d.bindTo).map((d) => d.bindTo))],
+      title: (e && typeof e === "object" && e.title) || null, // human detail title (from its resources)
       error: p.error || null,
     };
   }
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     clientEditableLayers: manifest.clientEditableLayers || [],
-    resources: manifest.resources || {},   // #5/#13 — localizable strings for caption resolution
-    detailSchemas,                          // #11(ii)/B2 — parsed detail bodies (entity + columns)
+    resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
+    columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
+    detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
   });
   const parseErrors = [...layers, ...seedLayers].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
   const decisionSummary = {};

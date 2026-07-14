@@ -190,3 +190,15 @@
 - **#3** native>generic + **#8b** section-actions: SKILL явно — `standardFeatures` будувати нативно (не generic-grid); section-дії (`getSectionActions` у `*Section`) — окрема поверхня, поза page-unit.
 
 **Лишилось (свідомо НЕ брав цього разу):** #2 (section list-колонки з DATA), #4 (lookup-тул у fork), F8 (vm-boundary). Editability деталі (частина #11) — потребує detail data-config. Наскрізна верифікація на стенді + 2 PR.
+
+## Ф4 — шостий прогін (успіх) + дорезолв РЕАЛЬНИХ назв
+
+Прогін на `e5b133c`: агент зробив усе правильно — запустив `--spec`, дістав caption'и з `SysLocalizableValue` → `resources`, передав `detailSchemas`, показав **2 острови окремо**, нативні фічі, process-launch. Тобто вся база (#5/#13, #9b, #10c, #11ii, #8c) підтверджена наскрізно.
+
+**АЛЕ** юзер помітив: таб-caption'и резолвнулись, а **назви ПОЛІВ і ДЕТАЛЕЙ — ні** (region map показував коди `MobilePhone`/`ExpertiseLevel` і схеми `StageInRecruitmentDetailV2`). Коріння: field-labels були поза scope #5/#13 (title колонки — в entity, не передавалось), а designspec виводив `detailSchema`, не caption.
+
+**Виконано (merge 49/49, mapper 107/107, +4 goldens):**
+- **Field labels** (#5/#13 fields): `manifest.columnTitles` (з `describe-entity`) → label поля = людський title («Mobile phone»), не код; designspec показує title. Якщо жоден не резолвлено — ОДНА агрегатна `field-labels`-підказка.
+- **Detail titles** (#13): `manifest.detailSchemas[x].title` → caption деталі = людська назва («Stage history»); designspec показує `caption||schema`.
+- **Detail-only tab bug**: таб лише з деталлю (без полів) раніше **не емітився** (ensureTab лише з field-routing) → related list нема куди лягти + region показував код. Тепер деталь/фіча **гарантує свій owning tab** (+ caption резолвиться). Golden оновлено на field-scoped count.
+- SKILL: три resolution-входи (`resources`, `columnTitles`, `detailSchemas` з `title`) з поясненням, звідки їх брати (SysLocalizableValue / describe-entity).

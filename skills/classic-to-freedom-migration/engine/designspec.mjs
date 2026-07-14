@@ -83,8 +83,10 @@ export function renderDesignSpec(result, opts = {}) {
     if (!regionHolds.has(region)) { regionHolds.set(region, []); regionOrder.push(region); }
     regionHolds.get(region).push(item);
   };
-  for (const f of fields) addTo(regionOf(f.parentName), esc(strip(f.values.control)));
-  for (const d of cs.details || []) addTo(d.tab ? tabRegion(d.tab, vcd) : "⚠ unplaced", `▤ ${esc(d.detailSchema || d.entity)} (list)`);
+  // a field's display name = its resolved label (human title) when available, else the column code.
+  const dispLabel = (o) => { const l = o.values && o.values.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
+  for (const f of fields) addTo(regionOf(f.parentName), esc(dispLabel(f)));
+  for (const d of cs.details || []) addTo(d.tab ? tabRegion(d.tab, vcd) : "⚠ unplaced", `▤ ${esc(d.caption || d.detailSchema || d.entity)} (list)`);
   for (const s of cs.standardFeatures || []) addTo(s.tab ? tabRegion(s.tab, vcd) : "⚠ unplaced", `★ ${esc(s.feature)}`);
   L.push("### Region map");
   L.push("| Region | Holds |");
@@ -94,7 +96,7 @@ export function renderDesignSpec(result, opts = {}) {
 
   // ---- Fields ----
   L.push("### Fields");
-  L.push("| Classic column | Freedom component | Attribute | Container | Col · colSpan | Rule |");
+  L.push("| Field | Freedom component | Attribute | Container | Col · colSpan | Rule |");
   L.push("| --- | --- | --- | --- | --- | --- |");
   for (const f of fields) {
     const col = strip(f.values.control);
@@ -102,7 +104,7 @@ export function renderDesignSpec(result, opts = {}) {
     const comp = COMPONENT_LABEL[f.values.type] || f.values.type;
     const cell = `${lc.column ?? "?"} · ${lc.colSpan ?? "?"}`;
     const vis = f.values.visible === false ? " · hidden" : "";
-    L.push(`| ${esc(col)} | ${esc(comp)}${vis} | PDS.${esc(col)} | ${esc(f.parentName)} | ${cell} | ${ruleByEl.get(col) || "—"} |`);
+    L.push(`| ${esc(dispLabel(f))} | ${esc(comp)}${vis} | PDS.${esc(col)} | ${esc(f.parentName)} | ${cell} | ${ruleByEl.get(col) || "—"} |`);
   }
   L.push("");
 
@@ -118,7 +120,7 @@ export function renderDesignSpec(result, opts = {}) {
         d.dependency ? `by ${esc(d.dependency.attributePath)}` : "⚠ FK unresolved",
         d.columns && d.columns.length ? `cols: ${d.columns.map(esc).join(", ")}` : null,
       ].filter(Boolean).join(" · ");
-      L.push(`| ${esc(d.detailSchema || d.entity)} | ▤ Expanded list (${esc(d.entity)}) | ${esc(d.tab || "⚠ unplaced")} | ${note} |`);
+      L.push(`| ${esc(d.caption || d.detailSchema || d.entity)} | ▤ Expanded list (${esc(d.entity)}) | ${esc(d.tab || "⚠ unplaced")} | ${note} |`);
     }
     L.push("");
   }

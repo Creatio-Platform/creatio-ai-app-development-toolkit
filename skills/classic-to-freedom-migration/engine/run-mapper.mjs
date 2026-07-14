@@ -37,9 +37,10 @@ const check = (n, c) => (c ? (pass++, console.log("  ✅ " + n)) : (fail++, cons
 const field = (b) => cs.viewConfigDiff.find(o => o.name === b);
 
 console.log("assertions:");
-check("8 field inserts", cs.viewConfigDiff.length === 8);
+const suFieldOps = cs.viewConfigDiff.filter(o => o.values?.control);
+check("8 field inserts", suFieldOps.length === 8);
 check("all fields into SideAreaProfileContainer (container-role mapping)",
-  cs.viewConfigDiff.every(o => o.parentName === "SideAreaProfileContainer"));
+  suFieldOps.every(o => o.parentName === "SideAreaProfileContainer"));
 check("lookups -> crt.ComboBox", ["ParentSupportUnit", "Contact", "Calendar", "SupportWorkingDayType"]
   .every(b => field(b)?.values.type === "crt.ComboBox"));
 check("Active -> crt.Checkbox", field("Active")?.values.type === "crt.Checkbox");
@@ -482,6 +483,37 @@ check("#5/#13: without resources, captions keep the binding + are flagged unreso
   capUnresolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCaption"
   && capUnresolved.needsDecision.some(n => n.kind === "tab-caption")
   && capUnresolved.needsDecision.some(n => n.kind === "group-caption"));
+
+/* ---- #5/#13 (fields): columnTitles resolve field LABELS to human titles (not raw codes) ---- */
+const lblClient = () => L("Client", { entity: "X", diff: [
+  di({ name: "MobilePhone", parentName: "Header", propertyName: "items", bindTo: "MobilePhone" }),
+  di({ name: "ExpertiseLevel", parentName: "Header", propertyName: "items", bindTo: "ExpertiseLevel" })] });
+const lblResolved = mapToFreedom(mergeLayers([lblClient()]), { columnTitles: { MobilePhone: "Mobile phone", ExpertiseLevel: "Specialist expertise level" } });
+check("#5/#13 fields: columnTitles → field label is the human title, not the column code",
+  lblResolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.label === "Mobile phone"
+  && lblResolved.viewConfigDiff.find(o => o.name === "ExpertiseLevel")?.values.label === "Specialist expertise level");
+const lblUnresolved = mapToFreedom(mergeLayers([lblClient()]));
+check("#5/#13 fields: without columnTitles, labels keep the binding + ONE aggregate field-labels nudge",
+  lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.label === "$Resources.Strings.MobilePhone"
+  && lblUnresolved.needsDecision.filter(n => n.kind === "field-labels").length === 1);
+
+/* ---- #13 (detail title): detailSchemas[...].title becomes the detail's display caption ---- */
+const dtCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
+    Stages: { schemaName: "StageInRecruitmentDetailV2", entitySchemaName: "RecruitmentInStage", detailColumn: "Root", masterColumn: "Id" } },
+  diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+         di({ name: "Stages", parentName: "T", propertyName: "items", itemType: 2 })] })]),
+  { detailSchemas: { StageInRecruitmentDetailV2: { entity: "RecruitmentInStage", columns: ["Stage", "Date"], title: "Stage history" } } });
+check("#13 detail title: detailSchemas.title → the detail's caption is the human title",
+  dtCs.details.find(d => d.detailSchema === "StageInRecruitmentDetailV2")?.caption === "Stage history");
+
+/* ---- a tab that holds ONLY a detail (no field) must still be emitted so the related list has a home ---- */
+const dtabCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
+    D: { schemaName: "MyDetail", entitySchemaName: "Child", detailColumn: "M", masterColumn: "Id" } },
+  diff: [di({ name: "OnlyDetailTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.ODTCap" }),
+         di({ name: "D", parentName: "OnlyDetailTab", propertyName: "items", itemType: 2 })] })]),
+  { resources: { ODTCap: "Vacancies" } });
+check("detail-only tab: the owning tab is emitted as crt.Tab (the related list has a home) + caption resolves",
+  dtabCs.viewConfigDiff.some(o => o.name === "OnlyDetailTab" && o.values?.type === "crt.Tab" && o.values.caption === "Vacancies"));
 
 /* ---- #11(ii)/B2: a supplied detail schema resolves the related-list columns + kills detail-unresolved ---- */
 const detCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {

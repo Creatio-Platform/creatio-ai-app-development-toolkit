@@ -125,6 +125,11 @@ export function mapToFreedom(eff, opts = {}) {
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
   // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
   const detailSchemas = opts.detailSchemas || {};
+  // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from describe-entity, so a field's
+  // LABEL is the human title, not the raw column code. Falls back to the page resources, then the code.
+  const columnTitles = opts.columnTitles || {};
+  const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? null;
+  let fieldsWithTitle = 0;
   const needsDecision = [];
   const viewConfigDiff = [];
   const attributes = {};
@@ -310,8 +315,10 @@ export function mapToFreedom(eff, opts = {}) {
       reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
     if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
       reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
+    const lbl = labelFor(col);
+    if (lbl != null) fieldsWithTitle++;
     const values = {
-      type: c.type, control: "$" + col, label: "$Resources.Strings." + col,
+      type: c.type, control: "$" + col, label: lbl != null ? lbl : "$Resources.Strings." + col,
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
@@ -338,6 +345,10 @@ export function mapToFreedom(eff, opts = {}) {
   // Freedom left-area representation (stacked containers vs one profile card) is confirmed, not assumed.
   if (splitIslands) needsDecision.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
     reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — each is rebuilt as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Confirm the Freedom left area supports stacked containers; if it must be one profile card, merge them.` });
+  // #5/#13 (fields) — if NO field label resolved to a real title, the spec shows column CODES. Nudge the
+  // agent to pass describe-entity column titles so labels read like the classic page, not raw codes.
+  if (payloadFields.length && fieldsWithTitle === 0) needsDecision.push({ kind: "field-labels", item: "(all fields)",
+    reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from describe-entity) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
 
   // ---- rules ----
   const pageBusinessRules = [], entityBusinessRules = [];
@@ -391,11 +402,15 @@ export function mapToFreedom(eff, opts = {}) {
     const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
     const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? profileRegion(own) : null);
     const cur = bySig.get(detailSig(d));
-    if (!cur) bySig.set(detailSig(d), { d, tab });
-    else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; }   // prefer a resolved placement
+    if (!cur) bySig.set(detailSig(d), { d, tab, own });
+    else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; cur.own = own; } // prefer a resolved placement
     else if (!cur.d.caption && d.caption) cur.d.caption = d.caption;         // else keep first, backfill caption
   }
-  for (const { d, tab } of bySig.values()) {
+  for (const { d, tab, own } of bySig.values()) {
+    // Ensure the OWNING tab is emitted as a container so the related list / feature has a home AND its
+    // caption resolves — a tab holding ONLY details would otherwise never be built (ensureTab is
+    // otherwise reached only from field routing).
+    if (own && own.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned);
     // #11(ii)/B2 — the detail's OWN schema (when passed in manifest.detailSchemas) gives its real child
     // entity + list columns, resolving even an auto-named SchemaNDetail.
     const dinfo = detailSchemas[d.schemaName];
@@ -426,11 +441,15 @@ export function mapToFreedom(eff, opts = {}) {
     // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
     // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
     const resolvedDcap = d.caption ? resolveText(d.caption) : null;
-    if (d.caption && /^Resources\.Strings\./.test(d.caption) && resolvedDcap == null) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
-      reason: `detail caption is the unresolved resource key '${d.caption}' — pass the schema's localizable strings as manifest.resources, or confirm the real label; do NOT invent a caption` });
+    const plainDcap = d.caption && !/^Resources\.Strings\./.test(d.caption) ? d.caption : null;
+    // detail TITLE: resolved page-caption resource → the detail's own title (manifest.detailSchemas.title)
+    // → a plain caption → null. Flag only when it stays an unresolved resource key.
+    const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
+    if (!detailTitle && d.caption && /^Resources\.Strings\./.test(d.caption)) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
+      reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
     details.push({
       composite: "Expanded list", entity: dentity, detailSchema: d.schemaName,
-      caption: resolvedDcap ?? d.caption ?? null, tab, order: d.order ?? null, dataSourceScope: "viewElement",
+      caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
       columns: dinfo?.columns?.length ? dinfo.columns : null, // #11(ii) — the related-list columns, when the detail schema was supplied
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
