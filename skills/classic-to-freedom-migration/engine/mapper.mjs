@@ -3,7 +3,12 @@
 // + needsDecision[] for the judgment 20%. See .migration/solution-design.md §3.3.
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
-const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header"]); // classic → SideAreaProfileContainer
+// Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
+// BaseModulePageV2 LEFT area that holds the profile islands (e.g. ContactContainer): a field nested
+// under it (field → ContactContainer → LeftModulesContainer) must resolve to the profile, NOT collapse
+// into a fallback tab. Adding it here is what routes those island fields to the side profile once the
+// base template is seeded (#18). Header stays separate (a WIDE header block → HeaderContainer, below).
+const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header", "LeftModulesContainer"]); // classic → SideAreaProfileContainer
 const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its parent chain is unresolvable
 
 // F3 — resolve which Freedom region a field belongs to by CLIMBING the classic item tree from the
@@ -20,12 +25,15 @@ function resolveOwner(startParent, index) {
   while (parent && hops++ < 32) {
     if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", via: parent, groups: groups.reverse() };
     const p = index.get(parent);
-    if (!p) return { kind: "unresolved", parent };
+    // `why` distinguishes the two unresolved causes so the caller's flag is accurate (#18): the ancestor
+    // name is not defined by ANY layer/template (missing seed) vs the chain is fully defined but never
+    // reaches a profile/tab anchor (climbed to the page root — a wrong/incomplete seed).
+    if (!p) return { kind: "unresolved", parent, why: "undefined-parent" };
     if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, groups: groups.reverse() };
     groups.push(p); // intermediate container between the field and its tab/profile
     parent = p.parent;
   }
-  return { kind: "unresolved", parent: startParent };
+  return { kind: "unresolved", parent: startParent, why: "no-anchor" };
 }
 const tabGridName = (tab) => `${tab}Grid`;
 
@@ -199,11 +207,17 @@ export function mapToFreedom(eff, opts = {}) {
       reason: `classic Header is a WIDE ${headerCols.size}-column block, not the default left profile island — mapped to a full-width header grid; confirm the target Freedom page uses a header region (no left profile) and the column layout` });
   }
   const profileRegion = (own) => (own.via === "Header" && headerIsWide) ? "HeaderContainer" : "SideAreaProfileContainer";
+  const profileIslands = new Set(); // classic left-area island wrappers flattened into the side profile (#18/#9b)
   for (const { f, own } of resolved) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
     let parent;
-    if (own.kind === "profile") parent = profileRegion(own);
-    else if (own.kind === "tab") {
+    if (own.kind === "profile") {
+      parent = profileRegion(own);
+      // the island/group wrappers between the field and the profile anchor (e.g. ContactContainer under
+      // LeftModulesContainer) are ACCOUNTED FOR — their fields are migrated into the profile — so they are
+      // not later mis-flagged as "produced no Freedom element". Their distinct-island rebuild is #9b.
+      for (const g of own.groups) { accountedFor.add(g.name); if (parent === "SideAreaProfileContainer") profileIslands.add(g.name); }
+    } else if (own.kind === "tab") {
       parent = ensureTab(own.tab, own.tabTemplateOwned);
       // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
       // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
@@ -211,8 +225,11 @@ export function mapToFreedom(eff, opts = {}) {
       else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
     } else {
       parent = FLAT_FALLBACK; // parent chain unresolvable
+      const why = own.why === "undefined-parent"
+        ? `classic container '${own.parent}' is not defined by any layer or template — seed the base template (F2) so it resolves`
+        : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
-        reason: `classic container '${own.parent || f.parent}' is not defined by any layer or template — placed in ${parent}; seed the base template (F2) or confirm target tab/group` });
+        reason: `${why} — placed in ${parent} for now` });
     }
     rowByContainer[parent] = (rowByContainer[parent] || 0) + 1;
     const col = f.bindTo || f.name || "Field";
@@ -263,6 +280,11 @@ export function mapToFreedom(eff, opts = {}) {
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
   }
+  // #18/#9b: surface the flattening of classic left-area islands into the single-column side profile so
+  // it is a KNOWN decision, not a silent structural loss (the user literally sees "2 islands" on the
+  // classic page). Only for >1 island — a single profile group is the normal case and must not nag.
+  if (profileIslands.size > 1) needsDecision.push({ kind: "profile-island", item: [...profileIslands].join(", "),
+    reason: `classic left profile area groups fields into ${profileIslands.size} island containers (${[...profileIslands].join(", ")}) — their fields are placed in the Freedom side profile as ONE flat stack; if the distinct visual islands must be preserved, split them manually (the Freedom side profile is a single-column region)` });
 
   // ---- rules ----
   const pageBusinessRules = [], entityBusinessRules = [];
@@ -304,19 +326,41 @@ export function mapToFreedom(eff, opts = {}) {
   // ---- details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list) ----
   const details = [];              // genuine custom details
   const standardFeatures = [];     // Approvals/Attachments/Activities/Emails → their Freedom feature
+  // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
+  // across layers → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
+  // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
+  // a tab (the real placement) and dropping the phantom.
+  const detailSig = (d) => [d.schemaName, d.entitySchemaName, d.detailColumn, d.masterColumn].join("|");
+  const bySig = new Map();
   for (const d of payloadDetails) {
     accountedFor.add(d.key); if (d.schemaName) accountedFor.add(d.schemaName);
     // place the detail in its owning TAB (ancestry-resolved), preserving order.
     const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
     const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? profileRegion(own) : null);
-    const feat = matchFeature(d.schemaName);
+    const cur = bySig.get(detailSig(d));
+    if (!cur) bySig.set(detailSig(d), { d, tab });
+    else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; }   // prefer a resolved placement
+    else if (!cur.d.caption && d.caption) cur.d.caption = d.caption;         // else keep first, backfill caption
+  }
+  for (const { d, tab } of bySig.values()) {
+    // A standard feature is recognised by the detail SCHEMA name (matchFeature), OR — when the schema
+    // carries an auto-generated placeholder name (SchemaNDetail) that hides it — by its file-storage
+    // ENTITY (`*File`, which always backs the Attachments detail). Entity-inferred matches are flagged
+    // as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
+    let feat = matchFeature(d.schemaName), featByEntity = false;
+    if (!feat && /File$/.test(d.entitySchemaName || "")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: d.entitySchemaName, tab, templateProvided: !!feat.templateProvided });
-      needsDecision.push({ kind: "standard-feature", item: d.schemaName,
-        reason: `classic '${d.schemaName}' is the ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}` });
+      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: d.entitySchemaName, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity });
+      needsDecision.push({ kind: "standard-feature", item: d.schemaName || d.entitySchemaName,
+        reason: `${featByEntity ? `detail over the file-storage entity '${d.entitySchemaName}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}` });
       continue;
     }
+    // #11: an auto-generated detail schema name (SchemaNDetail) cannot be resolved from the master — its
+    // real caption/columns/actions live in the detail's OWN schema. Surface it LOUDLY (do not ship a
+    // related list under a placeholder name) so the agent fetches the detail schema (B2 recursion).
+    if (/^Schema\d+Detail$/.test(d.schemaName || "")) needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
+      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${d.entitySchemaName ? ` (child entity '${d.entitySchemaName}')` : ""} — fetch its schema (get-classic-schema) to resolve the real caption, columns, and allowed actions before building; do NOT ship a related list under a placeholder name` });
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
     // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's

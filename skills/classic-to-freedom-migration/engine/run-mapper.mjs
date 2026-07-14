@@ -352,5 +352,70 @@ check("#14: structural GridContainer carries a 24-column grid config",
 check("#15: a resource-key detail caption → detail-caption decision (resolve, don't invent)",
   featCs.needsDecision.some(n => n.kind === "detail-caption" && n.item === "SomeRequestDetail"));
 
+/* ---- #18: fields nested under LeftModulesContainer (the base LEFT profile area) route to the side
+   profile, NOT a fallback tab — the real cause of "profile fields in the wrong place" once seeded ---- */
+const lmSeed = L("Tpl", { diff: [di({ name: "LeftModulesContainer", itemType: 15 }), di({ name: "Tabs", itemType: 15 })] });
+const lmClient = L("Client", { entity: "X", diff: [
+  di({ name: "ContactContainer", parentName: "LeftModulesContainer", itemType: 0 }),         // client "island" wrapper
+  di({ name: "InternalRequestContainer", parentName: "LeftModulesContainer", itemType: 0 }), // second island
+  di({ name: "Phone", parentName: "ContactContainer", propertyName: "items", bindTo: "Phone" }),
+  di({ name: "Email", parentName: "ContactContainer", propertyName: "items", bindTo: "Email" }),
+  di({ name: "ReqNo", parentName: "InternalRequestContainer", propertyName: "items", bindTo: "ReqNo" })] });
+const lmcs = mapToFreedom(mergeLayers([lmClient], { seedLayers: [lmSeed] }));
+check("#18: island fields under LeftModulesContainer route to SideAreaProfileContainer (not the fallback tab)",
+  ["Phone", "Email", "ReqNo"].every(n => lmcs.viewConfigDiff.find(o => o.name === n)?.parentName === "SideAreaProfileContainer"));
+check("#18: no bogus container decision + nothing left in the GeneralInfoTabContainer fallback",
+  !lmcs.needsDecision.some(n => n.kind === "container")
+  && !lmcs.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
+check("#18: the island wrappers are NOT mis-flagged as unmapped-component (their fields were migrated)",
+  !lmcs.needsDecision.some(n => n.kind === "unmapped-component" && /Container$/.test(n.item)));
+check("#18/#9b: multi-island flattening surfaced as ONE profile-island decision naming both islands",
+  lmcs.needsDecision.some(n => n.kind === "profile-island"
+    && /ContactContainer/.test(n.item) && /InternalRequestContainer/.test(n.item)));
+
+/* ---- #18: an unresolved chain that never reaches an anchor is flagged with the ACCURATE reason
+   (the container IS defined, but climbs to root) — not the misleading "not defined by any layer" ---- */
+const naClient = L("Client", { entity: "X", diff: [
+  di({ name: "OrphanBox", itemType: 0 }),                                                    // defined, but no chain to an anchor
+  di({ name: "Lost", parentName: "OrphanBox", propertyName: "items", bindTo: "Lost" })] });
+const nacs = mapToFreedom(mergeLayers([naClient]));
+check("#18: no-anchor chain flagged with the accurate 'never reaches a profile/tab anchor' reason",
+  nacs.needsDecision.some(n => n.kind === "container" && /never reaches a profile\/tab anchor/.test(n.reason)));
+
+/* ---- #11: dedup — the same detail under two placements collapses to ONE (resolved tab wins) ---- */
+const dupClient = L("Client", { entity: "X", details: {
+    D1: { schemaName: "ReqDetail", entitySchemaName: "Req", detailColumn: "M", masterColumn: "Id" },  // placed under a tab
+    D2: { schemaName: "ReqDetail", entitySchemaName: "Req", detailColumn: "M", masterColumn: "Id" } }, // duplicate, no parent
+  diff: [
+    di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
+    di({ name: "D1", parentName: "T", propertyName: "items", itemType: 2 }),
+    di({ name: "D2", itemType: 2 })] });                                                      // D2 has no resolvable parent
+const dupcs = mapToFreedom(mergeLayers([dupClient]));
+check("#11: duplicate detail (same schema+entity+FK) emitted ONCE, keeping the resolved tab",
+  dupcs.details.filter(d => d.detailSchema === "ReqDetail").length === 1
+  && dupcs.details.find(d => d.detailSchema === "ReqDetail")?.tab === "T");
+
+/* ---- #11: a detail over a *File entity is recognised as Attachments even when the schema name is an
+   auto-generated placeholder (SchemaNDetail) that hides it — flagged as inferred ---- */
+const fileClient = L("Client", { entity: "X", details: {
+    Files: { schemaName: "Schema1Detail", entitySchemaName: "ApplicantFile", detailColumn: "Applicant", masterColumn: "Id" } },
+  diff: [di({ name: "T2", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.T2" }),
+         di({ name: "Files", parentName: "T2", propertyName: "items", itemType: 2 })] });
+const filecs = mapToFreedom(mergeLayers([fileClient]));
+check("#11: *File-entity detail → Attachments feature (templateProvided, inferred), NOT a generic custom detail",
+  filecs.standardFeatures.some(s => s.feature === "Attachments" && s.templateProvided && s.inferredFromEntity)
+  && !filecs.details.some(d => d.entity === "ApplicantFile"));
+check("#11: entity-inferred Attachments carries a 'confirm / inferred' note",
+  filecs.needsDecision.some(n => n.kind === "standard-feature" && /inferred from the entity/.test(n.reason)));
+
+/* ---- #11: an auto-generated detail name over a NON-file entity is surfaced LOUD (fetch its schema) ---- */
+const autoClient = L("Client", { entity: "X", details: {
+    Auto: { schemaName: "Schema2Detail", entitySchemaName: "SomeChild", detailColumn: "P", masterColumn: "Id" } },
+  diff: [di({ name: "T3", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.T3" }),
+         di({ name: "Auto", parentName: "T3", propertyName: "items", itemType: 2 })] });
+const autocs = mapToFreedom(mergeLayers([autoClient]));
+check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unresolved (fetch its schema)",
+  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-schema/.test(n.reason)));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
