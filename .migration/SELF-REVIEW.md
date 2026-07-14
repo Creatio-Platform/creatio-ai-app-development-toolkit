@@ -215,3 +215,11 @@
 **Двигун:** `designspec.mjs` переписаний на Layout/Logic/Confirm; `entityColumns` тепер приймає об'єкт `{type,length,ref,title}` (Type-колонка); `FEATURE_CATALOG.uiShape` (list vs component); detail-only tab тепер емітиться. `analysis-summary.md` + `page-design-spec.md` + SKILL синхронізовано.
 
 **Межа (чесно):** злиті комірки Region — лише в HTML-макеті для перегляду; у реальному плані (plain markdown) Region повторюється. Реальні `Type`-деталі (`Text(250)`, `Lookup(Ref)`) вимагають багатшого `entityColumns` з `describe-entity` — degrade-нейтрально (без нього показує базовий тип).
+
+## Прогалина: сторінки редагування деталей (child edit/mini pages)
+
+Юзер помітив: ми мігруємо master-сторінку + деталі як related list, але **edit/mini-сторінку дочірньої сутності** (що відкривається на add/edit рядка) рушій НЕ мігрує (обробляє одну сторінку, без рекурсії). Скіл згадував mini/edit-pages лише прозою.
+
+**Зроблено (флаг, merge 49/49, mapper 114/114):** mapper тепер на КОЖНУ кастомну деталь кидає `detail-editpage` — «related list відкриває форму `<child entity>` на add/edit → окрема міграція: підтвердь наявну Freedom-форму або мігруй follow-on». Стандартні фічі (Approvals/Attachments/Activities/Emails) флаг НЕ отримують (нативні форми). SKILL крок 7 + page-design-spec оновлено.
+
+**Лишилось (більше):** повна **рекурсивна** міграція дочірніх сторінок (single-section → дерево сторінок) — не зроблено; поки лише гучний флаг.

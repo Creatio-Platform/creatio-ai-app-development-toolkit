@@ -92,5 +92,6 @@ HTML or a rendered artifact.
 ### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.
 - **[detail-editability]** ContactCommunication — view-only vs add/edit/delete not on the master; resolve from the detail schema.
+- **[detail-editpage]** ContactCommunication — the related list opens the ContactCommunication form on add/edit; confirm a Freedom form (and mini page, if used) exists for it, or migrate it as a follow-on page.
 - **risk/gap:** created Freedom pages can't yet be re-opened in the visual designer — edits go via the agent.
 ```

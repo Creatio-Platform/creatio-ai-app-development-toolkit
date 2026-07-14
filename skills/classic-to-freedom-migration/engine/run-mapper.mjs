@@ -468,6 +468,8 @@ check("design-spec: component feature (Approvals) shown by name; list feature (A
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
 check("design-spec: Logic table lists the handler (onContactChanged → Contact changes)",
   /### Logic/.test(spec) && /onContactChanged \| Contact changes/.test(spec));
+check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
+  !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
 
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
 const skelSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
@@ -540,6 +542,8 @@ const detCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
 check("#11(ii): detail schema supplied → related-list columns resolved on the detail + no detail-unresolved flag",
   detCs.details.find(d => d.detailSchema === "Schema7Detail")?.columns?.join(",") === "Number,Status,Job"
   && !detCs.needsDecision.some(n => n.kind === "detail-unresolved"));
+check("detail-editpage: a custom related list flags the child entity's edit/mini page as a follow-on migration",
+  detCs.needsDecision.some(n => n.kind === "detail-editpage" && n.item === "InternalRequest"));
 
 /* ---- #8c: process-launch detected in a real body → RunProcess card action + process-launch decision ---- */
 const plRun = runMigration({ entity: "X", layers: [{ pkg: "P", body:

@@ -469,6 +469,12 @@ export function mapToFreedom(eff, opts = {}) {
     // OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
     needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
       reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
+    // a related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
+    // page, if the classic detail used one) is a SEPARATE migration, not covered by migrating this master
+    // page. Surface it so it isn't silently skipped: a related list without a Freedom form for its entity
+    // cannot add/edit records.
+    needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
+      reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
     // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
     // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
     const resolvedDcap = d.caption ? resolveText(d.caption) : null;
