@@ -234,3 +234,7 @@
 Вивід — новий блок `### Section (list page)` у design-spec (self-contained, ⚠ inline). SKILL: `section` у входах маніфесту + оновлена нота #8b (тепер engine-підтримка, не лише проза).
 
 **Межа:** list-колонки з profile-data не читаються (потрібні дані стенду) — флаг; mini-page/section-actions самі НЕ мігруються — це follow-on (як detail-editpage).
+
+## Backlog — окремі майбутні задачі
+
+- **[clio-fork] `list-environments` шум (~30k/прогін).** Виклик без аргументів дампить УСІ зареєстровані середовища з повним конфігом (одноразово ~30k токенів, висить у контексті). Fix = **варіант A**: додати `list-environments` **необов'язковий** `search-pattern` (match за name/URL-хостом) → повертає лише збіг. Additive/opt-in, backward-compatible; **НЕ варіант B** (обрізати вивід для всіх — зламає інших викликачів). Це **базовий** clio-тул → окрема гілка у форку, **не мішати** в `feature/classic-to-freedom-schema-tools` (окремий scope/PR). Пріоритет: низький (разовий хіт; братись лише якщо на верифікації реально муляє). Див. [[classic-freedom-discovery-token-burn]].
