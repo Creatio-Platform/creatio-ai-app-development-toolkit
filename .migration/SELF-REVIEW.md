@@ -156,3 +156,13 @@
 - Кожен + golden. **Golden: merge 49/49, mapper 86/86** (77→86, +9). Регресій нема.
 
 **Лишається:** ProcessButton остаточно закриється, коли #19 змусить брати реальний base (fork re-fetch, наскрізний прогін); #9b (2 острови окремо), #16 (Approvals нативний), #8 (process-launch/section-actions), #2 (section grid), #5/#13 (caption-резолв), F8.
+
+## Ф4 — третій прогін + перехід з прози на ДЕТЕРМІНОВАНИЙ вивід
+
+Третій прогін (на `e9a45e8`, #10b активний): агент **додав** секцію «Design spec», але написав її **прозою** («Contact · Mobile phone (ro)…», «12/24 each») — без таблиці по кожному полю. Урок остаточний: **скільки не пиши інструкцій — агент переказує spec, а не емітить структуру.** Прозова інструкція тут принципово не тримає.
+
+**Виконано (перехід на валідації/генерацію — merge 49/49, mapper 94/94):**
+- **#10c design-spec ГЕНЕРУЄТЬСЯ рушієм.** Новий `engine/designspec.mjs` (`renderDesignSpec`) рендерить spec з ChangeSet: region map + **таблиця по кожному полю** (Classic col · компонент · PDS-атрибут · контейнер · col·colSpan · rule) + details/standard-features + card actions + rules + ⚠ decisions. `migrate.mjs` віддає `designSpec` у JSON і має режим `--spec` (чистий Markdown). SKILL (рядок 12, кроки 4.2/5/6, output-rules) + `page-design-spec.md`: **не писати руками — запустити `migrate.mjs --spec` і показати дослівно.** Агент не може переказати таблицю, яку не писав.
+- **#19 seed-quality — МАШИННА валідація.** `mergeLayers` рахує `seedQuality.looksSkeletal` (seed є, але 0 методів / нема `getActions` = ручний скелет) і кидає `skeletal-seed` **warning** → існуючий HARD GATE (warnings порожні) блокує білд, доки не підтягнуть реальне тіло base через `get-classic-schema`. Це enforcement, не проза.
+
+**Принцип на майбутнє:** де агент стабільно «недотягує» за інструкцією — переносити з прози в детермінований вивід рушія (генерувати артефакт) або в машинну перевірку (warning у gate), а не додавати ще тексту. Див. [[skill-dominant-vs-buried-instruction]].

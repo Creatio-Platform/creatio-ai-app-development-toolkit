@@ -20,6 +20,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
+import { renderDesignSpec } from "./designspec.mjs";
 
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
@@ -36,7 +37,7 @@ export function runMigration(manifest, opts = {}) {
   const parseErrors = [...layers, ...seedLayers].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
-  return {
+  const out = {
     entity: manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity,
     parseErrors, // non-empty ⇒ a layer body failed to parse: FIX before trusting the ChangeSet
     // effective Classic page (the merged 80%) — headline counts + the diagnostics that gate correctness
@@ -45,12 +46,17 @@ export function runMigration(manifest, opts = {}) {
       rules: eff.rules.length, removed: eff.removed.length,
       warnings: eff.warnings,                 // op hit a missing item ⇒ layer order (F1) / seed (F2) wrong
       unresolvedParents: eff.unresolvedParents, // non-empty ⇒ base template not fully seeded (F2)
+      seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton (#19)
       features: eff.features,                 // feature toggles gating runtime visibility (union, not one state)
       referencedModules: eff.referencedModules, // UI-rendering deps outside the page-schema migration unit
     },
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
   };
+  // The design spec is the "what goes where" the user approves at the gate. It is GENERATED here (not
+  // hand-written by the agent, which only ever produced a loose paraphrase) and presented verbatim.
+  out.designSpec = renderDesignSpec(out, { template: manifest.template, targetPackage: manifest.targetPackage });
+  return out;
 }
 
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
@@ -58,7 +64,9 @@ export function runMigration(manifest, opts = {}) {
 // (a plain `node` script would otherwise dump a raw stack to the agent) — never a half-written stdout.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
-  const arg = process.argv[2];
+  const argv = process.argv.slice(2);
+  const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown (for verbatim presentation)
+  const arg = argv.find((a) => a !== "--spec");
   const fromFile = !!arg && arg !== "-";
   let raw;
   try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
@@ -72,5 +80,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a layer `file` that does not exist
-  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  // `--spec` ⇒ pure design-spec Markdown (present verbatim / write to design-spec.md); default ⇒ full JSON.
+  process.stdout.write(specMode ? result.designSpec + "\n" : JSON.stringify(result, null, 2) + "\n");
 }

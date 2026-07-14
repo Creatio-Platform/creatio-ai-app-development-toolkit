@@ -417,5 +417,36 @@ const autocs = mapToFreedom(mergeLayers([autoClient]));
 check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unresolved (fetch its schema)",
   autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-schema/.test(n.reason)));
 
+/* ---- #10c: the design spec is GENERATED deterministically (table, not agent prose) ---- */
+// The recurring failure: the agent paraphrases the design spec into prose (no per-field table, wrong
+// feature labels). The engine emits the table itself; the skill presents it verbatim.
+check("design-spec: runMigration returns a Markdown design spec string",
+  typeof cli.designSpec === "string" && cli.designSpec.startsWith("## Design spec"));
+check("design-spec: has a per-field table with Container + colSpan columns (not prose)",
+  /### Fields/.test(cli.designSpec) && /Container \| Col · colSpan/.test(cli.designSpec));
+check("design-spec: one field row (PDS attribute) per effective field — nothing dropped/invented",
+  cli.designSpec.split("\n").filter(l => /\| PDS\./.test(l)).length === cli.effective.fields);
+check("design-spec: region map + details + decisions sections present",
+  /### Region map/.test(cli.designSpec) && /### Details & standard features/.test(cli.designSpec) && /### Decisions/.test(cli.designSpec));
+const specRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--spec"], {
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
+    { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
+    { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
+check("migrate.mjs --spec: prints pure design-spec Markdown (## Design spec…), no JSON envelope",
+  specRun.status === 0 && /^## Design spec/.test((specRun.stdout || "").trim()) && !/"changeSet"/.test(specRun.stdout || ""));
+
+/* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
+const skelSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedLayers: [L("Base", { diff: [di({ name: "Header", itemType: 15 })] })] });        // seed = bare containers, no methods
+check("#19: skeletal seed (0 methods) → seedQuality.looksSkeletal + a 'skeletal-seed' warning (gate blocks)",
+  skelSeed.seedQuality.looksSkeletal === true && skelSeed.warnings.some(w => w.name === "skeletal-seed"));
+const realSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedLayers: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "getActions"] })] }); // seed with real methods
+check("#19: real seed (methods incl. getActions) → not skeletal, no skeletal-seed warning",
+  realSeed.seedQuality.looksSkeletal === false && realSeed.seedQuality.hasGetActions === true
+  && !realSeed.warnings.some(w => w.name === "skeletal-seed"));
+check("#19: no seed at all → seedQuality.seeded=false, not flagged skeletal",
+  mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })]).seedQuality.seeded === false);
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

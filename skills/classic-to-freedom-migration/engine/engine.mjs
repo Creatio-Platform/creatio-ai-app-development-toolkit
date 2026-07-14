@@ -386,6 +386,25 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
   const referencedModules = [...new Set(layers.flatMap(l => l.refModules || []))].sort();
 
+  // #19 — seed QUALITY validation. A real fetched base-template body (BaseModulePageV2 → BasePageV2 →
+  // BaseEntityPage) always defines methods — hundreds of them, incl. `getActions` (which surfaces the
+  // base ProcessButton / Run process). A hand-authored SKELETON seed (the recurring failure: the agent
+  // types a few `{itemType:15}` container stubs to clear the parent gate) contributes ZERO methods. So
+  // "seed present but no seed method" reliably means the seed is a skeleton, not the real template — and
+  // building on it silently drops base actions + the true nesting. Surface it as a WARNING so the SKILL's
+  // hard gate (warnings must be empty) blocks the build until the real base layers are fetched.
+  const seedMethodNames = new Set(seedLayers.flatMap(l => l.methods || []));
+  const looksSkeletal = seedLayers.length > 0 && seedMethodNames.size === 0;
+  const seedQuality = {
+    seeded: seedLayers.length > 0, seedLayers: seedLayers.length,
+    seedMethods: seedMethodNames.size, hasGetActions: seedMethodNames.has("getActions"),
+    looksSkeletal,
+  };
+  if (looksSkeletal) warnings.push({
+    op: "seed", name: "skeletal-seed", layer: "(seed)",
+    message: `SEED LOOKS SKELETAL (#19): the ${seedLayers.length} seed layer(s) contribute 0 methods and no getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines methods incl. getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton, not the fetched template body. Re-fetch the parent-template layers via get-classic-schema and pass their real bodies as \`seed\` — do NOT build on a skeleton.`,
+  });
+
   return {
     entity,
     // Full alive layout tree (containers, groups, tabs, fields) with parent links — the input F3's
@@ -410,6 +429,7 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
     components: [...components.values()].map(c => ({ ...c, fromTemplate: !c.schemaTouched })),
     warnings,
     unresolvedParents,
+    seedQuality, // #19 — whether the seed is a real fetched template body vs a hand-authored skeleton
     features, // feature toggles gating runtime visibility (the rendered page shows one feature-state)
     cardActionHints, // custom card actions found in getActions bodies (imperative — surfaced for review)
     referencedModules, // custom UI-rendering modules pulled via define() deps — outside the migration unit

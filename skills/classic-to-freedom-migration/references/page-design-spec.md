@@ -11,11 +11,13 @@ HTML or a rendered artifact.
 
 ## What makes a good spec
 
-- **Populate it from the engine ChangeSet, not by hand.** When `engine/migrate.mjs` was run, its output
-  IS the spec's data: every `viewConfigDiff` insert → a field row (its `parentName` is the container/tab,
-  its `layoutConfig` is the placement + colSpan); every `details` / `standardFeatures` entry → a
-  related-list / native-feature row; every `cardActions` entry → an action row; every `needsDecision`
-  item is resolved in the row it affects. If the spec omits an element the ChangeSet emitted, it is wrong.
+- **GENERATE it — do not hand-write it.** When `engine/migrate.mjs` was run, `node engine/migrate.mjs
+  <manifest> --spec` prints this whole spec as Markdown straight from the ChangeSet (region map,
+  per-field table, details/standard-features, card actions, business rules, ⚠ decisions). Present that
+  output verbatim; your only edits RESOLVE the ⚠ decisions. Hand-writing it is the recurring failure —
+  loose prose, no per-field placement, features mislabelled (Activities→"Timeline", Approvals→"Expanded
+  list") that the engine had already resolved. The sections below are the FORMAT the generator emits and
+  the fallback template for when the engine was not run (no Node / hand-merge path).
 - **Region by region, not field-dumped.** Walk the Classic page top to bottom — header, side/profile
   area, tabs, field groups, details, files/notes/feed, actions — and give each a Freedom home.
 - **Every Classic field gets one row** with its Freedom component, data-source attribute, and grid
