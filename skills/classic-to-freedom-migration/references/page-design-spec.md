@@ -30,12 +30,18 @@ HTML or a rendered artifact.
 ## Spec template
 
 ```
-## Design spec — <Classic page> → Freedom <form name> (generated)
+## Design spec — <entity> (generated)
 
 - Entity: <entity> · Template: <chosen Freedom template> · Package: <target package>
-- Size: <P> pages · <F> fields · <D> details/features · <R> rules · <A> actions
+- Size: <F> fields · <D> details/features · <R> rules · <A> actions
 
-### Layout
+### List page
+- **Add record:** via mini page `<MiniPage>` / full edit page
+- **List columns:** <col> · <col> · …
+- **Section actions:** `<action>` · … — migrate as Freedom list-page actions
+
+### <entity> form page
+#### Layout
 | Region | Element | Type | Source | Rule | Additional |
 | --- | --- | --- | --- | --- | --- |
 | Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Date / Number / Boolean | PDS.<col> | required / read-only / visible-when … | tip: … |
@@ -45,27 +51,35 @@ HTML or a rendered artifact.
 | Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
 | Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
-### Logic
+#### Logic
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
 | <handler method> | <trigger> | imperative (<category>) — review | request handler / converter / virtual attr |
-| Run process | Run process action | launch <process> | ⚠ run-process handler — which process |
+| Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
 
-### ⚠ Confirm before I build
+#### ⚠ Confirm before I build
 - **[<kind>]** <item> — <what to confirm / resolve>
 - **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
+Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → Confirm), then each child page under **Child page mappings**.
+
 ## Worked example (single-section, abbreviated)
 
 ```
-## Design spec — Applicant1Page → Freedom "Applicant" (generated)
+## Design spec — Applicant (generated)
 
 - Entity: Applicant · Template: PageWithTabsFreedomTemplate · Package: UsrApplicantFreedom
-- Size: 1 page · 19 fields · 8 details/features · 6 rules · 2 actions
+- Size: 19 fields · 8 details/features · 6 rules · 2 actions
 
-### Layout
+### List page
+- **Add record:** via mini page `ApplicantMiniPage` — migrate as a Freedom mini page / quick-add
+- **List columns:** ⚠ not in the schema (profile data) — read the section's saved columns
+- **Section actions:** `runBulkAssign` — migrate as Freedom list-page actions
+
+### Applicant form page
+#### Layout
 | Region | Element | Type | Source | Rule | Additional |
 | --- | --- | --- | --- | --- | --- |
 | Side profile › Contact | Contact | Lookup (Contact) | PDS.Contact | — | — |
@@ -80,16 +94,16 @@ HTML or a rendered artifact.
 | Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
 | Tab · History | Activities | Related list | Activity · native | — | — |
 | Tab · Approvals | Visas | Approvals | native — confirm component on-stand | — | — |
-| Card actions | Run process | Action | — | — | ⚠ which process — confirm |
+| Card actions | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
-### Logic
+#### Logic
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 | onContactChanged | Contact changes | imperative — fill Mobile phone / Email / Skype | request handler + virtual attrs |
 | onInternalRequestChanged | Request changes | imperative — fill Department / Staff unit | request handler + virtual attrs |
 
-### ⚠ Confirm before I build
+#### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.
 - **[detail-editability]** ContactCommunication — view-only vs add/edit/delete not on the master; resolve from the detail schema.
 - **[detail-editpage]** ContactCommunication — the related list opens the ContactCommunication form on add/edit; confirm a Freedom form (and mini page, if used) exists for it, or migrate it as a follow-on page.

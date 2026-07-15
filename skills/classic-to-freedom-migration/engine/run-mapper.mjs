@@ -441,14 +441,14 @@ check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unr
 // feature labels). The engine emits the table itself; the skill presents it verbatim.
 check("design-spec: runMigration returns a Markdown design spec string",
   typeof cli.designSpec === "string" && cli.designSpec.startsWith("## Design spec"));
-check("design-spec: ONE Layout table (Region · Element · Type · Source · Rule · Additional)",
-  /### Layout/.test(cli.designSpec) && /Region \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
+check("design-spec: ONE Layout table (Region · Element · Type · Source · Rule · Additional) under the form-page heading",
+  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec) && /Region \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
 check("design-spec: one Layout row (PDS attribute) per effective field — nothing dropped/invented",
   cli.designSpec.split("\n").filter(l => /\| PDS\./.test(l)).length === cli.effective.fields);
 check("design-spec: legacy split tables gone (no Region map / Fields / Details & standard features)",
   !/### Region map/.test(cli.designSpec) && !/### Fields/.test(cli.designSpec) && !/### Details & standard features/.test(cli.designSpec));
 check("design-spec: Confirm section present (⚠ worklist)",
-  /### ⚠ Confirm before I build/.test(cli.designSpec));
+  /#### ⚠ Confirm before I build/.test(cli.designSpec));
 const specRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--spec"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
@@ -468,7 +468,7 @@ check("design-spec: text Type shows length — Text (250)", /Text \(250\)/.test(
 check("design-spec: component feature (Approvals) shown by name; list feature (Activities) as Related list",
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
 check("design-spec: Logic table lists the handler (onContactChanged → Contact changes)",
-  /### Logic/.test(spec) && /onContactChanged \| Contact changes/.test(spec));
+  /#### Logic/.test(spec) && /onContactChanged \| Contact changes/.test(spec));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
 
@@ -480,11 +480,12 @@ const secRun = runMigration({ entity: "Applicant",
 check("section: add-record mini page detected (name)", secRun.section?.addRecordMiniPage === "ApplicantMiniPage");
 check("section: getSectionActions hint captured (#8b)", secRun.section?.sectionActions.includes("runBulkAssign"));
 check("section: list columns from getGridDataColumns (#2)", (secRun.section?.listColumns || []).join(",") === "Name,Stage");
-check("section: design spec has a Section (list page) block naming the mini page",
-  /### Section \(list page\)/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec));
+check("section: design spec has a List page block (before the form page) naming the mini page",
+  /### List page/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec)
+  && secRun.designSpec.indexOf("### List page") < secRun.designSpec.indexOf(" form page"));
 const noSec = runMigration({ entity: "X",
   layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("section: absent when no section input (block omitted)", noSec.section === null && !/### Section \(list page\)/.test(noSec.designSpec));
+check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
 check("section: no add-record mini page → 'full edit page' + list columns flagged data-driven",
   (() => { const r = runMigration({ entity: "Applicant",
     layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -586,10 +587,10 @@ check("ancestor-visibility: field in a dynamically-shown container is flagged (c
   avCs.needsDecision.some(n => n.kind === "ancestor-visibility" && n.item === "DF"));
 
 /* ---- --plan: whole plan skeleton (Overview/Pages placeholders + generated spec + recursive child pages) ---- */
-check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Pages + design spec + Layout)",
+check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Main scope + design spec + Layout)",
   typeof cli.plan === "string" && /— Classic → Freedom UI/.test(cli.plan)
   && /### Overview/.test(cli.plan) && /<FILL:/.test(cli.plan)
-  && /### Pages/.test(cli.plan) && /## Design spec/.test(cli.plan) && /### Layout/.test(cli.plan));
+  && /### Main scope/.test(cli.plan) && /## Design spec/.test(cli.plan) && /#### Layout/.test(cli.plan));
 check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)",
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
 check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
@@ -677,7 +678,7 @@ const recB = recCs.childPages.find((c) => c.entity === "ChildB") || {};
 check("#7 child recursion: supplied child schema is mapped (childPages[].spec populated, resolvedFrom set)",
   !!recA.spec && recA.resolvedFrom === "ChildAPage" && !recB.spec);
 check("#7 child recursion: mapped child's design spec is NESTED in the plan (headings demoted under Child page mappings)",
-  /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /##### Layout/.test(recCs.plan));
+  /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
 check("#7 child recursion: unsupplied child gets an explicit recursive-sub-migration FILL slot (not just a row)",
   /#### Child page: ChildB[\s\S]*?<FILL: recursive sub-migration>/.test(recCs.plan));
 

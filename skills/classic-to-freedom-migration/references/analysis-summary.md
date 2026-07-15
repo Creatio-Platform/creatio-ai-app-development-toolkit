@@ -22,8 +22,8 @@ The dense provenance lives in `plan.md`.
   lock state → the `Package` line; per-item migration call → the `Pages` table; each field's/detail's
   placement, type, rule → the design-spec `Layout` table; behaviour (filters/handlers/process) → `Logic`;
   decisions + risks → `⚠ Confirm`. If a line repeats something already shown above, cut it.
-- Scale to scope. **Single-section:** `Overview` + `What it does` + `Pages`, then the design spec. No
-  phases. **Whole-package:** add `How we'll stage it`, and give `Pages` a leading `Section` column that
+- Scale to scope. **Single-section:** `Overview` + `What it does` + `Main scope`, then the design spec. No
+  phases. **Whole-package:** add `How we'll stage it`, and give `Main scope` a leading `Section` column that
   repeats down its rows.
 
 Migration call vocabulary (the `Call` column in `Pages`):
@@ -53,16 +53,18 @@ Migration call vocabulary (the `Call` column in `Pages`):
 ### What it does
 <1–2 sentences in business language: what the app is for and who uses it.>
 
-### Pages
+### Main scope
 | Classic | Freedom target | Call |
 | --- | --- | --- |
-| <section/list schema> | <Freedom list template> | Rebuild |
-| <page schema> | <Freedom form template> | Rebuild |
+| <section/list schema> (list page) | <Freedom list template> | Rebuild |
+| <page schema> (form page) | <Freedom form template> | Rebuild |
 | entity · details · lookups · backend | reused as-is | Reuse |
 ```
 
-Then present the per-page design spec (`--spec` output) for each Rebuild/Delta page, and stop for
-explicit approval. Do not stop on the summary alone — the user approves the design spec.
+`Main scope` is the index of the pages this migration covers; expand each below IN THIS ORDER — list
+page, then form page (Layout → Logic → Confirm), then child pages under `Child page mappings`. Then
+present the per-page design spec (`--spec`/`--plan` output) and stop for explicit approval. Do not stop
+on the summary alone — the user approves the design spec.
 
 Whole-package only, before the design specs:
 
@@ -90,11 +92,11 @@ Whole-package only, before the design specs:
 The HR/Recruiting candidates register — each applicant card carries a contact/vacancy profile,
 recruitment-stage logic, communications, activities/emails, and an approvals (visa) flow.
 
-### Pages
+### Main scope
 | Classic | Freedom target | Call |
 | --- | --- | --- |
-| Applicant1Section | ListPageV3 list page | Rebuild |
-| Applicant1Page | PageWithTabsFreedomTemplate (form) | Rebuild |
+| Applicant1Section (list page) | ListPageV3 list page | Rebuild |
+| Applicant1Page (form page) | PageWithTabsFreedomTemplate (form) | Rebuild |
 | Applicant entity · details · lookups · backend | reused as-is | Reuse |
 ```
 
