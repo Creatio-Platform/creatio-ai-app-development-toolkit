@@ -15,8 +15,8 @@ const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its
 // field's parent: hitting Header/ProfileContainer => the side profile; hitting a tab => that tab;
 // running off the tree (parent never defined) => unresolved (caller flags + falls back). This is
 // what turns the old "everything flattens to one tab" into faithful tab placement.
-// `tabTemplateOwned` = the owning tab's DEFINING insert came from a seed layer (so the Freedom template
-// already provides it — don't re-synthesize even if a client layer re-captioned it). `groups` = the
+// `tabTemplateOwned` = the owning tab's DEFINING insert came from a seed schema (so the Freedom template
+// already provides it — don't re-synthesize even if a client schema re-captioned it). `groups` = the
 // intermediate non-tab containers between the field and its tab (outermost→innermost), which the mapper
 // rebuilds as ExpansionPanel (CONTROL_GROUP, itemType 15) / GridContainer, preserving classic grouping
 // (e.g. a "Delivery" group) instead of flattening every field into one grid.
@@ -26,7 +26,7 @@ function resolveOwner(startParent, index) {
     if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", via: parent, groups: groups.reverse() };
     const p = index.get(parent);
     // `why` distinguishes the two unresolved causes so the caller's flag is accurate (#18): the ancestor
-    // name is not defined by ANY layer/template (missing seed) vs the chain is fully defined but never
+    // name is not defined by ANY schema/template (missing seed) vs the chain is fully defined but never
     // reaches a profile/tab anchor (climbed to the page root — a wrong/incomplete seed).
     if (!p) return { kind: "unresolved", parent, why: "undefined-parent" };
     if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, groups: groups.reverse() };
@@ -128,7 +128,7 @@ const KNOWN_ACTION_ITEMS = new Set([
 
 export function mapToFreedom(eff, opts = {}) {
   const cols = opts.entityColumns || {};       // { column: dataType }
-  const clientEditableLayers = new Set(opts.clientEditableLayers || []); // for B6 removals
+  const clientEditableSchemas = new Set(opts.clientEditableSchemas || []); // for B6 removals
   // #5/#13 — localizable strings from the manifest (page + detail resources). Lets the mapper resolve a
   // classic `Resources.Strings.X` caption to its real localized text instead of shipping an opaque key.
   const resources = opts.resources || {};
@@ -304,7 +304,7 @@ export function mapToFreedom(eff, opts = {}) {
     } else {
       parent = FLAT_FALLBACK; // parent chain unresolvable
       const why = own.why === "undefined-parent"
-        ? `classic container '${own.parent}' is not defined by any layer or template — seed the base template (F2) so it resolves`
+        ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
         : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
         reason: `${why} — placed in ${parent} for now` });
@@ -431,7 +431,7 @@ export function mapToFreedom(eff, opts = {}) {
   const details = [];              // genuine custom details
   const standardFeatures = [];     // Approvals/Attachments/Activities/Emails → their Freedom feature
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
-  // across layers → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
+  // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
   // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
   // a tab (the real placement) and dropping the phantom.
   const detailSig = (d) => [d.schemaName, d.entitySchemaName, d.detailColumn, d.masterColumn].join("|");
@@ -471,7 +471,7 @@ export function mapToFreedom(eff, opts = {}) {
     // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied
     // (real entity + columns known). Only flag detail-unresolved when the schema was NOT provided.
     if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
-      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${dentity ? ` (child entity '${dentity}')` : ""} — fetch its schema (get-classic-schema) and pass it as manifest.detailSchemas to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
+      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${dentity ? ` (child entity '${dentity}')` : ""} — fetch its schema (get-classic-schema-by-uid) and pass it as manifest.detailSchemas to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
     // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
@@ -559,16 +559,16 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- removals (B6) — client removals only; template-internal removes are context (F9, C3) ----
   for (const rm of eff.removed.filter(notTpl)) {
-    const clientRemoved = clientEditableLayers.has(rm.removedBy);
+    const clientRemoved = clientEditableSchemas.has(rm.removedBy);
     needsDecision.push({ kind: "removal", item: rm.name,
       reason: clientRemoved
-        ? `client layer '${rm.removedBy}' removed it — remove/hide on Freedom`
+        ? `client schema '${rm.removedBy}' removed it — remove/hide on Freedom`
         : `removed by '${rm.removedBy}' (not confirmed client-editable) — KEEP on Freedom unless confirmed` });
   }
 
   // ---- Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff) ----
   // e.g. CasesEstimateLabel → the SLA response/solution timer + its START/END buttons. The migration
-  // unit is the page schema, so these modules' rendered controls are invisible to layer analysis and are
+  // unit is the page schema, so these modules' rendered controls are invisible to schema analysis and are
   // NOT in this ChangeSet. Surface them for a manual Freedom port instead of under-reporting the surface.
   for (const rm of (eff.referencedModules || []))
     needsDecision.push({ kind: "referenced-module", item: rm,

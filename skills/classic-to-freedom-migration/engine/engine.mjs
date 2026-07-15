@@ -1,5 +1,5 @@
 // Ф2 — Merge engine (prototype). Pure Node module, no Creatio/stand dependency.
-// Parses classic ClientUnitSchema layer bodies and merges N layers (base->top)
+// Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance. See .migration/solution-design.md §3.1.
 import vm from "node:vm";
 
@@ -59,8 +59,8 @@ function resolveDep(name) {
   return name === "BusinessRuleModule" ? BUSINESS_RULE_MODULE : PROXY;
 }
 
-// Extract the schema object literal from a layer body by capturing define().
-export function parseLayer(src, pkg) {
+// Extract the schema object literal from a schema body by capturing define().
+export function parseSchema(src, pkg) {
   let captured = null, parseError = null, amdDeps = [];
   // factory `this` also exposes BusinessRuleModule (bodies reference this.BusinessRuleModule too).
   const thisProxy = new Proxy(function () {}, {
@@ -81,7 +81,7 @@ export function parseLayer(src, pkg) {
     // functions, so a body can still escape via define.constructor.constructor("return process")(). node:vm
     // is not a sandbox for untrusted code; today's inputs are OFFLINE fixtures only. Before any production
     // seed-fetch feeds stand-sourced bodies here, replace this with a non-executing parser / real isolation
-    // (see F8 in SELF-REVIEW.md). Do not treat parseLayer as safe for untrusted input.
+    // (see F8 in SELF-REVIEW.md). Do not treat parseSchema as safe for untrusted input.
     Terrasoft: TERRASOFT, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
   };
   // NOSONAR (javascript:S1523) — INTENTIONAL: parses OFFLINE Classic-schema fixtures only; not a security
@@ -120,7 +120,7 @@ export function parseLayer(src, pkg) {
     // this page's own diff (e.g. CasesEstimateLabel → the SLA timer + its START/END buttons). Surfaced
     // so the mapper flags them — the page-schema migration unit cannot see their rendered surface.
     refModules: referencedUiModules(amdDeps),
-    // #8c — does this layer LAUNCH a business process imperatively (a "Run process" action / handler)?
+    // #8c — does this schema LAUNCH a business process imperatively (a "Run process" action / handler)?
     // Detected by the classic process-launch APIs. The process NAMES (when quoted) are captured so the
     // mapper can name them; a run-process action maps to a Freedom "Run process" card action / handler.
     processLaunch: (() => {
@@ -165,7 +165,7 @@ export function parseLayer(src, pkg) {
 
 // AMD define() dependency list → the CUSTOM modules that likely RENDER UI (ship their own CSS, or have a
 // UI-ish name). A page composes such modules OUTSIDE its own diff, so their UI (buttons/labels/timers) is
-// invisible to layer analysis. Framework utils (FormatUtils, BusinessRuleModule, ConfigurationEnums…) are
+// invisible to schema analysis. Framework utils (FormatUtils, BusinessRuleModule, ConfigurationEnums…) are
 // excluded — only css-backed or UI-named deps qualify, keeping the signal high (E1: never flag noise).
 // The UI-name test is ANCHORED to a trailing role suffix so a utility like `LabelHelper` / `GeneratorUtils`
 // (contains a token but doesn't END in it) is NOT misflagged — only css-backed deps or true role names pass.
@@ -293,39 +293,39 @@ function sanitizeConditions(conds) {
   });
 }
 
-// mergeLayers(layers, opts)
-//   layers    — the schema's own layers, base->top in true dependency order (F1).
-//   opts.seedLayers — parsed parent-TEMPLATE layers (e.g. the BaseModulePageV2→…→BaseEntityPage
+// mergeHierarchy(schemas, opts)
+//   schemas    — the schema's own schemas, base->top in true dependency order (F1).
+//   opts.seedTemplate — parsed parent-TEMPLATE schemas (e.g. the BaseModulePageV2→…→BaseEntityPage
 //     chain) merged FIRST, so base containers (Header/ProfileContainer/Tabs) and base tabs (ESNTab…)
-//     exist before the schema's own layers patch them (F2). Seed packages define only LAYOUT context:
+//     exist before the schema's own schemas patch them (F2). Seed packages define only LAYOUT context:
 //     every produced element is tagged `fromTemplate` (F9) so the mapper migrates only the page's own
-//     content (fields/rules/details/methods/components touched by a schema layer) and treats
+//     content (fields/rules/details/methods/components touched by a schema schema) and treats
 //     template-only elements — e.g. the 300+ framework methods on BaseEntityPage — as context, not
 //     payload. Without this, seeding the full chain floods the ChangeSet with base noise.
-export function mergeLayers(layers /* base->top */, opts = {}) {
+export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
   const details = new Map();   // key -> record
   const methods = new Map();   // name -> [pkgs] (override stack)
   const components = new Map(); // module key -> {moduleName, provenance} (widgets/charts → B9/B10)
-  // Non-fatal diagnostics. A merge/move/remove that targets an item NO lower layer defined means
-  // either the layers were passed out of dependency order (F1) or the base-template element it
+  // Non-fatal diagnostics. A merge/move/remove that targets an item NO lower schema defined means
+  // either the schemas were passed out of dependency order (F1) or the base-template element it
   // patches was never seeded (F2). We surface these instead of silently dropping/orphaning them.
   const warnings = [];
-  const seedLayers = Array.isArray(opts.seedLayers) ? opts.seedLayers : [];
-  // F9 origin: tag each layer by WHERE it came from — parent-template seed vs the page's own schema
-  // layers. This is the authoritative signal, known HERE from which list the layer is in; we do NOT
-  // reconstruct it from package names later (names collide when one package is both a template layer
-  // and a schema layer). Diff-items carry `templateOwned` = their DEFINING insert came from a seed
-  // layer — used for STRUCTURAL identity: a base tab a client merely re-captions is still template-
+  const seedTemplate = Array.isArray(opts.seedTemplate) ? opts.seedTemplate : [];
+  // F9 origin: tag each schema by WHERE it came from — parent-template seed vs the page's own schema
+  // schemas. This is the authoritative signal, known HERE from which list the schema is in; we do NOT
+  // reconstruct it from package names later (names collide when one package is both a template schema
+  // and a schema schema). Diff-items carry `templateOwned` = their DEFINING insert came from a seed
+  // schema — used for STRUCTURAL identity: a base tab a client merely re-captions is still template-
   // owned, so we never re-synthesize it (the Freedom template still provides it). Keyed elements
-  // (rules/methods/details/components) carry `schemaTouched` = ≥1 schema layer contributed — a client
-  // override IS payload. Payload = items a schema layer authored; template-only = layout context.
+  // (rules/methods/details/components) carry `schemaTouched` = ≥1 schema schema contributed — a client
+  // override IS payload. Payload = items a schema schema authored; template-only = layout context.
   const tagged = [
-    ...seedLayers.map(L => ({ L, seed: true })),   // parent-template skeleton first
-    ...layers.map(L => ({ L, seed: false })),      // then the schema's own layers
+    ...seedTemplate.map(L => ({ L, seed: true })),   // parent-template skeleton first
+    ...schemas.map(L => ({ L, seed: false })),      // then the schema's own schemas
   ];
-  const entity = layers.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
+  const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
   for (const { L, seed } of tagged) {
     // diff replay
@@ -340,28 +340,28 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
           templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
         });
       } else if (op.operation === "merge") {
-        // patch in place; carry contentType/itemType too — a later layer can introduce a control hint
+        // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
         if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; if (op.visible != null) cur.visible = op.visible; if (op.tip) cur.tip = op.tip; if (op.hint) cur.hint = op.hint; if (op.caption) cur.caption = op.caption; cur.provenance.push(L.pkg); }
         else {
-          // merge onto an item no lower layer defined: record a stub with the SAME shape as an insert
+          // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
           // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
           items.set(op.name, { name: op.name, parent: op.parentName, propertyName: op.propertyName, bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, templateOwned: seed });
-          warnings.push({ op: "merge", name: op.name, layer: L.pkg, hint: "merge onto an item no lower layer defined — base-template element not seeded (F2) or layers out of order (F1)" });
+          warnings.push({ op: "merge", name: op.name, schema: L.pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
         }
       } else if (op.operation === "move") {
         // classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
         // spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
         // e.g. Product's IsArchive/"Inactive" checkbox).
         if (cur) { if (op.parentName) cur.parent = op.parentName; if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; } cur.provenance.push(L.pkg); }
-        else warnings.push({ op: "move", name: op.name, layer: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / layer order (F1)` });
+        else warnings.push({ op: "move", name: op.name, schema: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
       } else if (op.operation === "remove") {
         // removedBySeed: a template-internal remove (base template dropping a base element) is context,
         // not a client B6 decision — the mapper filters it out like every other template-only element.
         if (cur) { cur.removed = true; cur.removedBy = L.pkg; cur.removedBySeed = seed; }
         else {
           items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, removedBySeed: seed, provenance: [L.pkg] });
-          warnings.push({ op: "remove", name: op.name, layer: L.pkg, hint: "remove of an item no lower layer defined — recorded as tombstone; check base seed / layer order" });
+          warnings.push({ op: "remove", name: op.name, schema: L.pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
         }
       }
     }
@@ -398,7 +398,7 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
       if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
       details.set(k, rec);
     }
-    // methods (override stack) — track whether any schema layer contributed
+    // methods (override stack) — track whether any schema schema contributed
     for (const m of L.methods) { const prev = methods.get(m); methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed }); }
     // modules (widgets/charts) — merge by key
     for (const c of L.modules || []) {
@@ -414,7 +414,7 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);
 
   // Parent containers referenced by an ALIVE item but never defined by an ALIVE item == base-template
-  // elements the client's layers sit inside (e.g. Header, GeneralInfoTab from BaseModulePageV2).
+  // elements the client's schemas sit inside (e.g. Header, GeneralInfoTab from BaseModulePageV2).
   // This is the precise seed list F2 must supply so layout targets resolve and base tabs survive.
   // Computed over the ALIVE set only (NOT items.keys(), which includes remove-tombstones): the mapper's
   // routing index is alive-only, so a parent that survives only as a tombstone must still count as
@@ -423,17 +423,17 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   const unresolvedParents = [...new Set(
     alive.map(i => i.parent).filter(p => p && !aliveNames.has(p))
   )].sort(byLocale);
-  // feature toggles referenced by the SCHEMA layers (not the base template) — they gate element
+  // feature toggles referenced by the SCHEMA schemas (not the base template) — they gate element
   // visibility at runtime; the rendered page shows one feature-state while this is the full union.
-  const features = [...new Set(layers.flatMap(l => l.features || []))].sort(byLocale);
-  const cardActionHints = [...new Set(layers.flatMap(l => l.actionHints || []))].sort(byLocale);
-  // #8c — process launch detected in the SCHEMA's OWN layers (not the seed: the base template's "Run
+  const features = [...new Set(schemas.flatMap(l => l.features || []))].sort(byLocale);
+  const cardActionHints = [...new Set(schemas.flatMap(l => l.actionHints || []))].sort(byLocale);
+  // #8c — process launch detected in the SCHEMA's OWN schemas (not the seed: the base template's "Run
   // process by record" is template-provided; here we surface the CLIENT page's own process launch).
-  const processLaunch = layers.some(l => l.processLaunch);
-  const processNames = [...new Set(layers.flatMap(l => (l.processLaunch && l.processLaunch.names) || []))].sort(byLocale);
-  // referenced UI modules the SCHEMA's own layers pull in via define() (not the base template) — their
+  const processLaunch = schemas.some(l => l.processLaunch);
+  const processNames = [...new Set(schemas.flatMap(l => (l.processLaunch && l.processLaunch.names) || []))].sort(byLocale);
+  // referenced UI modules the SCHEMA's own schemas pull in via define() (not the base template) — their
   // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
-  const referencedModules = [...new Set(layers.flatMap(l => l.refModules || []))].sort(byLocale);
+  const referencedModules = [...new Set(schemas.flatMap(l => l.refModules || []))].sort(byLocale);
 
   // #19 — seed QUALITY validation. A real fetched base-template body (BaseModulePageV2 → BasePageV2 →
   // BaseEntityPage) always defines methods — hundreds of them, incl. `getActions` (which surfaces the
@@ -441,25 +441,25 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   // types a few `{itemType:15}` container stubs to clear the parent gate) contributes ZERO methods. So
   // "seed present but no seed method" reliably means the seed is a skeleton, not the real template — and
   // building on it silently drops base actions + the true nesting. Surface it as a WARNING so the SKILL's
-  // hard gate (warnings must be empty) blocks the build until the real base layers are fetched.
-  const seedMethodNames = new Set(seedLayers.flatMap(l => l.methods || []));
-  const looksSkeletal = seedLayers.length > 0 && seedMethodNames.size === 0;
+  // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
+  const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
+  const looksSkeletal = seedTemplate.length > 0 && seedMethodNames.size === 0;
   const seedQuality = {
-    seeded: seedLayers.length > 0, seedLayers: seedLayers.length,
+    seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
     seedMethods: seedMethodNames.size, hasGetActions: seedMethodNames.has("getActions"),
     looksSkeletal,
   };
   if (looksSkeletal) warnings.push({
-    op: "seed", name: "skeletal-seed", layer: "(seed)",
-    message: `SEED LOOKS SKELETAL (#19): the ${seedLayers.length} seed layer(s) contribute 0 methods and no getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines methods incl. getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton, not the fetched template body. Re-fetch the parent-template layers via get-classic-schema and pass their real bodies as \`seed\` — do NOT build on a skeleton.`,
+    op: "seed", name: "skeletal-seed", schema: "(seed)",
+    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) contribute 0 methods and no getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines methods incl. getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton, not the fetched template body. Re-fetch the parent-template schemas via get-classic-schema-by-uid and pass their real bodies as \`seed\` — do NOT build on a skeleton.`,
   });
 
   return {
     entity,
     // Full alive layout tree (containers, groups, tabs, fields) with parent links — the input F3's
     // mapper walks to route each field to its owning tab/group. Diff-items carry `templateOwned`
-    // (defining insert came from a seed layer): payload = client-authored items, structural identity =
-    // template ownership. Keyed projections below carry `fromTemplate` (= no schema layer contributed).
+    // (defining insert came from a seed schema): payload = client-authored items, structural identity =
+    // template ownership. Keyed projections below carry `fromTemplate` (= no schema schema contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,

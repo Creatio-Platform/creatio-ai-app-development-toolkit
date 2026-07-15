@@ -2,17 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseLayer, mergeLayers } from "./engine.mjs";
+import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
 import { runMigration } from "./migrate.mjs";
 import { renderDesignSpec } from "./designspec.mjs";
 import { spawnSync } from "node:child_process";
-import { makeLayer as L, makeOp as di } from "./_testkit.mjs";
+import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(DIR, "fixtures");
 const load = (dir, order) => order.map(fn =>
-  parseLayer(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
+  parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 
 // SupportUnit entity column types (from describe-entity) — lets the mapper pick precise controls.
 const SU_COLS = {
@@ -20,7 +20,7 @@ const SU_COLS = {
   Active: "Boolean", SupportEmpIndex: "Integer", Canprocessreopencases: "Boolean", SupportCaseLimit: "Integer",
 };
 
-const eff = mergeLayers(load("supportunitemployee", ["SupportCalendar_base.js", "SupportService.js"]));
+const eff = mergeHierarchy(load("supportunitemployee", ["SupportCalendar_base.js", "SupportService.js"]));
 const cs = mapToFreedom(eff, { entityColumns: SU_COLS });
 
 console.log("===== SupportUnit -> Freedom ChangeSet =====");
@@ -59,10 +59,10 @@ check("chart widgets flagged as needsDecision (component)", cs.needsDecision.som
 
 // Contract sanity — TRUE dependency order (F1), with base-template seed (F2).
 const seed = load("_base", ["BaseModulePageV2_skeleton.js"]);
-const coEff = mergeLayers(load("contract", [
+const coEff = mergeHierarchy(load("contract", [
   "CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
   "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js"]),
-  { seedLayers: seed });
+  { seedTemplate: seed });
 const co = mapToFreedom(coEff);
 console.log(`\n===== Contract sanity =====`);
 console.log(`viewConfigDiff=${co.viewConfigDiff.length} entityRules=${co.entityBusinessRules.length} pageRules=${co.pageBusinessRules.length} details=${co.details.length} handlerStubs=${co.handlerStubs.length} needsDecision=${co.needsDecision.length}`);
@@ -99,7 +99,7 @@ check("F3/features: Approvals(Visa)/Attachments(Files)/Activities are standard f
 check("F3/actions: card actions / ACTIONS-menu flagged (B7)",
   co.needsDecision.some(n => n.kind === "card-action"));
 // widgets: synthetic (the curated fixture lacks the dashboard modules the real page has)
-const wCs = mapToFreedom(mergeLayers([L("Client", { entity: "X",
+const wCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   modules: [{ key: "ActionsDashboardModule", moduleName: "ActionsDashboardModule" }],
   diff: [di({ name: "DuplicatesWidgetContainer", itemType: 0, parentName: "LeftModulesContainer" })] })]));
 check("F3/widgets: Action Dashboard (module) + Duplicates (container) recognized → Freedom analogs",
@@ -110,7 +110,7 @@ check("F3: no field left in the old catch-all GeneralInfoTabContainer",
   !co.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
 
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
-// L/di are the shared layer/op builders (see _testkit.mjs), aliased to keep the assertions terse.
+// L/di are the shared schema/op builders (see _testkit.mjs), aliased to keep the assertions terse.
 // Seed contributes a bound FIELD and a business RULE too (the primary payload) — not only methods/details/
 // components — so their exclusion is asserted POSITIVELY, not "0 by accident".
 const f9seed = L("Tpl", {
@@ -123,7 +123,7 @@ const f9client = L("Client", { entity: "X",
   methods: ["clientSave"],
   businessRules: { Name: { reqRule: { ruleType: 0, property: 2 } } },          // client BINDPARAMETER/Required rule
   details: { ClientDetail: { schemaName: "ClientDetail", entitySchemaName: "ClientE", detailColumn: "X", masterColumn: "Id" } } });
-const f9cs = mapToFreedom(mergeLayers([f9client], { seedLayers: [f9seed] }));
+const f9cs = mapToFreedom(mergeHierarchy([f9client], { seedTemplate: [f9seed] }));
 check("F9: seed method is context, only the client method is payload",
   f9cs.handlerStubs.length === 1 && f9cs.handlerStubs[0].sourceMethod === "clientSave");
 check("F9: seed FIELD excluded, client field kept",
@@ -145,7 +145,7 @@ const btSeed = L("Tpl", { diff: [di({ name: "Tabs", itemType: 15 }),
   di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true })] });
 const btClient = L("Client", { entity: "X",
   diff: [di({ name: "Note", parentName: "ESNTab", propertyName: "items", bindTo: "Note" })] });
-const btcs = mapToFreedom(mergeLayers([btClient], { seedLayers: [btSeed] }));
+const btcs = mapToFreedom(mergeHierarchy([btClient], { seedTemplate: [btSeed] }));
 check("F9×F3: no fresh crt.Tab insert synthesized for a base-template tab (ESNTab)",
   !btcs.viewConfigDiff.some(o => o.name === "ESNTab" && o.values?.type === "crt.Tab"));
 check("F9×F3: base-template tab placement flagged as needsDecision",
@@ -153,14 +153,14 @@ check("F9×F3: base-template tab placement flagged as needsDecision",
 check("F9×F3: the field routes into the EXISTING base tab, not a synthesized grid",
   btcs.viewConfigDiff.some(o => o.name === "Note" && o.parentName === "ESNTab"));
 
-/* ---- B1 (Blocker): a base tab a CLIENT layer merges is STILL template-owned (origin=insert) — the
+/* ---- B1 (Blocker): a base tab a CLIENT schema merges is STILL template-owned (origin=insert) — the
    common reorder/re-caption case the prior fix missed. Must not synthesize a duplicate crt.Tab. ---- */
 const b1seed = L("Tpl", { diff: [di({ name: "Tabs", itemType: 15 }),
   di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true })] });
 const b1client = L("Client", { entity: "X", diff: [
   di({ operation: "merge", name: "ESNTab", order: 5 }),                                  // client re-orders the base tab
   di({ name: "Note", parentName: "ESNTab", propertyName: "items", bindTo: "Note" })] }); // and adds a field to it
-const b1eff = mergeLayers([b1client], { seedLayers: [b1seed] });
+const b1eff = mergeHierarchy([b1client], { seedTemplate: [b1seed] });
 const b1tab = b1eff.tabs.find(t => t.name === "ESNTab");
 const b1cs = mapToFreedom(b1eff);
 check("B1: client-merged base tab keeps templateOwned=true (origin=seed insert, provenance has both)",
@@ -171,11 +171,11 @@ check("B1: field routes into the existing base tab + base-tab-placement flagged"
   b1cs.viewConfigDiff.some(o => o.name === "Note" && o.parentName === "ESNTab")
   && b1cs.needsDecision.some(n => n.kind === "base-tab-placement" && n.item === "ESNTab"));
 
-/* ---- C3: a template-internal remove (by a seed layer) is context, not a client B6 decision ---- */
+/* ---- C3: a template-internal remove (by a seed schema) is context, not a client B6 decision ---- */
 const c3seed = L("Tpl", { diff: [di({ name: "BaseA", itemType: 15 }), di({ name: "BaseB", itemType: 15 }),
   di({ operation: "remove", name: "BaseB" })] });                    // seed removes its OWN base element
 const c3client = L("Client", { entity: "X", diff: [di({ operation: "remove", name: "BaseA" })] }); // client removes a base element
-const c3cs = mapToFreedom(mergeLayers([c3client], { seedLayers: [c3seed] }));
+const c3cs = mapToFreedom(mergeHierarchy([c3client], { seedTemplate: [c3seed] }));
 check("C3: client remove of a base element surfaces as a removal decision (BaseA)",
   c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseA"));
 check("C3: template-internal remove (seed removed its own element) is NOT a removal decision (BaseB)",
@@ -186,7 +186,7 @@ const c5client = L("Client", { entity: "X", diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
   di({ name: "Grp1", parentName: "MyTab", itemType: 15 }),                          // CONTROL_GROUP
   di({ name: "GF", parentName: "Grp1", propertyName: "items", bindTo: "ColG" })] });
-const c5cs = mapToFreedom(mergeLayers([c5client]));
+const c5cs = mapToFreedom(mergeHierarchy([c5client]));
 check("C5: CONTROL_GROUP is BUILT as a crt.ExpansionPanel under the tab",
   c5cs.viewConfigDiff.some(o => o.name === "Grp1" && o.values?.type === "crt.ExpansionPanel"));
 check("C5: field routes into the GROUP's grid (nesting preserved, not flattened to the tab grid)",
@@ -198,7 +198,7 @@ check("C5: synthesized group caption flagged (group-caption)",
 const c4seed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }),
   di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" })] });
 const c4client = L("Client", { entity: "X", diff: [], businessRules: { BaseCol: { r: { ruleType: 0, property: 2 } } } });
-const c4cs = mapToFreedom(mergeLayers([c4client], { seedLayers: [c4seed] }));
+const c4cs = mapToFreedom(mergeHierarchy([c4client], { seedTemplate: [c4seed] }));
 check("C4: rule on a base (excluded) field is flagged rule-target-missing",
   c4cs.needsDecision.some(n => n.kind === "rule-target-missing" && n.item === "BaseCol")
   && !c4cs.viewConfigDiff.some(o => o.name === "BaseCol"));
@@ -208,7 +208,7 @@ const dClient = L("Client", { entity: "X", diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
   di({ name: "Prod", parentName: "MyTab", itemType: 2, order: 3 })],           // detail grid placed in MyTab, pos 3
   details: { Prod: { schemaName: "ProdDetailV2", entitySchemaName: "OrderProduct", detailColumn: "X", masterColumn: "Id" } } });
-const dcs = mapToFreedom(mergeLayers([dClient]));
+const dcs = mapToFreedom(mergeHierarchy([dClient]));
 const prod = dcs.details.find(d => d.detailSchema === "ProdDetailV2");
 check("Detail: resolved to its owning tab (MyTab) with order", prod?.tab === "MyTab" && prod?.order === 3);
 check("Detail: editability NOT hardcoded to 'add' — actions unresolved + flagged",
@@ -221,7 +221,7 @@ const efClient = L("Client", { entity: "X",
   businessRules: {
     Lk: { r: { ruleType: 1, baseAttributePatch: "OtherCol" } },                                              // FILTRATION, dynamic (no value)
     St: { r: { ruleType: 1, baseAttributePatch: "Active", comparisonType: 3, value: true, dataValueType: 12 } } } }); // static
-const efcs = mapToFreedom(mergeLayers([efClient]));
+const efcs = mapToFreedom(mergeHierarchy([efClient]));
 const lk = efcs.entityBusinessRules.find(r => r.targetAttribute === "Lk");
 const st = efcs.entityBusinessRules.find(r => r.targetAttribute === "St");
 check("entity-filter: dynamic filter marked incomplete + flagged (entity-filter)",
@@ -230,7 +230,7 @@ check("entity-filter: static filter marked complete + NOT flagged",
   st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && n.item === "St"));
 
 /* ---- image component + tooltip carry (Product gaps) ---- */
-const imgCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Photo", parentName: "Header", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
   di({ name: "Code", parentName: "Header", propertyName: "items", bindTo: "Code", tip: "Resources.Strings.CodeTip" })] })]));
 check("image component (generator-based, no bindTo) recognized → images[] + needsDecision",
@@ -239,7 +239,7 @@ check("tooltip carried onto the Freedom field (tip.content)",
   imgCs.viewConfigDiff.find(o => o.name === "Code")?.values.tip?.content === "$Resources.Strings.CodeTip");
 
 /* ---- visibility respected (not hardcoded true) + feature toggles flagged ---- */
-const visCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", features: ["UseNewProductCatalogue"], diff: [
+const visCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", features: ["UseNewProductCatalogue"], diff: [
   di({ name: "Hidden", parentName: "Header", propertyName: "items", bindTo: "Hidden", visible: false }),
   di({ name: "Shown", parentName: "Header", propertyName: "items", bindTo: "Shown" })] })]));
 check("static visible:false is respected on the Freedom field (not forced true)",
@@ -249,7 +249,7 @@ check("feature toggles flagged (feature-toggle) — mapping is the full union, p
   visCs.needsDecision.some(n => n.kind === "feature-toggle" && /UseNewProductCatalogue/.test(n.item)));
 
 /* ---- getActions custom action surfaced into cardActions + real caption used (no synth flag) ---- */
-const actCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", actionHints: ["navigateToTaxesByCountriesLookup"],
+const actCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", actionHints: ["navigateToTaxesByCountriesLookup"],
   methods: ["getActions"], diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true, caption: "Resources.Strings.MyTabCap" }),
   di({ name: "F", parentName: "MyTab", propertyName: "items", bindTo: "F" })] })]));
@@ -260,7 +260,7 @@ check("real tab caption kept as the classic binding (not synthesized) + flagged 
   && actCs.needsDecision.some(n => n.kind === "tab-caption" && n.item === "MyTab" && /unresolved/.test(n.reason)));
 
 /* ---- Fix 1: classic `hint` → field tooltip (static) vs field-hint decision (dynamic) ---- */
-const hintCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+const hintCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "S", parentName: "Header", propertyName: "items", bindTo: "S", hint: "Resources.Strings.SHint" }),
   di({ name: "D", parentName: "Header", propertyName: "items", bindTo: "D", hint: "getDynamicHint" }),
   di({ name: "B", parentName: "Header", propertyName: "items", bindTo: "B", tip: "Resources.Strings.BTip", hint: "getDynB" })] })]));
@@ -275,7 +275,7 @@ check("field-hint: a dynamic hint is flagged EVEN when a static tip already occu
   && hintCs.viewConfigDiff.find(o => o.name === "B")?.values.tip?.content === "$Resources.Strings.BTip");
 
 /* ---- Fix 2: LOUD unmapped-component (client content the mapper produced nothing for) ---- */
-const umCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", refModules: ["CasesEstimateLabel"], diff: [
+const umCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", refModules: ["CasesEstimateLabel"], diff: [
   di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" }),                        // field → mapped
   di({ name: "TimerLabel", parentName: "Header", propertyName: "items", caption: "getTimer" }),       // LABEL, no bindTo → unmapped
   di({ name: "MyGrid", parentName: "Header", propertyName: "items" }),                                // scaffolding (Grid$) → skipped
@@ -295,8 +295,8 @@ check("unmapped-component: a CHILDLESS struct-named content item (SlaGroup) IS s
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaGroup"));
 check("unmapped-component: a struct-named PARENT container (RealGroup, has a child) is NOT surfaced (no noise)",
   !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroup"));
-const umTpl = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [di({ name: "CF", parentName: "Header", propertyName: "items", bindTo: "CF" })] })],
-  { seedLayers: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
+const umTpl = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "CF", parentName: "Header", propertyName: "items", bindTo: "CF" })] })],
+  { seedTemplate: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
 check("unmapped-component: template-owned items are NOT flagged (payload = client content only, F9)",
   !umTpl.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "BaseLabel"));
 
@@ -309,7 +309,7 @@ check("referenced-module: exposed on the ChangeSet for the migration report",
 /* ---- migrate.mjs CLI driver: end-to-end on the real SupportUnit fixtures (file-reading path) ---- */
 const cli = runMigration({
   entity: "SupportUnit", entityColumns: SU_COLS,
-  layers: [
+  schemas: [
     { pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" },
     { pkg: "SupportService", file: "supportunitemployee/SupportService.js" },
   ],
@@ -319,7 +319,7 @@ check("migrate.mjs: runMigration produces a ChangeSet (entity + non-empty viewCo
 check("migrate.mjs: no parse errors + effective counts + decisionSummary surfaced",
   cli.parseErrors.length === 0 && cli.effective.fields > 0 && typeof cli.decisionSummary === "object" && Object.keys(cli.decisionSummary).length > 0);
 check("migrate.mjs: entity '?' falls back to the merged effective entity",
-  runMigration({ entity: "?", layers: [
+  runMigration({ entity: "?", schemas: [
     { pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" },
     { pkg: "SupportService", file: "supportunitemployee/SupportService.js" }] }, { baseDir: FIX }).entity === "SupportUnit");
 const migBad = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-"], { input: "{ not json", encoding: "utf8" });
@@ -327,7 +327,7 @@ check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdo
   migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
 
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
-const featCs = mapToFreedom(mergeLayers([L("Client", { entity: "X",
+const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   details: {
     MyAct:   { schemaName: "ApplicantActivityDetailV2", entitySchemaName: "Activity" },
     MyEmail: { schemaName: "ApplicantEmailDetailV2",    entitySchemaName: "Activity" },
@@ -363,7 +363,7 @@ const lmClient = L("Client", { entity: "X", diff: [
   di({ name: "Phone", parentName: "ContactContainer", propertyName: "items", bindTo: "Phone" }),
   di({ name: "Email", parentName: "ContactContainer", propertyName: "items", bindTo: "Email" }),
   di({ name: "ReqNo", parentName: "InternalRequestContainer", propertyName: "items", bindTo: "ReqNo" })] });
-const lmcs = mapToFreedom(mergeLayers([lmClient], { seedLayers: [lmSeed] }));
+const lmcs = mapToFreedom(mergeHierarchy([lmClient], { seedTemplate: [lmSeed] }));
 check("#18: island fields resolve to the side profile, NOT the fallback tab (+ no bogus container decision)",
   !lmcs.needsDecision.some(n => n.kind === "container")
   && !lmcs.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
@@ -383,21 +383,21 @@ check("#9b: multi-island surfaced as ONE profile-island decision naming both isl
   lmcs.needsDecision.some(n => n.kind === "profile-island"
     && /ContactContainer/.test(n.item) && /InternalRequestContainer/.test(n.item)));
 // a SINGLE island must NOT be split (no redundant wrapper, no nag) — fields stay flat in the profile.
-const oneIsland = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+const oneIsland = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "ContactContainer", parentName: "LeftModulesContainer", itemType: 0 }),
   di({ name: "A", parentName: "ContactContainer", propertyName: "items", bindTo: "A" }),
-  di({ name: "B", parentName: "ContactContainer", propertyName: "items", bindTo: "B" })] })], { seedLayers: [lmSeed] }));
+  di({ name: "B", parentName: "ContactContainer", propertyName: "items", bindTo: "B" })] })], { seedTemplate: [lmSeed] }));
 check("#9b: a SINGLE island stays flat in SideAreaProfileContainer (no wrapper container, no profile-island nag)",
   ["A", "B"].every(n => oneIsland.viewConfigDiff.find(o => o.name === n)?.parentName === "SideAreaProfileContainer")
   && !oneIsland.viewConfigDiff.some(o => o.name === "ContactContainer")
   && !oneIsland.needsDecision.some(n => n.kind === "profile-island"));
 
 /* ---- #18: an unresolved chain that never reaches an anchor is flagged with the ACCURATE reason
-   (the container IS defined, but climbs to root) — not the misleading "not defined by any layer" ---- */
+   (the container IS defined, but climbs to root) — not the misleading "not defined by any schema" ---- */
 const naClient = L("Client", { entity: "X", diff: [
   di({ name: "OrphanBox", itemType: 0 }),                                                    // defined, but no chain to an anchor
   di({ name: "Lost", parentName: "OrphanBox", propertyName: "items", bindTo: "Lost" })] });
-const nacs = mapToFreedom(mergeLayers([naClient]));
+const nacs = mapToFreedom(mergeHierarchy([naClient]));
 check("#18: no-anchor chain flagged with the accurate 'never reaches a profile/tab anchor' reason",
   nacs.needsDecision.some(n => n.kind === "container" && /never reaches a profile\/tab anchor/.test(n.reason)));
 
@@ -409,7 +409,7 @@ const dupClient = L("Client", { entity: "X", details: {
     di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
     di({ name: "D1", parentName: "T", propertyName: "items", itemType: 2 }),
     di({ name: "D2", itemType: 2 })] });                                                      // D2 has no resolvable parent
-const dupcs = mapToFreedom(mergeLayers([dupClient]));
+const dupcs = mapToFreedom(mergeHierarchy([dupClient]));
 check("#11: duplicate detail (same schema+entity+FK) emitted ONCE, keeping the resolved tab",
   dupcs.details.filter(d => d.detailSchema === "ReqDetail").length === 1
   && dupcs.details.find(d => d.detailSchema === "ReqDetail")?.tab === "T");
@@ -420,7 +420,7 @@ const fileClient = L("Client", { entity: "X", details: {
     Files: { schemaName: "Schema1Detail", entitySchemaName: "ApplicantFile", detailColumn: "Applicant", masterColumn: "Id" } },
   diff: [di({ name: "T2", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.T2" }),
          di({ name: "Files", parentName: "T2", propertyName: "items", itemType: 2 })] });
-const filecs = mapToFreedom(mergeLayers([fileClient]));
+const filecs = mapToFreedom(mergeHierarchy([fileClient]));
 check("#11: *File-entity detail → Attachments feature (templateProvided, inferred), NOT a generic custom detail",
   filecs.standardFeatures.some(s => s.feature === "Attachments" && s.templateProvided && s.inferredFromEntity)
   && !filecs.details.some(d => d.entity === "ApplicantFile"));
@@ -432,9 +432,9 @@ const autoClient = L("Client", { entity: "X", details: {
     Auto: { schemaName: "Schema2Detail", entitySchemaName: "SomeChild", detailColumn: "P", masterColumn: "Id" } },
   diff: [di({ name: "T3", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.T3" }),
          di({ name: "Auto", parentName: "T3", propertyName: "items", itemType: 2 })] });
-const autocs = mapToFreedom(mergeLayers([autoClient]));
+const autocs = mapToFreedom(mergeHierarchy([autoClient]));
 check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unresolved (fetch its schema)",
-  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-schema/.test(n.reason)));
+  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-schema-by-uid/.test(n.reason)));
 
 /* ---- #10c: the design spec is GENERATED deterministically (table, not agent prose) ---- */
 // The recurring failure: the agent paraphrases the design spec into prose (no per-field table, wrong
@@ -450,7 +450,7 @@ check("design-spec: legacy split tables gone (no Region map / Fields / Details &
 check("design-spec: Confirm section present (⚠ worklist)",
   /#### ⚠ Confirm before I build/.test(cli.designSpec));
 const specRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--spec"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
     { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
 check("migrate.mjs --spec: prints pure design-spec Markdown (## Design spec…), no JSON envelope",
@@ -459,7 +459,7 @@ check("migrate.mjs --spec: prints pure design-spec Markdown (## Design spec…),
 /* ---- design-spec Layout: uiShape (list vs component), lookup ref, type+length, Logic handlers ---- */
 const dsCs = runMigration({ entity: "X",
   entityColumns: { Contact: { type: "Lookup", ref: "Contact", title: "Contact" }, Note: { type: "text", length: 250 } },
-  layers: [{ pkg: "P", body:
+  schemas: [{ pkg: "P", body:
     `define("P",[],function(){return{entitySchemaName:"X",details:{V:{schemaName:"VisaDetailV2",entitySchemaName:"XVisa"},A:{schemaName:"ActivityDetailV2",entitySchemaName:"Activity"}},methods:{onContactChanged:function(){}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"Contact",parentName:"T",propertyName:"items",values:{bindTo:"Contact"}},{operation:"insert",name:"Note",parentName:"T",propertyName:"items",values:{bindTo:"Note"}},{operation:"insert",name:"V",parentName:"T",values:{itemType:2}},{operation:"insert",name:"A",parentName:"T",values:{itemType:2}}]};});` }],
 }, { baseDir: FIX });
 const spec = dsCs.designSpec;
@@ -474,7 +474,7 @@ check("detail-editpage: standard features (Approvals/Activities) do NOT get a ch
 
 /* ---- Section-schema analysis: add-record mini page + section actions (#8b) + list columns (#2) ---- */
 const secRun = runMigration({ entity: "Applicant",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getAddRecordMiniPage:function(){return "ApplicantMiniPage";},getSectionActions:function(){var a=this.callParent(arguments);a.addItem({"Tag":"runBulkAssign"});return a;},getGridDataColumns:function(){return {Name:{path:"Name"},Stage:{path:"Stage"}};}},diff:[]};});` }],
 }, { baseDir: FIX });
 check("section: add-record mini page detected (name)", secRun.section?.addRecordMiniPage === "ApplicantMiniPage");
@@ -484,40 +484,40 @@ check("section: design spec has a List page block (before the form page) naming 
   /### List page/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec)
   && secRun.designSpec.indexOf("### List page") < secRun.designSpec.indexOf(" form page"));
 const noSec = runMigration({ entity: "X",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
 check("section: no add-record mini page → 'full edit page' + list columns flagged data-driven",
   (() => { const r = runMigration({ entity: "Applicant",
-    layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
     return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /profile data/.test(r.designSpec); })());
 
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
-const skelSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
-  { seedLayers: [L("Base", { diff: [di({ name: "Header", itemType: 15 })] })] });        // seed = bare containers, no methods
+const skelSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })] })] });        // seed = bare containers, no methods
 check("#19: skeletal seed (0 methods) → seedQuality.looksSkeletal + a 'skeletal-seed' warning (gate blocks)",
   skelSeed.seedQuality.looksSkeletal === true && skelSeed.warnings.some(w => w.name === "skeletal-seed"));
-const realSeed = mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
-  { seedLayers: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "getActions"] })] }); // seed with real methods
+const realSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "getActions"] })] }); // seed with real methods
 check("#19: real seed (methods incl. getActions) → not skeletal, no skeletal-seed warning",
   realSeed.seedQuality.looksSkeletal === false && realSeed.seedQuality.hasGetActions === true
   && !realSeed.warnings.some(w => w.name === "skeletal-seed"));
 check("#19: no seed at all → seedQuality.seeded=false, not flagged skeletal",
-  mergeLayers([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })]).seedQuality.seeded === false);
+  mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })]).seedQuality.seeded === false);
 
 /* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
 const capClient = () => L("Client", { entity: "X", diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.MyTabCaption" }),
   di({ name: "Grp", parentName: "MyTab", itemType: 15, caption: "Resources.Strings.GrpCaption" }),
   di({ name: "GF", parentName: "Grp", propertyName: "items", bindTo: "GF" })] });
-const capResolved = mapToFreedom(mergeLayers([capClient()]), { resources: { MyTabCaption: "Vacancies", GrpCaption: "Details" } });
+const capResolved = mapToFreedom(mergeHierarchy([capClient()]), { resources: { MyTabCaption: "Vacancies", GrpCaption: "Details" } });
 check("#5/#13: resolved tab caption becomes literal text + no tab-caption decision",
   capResolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "Vacancies"
   && !capResolved.needsDecision.some(n => n.kind === "tab-caption"));
 check("#5/#13: resolved group caption becomes literal text + no group-caption decision",
   capResolved.viewConfigDiff.find(o => o.name === "Grp")?.values.caption === "Details"
   && !capResolved.needsDecision.some(n => n.kind === "group-caption"));
-const capUnresolved = mapToFreedom(mergeLayers([capClient()]));
+const capUnresolved = mapToFreedom(mergeHierarchy([capClient()]));
 check("#5/#13: without resources, captions keep the binding + are flagged unresolved (tab + group)",
   capUnresolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCaption"
   && capUnresolved.needsDecision.some(n => n.kind === "tab-caption")
@@ -527,17 +527,17 @@ check("#5/#13: without resources, captions keep the binding + are flagged unreso
 const lblClient = () => L("Client", { entity: "X", diff: [
   di({ name: "MobilePhone", parentName: "Header", propertyName: "items", bindTo: "MobilePhone" }),
   di({ name: "ExpertiseLevel", parentName: "Header", propertyName: "items", bindTo: "ExpertiseLevel" })] });
-const lblResolved = mapToFreedom(mergeLayers([lblClient()]), { columnTitles: { MobilePhone: "Mobile phone", ExpertiseLevel: "Specialist expertise level" } });
+const lblResolved = mapToFreedom(mergeHierarchy([lblClient()]), { columnTitles: { MobilePhone: "Mobile phone", ExpertiseLevel: "Specialist expertise level" } });
 check("#5/#13 fields: columnTitles → field label is the human title, not the column code",
   lblResolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.label === "Mobile phone"
   && lblResolved.viewConfigDiff.find(o => o.name === "ExpertiseLevel")?.values.label === "Specialist expertise level");
-const lblUnresolved = mapToFreedom(mergeLayers([lblClient()]));
+const lblUnresolved = mapToFreedom(mergeHierarchy([lblClient()]));
 check("#5/#13 fields: without columnTitles, labels keep the binding + ONE aggregate field-labels nudge",
   lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.label === "$Resources.Strings.MobilePhone"
   && lblUnresolved.needsDecision.filter(n => n.kind === "field-labels").length === 1);
 
 /* ---- #13 (detail title): detailSchemas[...].title becomes the detail's display caption ---- */
-const dtCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
+const dtCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
     Stages: { schemaName: "StageInRecruitmentDetailV2", entitySchemaName: "RecruitmentInStage", detailColumn: "Root", masterColumn: "Id" } },
   diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
          di({ name: "Stages", parentName: "T", propertyName: "items", itemType: 2 })] })]),
@@ -546,7 +546,7 @@ check("#13 detail title: detailSchemas.title → the detail's caption is the hum
   dtCs.details.find(d => d.detailSchema === "StageInRecruitmentDetailV2")?.caption === "Stage history");
 
 /* ---- a tab that holds ONLY a detail (no field) must still be emitted so the related list has a home ---- */
-const dtabCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
+const dtabCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
     D: { schemaName: "MyDetail", entitySchemaName: "Child", detailColumn: "M", masterColumn: "Id" } },
   diff: [di({ name: "OnlyDetailTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.ODTCap" }),
          di({ name: "D", parentName: "OnlyDetailTab", propertyName: "items", itemType: 2 })] })]),
@@ -555,7 +555,7 @@ check("detail-only tab: the owning tab is emitted as crt.Tab (the related list h
   dtabCs.viewConfigDiff.some(o => o.name === "OnlyDetailTab" && o.values?.type === "crt.Tab" && o.values.caption === "Vacancies"));
 
 /* ---- #11(ii)/B2: a supplied detail schema resolves the related-list columns + kills detail-unresolved ---- */
-const detCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", details: {
+const detCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
     Reqs: { schemaName: "Schema7Detail", entitySchemaName: "InternalRequest", detailColumn: "Emp", masterColumn: "Id" } },
   diff: [di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.TCap" }),
          di({ name: "Reqs", parentName: "T", propertyName: "items", itemType: 2 })] })]),
@@ -567,14 +567,14 @@ check("detail-editpage: a custom related list flags the child entity's edit/mini
   detCs.needsDecision.some(n => n.kind === "detail-editpage" && n.item === "InternalRequest"));
 
 /* ---- #8c: process-launch detected in a real body → RunProcess card action + process-launch decision ---- */
-const plRun = runMigration({ entity: "X", layers: [{ pkg: "P", body:
+const plRun = runMigration({ entity: "X", schemas: [{ pkg: "P", body:
   `define("P",[],function(){return{entitySchemaName:"X",diff:[],methods:{onRun:function(){ProcessModuleUtilities.executeProcess({sysProcessName:"RecruitingSecurityCheckProcess"});}}};});` }] }, { baseDir: FIX });
 check("#8c: process-launch → RunProcess card action + process-launch decision naming the process",
   plRun.changeSet.cardActions.includes("RunProcess")
   && plRun.changeSet.needsDecision.some(n => n.kind === "process-launch" && /RecruitingSecurityCheckProcess/.test(n.item)));
 
 /* ---- ancestor-visibility: a field inside a hidden/dynamic container inherits + is flagged ---- */
-const avCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+const avCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "AvTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.AvCap" }),
   di({ name: "HiddenGrp", parentName: "AvTab", itemType: 15, visible: false }),
   di({ name: "GF2", parentName: "HiddenGrp", propertyName: "items", bindTo: "GF2" }),
@@ -599,14 +599,14 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const planRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
     { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
 check("migrate.mjs --plan: prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || ""));
 check("child pages: detail schema editPage flows into the recursion target",
   runMigration({ entity: "X",
-    layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{R:{schemaName:"ReqDetail",entitySchemaName:"InternalRequest",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R",parentName:"T",values:{itemType:2}}]};});` }],
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{R:{schemaName:"ReqDetail",entitySchemaName:"InternalRequest",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R",parentName:"T",values:{itemType:2}}]};});` }],
     detailSchemas: { ReqDetail: { entity: "InternalRequest", columns: ["Number"], editPage: "InternalRequestPage" } } }, { baseDir: FIX })
     .childPages.some(c => c.entity === "InternalRequest" && c.editPage === "InternalRequestPage"));
 
@@ -617,31 +617,31 @@ check("#1 Confirm: standard-feature / method NOT re-listed (already in Layout / 
   dsCs.designSpec.includes("### ⚠ Confirm") && !/\[standard-feature\]/.test(cfTail) && !/\[method\]/.test(cfTail));
 // #2 — a lookup column (rich meta) with no reference schema → probable read-only mirror flag
 const mirrorCs = runMigration({ entity: "X", entityColumns: { MobilePhone: { type: "Lookup" } },
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MobilePhone",parentName:"Header",propertyName:"items",values:{bindTo:"MobilePhone"}}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MobilePhone",parentName:"Header",propertyName:"items",values:{bindTo:"MobilePhone"}}]};});` }] }, { baseDir: FIX });
 check("#2 lookup-no-ref: lookup column with no reference schema flagged as a probable read-only mirror",
   mirrorCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && n.item === "MobilePhone"));
 check("#2 lookup-no-ref: a lookup WITH a reference schema is NOT flagged (no false positive)",
   !dsCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref"));
 // #3 — set/clear<X>Info helpers fold into on<X>Change (not separate Logic rows)
 const foldCs = runMigration({ entity: "X",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#3 Logic: set/clear<X>Info helpers folded into on<X>Change (not separate rows)",
   /onContactChange[^\n]*\+ setContactInfo, clearContactInfo/.test(foldCs.designSpec) && !/\| setContactInfo \| /.test(foldCs.designSpec));
 // #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
 const dupFilt = runMigration({ entity: "X",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
   /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
 // #5 — widgets grouped under a single 'Header / top' region
 const wReg = runMigration({ entity: "X",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#5 widgets: grouped under a 'Header / top' region (not their own top-level region)",
   /\| Header \/ top \| ActionDashboard \|/.test(wReg.designSpec));
 
 // #8 — DCM widget carries the "binds to the object" note (stages + Next steps auto-populate from the
 // object's case), on the widget, in its decision, and in the design spec's Additional column.
 const dcmCs = runMigration({ entity: "X",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#8 DCM: widget + decision carry the 'binds to the object' note (stages/Next steps auto-populate)",
   dcmCs.changeSet.widgets.some((w) => w.widget === "CaseStages (DCM)" && /binds to the object/.test(w.note || ""))
   && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /binds to the object/.test(n.reason)));
@@ -650,14 +650,14 @@ check("#8 DCM: the note surfaces in the design spec (Additional column of the wi
 
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.
-const ordCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+const ordCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "C1", parentName: "LeftModulesContainer", itemType: 0 }),
   di({ name: "Phone", parentName: "C1", propertyName: "items", bindTo: "Phone" }),
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.C" }),
   di({ name: "TabF", parentName: "MyTab", propertyName: "items", bindTo: "TabF" }),
   di({ name: "C2", parentName: "LeftModulesContainer", itemType: 0 }),
   di({ name: "Req", parentName: "C2", propertyName: "items", bindTo: "Req" })] })],
-  { seedLayers: [L("Tpl", { diff: [di({ name: "LeftModulesContainer", itemType: 15 }), di({ name: "Tabs", itemType: 15 })] })] }));
+  { seedTemplate: [L("Tpl", { diff: [di({ name: "LeftModulesContainer", itemType: 15 }), di({ name: "Tabs", itemType: 15 })] })] }));
 const ordLines = renderDesignSpec({ entity: "X", changeSet: ordCs, effective: { fields: 3 } }).split("\n").filter((l) => /^\| (Side profile|Tab · )/.test(l));
 const lastProfileIx = ordLines.reduce((acc, l, i) => /^\| Side profile/.test(l) ? i : acc, -1);
 const firstTabIx = ordLines.findIndex((l) => /^\| Tab · /.test(l));
@@ -668,10 +668,10 @@ check("#6 Layout order: all profile regions render before tabs (not interleaved)
 // an unsupplied child gets an explicit `<FILL: recursive sub-migration>` slot — the listing alone is
 // not enough; every child page needs its own mapping, or a visible instruction to produce one.
 const recCs = runMigration({ entity: "Par",
-  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"ChildADetail",entitySchemaName:"ChildA",filter:{detailColumn:"M",masterColumn:"Id"}},D2:{schemaName:"ChildBDetail",entitySchemaName:"ChildB",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"D2",parentName:"T",values:{itemType:2}}]};});` }],
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"ChildADetail",entitySchemaName:"ChildA",filter:{detailColumn:"M",masterColumn:"Id"}},D2:{schemaName:"ChildBDetail",entitySchemaName:"ChildB",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"D2",parentName:"T",values:{itemType:2}}]};});` }],
   detailSchemas: { D1: { entity: "ChildA", editPage: "ChildAPage" }, D2: { entity: "ChildB", editPage: "ChildBPage" } },
   childPageSchemas: { ChildAPage: { entity: "ChildA",
-    layers: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"ChildA",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] } } },
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"ChildA",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] } } },
   { baseDir: FIX });
 const recA = recCs.childPages.find((c) => c.entity === "ChildA") || {};
 const recB = recCs.childPages.find((c) => c.entity === "ChildB") || {};

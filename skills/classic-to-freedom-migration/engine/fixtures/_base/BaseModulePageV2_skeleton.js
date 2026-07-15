@@ -1,13 +1,13 @@
 // Minimal structural skeleton of the classic base page template (BaseModulePageV2 family).
-// Used as an F2 SEED: prepended to a schema's own layers so the base containers/tabs the client
-// layers patch (Header, ProfileContainer, Tabs, ESNTab, ChangesHistoryTab, PrintButton) exist
+// Used as an F2 SEED: prepended to a schema's own schemas so the base containers/tabs the client
+// schemas patch (Header, ProfileContainer, Tabs, ESNTab, ChangesHistoryTab, PrintButton) exist
 // before those patches replay — otherwise they orphan (unresolvedParents) or warn (merge onto
 // absent). Real names taken from the live diagnostics (unresolvedParents + merge-warnings on the
 // Contract/SupportUnit goldens). No entitySchemaName: the template is abstract, so entity
-// resolution skips it and still picks the concrete entity from the client layers.
+// resolution skips it and still picks the concrete entity from the client schemas.
 //
-// In production these seed layers are the REAL parent-template bodies, fetched by their UId via
-// clio get-classic-schema (the base row's Parent.Name from list-schema-layers gives the template
+// In production these seed schemas are the REAL parent-template bodies, fetched by their UId via
+// clio get-classic-schema-by-uid (the base row's Parent.Name from list-schema-hierarchy gives the template
 // name; walk the Parent chain). This fixture is the offline stand-in that proves the mechanism.
 define("BaseModulePageV2", [], function() {
 	return {

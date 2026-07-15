@@ -2,7 +2,7 @@
 
 Use this when a Classic section is being migrated but a **Freedom UI section/page for the same entity
 already exists** (shipped out of the box, or built earlier), and the client's real value is the
-**customizations they layered on the Classic section in their own packages** — added fields, details,
+**customizations they added on top of the Classic section in their own packages** — added fields, details,
 rules, buttons, and elements they hid or removed. The job is not to build a new page; it is to make
 the existing Freedom section carry the client's Classic customization intent, and to reconcile
 anything on Freedom that does not belong.

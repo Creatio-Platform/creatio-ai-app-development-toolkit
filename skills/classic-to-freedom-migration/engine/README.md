@@ -3,7 +3,7 @@
 Детермінований merge-рушій: N шарів класичної ClientUnitSchema (base→top) → одна **ефективна сторінка** + provenance. Чистий Node-модуль, **без залежності від Creatio/стенду** — тестується офлайн на golden-фікстурах.
 
 ## Файли
-- `engine.mjs` — `parseLayer(src,pkg)` (sandbox-парсинг тіла `define(...)` через `node:vm` + універсальний Proxy для Terrasoft/Ext/this) і `mergeLayers(layers)` (replay diff · merge businessRules/rules/details по ключу · override-стек методів · provenance).
+- `engine.mjs` — `parseSchema(src,pkg)` (sandbox-парсинг тіла `define(...)` через `node:vm` + універсальний Proxy для Terrasoft/Ext/this) і `mergeHierarchy(schemas)` (replay diff · merge businessRules/rules/details по ключу · override-стек методів · provenance).
 - `run.mjs` — golden-runner: завантажує фікстури, зливає, друкує звіт, перевіряє assert-и.
 
 ## Запуск
@@ -16,8 +16,8 @@ npm test            # обидва раннери (merge + mapper), exit 1 пр�
 ## Golden-результат (merge 46/46 ✅)
 - **SupportUnit** (SupportCalendar + SupportService): entity=SupportUnit; 8 полів; 3 вкладки; 3 деталі (вкл. `SupportScheduleEmployeeDetail`); 4 правила (ParentSupportUnit/SupportWorkingDayType FILTRATION, Contact/Calendar Required); метод `setName`.
 - **Contract** (9 шарів): entity=Contract; 25 полів; 5 вкладок; 14 деталей; 19 активних правил; **removed** `State`(WorkContractsProcess), `Contact`+`ContractSumGroup`(WorkOverride); `Owner` FILTRATION + `Parent` Required (WorkContractsProcess); 71 метод.
-- **F1 (порядок):** шари подаються у справжньому порядку залежностей (`HierarchyLevel` зі стенду: 299<320<…<607). `mergeLayers` віддає `warnings` (op б'є по відсутньому item) і `unresolvedParents` (діагностика порядку/seed).
-- **F2 (seed бази):** `mergeLayers(layers, {seedLayers})` + fixture `_base/BaseModulePageV2_skeleton.js` → базові контейнери резолвляться (`unresolvedParents→0`), базова вкладка `ESNTab` з'являється, клієнтські вкладки лишаються.
+- **F1 (порядок):** шари подаються у справжньому порядку залежностей (`HierarchyLevel` зі стенду: 299<320<…<607). `mergeHierarchy` віддає `warnings` (op б'є по відсутньому item) і `unresolvedParents` (діагностика порядку/seed).
+- **F2 (seed бази):** `mergeHierarchy(schemas, {seedTemplate})` + fixture `_base/BaseModulePageV2_skeleton.js` → базові контейнери резолвляться (`unresolvedParents→0`), базова вкладка `ESNTab` з'являється, клієнтські вкладки лишаються.
 
 ## Що доводить
 Реконструкція ефективної сторінки з 9 шарів, яку раніше LLM-субагент рахував ~142k токенів, тут виконується **детерміновано й миттєво кодом** — підтвердження тези «merge = код, не LLM».
@@ -34,5 +34,5 @@ npm test            # обидва раннери (merge + mapper), exit 1 пр�
 ## Обмеження прототипу (доробити → продукт)
 - Символьні enum-и: `BusinessRuleModule` (RuleType/Property) і `ViewItemType` (лише підтверджені 0/2/15) **засіджені** → резолвляться. Інші члени `ViewItemType` та `Terrasoft.ContentType.*` ще символьні → нечислові (null); дозасідити за підтвердженими значеннями (ніколи не вгадувати — урок E1).
 - Порядок шарів (F1): подається у порядку `HierarchyLevel` зі стенду (авторитетна топо-глибина). `SysPackageInDependency` **не** ESQ-читабельна, тож сирі DAG-ребра недоступні — двозначність (однаковий рівень) позначається `warnings`, не топосортиться.
-- Seed бази (F2): механізм є (`seedLayers`), але офлайн-fixture — скелет; реальний parent-template ще не тягнеться зі стенду (тому немає, напр., `Name`).
+- Seed бази (F2): механізм є (`seedTemplate`), але офлайн-fixture — скелет; реальний parent-template ще не тягнеться зі стенду (тому немає, напр., `Name`).
 - Функції у `attributes`/`methods` фіксуються за наявністю (provenance), тіла не аналізуються (це вхід для mapper/handler-заготовок).

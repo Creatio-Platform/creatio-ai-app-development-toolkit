@@ -25,7 +25,7 @@ Record the evidence used and any gaps.
 | Local repository | Available / Missing / Partial |  |  |
 | Existing Freedom UI artifacts | Found / Not found / Partial |  |  |
 | Package ownership/editability | Editable / Locked / Unknown / Partial |  |  |
-| Classic layer coverage | All layers read / Partial / Top-only | list layers read (base→top) | items from unread layers are INFERRED |
+| Classic schema coverage | All schemas read / Partial / Top-only | list schemas read (base→top) | items from unread schemas are INFERRED |
 | Tests or validation assets | Found / Not found / Partial |  |  |
 
 ## 3. Classic UI Inventory

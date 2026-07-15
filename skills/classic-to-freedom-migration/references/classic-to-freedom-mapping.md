@@ -101,34 +101,34 @@ For each Classic page/detail, record:
 - Treat security, permission, and data-integrity logic as migration-critical.
 - Treat unsupported Classic UX patterns as product decisions, not implementation details.
 
-## Classic layout & business rules: read ALL package layers, not just the top one
+## Classic layout & business rules: read ALL package schemas, not just the top one
 
-> **Preferred: run the bundled deterministic engine (`engine/migrate.mjs`, see SKILL.md step 4) instead of merging layers by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across layers with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
+> **Preferred: run the bundled deterministic engine (`engine/migrate.mjs`, see SKILL.md step 4) instead of merging schemas by hand.** It implements exactly the procedure below — enumerate the chain and merge `diff` / `details` / `businessRules` across schemas with provenance and symbolic-enum-safe rule decoding — deterministically and instantly, and emits the Freedom ChangeSet + `needsDecision[]`. The manual procedure here is the reference for what the engine does and the fallback when Node is unavailable.
 
 `get-client-unit-schema` (and any single-schema read) returns only the OWN body of the
-top-most replacing schema for that name. For a base-product Classic page that top layer is
+top-most replacing schema for that name. For a base-product Classic page that top schema is
 frequently a thin override whose `diff`, `details`, and `businessRules` blocks are EMPTY
 (`/**SCHEMA_DIFF*/[]`, `/**SCHEMA_BUSINESS_RULES*/{}`). The real layout, details, and
-business rules live in ANCESTOR package layers.
+business rules live in ANCESTOR package schemas.
 
-Hard rule: an empty `diff` / `businessRules` / `details` in one layer is NOT evidence that
+Hard rule: an empty `diff` / `businessRules` / `details` in one schema is NOT evidence that
 the page has none. NEVER state "the Classic page has no business rules / no layout / no
-details" based on a single layer's body. Doing so is a discovery defect, not a finding.
+details" based on a single schema's body. Doing so is a discovery defect, not a finding.
 
 Correct discovery procedure for every Classic page/section/detail:
 1. Enumerate ALL replacing schemas for the name across packages (e.g. `list-pages` /
    `list-client-unit-schemas` by schema-name) and record the full package chain,
    base → top.
-2. Read each layer's own body. If the read tool only resolves the top layer, obtain the
-   lower layers by:
+2. Read each schema's own body. If the read tool only resolves the top schema, obtain the
+   lower schemas by:
    - pulling package source with `download-configuration-by-environment` and grepping
      `businessRules` / `SCHEMA_DIFF` across every `*PageV2` / `*SectionV2` body, or
-   - reading the layer directly in the Client Unit Schema designer.
-3. Merge `diff`, `details`, and `businessRules` across layers to reconstruct the effective
-   Classic page. Attribute each item to the layer it came from.
-4. In the plan's discovery-evidence table, add a "layer coverage" row: list which layers
+   - reading the schema directly in the Client Unit Schema designer.
+3. Merge `diff`, `details`, and `businessRules` across schemas to reconstruct the effective
+   Classic page. Attribute each item to the schema it came from.
+4. In the plan's discovery-evidence table, add a "schema coverage" row: list which schemas
    were actually read and which were not. Mark any business rule / field / detail as
-   CONFIRMED only when its source layer body was read; otherwise mark it INFERRED and list
+   CONFIRMED only when its source schema body was read; otherwise mark it INFERRED and list
    it as a missing-source risk.
 
 ## Distinguish declarative business rules from imperative logic — they map differently
