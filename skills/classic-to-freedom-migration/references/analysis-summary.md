@@ -58,7 +58,6 @@ Migration call vocabulary (the `Call` column in `Pages`):
 | --- | --- | --- |
 | <section/list schema> (list page) | <Freedom list template> | Rebuild |
 | <page schema> (form page) | <Freedom form template> | Rebuild |
-| entity · details · lookups · backend | reused as-is | Reuse |
 ```
 
 `Main scope` is the index of the pages this migration covers; expand each below IN THIS ORDER — list
@@ -97,7 +96,6 @@ recruitment-stage logic, communications, activities/emails, and an approvals (vi
 | --- | --- | --- |
 | Applicant1Section (list page) | ListPageV3 list page | Rebuild |
 | Applicant1Page (form page) | PageWithTabsFreedomTemplate (form) | Rebuild |
-| Applicant entity · details · lookups · backend | reused as-is | Reuse |
 ```
 
 Then the generated design spec (`Layout` + `Logic` + `⚠ Confirm`) for `Applicant1Page` follows.

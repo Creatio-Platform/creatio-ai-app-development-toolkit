@@ -682,6 +682,13 @@ check("#7 child recursion: mapped child's design spec is NESTED in the plan (hea
   /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
 check("#7 child recursion: unsupplied child gets an explicit recursive-sub-migration FILL slot (not just a row)",
   /#### Child page: ChildB[\s\S]*?<FILL: recursive sub-migration>/.test(recCs.plan));
+// #7b Main-scope hygiene: child rows get a fixed clean target (no free-text FILL that invited status prose),
+// and the meaningless "entity · details · lookups · backend → Reuse" row is gone.
+check("#7b Main scope: child rows use a fixed 'Freedom record page' target (no free-text FILL)",
+  /Rebuild \(child\) \|/.test(recCs.plan) && /\| Freedom record page \| Rebuild \(child\) \|/.test(recCs.plan)
+  && !/Freedom form template \/ resolve via list-pages/.test(recCs.plan));
+check("#7b Main scope: the meaningless 'entity · details · lookups · backend / Reuse' row is removed",
+  !/reused as-is \| Reuse/.test(recCs.plan) && !/entity · details · lookups · backend/.test(recCs.plan));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

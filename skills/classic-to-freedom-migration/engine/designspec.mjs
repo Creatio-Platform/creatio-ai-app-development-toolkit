@@ -247,10 +247,11 @@ export function renderPlan(result, opts = {}) {
   P.push("| --- | --- | --- |");
   P.push("| <FILL: section schema> (list page) | <FILL: Freedom list template> | Rebuild |");
   P.push(`| ${entity} form page | <FILL: Freedom form template> | Rebuild |`);
-  // child edit pages belong in Pages too — each related list's child entity opens its OWN form on
-  // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note.
-  for (const c of childs) P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | <FILL: Freedom form template / resolve via list-pages> | Rebuild (child) |`);
-  P.push("| entity · details · lookups · backend | reused as-is | Reuse |");
+  // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
+  // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
+  // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
+  // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
+  for (const c of childs) P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | Freedom record page | Rebuild (child) |`);
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)` rows are recursive sub-migrations** — each child page's own mapping is under **Child page mappings** below (generated where the schema was supplied, a `<FILL>` slot otherwise). A related list whose child entity has no Freedom form can't add/edit records.");
   P.push("");
