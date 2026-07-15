@@ -106,14 +106,17 @@ function matchFeature(schemaName) {
 // coordinates overflow and the layout breaks; emitting the 24-track template fixes it (#14).
 const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
 // header/analytical widgets — recognised by MODULE key and by CONTAINER name.
+// DCM binds to the OBJECT: in Freedom the case-stage progress bar and Next-steps auto-populate from the
+// object's configured case (nothing to place/configure per page). No case on the object ⇒ no stages to migrate.
+const DCM_NOTE = "DCM binds to the object — the stage progress bar + Next steps auto-populate from the object's case; do NOT rebuild stages per page. No case configured on the object ⇒ nothing to migrate here.";
 const WIDGET_BY_MODULE = {
-  ActionsDashboardModule: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps" },
-  DcmActionsDashboardModule: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator" },
+  ActionsDashboardModule: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps", note: DCM_NOTE },
+  DcmActionsDashboardModule: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator", note: DCM_NOTE },
   Timeline: { widget: "Timeline", freedom: "Freedom Timeline" },
 };
 const WIDGET_BY_CONTAINER = {
-  ActionDashboardContainer: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps" },
-  DcmActionsDashboardContainer: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator" },
+  ActionDashboardContainer: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps", note: DCM_NOTE },
+  DcmActionsDashboardContainer: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator", note: DCM_NOTE },
   RecommendationModuleContainer: { widget: "Recommendations", freedom: "Freedom recommendations widget" },
   DuplicatesWidgetContainer: { widget: "Duplicates", freedom: "Freedom duplicates widget" },
   ESNFeedContainer: { widget: "Feed (ESN)", freedom: "Freedom Feed" },
@@ -504,9 +507,9 @@ export function mapToFreedom(eff, opts = {}) {
   const widgets = [];
   const seenWidget = new Set();
   const addWidget = (w, classic, base) => { if (w) accountedFor.add(classic); if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base });
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null });
     needsDecision.push({ kind: "widget", item: w.widget,
-      reason: `${w.widget}${base ? " (base-provided)" : ""} → ${w.freedom}${base ? " — usually provided by the Freedom template; confirm or re-apply any customization" : "; confirm the Freedom component"}` }); } };
+      reason: `${w.widget}${base ? " (base-provided)" : ""} → ${w.freedom}${base ? " — usually provided by the Freedom template; confirm or re-apply any customization" : "; confirm the Freedom component"}${w.note ? ` — ${w.note}` : ""}` }); } };
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
 

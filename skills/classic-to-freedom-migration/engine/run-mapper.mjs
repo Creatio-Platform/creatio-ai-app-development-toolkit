@@ -637,6 +637,16 @@ const wReg = runMigration({ entity: "X",
 check("#5 widgets: grouped under a 'Header / top' region (not their own top-level region)",
   /\| Header \/ top \| ActionDashboard \|/.test(wReg.designSpec));
 
+// #8 — DCM widget carries the "binds to the object" note (stages + Next steps auto-populate from the
+// object's case), on the widget, in its decision, and in the design spec's Additional column.
+const dcmCs = runMigration({ entity: "X",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("#8 DCM: widget + decision carry the 'binds to the object' note (stages/Next steps auto-populate)",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "CaseStages (DCM)" && /binds to the object/.test(w.note || ""))
+  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /binds to the object/.test(n.reason)));
+check("#8 DCM: the note surfaces in the design spec (Additional column of the widget row)",
+  /CaseStages \(DCM\)[\s\S]*?binds to the object/.test(dcmCs.designSpec));
+
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.
 const ordCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [

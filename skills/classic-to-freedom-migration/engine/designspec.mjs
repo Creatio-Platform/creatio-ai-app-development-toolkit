@@ -96,7 +96,7 @@ export function renderDesignSpec(result, opts = {}) {
     rows.push({ region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] });
   }
   for (const w of cs.widgets || []) {
-    rows.push({ region: "Header / top", sort: 2, cells: [esc(w.widget), "Component", w.base ? "template context — provided by the Freedom template" : "native — confirm on-stand", DASH, DASH] });
+    rows.push({ region: "Header / top", sort: 2, cells: [esc(w.widget), "Component", w.base ? "template context — provided by the Freedom template" : "native — confirm on-stand", DASH, w.note ? esc(w.note) : DASH] });
   }
   for (const a of cs.cardActions || []) {
     const isProc = /process/i.test(a);

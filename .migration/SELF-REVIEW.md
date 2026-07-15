@@ -269,6 +269,11 @@
 - SKILL: `childPageSchemas` у входах (крок 4.2), опис `--plan` згадує `### Child page mappings`, крок 7.3 → child будується з вкладеного spec; `<FILL: recursive sub-migration>` має бути **зарезолвлений ДО апруву** (fetch edit page → додати в `childPageSchemas` → re-run `--plan`), не відкладати на білд.
 - **Межа:** рушій даних не фетчить — агент витягує child-схеми (`list-pages`+`get-classic-schema`) і передає в `childPageSchemas`; рушій робить решту. Depth-cap 2: онуки лишаються рядками у власному плані дитини.
 
+**Зауваження юзера #5: DCM прив'язується до ОБ'ЄКТА.** Агент писав «Applicant не має налаштованого DCM-кейса, беру лише те, що дає шаблон» — але не пояснено головне: у Freedom прогрес-бар стадій + Next Steps **автозаповнюються з кейса ОБ'ЄКТА**, не конфігуряться на сторінці. Фікс (merge 49/49, mapper 138/138, +2):
+- `mapper.mjs` — `DCM_NOTE` на DCM-віджетах (`CaseStages (DCM)`, `ActionDashboard/Next steps`): «DCM binds to the object — stage progress bar + Next steps auto-populate from the object's case; do NOT rebuild stages per page. No case ⇒ nothing to migrate». Прокинуто в `widgets[].note` + decision reason.
+- `designspec.mjs` — note у колонці Additional widget-рядка.
+- SKILL — нова нота «DCM widgets bind to the OBJECT, not the page»: є кейс на об'єкті → прив'яжи віджет, стадії/кроки самі; нема кейса → мігрувати нічого (це був base-context); ніколи не хардкодити стадії на сторінці. Наявність кейса — confirm на стенді (схема не каже).
+
 ## Backlog — окремі майбутні задачі
 
 - **[clio-fork] `list-environments` шум (~30k/прогін).** Виклик без аргументів дампить УСІ зареєстровані середовища з повним конфігом (одноразово ~30k токенів, висить у контексті). Fix = **варіант A**: додати `list-environments` **необов'язковий** `search-pattern` (match за name/URL-хостом) → повертає лише збіг. Additive/opt-in, backward-compatible; **НЕ варіант B** (обрізати вивід для всіх — зламає інших викликачів). Це **базовий** clio-тул → окрема гілка у форку, **не мішати** в `feature/classic-to-freedom-schema-tools` (окремий scope/PR). Пріоритет: низький (разовий хіт; братись лише якщо на верифікації реально муляє). Див. [[classic-freedom-discovery-token-burn]].
