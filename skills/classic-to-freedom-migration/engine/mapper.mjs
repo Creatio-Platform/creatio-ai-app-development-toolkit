@@ -85,7 +85,12 @@ const PROP_ACTION = {
 // native Freedom component with its own UI (Approvals, Attachments). This drives whether the spec marks it
 // "Related list" vs the component name — the two are NOT visually interchangeable.
 const FEATURE_CATALOG = {
-  VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)", uiShape: "component" },
+  // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
+  // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
+  // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.
+  // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
+  VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)", uiShape: "component",
+    note: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." },
   FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component" },
   // Activities is the related TASKS/activities list — NOT the Timeline widget (Timeline is a separate
   // classic component, mapped via WIDGET_BY_MODULE.Timeline). Do not conflate the two (#6).
@@ -465,9 +470,9 @@ export function mapToFreedom(eff, opts = {}) {
     if (!feat && (dentity || "").endsWith("File")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list" });
+      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
       needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
-        reason: `${featByEntity ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}` });
+        reason: `${featByEntity ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}${feat.note ? ` — ${feat.note}` : ""}` });
       continue;
     }
     // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied

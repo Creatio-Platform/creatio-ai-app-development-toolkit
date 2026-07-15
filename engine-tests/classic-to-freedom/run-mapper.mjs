@@ -468,6 +468,11 @@ check("design-spec: lookup Type shows the referenced object — Lookup (Contact)
 check("design-spec: text Type shows length — Text (250)", /Text \(250\)/.test(spec));
 check("design-spec: component feature (Approvals) shown by name; list feature (Activities) as Related list",
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
+// Visa=Approvals domain note must ride on the standardFeature AND surface in the Layout row (the
+// standard-feature decision is excluded from ⚠ Confirm) — so the agent doesn't wrongly downgrade it.
+check("Approvals: Visa carries the 'don't downgrade' domain note in the feature + design-spec Layout row",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && /how Approvals is stored/.test(s.note || ""))
+  && /Approvals[\s\S]*?how Approvals is stored/.test(spec));
 check("design-spec: Logic table lists the handler (onContactChanged → Contact changes)",
   /#### Logic/.test(spec) && /onContactChanged \| Contact changes/.test(spec));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
@@ -588,10 +593,12 @@ check("ancestor-visibility: field in a dynamically-shown container is flagged (c
   avCs.needsDecision.some(n => n.kind === "ancestor-visibility" && n.item === "DF"));
 
 /* ---- --plan: whole plan skeleton (Overview/Pages placeholders + generated spec + recursive child pages) ---- */
-check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Main scope + design spec + Layout)",
+check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Main scope + embedded spec + Layout)",
   typeof cli.plan === "string" && /— Classic → Freedom UI/.test(cli.plan)
   && /### Overview/.test(cli.plan) && /<FILL:/.test(cli.plan)
-  && /### Main scope/.test(cli.plan) && /## Design spec/.test(cli.plan) && /#### Layout/.test(cli.plan));
+  && /### Main scope/.test(cli.plan) && / form page/.test(cli.plan) && /#### Layout/.test(cli.plan)
+  // embedded spec must NOT repeat the standalone `## Design spec …` header / Entity+Size preamble (Overview has it)
+  && !/## Design spec/.test(cli.plan));
 check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)",
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
 check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
