@@ -333,8 +333,8 @@
 - D3: у списку підзадач кроку 7 — child edit pages FIRST, потім related lists батька (leaf-first по дереву), бо Add/Edit деталі працює лише коли є дочірня форма.
 - D1: завершення лишається (масштаб/поведінка; частково закрито STRUCTURE-валідатором, що не дає «готовий» план без дочірніх).
 
-**⚪ P3 — гігієна (Тема 8)**
-- RV13: `.gitignore scratch_` не匹ає реальні артефакти (plan.md/manifest.json/design-spec.md) → ризик закомітити дані замовника.
+**✅ ЗРОБЛЕНО — гігієна (Тема 8; RV13)**
+Бланкетно ігнорити імена doc-set не можна (plan.md/… свідомо версіонуються в КЛІЄНТСЬКОМУ репо; `analysis-summary.md`/`page-design-spec.md` — власні файли скіла → колізія). Безпечний фікс: чутливий engine-I/O (manifest + витягнуті стенд-тіла + `--plan`/`--spec` дампи) писати під `scratch_`-теку, яку `.gitignore scratch_*` ловить (файли І теки). SKILL крок 4.2 → «Write manifest + bodies under `scratch_<entity>-migration/`»; `.gitignore` коментар пояснює межу (engine-I/O ігнорується; doc-set — ні).
 
 ## Applicant run #2 — child-mapping loophole ("out of scope" invented) [✅ ЗРОБЛЕНО]
 

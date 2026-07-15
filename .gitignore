@@ -20,5 +20,11 @@ output/
 .tmp-tests/
 .serena/
 .clio-pages/
-# Classic→Freedom migration engine (migrate.mjs) I/O artifacts — may contain stand-sourced Classic schema/config
+# Classic→Freedom migration engine (migrate.mjs) I/O — the manifest, the fetched Classic schema BODIES
+# (page/seed/detail layer sources), and any --plan/--spec dumps. These carry stand-sourced schema/config and
+# possibly customer captions/business-rule values, so the skill writes them under a `scratch_*` working dir
+# (SKILL step 4.2) and they are ignored here. Matches files AND directories (e.g. scratch_applicant-migration/).
+# NOTE: the migration DOC set (plan.md/discovery.md/worklog.md/roadmap.md/decisions.md) is meant to be VERSIONED
+# in the client's own migration-project repo — it is intentionally NOT ignored (and its names collide with the
+# toolkit's own references/*.md, so they must never be blanket-ignored here).
 scratch_*
