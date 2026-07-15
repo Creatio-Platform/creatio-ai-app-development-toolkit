@@ -104,8 +104,21 @@ export function runMigration(manifest, opts = {}) {
   }
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
+  // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
+  // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
+  // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
+  // turns `blocked` into a loud banner + non-zero exit, and the renderer prints the banner into the artifact.
+  const gate = (() => {
+    const reasons = [];
+    if (parseErrors.length) reasons.push(`parseErrors (${parseErrors.length}): ${parseErrors.map((e) => e.pkg).join(", ")} — a schema body failed to parse`);
+    if ((eff.unresolvedParents || []).length) reasons.push(`unresolvedParents: ${eff.unresolvedParents.join(", ")} — base-template seed incomplete (F2) or schemas out of order (F1)`);
+    if ((eff.warnings || []).length) reasons.push(`warnings (${eff.warnings.length}): ${[...new Set(eff.warnings.map((w) => w.name || w.op))].join(", ")} — op hit a missing item / skeletal seed`);
+    if (eff.seedQuality && eff.seedQuality.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
+    return { blocked: reasons.length > 0, reasons };
+  })();
   const out = {
     entity: manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity,
+    gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal
     parseErrors, // non-empty ⇒ a schema body failed to parse: FIX before trusting the ChangeSet
     // effective Classic page (the merged 80%) — headline counts + the diagnostics that gate correctness
     effective: {
@@ -159,4 +172,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (specMode) output = result.designSpec + "\n";
   else output = JSON.stringify(result, null, 2) + "\n";
   process.stdout.write(output);
+  // ⛔ HARD GATE (RV1): the artifact carries the banner (renderer), but also make the CLI fail loudly so a
+  // gate-blocked run can't be mistaken for a clean one — stderr note + non-zero exit (2, distinct from the
+  // exit-1 bad-input path). The plan/spec is still printed above so the agent can see WHAT is wrong.
+  if (result.gate && result.gate.blocked) {
+    process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
+    process.exit(2);
+  }
 }

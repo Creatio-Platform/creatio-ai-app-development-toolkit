@@ -450,12 +450,16 @@ check("design-spec: legacy split tables gone (no Region map / Fields / Details &
   !/### Region map/.test(cli.designSpec) && !/### Fields/.test(cli.designSpec) && !/### Details & standard features/.test(cli.designSpec));
 check("design-spec: Confirm section present (⚠ worklist)",
   /#### ⚠ Confirm before I build/.test(cli.designSpec));
+// a clean (non-skeletal) seed defining the base containers the SupportUnit fixture patches — so these CLI
+// runs are gate-CLEAN (exit 0, no ⛔ banner) and stay pure shape tests; the blocked path is tested separately.
+const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){},getActions:function(){}}};});' }];
+const SU_SCHEMAS = [
+  { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
+  { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }];
 const specRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: [
-    { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
-    { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
-check("migrate.mjs --spec: prints pure design-spec Markdown (## Design spec…), no JSON envelope",
-  specRun.status === 0 && (specRun.stdout || "").trim().startsWith("## Design spec") && !/"changeSet"/.test(specRun.stdout || ""));
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED }), encoding: "utf8" });
+check("migrate.mjs --spec: gate-clean run prints pure design-spec Markdown (## Design spec…), no JSON envelope, exit 0",
+  specRun.status === 0 && (specRun.stdout || "").trim().startsWith("## Design spec") && !/"changeSet"/.test(specRun.stdout || "") && !/GATE BLOCKED/.test(specRun.stdout || ""));
 
 /* ---- design-spec Layout: uiShape (list vs component), lookup ref, type+length, Logic handlers ---- */
 const dsCs = runMigration({ entity: "X",
@@ -607,11 +611,21 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: [
-    { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
-    { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
-check("migrate.mjs --plan: prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope",
-  planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || ""));
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED }), encoding: "utf8" });
+check("migrate.mjs --plan: gate-clean run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
+  planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || ""));
+// ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
+// plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
+const blockedRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS }), encoding: "utf8" });
+check("HARD GATE: a no-seed run is blocked — CLI exits non-zero, stderr + top-of-plan ⛔ banner",
+  blockedRun.status !== 0 && /GATE BLOCKED/.test(blockedRun.stderr || "")
+  && /⛔ \*\*HARD GATE — BLOCKED/.test(blockedRun.stdout || "")
+  && /unresolvedParents/.test(blockedRun.stdout || ""));
+check("HARD GATE: result.gate.blocked + reasons are exposed on the JSON result",
+  (() => { const r = runMigration({ entity: "SupportUnit", entityColumns: SU_COLS,
+    schemas: [{ pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" }, { pkg: "SupportService", file: "supportunitemployee/SupportService.js" }] }, { baseDir: FIX });
+    return r.gate.blocked === true && r.gate.reasons.some(x => /unresolvedParents/.test(x)); })());
 check("child pages: detail schema editPage flows into the recursion target",
   runMigration({ entity: "X",
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{R:{schemaName:"ReqDetail",entitySchemaName:"InternalRequest",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R",parentName:"T",values:{itemType:2}}]};});` }],

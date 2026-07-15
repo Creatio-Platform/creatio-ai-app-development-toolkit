@@ -293,7 +293,9 @@
 
 Джерела: аналіз реального прогону (Applicant на workbuild103), Adjustments/чекпойнт самого агента, і code-review PR #46 (Alexandr-Kravchuk, 15 знахідок). Уже закрито інлайн: Main scope child-тексти + Reuse-рядок, дубль заголовка специ (opts.embedded), Visa=Approvals доменна нота.
 
-**🔴 P1 — HARD GATE насправді не працює (Тема 1; поглинає seed-shortcut B1)**
+**✅ ЗРОБЛЕНО — HARD GATE тепер реальний (Тема 1; поглинає seed-shortcut B1)**
+`runMigration` рахує `result.gate={blocked,reasons[]}` (не кидає — golden-safe); CLI при blocked пише stderr `⛔ GATE BLOCKED` + exit 2; `--plan`/`--spec` несуть `⛔ HARD GATE — BLOCKED` банер нагорі (усі 4 сигнали: parseErrors/unresolvedParents/warnings/looksSkeletal). SKILL: гейт-блок посилається на `result.gate.blocked` + всі шляхи з префіксом `result.effective.*` (RV3). +4 голдени (gate-clean +2 shape, blocked-path, gate-on-JSON). Нижче — вихідний опис:
+
 - RV1: `runMigration` рахує `parseErrors`/`warnings`/`unresolvedParents`/`looksSkeletal`, але ніде не перевіряє → завжди повертає повний план; CLI не друкує `parseErrors`.
 - RV2: `renderDesignSpec` виводить лише `unresolvedParents`, не решту 3 сигнали.
 - RV3: SKILL-гейт пише `unresolvedParents`/`warnings` без префікса `effective.` → агент може вважати гейт вакуумно пройденим.

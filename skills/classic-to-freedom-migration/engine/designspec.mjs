@@ -81,8 +81,13 @@ export function renderDesignSpec(result, opts = {}) {
     L.push(`- **Entity:** ${entity}${opts.template ? ` · **Template:** ${opts.template}` : ""}${opts.targetPackage ? ` · **Package:** ${opts.targetPackage}` : ""}`);
     L.push(`- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`);
   }
-  if (eff.unresolvedParents?.length)
-    L.push(`- ⚠ **unresolvedParents:** ${eff.unresolvedParents.join(", ")} — the seed is incomplete; DO NOT build until empty`);
+  // ⛔ HARD GATE banner (RV1/RV2): surface EVERY non-empty correctness signal, not just unresolvedParents.
+  // Standalone (--spec) prints it here; embedded-in-plan relies on renderPlan's top-of-plan banner (below).
+  const gate = result.gate || { blocked: false, reasons: [] };
+  if (!opts.embedded && gate.blocked) {
+    L.push("> ⛔ **HARD GATE — BLOCKED. DO NOT BUILD.** The engine found unresolved correctness signals; fix them and re-run:");
+    for (const r of gate.reasons) L.push(`> - ${esc(r)}`);
+  }
   L.push("");
 
   // ---- ONE Layout table (structure + contents) ----
@@ -237,6 +242,14 @@ export function renderPlan(result, opts = {}) {
   const P = [];
   P.push(`## ${entity} — Classic → Freedom UI`);
   P.push("");
+  // ⛔ HARD GATE banner at the VERY TOP of the plan (RV1/RV2) — first thing the agent (and the user it pastes
+  // to) sees, above Overview. A blocked plan is NOT an approvable plan: fix the signals and re-run `--plan`.
+  const gate = result.gate || { blocked: false, reasons: [] };
+  if (gate.blocked) {
+    P.push("> ⛔ **HARD GATE — BLOCKED. This plan is NOT ready to build or approve.** Fix these and re-run `migrate.mjs --plan`:");
+    for (const r of gate.reasons) P.push(`> - ${esc(r)}`);
+    P.push("");
+  }
   P.push("### Overview");
   P.push("**Scope:** <FILL: single-section | whole-package> ·");
   P.push("**Environment:** <FILL: environment name> ·");
