@@ -98,7 +98,7 @@ export function renderDesignSpec(result, opts = {}) {
   for (const a of cs.cardActions || []) {
     const isProc = /process/i.test(a);
     const isPrint = /print/i.test(a);
-    const add = isProc ? "⚠ which process — confirm" : (isPrint ? "⚠ only if print reports exist — verify" : DASH);
+    const add = isProc ? "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection); base button names none" : (isPrint ? "⚠ only if print reports exist — verify" : DASH);
     rows.push({ region: "Card actions", sort: 3, cells: [esc(a.replace(/Button$/, "")), "Action", DASH, DASH, add] });
   }
   // group by region (first-seen order), stable by `sort` then insertion within region
@@ -157,7 +157,7 @@ export function renderDesignSpec(result, opts = {}) {
   }
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = (cs.needsDecision.find((n) => n.kind === "process-launch") || {}).item;
-    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, "⚠ run-process handler — which process?"]);
+    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection)"]);
   }
   if (logic.length) {
     L.push("### Logic");
