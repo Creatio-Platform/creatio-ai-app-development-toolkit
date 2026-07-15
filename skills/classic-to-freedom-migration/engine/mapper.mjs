@@ -307,8 +307,10 @@ export function mapToFreedom(eff, opts = {}) {
   }
   for (const { f, own } of resolved) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
-    let parent;
+    let parent, inProfile = false;
     if (own.kind === "profile") {
+      inProfile = true; // RV6 — a side-profile field stays "narrow" even after `parent` is reassigned to a
+                        // per-island container below (multi-island pages); don't derive narrow from `parent`.
       parent = profileRegion(own);
       // the island/group wrappers between the field and the profile anchor are ACCOUNTED FOR — their
       // fields are migrated into the profile — so they are not mis-flagged as "produced no Freedom element".
@@ -345,7 +347,7 @@ export function mapToFreedom(eff, opts = {}) {
     // Moment 1 — preserve the classic grid coordinates (24-col grid, 0-based) instead of inventing them;
     // classic column N -> Freedom column N+1. Fall back to sequential/full-width only when absent.
     const cl = f.layout || {};
-    const narrow = parent === "SideAreaProfileContainer";
+    const narrow = inProfile; // profile fields (main container OR a per-island container) default to colSpan 1
     const defaultColSpan = narrow ? 1 : 24;
     const layoutConfig = {
       column: cl.column != null ? cl.column + 1 : 1,
@@ -541,8 +543,15 @@ export function mapToFreedom(eff, opts = {}) {
   // ---- image / photo components (generator-based, no bindTo) → Freedom image component ----
   const images = [];
   for (const i of (eff.items || [])) {
-    const isImg = (i.generator && /image/i.test(i.generator)) || (!i.bindTo && /^(Photo|Image|Logo)$/i.test(i.name));
-    if (!isImg) continue;
+    // RV11 — (a) skip template-owned items: a base-template Photo/Logo is layout context, not client payload
+    // (it triggered a spurious `image` decision on every migration built on that template). (b) the no-
+    // generator fallback recognised only bare Photo/Image/Logo — broaden to Avatar/Thumbnail/Picture and to
+    // *-suffixed names (CompanyLogo/UserAvatar), while still excluding structural containers/tabs/details.
+    if (i.templateOwned) continue;
+    const genImg = i.generator && /image/i.test(i.generator);
+    const nameImg = !i.bindTo && i.itemType !== 2 && i.itemType !== 15 && !i.isTab
+      && (/^(?:Photo|Image|Logo|Avatar|Thumbnail|Picture)\d*$/i.test(i.name) || /(?:Photo|Logo|Avatar|Thumbnail|Picture)$/.test(i.name));
+    if (!genImg && !nameImg) continue;
     accountedFor.add(i.name);
     images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
     needsDecision.push({ kind: "image", item: i.name,
@@ -616,7 +625,11 @@ export function mapToFreedom(eff, opts = {}) {
   const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
   const dropped = new Set();
   for (const i of (eff.items || [])) {
-    if (i.templateOwned || i.bindTo || i.itemType === 2 || i.itemType === 15 || i.isTab) continue;
+    // RV7 — a template-owned item is normally layout context (skip), EXCEPT a `…Button` outside the known
+    // action set: it is neither emitted as a card action nor otherwise accounted, so without this it vanished
+    // with zero warning (unlike an identically-named CUSTOM button, which was already flagged).
+    const isButton = /Button$/.test(i.name);
+    if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === 2 || i.itemType === 15 || i.isTab) continue;
     if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
     if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
     dropped.add(i.name);
@@ -629,7 +642,9 @@ export function mapToFreedom(eff, opts = {}) {
     const captionNote = i.caption ? ` (caption ${i.caption})` : "";
     const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
     const reason = isBtn
-      ? `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`
+      ? (i.templateOwned
+        ? `standard/template button '${i.name}' is not in the recognized action set and got no card-action mapping — confirm the Freedom template already provides it, else wire it as a Freedom card action (RV7)`
+        : `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`)
       : `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
     needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
   }

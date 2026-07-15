@@ -239,7 +239,9 @@ function normalizeDiff(diff) {
       // caption resource key (tab/group/detail label) — carried so the real caption is shown for
       // cross-check instead of only a synthesized placeholder.
       caption,
-      order: v && isNum(v.order) ? v.order : null,
+      // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
+      // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
+      order: v && isNum(v.order) ? v.order : (isNum(op.index) ? op.index : null),
       // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
       // (e.g. a wide 3-column header) instead of inventing a single narrow column.
       layout: normalizeLayout(v.layout),
@@ -353,13 +355,20 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
         if (cur) {
           for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
-          for (const k of ["bindTo", "layout", "tip", "hint", "caption"]) { if (op[k]) cur[k] = op[k]; }
+          for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
           cur.provenance.push(L.pkg);
         }
         else {
           // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
-          // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
-          items.set(op.name, { name: op.name, parent: op.parentName, propertyName: op.propertyName, bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, templateOwned: seed });
+          // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
+          // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
+          items.set(op.name, {
+            name: op.name, parent: op.parentName, propertyName: op.propertyName,
+            bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
+            isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
+            tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
+            templateOwned: seed,
+          });
           warnings.push({ op: "merge", name: op.name, schema: L.pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
         }
       } else if (op.operation === "move") {

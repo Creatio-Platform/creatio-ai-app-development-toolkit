@@ -305,12 +305,12 @@
 **✅ ЗРОБЛЕНО — структурний profile-anchor (Тема 2; RV14)**
 `deriveProfileAnchors(eff.items)` = літеральний набір ∪ структурні: top-level (parent null) templateOwned-контейнер, що НЕ tab і НЕ tabs-панель (батько isTab-елементів) → profile-anchor, хоч би як звався (LeftContainer/CasePageV2 тепер працює без дописування імені). `resolveOwner` приймає `profileAnchors`. +2 голдени (NON-literal LeftContainer→profile; tabs-панель НЕ profile). Дорогою спіймала, що API — `mergeHierarchy` + опція `seedTemplate` (не старі `mergeLayers`/`seedLayers`).
 
-**🟠 P2 — реальні баги рушія (Тема 3; голдени не ловлять)**
-- RV4: merge-onto-absent stub пропускає layout/tip/hint/generator/visible/caption.
-- RV5: `op.index` не використовується → order:null коли немає values.order.
-- RV6: narrow-colSpan баг на мульти-island профілі (24 замість 1).
-- RV7: стандартна кнопка поза KNOWN_ACTION_ITEMS + templateOwned зникає без warning.
-- RV11: image-loop не виключає templateOwned + name-match лише Photo/Image/Logo.
+**✅ ЗРОБЛЕНО — реальні баги рушія (Тема 3; +6 голденів)**
+- RV4: merge-onto-absent stub тепер має повну insert-форму (layout/tip/hint/generator/visible/caption); merge-cur теж копіює generator.
+- RV5: `normalizeDiff.order` fallback на `op.index`, коли немає `values.order`.
+- RV6: `narrow` рахується з прапорця `inProfile`, не з `parent` → island-поля лишають colSpan 1 (не 24).
+- RV7: template-owned `…Button` поза KNOWN_ACTION_ITEMS більше не пропускається drop-scan-ом → surface з template-aware текстом.
+- RV11: image-loop виключає `templateOwned` (нема спурйозного decision) + name-match розширено (Avatar/Thumbnail/Picture + *-suffix CompanyLogo/UserAvatar), структурні контейнери виключено.
 
 **✅ ЗРОБЛЕНО — повнота/точність плану (Тема 4)**
 - RV12: `cs.images` тепер має рядок у Layout («Image», з регіону parent + «⚠ wire source/upload»).

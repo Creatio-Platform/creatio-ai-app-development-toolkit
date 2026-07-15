@@ -765,5 +765,43 @@ check("#7c view-only child (no edit page) is a legit skip — 'no child edit pag
   && /View-only related list[\s\S]{0,80}no child edit page/.test(voChild.plan)
   && !/MUST fetch it and map it/.test(voChild.plan));
 
+/* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
+// RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
+const rv4 = mergeHierarchy([L("P", { entity: "X", diff: [
+  di({ name: "GhostBtn", operation: "merge", visible: false, tip: "Resources.Strings.T", caption: "Resources.Strings.C" })] })]);
+const rv4i = (rv4.items || []).find((i) => i.name === "GhostBtn");
+check("RV4: merge-onto-absent stub carries visible/tip/caption (full insert shape), + a merge warning",
+  !!rv4i && rv4i.visible === false && rv4i.tip === "Resources.Strings.T" && rv4i.caption === "Resources.Strings.C"
+  && rv4.warnings.some((w) => w.name === "GhostBtn"));
+// RV5 — a diff op with `index` but no `values.order` falls back to index (normalizeDiff / parseSchema path).
+const rv5op = parseSchema(`define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"D",parentName:"Header",propertyName:"items",values:{itemType:2},index:7}]};});`, "P")
+  .diff.find((o) => o.name === "D");
+check("RV5: diff op with index but no values.order gets order from index", !!rv5op && rv5op.order === 7);
+// RV6 — a field in a per-island profile container keeps colSpan 1 (narrow), not 24.
+const rv6 = mapToFreedom(mergeHierarchy(
+  [L("Client", { entity: "X", diff: [
+    di({ name: "IslandA", parentName: "LeftModulesContainer", itemType: 0 }),
+    di({ name: "FldA", parentName: "IslandA", propertyName: "items", bindTo: "FldA" }),
+    di({ name: "IslandB", parentName: "LeftModulesContainer", itemType: 0 }),
+    di({ name: "FldB", parentName: "IslandB", propertyName: "items", bindTo: "FldB" })] })],
+  { seedTemplate: [L("Tpl", { diff: [di({ name: "LeftModulesContainer", itemType: 15 }), di({ name: "Tabs", itemType: 15 })] })] }));
+const rv6f = rv6.viewConfigDiff.find((o) => o.name === "FldA");
+check("RV6: multi-island profile field keeps colSpan 1 (not 24), routed into its own island container",
+  !!rv6f && rv6f.values.layoutConfig.colSpan === 1 && rv6f.parentName !== "SideAreaProfileContainer");
+// RV7 — a template-owned button outside KNOWN_ACTION_ITEMS is surfaced, not silently dropped.
+const rv7 = mapToFreedom(mergeHierarchy(
+  [L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedTemplate: [L("Tpl", { diff: [di({ name: "FooButton", parentName: "Header" })] })] }));
+check("RV7: a template-owned button outside the known action set is surfaced (not silently dropped)",
+  rv7.needsDecision.some((n) => n.kind === "unmapped-component" && n.item === "FooButton" && /standard\/template button/.test(n.reason)));
+// RV11 — (a) a template-owned Photo triggers NO spurious image decision; (b) a non-bare image name is caught.
+const rv11a = mapToFreedom(mergeHierarchy(
+  [L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedTemplate: [L("Tpl", { diff: [di({ name: "Photo", parentName: "Header" })] })] }));
+check("RV11(a): a template-owned Photo does NOT trigger a spurious image decision", !rv11a.needsDecision.some((n) => n.kind === "image"));
+const rv11b = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"CompanyLogo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("RV11(b): a non-bare image name (CompanyLogo) is recognized as an image", rv11b.changeSet.images.some((i) => i.classic === "CompanyLogo"));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
