@@ -304,6 +304,7 @@ After approval:
    - entity model or data-source adjustments
    - layout migration
    - business rules
+   - **child edit pages FIRST, then the parent's related lists (D3).** A related list's Add/Edit opens the child entity's own form, so it only works once that form exists — build every child page (from `### Child page mappings`) BEFORE wiring the parent detail that creates/edits it. Order the whole tree leaf-first: deepest child pages → their parents' details → the top page's details.
    - details, related lists, and standard features — build **every** `details[]` entry from the ChangeSet as a Freedom related list, and **every** `standardFeatures[]` entry as its native Freedom feature (Approvals / Attachments / Activities (Tasks) / Emails), each in the tab the design spec assigns. Resolve any `detail-unresolved` item (auto-generated `SchemaNDetail` name) by fetching the detail schema FIRST, and confirm each entity-inferred Attachments before relying on it. For every `detail-editpage` flag, resolve the child entity's **Freedom edit page** (and its **mini page**, if the classic detail used one) — the form that opens when a related-list row is added/edited is a SEPARATE migration, not covered by migrating this master page: confirm a Freedom form already exists for that child entity, or migrate it as a follow-on page (a related list whose entity has no Freedom form cannot add/edit records). **Nothing here may be silently skipped:** an entry you cannot build now is logged as a loud `TODO` / `BLOCKED` in `worklog.md` with the reason — a page that migrated fields and rules but dropped its details/features (or their edit pages) is NOT done.
    - handlers, converters, validators, and helper modules
    - backend/service changes
@@ -313,6 +314,7 @@ After approval:
    - `create_page` only when a page does not already exist.
    - `get_page` before `update_page`.
    - `validate_page` before saving page bodies.
+   - **A `success` from `validate_page`/`update_page` is NOT proof the page works (D2).** clio reports `success` for bodies that fail at RUNTIME. After saving a page — and ALWAYS before building anything that depends on it (its details, child pages, dependent rules) — open it in the browser (or run a runtime render check) and confirm it loads without console/render errors. Do not layer several complex composites onto a page you have not actually seen render.
    - `create_page_business_rule` or `create_entity_business_rule` for supported rules.
    - `update_client_unit_schema` only for non-page client-unit schemas or when raw schema updates are explicitly needed.
 5. Compile only when C# schemas or SQL/runtime-compiled artifacts changed, or when Creatio reports a missing runtime schema.
@@ -326,7 +328,7 @@ Validate at the narrowest reliable level first, then broaden:
 - run page schema validation for Freedom UI bodies
 - run repository build or package validation when available
 - run relevant unit tests for helper logic
-- run integration or browser checks against the target Creatio environment when available
+- **render the built page in the browser before treating it as done** — schema validation and a save `success` do NOT catch runtime/render failures (D2); a page is only "built" once you have seen it load cleanly on the target environment. This is required for each page before anything depends on it, not just at the end.
 - run or propose E2E coverage for user-visible migrated flows
 
 Report what passed, what could not run, and what remains risky because of missing runtime, repository, permissions, or test coverage.

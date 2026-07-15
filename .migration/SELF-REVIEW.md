@@ -328,10 +328,10 @@
 - RV15: покрито ВСІ гілки `control()` через entityColumns (date/datetime→DateTimePicker, int/decimal/money→NumberInput, text/richtext→Input, lookup→ComboBox) + type-labels.
 - RV10: reporting закрито в Темі 4 (payload-лічильники); golden-крихкість задокументована coverage-нотою.
 
-**🟡 P3 — білд-фаза (Тема 7)**
-- D2: `success` clio ≠ коректний рантайм → мандат браузерної перевірки перед залежними артефактами.
-- D3: порядок дочірні картки → потім деталі.
-- D1: завершення (масштаб).
+**✅ ЗРОБЛЕНО — білд-фаза (Тема 7; SKILL-only)**
+- D2: у кроці 7 (clio-ops) + кроці 8 (Validate) — `success` від validate_page/update_page НЕ доказ; обов'язково відрендерити сторінку в браузері ПЕРЕД залежними артефактами.
+- D3: у списку підзадач кроку 7 — child edit pages FIRST, потім related lists батька (leaf-first по дереву), бо Add/Edit деталі працює лише коли є дочірня форма.
+- D1: завершення лишається (масштаб/поведінка; частково закрито STRUCTURE-валідатором, що не дає «готовий» план без дочірніх).
 
 **⚪ P3 — гігієна (Тема 8)**
 - RV13: `.gitignore scratch_` не匹ає реальні артефакти (plan.md/manifest.json/design-spec.md) → ризик закомітити дані замовника.
