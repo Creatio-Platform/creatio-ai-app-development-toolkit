@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseLayer, mergeLayers } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
 import { runMigration } from "./migrate.mjs";
+import { renderDesignSpec } from "./designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeLayer as L, makeOp as di } from "./_testkit.mjs";
 
@@ -635,6 +636,22 @@ const wReg = runMigration({ entity: "X",
   layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#5 widgets: grouped under a 'Header / top' region (not their own top-level region)",
   /\| Header \/ top \| ActionDashboard \|/.test(wReg.designSpec));
+
+// #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
+// field order interleaves an island, a tab field, then a second island.
+const ordCs = mapToFreedom(mergeLayers([L("Client", { entity: "X", diff: [
+  di({ name: "C1", parentName: "LeftModulesContainer", itemType: 0 }),
+  di({ name: "Phone", parentName: "C1", propertyName: "items", bindTo: "Phone" }),
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.C" }),
+  di({ name: "TabF", parentName: "MyTab", propertyName: "items", bindTo: "TabF" }),
+  di({ name: "C2", parentName: "LeftModulesContainer", itemType: 0 }),
+  di({ name: "Req", parentName: "C2", propertyName: "items", bindTo: "Req" })] })],
+  { seedLayers: [L("Tpl", { diff: [di({ name: "LeftModulesContainer", itemType: 15 }), di({ name: "Tabs", itemType: 15 })] })] }));
+const ordLines = renderDesignSpec({ entity: "X", changeSet: ordCs, effective: { fields: 3 } }).split("\n").filter((l) => /^\| (Side profile|Tab · )/.test(l));
+const lastProfileIx = ordLines.reduce((acc, l, i) => /^\| Side profile/.test(l) ? i : acc, -1);
+const firstTabIx = ordLines.findIndex((l) => /^\| Tab · /.test(l));
+check("#6 Layout order: all profile regions render before tabs (not interleaved)",
+  lastProfileIx >= 0 && firstTabIx >= 0 && lastProfileIx < firstTabIx);
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

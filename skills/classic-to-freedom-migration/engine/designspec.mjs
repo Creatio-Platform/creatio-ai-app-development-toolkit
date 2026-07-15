@@ -105,6 +105,11 @@ export function renderDesignSpec(result, opts = {}) {
   const order = [];
   const byRegion = new Map();
   rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
+  // region reading order: the side profile (all islands) FIRST, then tabs, then top widgets, card actions,
+  // and finally any flagged/unresolved regions — so profile info is not interleaved with tabs.
+  const regionRank = (r) => /^Side profile/.test(r) || r === "Header" ? 0 : /^Tab /.test(r) ? 1 : r === "Header / top" ? 2 : r === "Card actions" ? 3 : 4;
+  const firstSeen = new Map(order.map((r, i) => [r, i]));
+  order.sort((a, b) => regionRank(a) - regionRank(b) || firstSeen.get(a) - firstSeen.get(b));
 
   L.push("### Layout");
   L.push("| Region | Element | Type | Source | Rule | Additional |");
