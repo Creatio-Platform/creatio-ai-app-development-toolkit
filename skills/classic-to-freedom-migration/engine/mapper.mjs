@@ -1,4 +1,4 @@
-// Ф3 — Mapper (prototype). Pure Node module: EffectiveClassicPage (from engine.mjs)
+// Ф3 — Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%. See .migration/solution-design.md §3.3.
 
@@ -23,13 +23,13 @@ const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its
 function resolveOwner(startParent, index) {
   let parent = startParent, hops = 0; const groups = [];
   while (parent && hops++ < 32) {
-    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", via: parent, groups: groups.reverse() };
+    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", via: parent, groups: [...groups].reverse() };
     const p = index.get(parent);
     // `why` distinguishes the two unresolved causes so the caller's flag is accurate (#18): the ancestor
     // name is not defined by ANY schema/template (missing seed) vs the chain is fully defined but never
     // reaches a profile/tab anchor (climbed to the page root — a wrong/incomplete seed).
     if (!p) return { kind: "unresolved", parent, why: "undefined-parent" };
-    if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, groups: groups.reverse() };
+    if (p.isTab) return { kind: "tab", tab: p.name, tabTemplateOwned: !!p.templateOwned, groups: [...groups].reverse() };
     groups.push(p); // intermediate container between the field and its tab/profile
     parent = p.parent;
   }
@@ -207,7 +207,7 @@ export function mapToFreedom(eff, opts = {}) {
       // client-owned tab: the page defines it, so we build it. Its grid holds the routed fields.
       parentName = tabGridName(tab);
       const tItem = index.get(tab);
-      const c = caption(tItem && tItem.caption, tab);
+      const c = caption(tItem?.caption, tab);
       structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
         values: { type: "crt.Tab", caption: c.value } });
       structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
@@ -255,7 +255,7 @@ export function mapToFreedom(eff, opts = {}) {
   // header (like Contract), NOT the narrow left profile island. In that case route them to a full-width
   // header GridContainer (preserving the multi-column grid) instead of cramming them into colSpan-1.
   const headerCols = new Set(resolved
-    .filter(r => r.own.kind === "profile" && r.own.via === "Header" && r.f.layout && r.f.layout.column != null)
+    .filter(r => r.own.kind === "profile" && r.own.via === "Header" && r.f.layout?.column != null)
     .map(r => r.f.layout.column));
   const headerIsWide = headerCols.size > 1;
   if (headerIsWide) {
@@ -270,7 +270,7 @@ export function mapToFreedom(eff, opts = {}) {
   // the field and the profile anchor (groups[0]). If there is >1 distinct island, rebuild each as its own
   // container in the side profile instead of flattening every field into one stack (which loses the split
   // the user sees on the classic page). A single island stays flat (no redundant wrapper).
-  const islandOf = (own) => (own.groups && own.groups.length) ? own.groups[0].name : null;
+  const islandOf = (own) => own.groups?.length ? own.groups[0].name : null;
   const distinctProfileIslands = new Set(resolved
     .filter(r => r.own.kind === "profile" && !(r.own.via === "Header" && headerIsWide))
     .map(r => islandOf(r.own)).filter(Boolean));
@@ -325,10 +325,11 @@ export function mapToFreedom(eff, opts = {}) {
     // classic column N -> Freedom column N+1. Fall back to sequential/full-width only when absent.
     const cl = f.layout || {};
     const narrow = parent === "SideAreaProfileContainer";
+    const defaultColSpan = narrow ? 1 : 24;
     const layoutConfig = {
       column: cl.column != null ? cl.column + 1 : 1,
       row: cl.row != null ? cl.row + 1 : rowByContainer[parent],
-      colSpan: cl.colSpan != null ? cl.colSpan : (narrow ? 1 : 24),
+      colSpan: cl.colSpan != null ? cl.colSpan : defaultColSpan,
       rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
     };
     // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
@@ -338,8 +339,8 @@ export function mapToFreedom(eff, opts = {}) {
     // is unset — it inherits the container's visibility. Surface it so the container-level condition is
     // wired onto the Freedom field/group rather than silently dropped.
     const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
-    let vis = f.visible === false ? false : true;
-    if (hiddenAncestor && hiddenAncestor.visible === false) vis = false; // inherits a statically-hidden ancestor
+    let vis = f.visible !== false;
+    if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
     if (f.visible === "dynamic") needsDecision.push({ kind: "visibility-rule", item: col,
       reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
     if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
@@ -371,7 +372,7 @@ export function mapToFreedom(eff, opts = {}) {
     //  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision — even when
     //    a tip is present — so the competing non-static tooltip doesn't vanish without a reviewer signal.
     if (f.hint) {
-      const staticHint = /^Resources\.Strings\./.test(f.hint);
+      const staticHint = f.hint.startsWith("Resources.Strings.");
       if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
       else needsDecision.push({ kind: "field-hint", item: col,
         reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
@@ -440,7 +441,8 @@ export function mapToFreedom(eff, opts = {}) {
     accountedFor.add(d.key); if (d.schemaName) accountedFor.add(d.schemaName);
     // place the detail in its owning TAB (ancestry-resolved), preserving order.
     const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
-    const tab = own.kind === "tab" ? own.tab : (own.kind === "profile" ? profileRegion(own) : null);
+    const profileTab = own.kind === "profile" ? profileRegion(own) : null;
+    const tab = own.kind === "tab" ? own.tab : profileTab;
     const cur = bySig.get(detailSig(d));
     if (!cur) bySig.set(detailSig(d), { d, tab, own });
     else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; cur.own = own; } // prefer a resolved placement
@@ -450,7 +452,7 @@ export function mapToFreedom(eff, opts = {}) {
     // Ensure the OWNING tab is emitted as a container so the related list / feature has a home AND its
     // caption resolves — a tab holding ONLY details would otherwise never be built (ensureTab is
     // otherwise reached only from field routing).
-    if (own && own.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned);
+    if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned);
     // #11(ii)/B2 — the detail's OWN schema (when passed in manifest.detailSchemas) gives its real child
     // entity + list columns, resolving even an auto-named SchemaNDetail.
     const dinfo = detailSchemas[d.schemaName];
@@ -460,7 +462,7 @@ export function mapToFreedom(eff, opts = {}) {
     // ENTITY (`*File`, which always backs the Attachments detail). Entity-inferred matches are flagged
     // as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
     let feat = matchFeature(d.schemaName), featByEntity = false;
-    if (!feat && /File$/.test(dentity || "")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
+    if (!feat && (dentity || "").endsWith("File")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
       standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list" });
@@ -487,11 +489,11 @@ export function mapToFreedom(eff, opts = {}) {
     // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
     // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
     const resolvedDcap = d.caption ? resolveText(d.caption) : null;
-    const plainDcap = d.caption && !/^Resources\.Strings\./.test(d.caption) ? d.caption : null;
+    const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
     // detail TITLE: resolved page-caption resource → the detail's own title (manifest.detailSchemas.title)
     // → a plain caption → null. Flag only when it stays an unresolved resource key.
     const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
-    if (!detailTitle && d.caption && /^Resources\.Strings\./.test(d.caption)) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
+    if (!detailTitle && d.caption && d.caption.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
       reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
     details.push({
       composite: "Expanded list", entity: dentity, detailSchema: d.schemaName,
@@ -506,7 +508,9 @@ export function mapToFreedom(eff, opts = {}) {
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
   const widgets = [];
   const seenWidget = new Set();
-  const addWidget = (w, classic, base) => { if (w) accountedFor.add(classic); if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
+  const addWidget = (w, classic, base) => {
+    if (w) { accountedFor.add(classic); }
+    if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
     widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null });
     needsDecision.push({ kind: "widget", item: w.widget,
       reason: `${w.widget}${base ? " (base-provided)" : ""} → ${w.freedom}${base ? " — usually provided by the Freedom template; confirm or re-apply any customization" : "; confirm the Freedom component"}${w.note ? ` — ${w.note}` : ""}` }); } };
@@ -533,8 +537,8 @@ export function mapToFreedom(eff, opts = {}) {
   // Freedom "Run process" card action + a decision naming the process(es) so it isn't lost.
   if (eff.processLaunch) {
     if (!cardActions.includes("RunProcess")) cardActions.push("RunProcess");
-    needsDecision.push({ kind: "process-launch", item: (eff.processNames && eff.processNames.length) ? eff.processNames.join(", ") : "RunProcess",
-      reason: `the classic page launches a business process imperatively${(eff.processNames && eff.processNames.length) ? ` (${eff.processNames.join(", ")})` : ""} — map it to a Freedom "Run process" card action / handler (ProcessModuleUtilities → run-process request); confirm the process schema name` });
+    needsDecision.push({ kind: "process-launch", item: eff.processNames?.length ? eff.processNames.join(", ") : "RunProcess",
+      reason: `the classic page launches a business process imperatively${eff.processNames?.length ? ` (${eff.processNames.join(", ")})` : ""} — map it to a Freedom "Run process" card action / handler (ProcessModuleUtilities → run-process request); confirm the process schema name` });
   }
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
@@ -600,11 +604,13 @@ export function mapToFreedom(eff, opts = {}) {
   // block, not one per leaf: the SLA timer surfaces as a single "port this block" item, not six.
   for (const i of (eff.items || [])) {
     if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
-    const isBtn = /Button$/.test(i.name);
-    needsDecision.push({ kind: "unmapped-component", item: i.name,
-      reason: isBtn
-        ? `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`
-        : `classic component '${i.name}'${i.caption ? ` (caption ${i.caption})` : ""}${i.generator ? ` (generator ${i.generator})` : ""} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop` });
+    const isBtn = i.name.endsWith("Button");
+    const captionNote = i.caption ? ` (caption ${i.caption})` : "";
+    const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
+    const reason = isBtn
+      ? `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`
+      : `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
+    needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
   }
 
   return {

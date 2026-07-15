@@ -11,7 +11,7 @@
 
 const strip = (s) => (s == null ? "" : String(s).replace(/^\$/, ""));
 const esc = (s) => strip(s).replace(/\|/g, "\\|"); // keep table cells from breaking on a literal pipe
-const isField = (o) => !!(o && o.values && o.values.control);
+const isField = (o) => !!o?.values?.control;
 const DASH = "—";
 
 // Climb the emitted insert tree from a container to the region that holds it: crt.Tab → that tab,
@@ -19,7 +19,7 @@ const DASH = "—";
 // else the raw container name (a base-template container not re-emitted here).
 function regionResolver(viewConfigDiff) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
-  const label = (o) => esc(o.values && o.values.caption ? strip(o.values.caption) : o.name);
+  const label = (o) => esc(o.values?.caption ? strip(o.values.caption) : o.name);
   return (parentName) => {
     let p = parentName, hops = 0, first = null;
     while (p && hops++ < 64) {
@@ -28,7 +28,7 @@ function regionResolver(viewConfigDiff) {
       if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
       const o = byName.get(p);
       if (!o) return esc(p);
-      if (o.values && o.values.type === "crt.Tab") return `Tab · ${label(o)}`;
+      if (o.values?.type === "crt.Tab") return `Tab · ${label(o)}`;
       if (!first) first = label(o);
       p = o.parentName;
     }
@@ -37,9 +37,15 @@ function regionResolver(viewConfigDiff) {
 }
 
 // field display name = its resolved label (human title) when available, else the column code.
-const dispLabel = (o) => { const l = o.values && o.values.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
+const dispLabel = (o) => { const l = o.values?.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
 const humanizeAction = (a) => ({ "make-required": "required", "make-optional": "optional", "make-read-only": "read-only", "make-editable": "editable", "show-element": "visible", "hide-element": "hidden" }[a] || a);
-const triggerOf = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? `${mt[1]} changes` : (/init/i.test(m) ? "on load" : (/save/i.test(m) ? "on save" : "—")); };
+const triggerOf = (m) => {
+  const mt = /^on(.+?)Chang/.exec(m);
+  if (mt) return `${mt[1]} changes`;
+  if (/init/i.test(m)) return "on load";
+  if (/save/i.test(m)) return "on save";
+  return "—";
+};
 // demote a nested design spec's Markdown headings two levels (## → ####, ### → #####, capped at ######)
 // so a child page's spec reads as a subsection under the parent plan's `#### Child page:` heading.
 const demoteHeadings = (md) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + 2)) + " ");
@@ -69,7 +75,7 @@ export function renderDesignSpec(result, opts = {}) {
   L.push("");
   L.push(`- **Entity:** ${entity}${opts.template ? ` · **Template:** ${opts.template}` : ""}${opts.targetPackage ? ` · **Package:** ${opts.targetPackage}` : ""}`);
   L.push(`- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`);
-  if (eff.unresolvedParents && eff.unresolvedParents.length)
+  if (eff.unresolvedParents?.length)
     L.push(`- ⚠ **unresolvedParents:** ${eff.unresolvedParents.join(", ")} — the seed is incomplete; DO NOT build until empty`);
   L.push("");
 
@@ -80,18 +86,19 @@ export function renderDesignSpec(result, opts = {}) {
     const v = f.values || {};
     const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
     const rule = v.readOnly ? "read-only" : (ruleByEl.get(col) || DASH);
-    const tip = v.tip && v.tip.content ? `tip: ${esc(v.tip.content)}` : DASH;
+    const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : DASH;
     rows.push({ region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, tip] });
   }
   for (const d of cs.details || []) {
     const src = `${esc(d.entity || "?")}${d.dependency ? ` · by ${esc(d.dependency.attributePath)}` : " · ⚠ FK"}`;
-    const add = d.columns && d.columns.length ? `cols: ${d.columns.map(esc).join(" · ")}` : DASH;
+    const add = d.columns?.length ? `cols: ${d.columns.map(esc).join(" · ")}` : DASH;
     rows.push({ region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), "Related list", src, DASH, add] });
   }
   for (const s of cs.standardFeatures || []) {
     const isList = s.uiShape === "list";
     const type = isList ? "Related list" : esc(s.feature);
-    const src = isList ? `${esc(s.entity || "Activity")} · native` : (s.templateProvided ? "template-provided" : "native — confirm component on-stand");
+    const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
+    const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const add = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
     rows.push({ region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] });
   }
@@ -101,7 +108,8 @@ export function renderDesignSpec(result, opts = {}) {
   for (const a of cs.cardActions || []) {
     const isProc = /process/i.test(a);
     const isPrint = /print/i.test(a);
-    const add = isProc ? "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection); base button names none" : (isPrint ? "⚠ only if print reports exist — verify" : DASH);
+    const printAdd = isPrint ? "⚠ only if print reports exist — verify" : DASH;
+    const add = isProc ? "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection); base button names none" : printAdd;
     rows.push({ region: "Card actions", sort: 3, cells: [esc(a.replace(/Button$/, "")), "Action", DASH, DASH, add] });
   }
   // group by region (first-seen order), stable by `sort` then insertion within region
@@ -110,7 +118,13 @@ export function renderDesignSpec(result, opts = {}) {
   rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
   // region reading order: the side profile (all islands) FIRST, then tabs, then top widgets, card actions,
   // and finally any flagged/unresolved regions — so profile info is not interleaved with tabs.
-  const regionRank = (r) => /^Side profile/.test(r) || r === "Header" ? 0 : /^Tab /.test(r) ? 1 : r === "Header / top" ? 2 : r === "Card actions" ? 3 : 4;
+  const regionRank = (r) => {
+    if (r.startsWith("Side profile") || r === "Header") return 0;
+    if (r.startsWith("Tab ")) return 1;
+    if (r === "Header / top") return 2;
+    if (r === "Card actions") return 3;
+    return 4;
+  };
   const firstSeen = new Map(order.map((r, i) => [r, i]));
   order.sort((a, b) => regionRank(a) - regionRank(b) || firstSeen.get(a) - firstSeen.get(b));
 
@@ -119,7 +133,13 @@ export function renderDesignSpec(result, opts = {}) {
   if (section) {
     L.push("### List page");
     const ar = section.addRecordMiniPage;
-    L.push(`- **Add record:** ${ar === true ? "⚠ via a mini page (name unresolved) — confirm and migrate it as a Freedom mini page / quick-add" : (ar ? `via mini page \`${esc(ar)}\` — migrate it as a Freedom mini page / quick-add` : "full edit page (no add-record mini page detected)")}`);
+    const miniPageDesc = ar
+      ? `via mini page \`${esc(ar)}\` — migrate it as a Freedom mini page / quick-add`
+      : "full edit page (no add-record mini page detected)";
+    const addRecordDesc = ar === true
+      ? "⚠ via a mini page (name unresolved) — confirm and migrate it as a Freedom mini page / quick-add"
+      : miniPageDesc;
+    L.push(`- **Add record:** ${addRecordDesc}`);
     L.push(`- **List columns:** ${(section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns"}`);
     if ((section.sectionActions || []).length) L.push(`- **Section actions:** ${section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ")} — migrate as Freedom list-page actions`);
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).join(", ") || "a process"} — wire as a list-page run-process action`);
@@ -141,10 +161,14 @@ export function renderDesignSpec(result, opts = {}) {
   const logic = [];
   // entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
   const filtBy = {};
-  for (const r of cs.entityBusinessRules || []) (filtBy[r.targetAttribute] = filtBy[r.targetAttribute] || []).push(r);
+  for (const r of cs.entityBusinessRules || []) {
+    filtBy[r.targetAttribute] = filtBy[r.targetAttribute] || [];
+    filtBy[r.targetAttribute].push(r);
+  }
   for (const [attr, rs] of Object.entries(filtBy)) {
     const unresolved = rs.filter((r) => !r.complete).length;
-    const effc = rs.length === 1 ? (rs[0].complete ? "static filter" : "⚠ dynamic — resolve value")
+    const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
+    const effc = rs.length === 1 ? singleEffc
       : `${rs.length} filters${unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : ""}`;
     logic.push([`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"]);
   }
@@ -154,7 +178,10 @@ export function renderDesignSpec(result, opts = {}) {
   const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
   const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
   const helpersByBase = {};
-  for (const h of stubs) { const b = helperBase(h.sourceMethod); if (b) (helpersByBase[b] = helpersByBase[b] || []).push(h.sourceMethod); }
+  for (const h of stubs) {
+    const b = helperBase(h.sourceMethod);
+    if (b) { helpersByBase[b] = helpersByBase[b] || []; helpersByBase[b].push(h.sourceMethod); }
+  }
   for (const h of stubs) {
     if (helperBase(h.sourceMethod)) continue; // shown folded into its trigger row
     const b = triggerBase(h.sourceMethod);
@@ -162,7 +189,7 @@ export function renderDesignSpec(result, opts = {}) {
     logic.push([esc(h.sourceMethod), triggerOf(h.sourceMethod), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"]);
   }
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
-    const pn = (cs.needsDecision.find((n) => n.kind === "process-launch") || {}).item;
+    const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
     logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection)"]);
   }
   if (logic.length) {

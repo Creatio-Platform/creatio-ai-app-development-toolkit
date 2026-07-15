@@ -369,7 +369,7 @@ check("#18: island fields resolve to the side profile, NOT the fallback tab (+ n
   !lmcs.needsDecision.some(n => n.kind === "container")
   && !lmcs.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
 check("#18: the island wrappers are NOT mis-flagged as unmapped-component (their fields were migrated)",
-  !lmcs.needsDecision.some(n => n.kind === "unmapped-component" && /Container$/.test(n.item)));
+  !lmcs.needsDecision.some(n => n.kind === "unmapped-component" && n.item.endsWith("Container")));
 // #9b — with >1 island, each field routes into its OWN island container (the classic split is preserved,
 // not flattened into one stack). This is the "second island" the user could not see before.
 check("#9b: with 2 islands, fields route into their own island container (split preserved)",
@@ -455,7 +455,7 @@ const specRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
     { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
 check("migrate.mjs --spec: prints pure design-spec Markdown (## Design spec…), no JSON envelope",
-  specRun.status === 0 && /^## Design spec/.test((specRun.stdout || "").trim()) && !/"changeSet"/.test(specRun.stdout || ""));
+  specRun.status === 0 && (specRun.stdout || "").trim().startsWith("## Design spec") && !/"changeSet"/.test(specRun.stdout || ""));
 
 /* ---- design-spec Layout: uiShape (list vs component), lookup ref, type+length, Logic handlers ---- */
 const dsCs = runMigration({ entity: "X",
@@ -660,8 +660,8 @@ const ordCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Req", parentName: "C2", propertyName: "items", bindTo: "Req" })] })],
   { seedTemplate: [L("Tpl", { diff: [di({ name: "LeftModulesContainer", itemType: 15 }), di({ name: "Tabs", itemType: 15 })] })] }));
 const ordLines = renderDesignSpec({ entity: "X", changeSet: ordCs, effective: { fields: 3 } }).split("\n").filter((l) => /^\| (Side profile|Tab · )/.test(l));
-const lastProfileIx = ordLines.reduce((acc, l, i) => /^\| Side profile/.test(l) ? i : acc, -1);
-const firstTabIx = ordLines.findIndex((l) => /^\| Tab · /.test(l));
+const lastProfileIx = ordLines.reduce((acc, l, i) => l.startsWith("| Side profile") ? i : acc, -1);
+const firstTabIx = ordLines.findIndex((l) => l.startsWith("| Tab · "));
 check("#6 Layout order: all profile regions render before tabs (not interleaved)",
   lastProfileIx >= 0 && firstTabIx >= 0 && lastProfileIx < firstTabIx);
 

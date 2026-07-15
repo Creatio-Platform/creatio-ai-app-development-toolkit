@@ -43,7 +43,8 @@ export function runMigration(manifest, opts = {}) {
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
     const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-    const body = hasBody ? (typeof e === "string" ? e : bodyOf(e)) : "";
+    let body = "";
+    if (hasBody) body = typeof e === "string" ? e : bodyOf(e);
     const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
     // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
     // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages).
@@ -73,14 +74,14 @@ export function runMigration(manifest, opts = {}) {
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
     listColumns: [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
-    processNames: [...new Set(sectionSchemas.flatMap((l) => (l.processLaunch && l.processLaunch.names) || []))],
+    processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
   } : null;
   // child pages (recursion): each CUSTOM detail's related list opens the child entity's edit form on
   // add/edit — a separate migration. Enumerate them so the plan is a tree (parent + one sub-plan each).
   const childPages = (changeSet.details || []).map((d) => ({
     entity: d.entity || null,
     via: d.caption || d.detailSchema || d.entity,
-    editPage: (detailSchemas[d.detailSchema] && detailSchemas[d.detailSchema].editPage) || null,
+    editPage: detailSchemas[d.detailSchema]?.editPage || null,
     editable: detailSchemas[d.detailSchema] ? detailSchemas[d.detailSchema].editable : null,
   })).filter((c) => c.entity);
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
@@ -153,5 +154,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
-  process.stdout.write(planMode ? result.plan + "\n" : specMode ? result.designSpec + "\n" : JSON.stringify(result, null, 2) + "\n");
+  let output;
+  if (planMode) output = result.plan + "\n";
+  else if (specMode) output = result.designSpec + "\n";
+  else output = JSON.stringify(result, null, 2) + "\n";
+  process.stdout.write(output);
 }

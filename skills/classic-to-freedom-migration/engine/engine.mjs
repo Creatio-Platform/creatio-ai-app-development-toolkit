@@ -1,4 +1,4 @@
-// Ф2 — Merge engine (prototype). Pure Node module, no Creatio/stand dependency.
+// Ф2 — Merge engine. Pure Node module, no Creatio/stand dependency.
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance. See .migration/solution-design.md §3.1.
 import vm from "node:vm";
@@ -31,9 +31,11 @@ function enumProxy(table) {
 }
 const BUSINESS_RULE_MODULE = new Proxy({}, {
   get: (_t, p) => p === "enums" ? new Proxy({}, {
-    get: (_t2, e) => e === "RuleType" ? enumProxy({ BINDPARAMETER: 0, FILTRATION: 1 })
-      : e === "Property" ? enumProxy({ VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 })
-        : PROXY,
+    get: (_t2, e) => {
+      if (e === "RuleType") return enumProxy({ BINDPARAMETER: 0, FILTRATION: 1 });
+      if (e === "Property") return enumProxy({ VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 });
+      return PROXY;
+    },
   }) : PROXY,
   apply: () => PROXY,
 });
@@ -47,10 +49,12 @@ const enumHolder = (member, val) => new Proxy({}, { get: (_t, p) => p === member
 // Terrasoft stub: resolves `.ViewItemType`, `.controls.ViewItemType`, `.core.enums.ViewItemType` to the
 // seeded table; everything else stays the universal PROXY (unchanged behaviour).
 const TERRASOFT = new Proxy({}, {
-  get: (_t, p) => p === "ViewItemType" ? VIEW_ITEM_TYPE
-    : p === "controls" ? enumHolder("ViewItemType", VIEW_ITEM_TYPE)
-    : p === "core" ? new Proxy({}, { get: (_t2, c) => c === "enums" ? enumHolder("ViewItemType", VIEW_ITEM_TYPE) : PROXY, apply: () => PROXY })
-    : PROXY,
+  get: (_t, p) => {
+    if (p === "ViewItemType") return VIEW_ITEM_TYPE;
+    if (p === "controls") return enumHolder("ViewItemType", VIEW_ITEM_TYPE);
+    if (p === "core") return new Proxy({}, { get: (_t2, c) => c === "enums" ? enumHolder("ViewItemType", VIEW_ITEM_TYPE) : PROXY, apply: () => PROXY });
+    return PROXY;
+  },
   apply: () => PROXY, construct: () => PROXY,
 });
 // Resolve an AMD dependency name to a stub. Only BusinessRuleModule needs real values (for rule enums);
@@ -184,8 +188,8 @@ function referencedUiModules(deps) {
 // the getActions scan to that method only. Returns "" when the function isn't found (→ no hints, no noise).
 function extractFnBody(src, name) {
   const openers = [
-    new RegExp(name + "\\s*[:=]\\s*function\\s*\\([^)]*\\)\\s*\\{"), // name: function(){  |  name = function(){
-    new RegExp(name + "\\s*\\([^)]*\\)\\s*\\{"),                       // name(){  (ES6 method shorthand)
+    new RegExp(name + String.raw`\s*[:=]\s*function\s*\([^)]*\)\s*\{`), // name: function(){  |  name = function(){
+    new RegExp(name + String.raw`\s*\([^)]*\)\s*\{`),                    // name(){  (ES6 method shorthand)
   ];
   for (const re of openers) {
     const m = re.exec(src);
@@ -209,7 +213,18 @@ function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? 
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
   return diff.map((op) => {
-    const v = op && op.values && typeof op.values === "object" ? op.values : {};
+    const v = op?.values && typeof op.values === "object" ? op.values : {};
+    // caption resource key: `caption.bindTo`, else a bare string, else null.
+    const captionStr = isStr(v.caption) ? v.caption : null;
+    const caption = v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : captionStr;
+    // field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
+    let hint = null;
+    if (isStr(v.hint?.bindTo)) hint = v.hint.bindTo;
+    else if (isStr(v.hint?.content?.bindTo)) hint = v.hint.content.bindTo;
+    else if (isStr(v.hint)) hint = v.hint;
+    // visibility: static false / a dynamic expression (bind/rule) / true; null = this op didn't set it.
+    const visibleDynamic = v.visible && typeof v.visible === "object" ? "dynamic" : null;
+    const visible = typeof v.visible === "boolean" ? v.visible : visibleDynamic;
     return {
       operation: isStr(op.operation) ? op.operation : "?",
       name: isStr(op.name) ? op.name : "?",
@@ -223,7 +238,7 @@ function normalizeDiff(diff) {
       hasCaption: !!(v.caption),
       // caption resource key (tab/group/detail label) — carried so the real caption is shown for
       // cross-check instead of only a synthesized placeholder.
-      caption: (v.caption && isStr(v.caption.bindTo)) ? v.caption.bindTo : (isStr(v.caption) ? v.caption : null),
+      caption,
       order: v && isNum(v.order) ? v.order : null,
       // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
       // (e.g. a wide 3-column header) instead of inventing a single narrow column.
@@ -231,16 +246,10 @@ function normalizeDiff(diff) {
       // tooltip resource key (classic `tip.content.bindTo = "Resources.Strings.XTip"`) — carried to the
       // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
       // recognising non-field components the mapper otherwise drops.
-      tip: (v.tip && v.tip.content && isStr(v.tip.content.bindTo)) ? v.tip.content.bindTo : null,
-      // field help/tooltip — classic uses `hint` (a DIFFERENT property from `tip`; missing it dropped
-      // every hint-based field tooltip, e.g. the SLA "Service agreements" help). Accept `hint.bindTo`
-      // (resource key OR a computed method), `hint.content.bindTo`, or a bare string.
-      hint: (v.hint && isStr(v.hint.bindTo)) ? v.hint.bindTo
-          : (v.hint && v.hint.content && isStr(v.hint.content.bindTo)) ? v.hint.content.bindTo
-          : (isStr(v.hint) ? v.hint : null),
+      tip: v.tip?.content && isStr(v.tip.content.bindTo) ? v.tip.content.bindTo : null,
+      hint,
       generator: isStr(v.generator) ? v.generator : null,
-      // visibility: static false / a dynamic expression (bind/rule) / true. null = this op didn't set it.
-      visible: typeof v.visible === "boolean" ? v.visible : (v.visible && typeof v.visible === "object" ? "dynamic" : null),
+      visible,
     };
   }).filter(op => op.name !== "?");
 }
@@ -283,7 +292,7 @@ const PROP = { 0: "Visible", 1: "Enabled", 2: "Required", 3: "Readonly" };
 function sanitizeConditions(conds) {
   if (!Array.isArray(conds)) return [];
   return conds.map(c => {
-    const l = (c && c.leftExpression) || {}, r = (c && c.rightExpression) || {};
+    const l = c?.leftExpression || {}, r = c?.rightExpression || {};
     return {
       comparison: typeof c.comparisonType === "number" ? c.comparisonType : null,
       left: { attribute: isStr(l.attribute) ? l.attribute : null, path: isStr(l.attributePath) ? l.attributePath : null },
@@ -342,7 +351,11 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       } else if (op.operation === "merge") {
         // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
-        if (cur) { if (op.order != null) cur.order = op.order; if (op.bindTo) cur.bindTo = op.bindTo; if (op.contentType != null) cur.contentType = op.contentType; if (op.itemType != null) cur.itemType = op.itemType; if (op.layout) cur.layout = op.layout; if (op.visible != null) cur.visible = op.visible; if (op.tip) cur.tip = op.tip; if (op.hint) cur.hint = op.hint; if (op.caption) cur.caption = op.caption; cur.provenance.push(L.pkg); }
+        if (cur) {
+          for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+          for (const k of ["bindTo", "layout", "tip", "hint", "caption"]) { if (op[k]) cur[k] = op[k]; }
+          cur.provenance.push(L.pkg);
+        }
         else {
           // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
           // (incl. contentType); templateOwned marks whether this first (merge-)definition was a seed.
@@ -353,8 +366,13 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
         // classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
         // spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
         // e.g. Product's IsArchive/"Inactive" checkbox).
-        if (cur) { if (op.parentName) cur.parent = op.parentName; if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; } cur.provenance.push(L.pkg); }
-        else warnings.push({ op: "move", name: op.name, schema: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+        if (cur) {
+          if (op.parentName) { cur.parent = op.parentName; }
+          if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
+          cur.provenance.push(L.pkg);
+        } else {
+          warnings.push({ op: "move", name: op.name, schema: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+        }
       } else if (op.operation === "remove") {
         // removedBySeed: a template-internal remove (base template dropping a base element) is context,
         // not a client B6 decision — the mapper filters it out like every other template-only element.
