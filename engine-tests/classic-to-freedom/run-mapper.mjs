@@ -644,6 +644,22 @@ check("#2 lookup-no-ref: lookup column with no reference schema flagged as a pro
   mirrorCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && n.item === "MobilePhone"));
 check("#2 lookup-no-ref: a lookup WITH a reference schema is NOT flagged (no false positive)",
   !dsCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref"));
+// C1 — the lookup-no-ref doubt must show in the Layout Type cell, not silently read "Lookup"
+check("C1: lookup-no-ref field renders Type '⚠ Text? (lookup, no ref)' in Layout, not 'Lookup'",
+  /MobilePhone \| ⚠ Text\? \(lookup, no ref\)/.test(mirrorCs.designSpec) && !/MobilePhone \| Lookup/.test(mirrorCs.designSpec));
+// RV12 — an image/photo component gets its own Layout row (it had a decision but no row before)
+const imageRowCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("RV12: image/photo component appears as an 'Image' row in the Layout table",
+  imageRowCs.changeSet.images.some((i) => i.classic === "Photo") && /\| Photo \| Image \|/.test(imageRowCs.designSpec));
+// C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
+const guidCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
+check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
+  /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+// RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
+check("RV10: result.payload exposes the emitted (payload-filtered) counts",
+  cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
 // #3 — set/clear<X>Info helpers fold into on<X>Change (not separate Logic rows)
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });

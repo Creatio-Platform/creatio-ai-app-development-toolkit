@@ -312,11 +312,11 @@
 - RV7: стандартна кнопка поза KNOWN_ACTION_ITEMS + templateOwned зникає без warning.
 - RV11: image-loop не виключає templateOwned + name-match лише Photo/Image/Logo.
 
-**🟠 P2 — повнота/точність плану (Тема 4)**
-- RV12: `cs.images` ніколи не рендериться в Layout (є decision, нема рядка).
-- C1: lookup-no-ref флагається, але Type у Layout лишається «Lookup».
-- C2: сирі GUID-и стадій в умовах правил (нечитабельно).
-- RV10: CLI-summary друкує raw effective counts замість payload-filtered.
+**✅ ЗРОБЛЕНО — повнота/точність плану (Тема 4)**
+- RV12: `cs.images` тепер має рядок у Layout («Image», з регіону parent + «⚠ wire source/upload»).
+- C1: коли `lookup-no-ref` — Type у Layout `⚠ Text? (lookup, no ref)`, не «Lookup».
+- C2: правило з lookup-GUID у conditions → Confirm-нота `[lookup-value]` «resolve GUIDs → names on-stand».
+- RV10: JSON-результат тепер має `payload{fields,details,…}` (F9-filtered) поряд із `effective.*` (merged, більший — пояснено в коментарі). +4 голдени.
 
 **✅ ЗРОБЛЕНО — tool-дисципліна (Тема 5; ПЕРЕФОРМУЛЬОВАНО під Оркестратор; = A1+A2+drift+RV8+A3)**
 - Замість переліку readerів + хардкоду `describe-entity` — прийняти патерн Оркестратора: (1) non-resident тули через `clio-run`, не ToolSearch; (2) arg-форму брати через `get-tool-contract`, payload не вигадувати; (3) описувати ПОТРЕБУ (типи/титули/refs колонок), а не ім'я тула (`describe-entity` прибрати; він не той сервер/без env); (4) імена тулів лишити лише як gate.

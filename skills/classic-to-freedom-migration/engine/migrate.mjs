@@ -120,7 +120,19 @@ export function runMigration(manifest, opts = {}) {
     entity: manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity,
     gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal
     parseErrors, // non-empty ⇒ a schema body failed to parse: FIX before trusting the ChangeSet
-    // effective Classic page (the merged 80%) — headline counts + the diagnostics that gate correctness
+    // RV10 — the Freedom PAYLOAD actually emitted into the ChangeSet/design-spec (F9-filtered: template-owned
+    // content is layout context, excluded). Report this ALONGSIDE `effective.*` so a reader doesn't mistake the
+    // merged totals (which include base-template context, always larger once a real seed is supplied) for
+    // "silently dropped" content. The design spec/plan already count the payload — this exposes it in the JSON too.
+    payload: {
+      fields: (changeSet.viewConfigDiff || []).filter((o) => o.values && o.values.control).length,
+      details: (changeSet.details || []).length,
+      standardFeatures: (changeSet.standardFeatures || []).length,
+      pageRules: (changeSet.pageBusinessRules || []).length,
+      entityRules: (changeSet.entityBusinessRules || []).length,
+      cardActions: (changeSet.cardActions || []).length,
+    },
+    // effective Classic page (the merged 80% — INCLUDES base-template context; larger than `payload` by design)
     effective: {
       fields: eff.fields.length, tabs: eff.tabs.length, details: eff.details.length,
       rules: eff.rules.length, removed: eff.removed.length,

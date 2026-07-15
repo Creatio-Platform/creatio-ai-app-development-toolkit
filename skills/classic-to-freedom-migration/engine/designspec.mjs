@@ -92,10 +92,14 @@ export function renderDesignSpec(result, opts = {}) {
 
   // ---- ONE Layout table (structure + contents) ----
   const rows = []; // { region, sort, cells:[element,type,source,rule,additional] }
+  // C1 — a lookup-no-ref column renders as a lookup contentType but has no reference schema; the Type cell must
+  // reflect that doubt (it is almost always a read-only text mirror), not silently say "Lookup" while the ⚠
+  // Confirm list says otherwise (a real run had to hand-correct Mobile phone/Email/Skype from that mismatch).
+  const lookupNoRef = new Set((cs.needsDecision || []).filter((n) => n.kind === "lookup-no-ref").map((n) => n.item));
   for (const f of fields) {
     const col = strip(f.values.control);
     const v = f.values || {};
-    const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
+    const type = lookupNoRef.has(col) ? "⚠ Text? (lookup, no ref)" : esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
     const rule = v.readOnly ? "read-only" : (ruleByEl.get(col) || DASH);
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : DASH;
     rows.push({ region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, tip] });
@@ -124,6 +128,12 @@ export function renderDesignSpec(result, opts = {}) {
     const printAdd = isPrint ? "⚠ only if print reports exist — verify" : DASH;
     const add = isProc ? "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection); base button names none" : printAdd;
     rows.push({ region: "Card actions", sort: 3, cells: [esc(a.replace(/Button$/, "")), "Action", DASH, DASH, add] });
+  }
+  // RV12 — image/photo components (mapper emits them in cs.images, each with its own needsDecision) were the
+  // only category with no Layout row. Give them one, placed in the region their parent resolves to.
+  for (const im of cs.images || []) {
+    const src = im.generator ? `generator ${esc(im.generator)}` : "native image — confirm";
+    rows.push({ region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "Image", src, DASH, "⚠ wire source/upload (getSrc/onChange)"] });
   }
   // group by region (first-seen order), stable by `sort` then insertion within region
   const order = [];
@@ -219,9 +229,15 @@ export function renderDesignSpec(result, opts = {}) {
   // NOT re-listed here — that duplication is exactly the noise the plan structure was meant to remove.
   const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  if (nd.length) {
-    L.push(`#### ⚠ Confirm before I build (${nd.length})`);
-    for (const d of nd) L.push(`- **[${esc(d.kind)}]** ${esc(d.item)} — ${strip(d.reason)}`);
+  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${strip(d.reason)}`);
+  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
+  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
+  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
+    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
+  if (confirm.length) {
+    L.push(`#### ⚠ Confirm before I build (${confirm.length})`);
+    for (const line of confirm) L.push(line);
     L.push("");
   }
 
