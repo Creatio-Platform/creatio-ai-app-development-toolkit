@@ -1,8 +1,19 @@
 # Fixtures — golden Classic schema bodies
 
-Реальні тіла Classic client-unit схем зі стенду `workbuild103_15688915_0726`, зчитані через `ClientUnitSchemaDesignerService.svc/GetSchema`. Використовуються як детерміновані golden-фікстури для offline-тестів merge-рушія та mapper'а (без стенду).
+Детерміновані golden-входи для offline-тестів merge-рушія та mapper'а (без стенду). Кожен файл — власне
+тіло одного шару (`define(...)`), не merged.
 
-- `supportunitemployee/` — перший пілот. `SupportUnitEmployeePage`, сутність `SupportUnit`, 2 клієнтські шари (`SupportCalendar_base.js` base + `SupportService.js` override). 3 деталі, 2 правила (REQUIRED + FILTRATION), 1 метод. Кейс A4 (Freedom-аналога немає).
-- `contract/` — складний еталон. 9 шарів `ContractPageV2` (сутність `Contract`). Типізовані правила, глибока рекурсія деталей, дві системи правил.
+Провенанс (важливо):
 
-Кожен файл — власне тіло одного шару (`define(...)`), не merged. Merged-очікування описуються в `expected.md` поряд (додається на Фазі 2).
+- `supportunitemployee/` — **синтетичні**, написані вручну. Компактні тіла `SupportUnitEmployeePage`
+  (сутність `SupportUnit`): base `SupportCalendar_base.js` (8 профільних полів, 3 таби, 3 деталі, 4
+  правила, метод, дві base-tab merge-и) + override `SupportService.js` (один аналітичний віджет-модуль).
+  Раніше тут лежали verbatim стенд-експорти з дампами модулів/`recordId`; їх замінено синтетикою.
+- `contract/` — переважно **реальна СТРУКТУРА сторінки** `ContractPageV2` (сутність `Contract`), 9 шарів
+  у справжньому порядку залежностей (F1). Це метадані стандартного об'єкта (не дані записів, майже без
+  GUID-ів). Найцінніший еталон — стрес-тест мержу 9 шарів (типізовані правила, tombstone-и, orphan-групи).
+  Два шари засанітизовано (`WorkSalesBase.js` → порожній non-asserted шар; `WorkContractsProcess.js` →
+  обрізаний до ~6 asserted-оп-ів) для усунення дублювання.
+- Базовий seed `_base/BaseModulePageV2_skeleton.js` — синтетичний мінімальний скелет parent-template.
+
+`employeescore/` видалено — жоден раннер його не вантажив.
