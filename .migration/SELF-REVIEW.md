@@ -288,3 +288,48 @@
 ## Backlog — окремі майбутні задачі
 
 - **[clio-fork] `list-environments` шум (~30k/прогін).** Виклик без аргументів дампить УСІ зареєстровані середовища з повним конфігом (одноразово ~30k токенів, висить у контексті). Fix = **варіант A**: додати `list-environments` **необов'язковий** `search-pattern` (match за name/URL-хостом) → повертає лише збіг. Additive/opt-in, backward-compatible; **НЕ варіант B** (обрізати вивід для всіх — зламає інших викликачів). Це **базовий** clio-тул → окрема гілка у форку, **не мішати** в `feature/classic-to-freedom-schema-tools` (окремий scope/PR). Пріоритет: низький (разовий хіт; братись лише якщо на верифікації реально муляє). Див. [[classic-freedom-discovery-token-burn]].
+
+## Applicant end-to-end review — consolidated backlog (agent session + PR #46 review)
+
+Джерела: аналіз реального прогону (Applicant на workbuild103), Adjustments/чекпойнт самого агента, і code-review PR #46 (Alexandr-Kravchuk, 15 знахідок). Уже закрито інлайн: Main scope child-тексти + Reuse-рядок, дубль заголовка специ (opts.embedded), Visa=Approvals доменна нота.
+
+**🔴 P1 — HARD GATE насправді не працює (Тема 1; поглинає seed-shortcut B1)**
+- RV1: `runMigration` рахує `parseErrors`/`warnings`/`unresolvedParents`/`looksSkeletal`, але ніде не перевіряє → завжди повертає повний план; CLI не друкує `parseErrors`.
+- RV2: `renderDesignSpec` виводить лише `unresolvedParents`, не решту 3 сигнали.
+- RV3: SKILL-гейт пише `unresolvedParents`/`warnings` без префікса `effective.` → агент може вважати гейт вакуумно пройденим.
+- B1: зрізаний seed (тонкий real-body + рукописні контейнери) пройшов слабкий `looksSkeletal`.
+- Фікс: fail-fast у runMigration/CLI + голосно винести всі 4 сигнали в рендер + виправити SKILL на `effective.*`.
+
+**🔴 P1 — структурний profile-anchor (Тема 2)**
+- RV14: `PROFILE_CONTAINERS` — закритий список 3 імен; збій уже повторювався (LeftModulesContainer, LeftContainer/CasePageV2). Деривувати anchor структурно з seed (top-level не-Tabs контейнер), не дописувати імена.
+
+**🟠 P2 — реальні баги рушія (Тема 3; голдени не ловлять)**
+- RV4: merge-onto-absent stub пропускає layout/tip/hint/generator/visible/caption.
+- RV5: `op.index` не використовується → order:null коли немає values.order.
+- RV6: narrow-colSpan баг на мульти-island профілі (24 замість 1).
+- RV7: стандартна кнопка поза KNOWN_ACTION_ITEMS + templateOwned зникає без warning.
+- RV11: image-loop не виключає templateOwned + name-match лише Photo/Image/Logo.
+
+**🟠 P2 — повнота/точність плану (Тема 4)**
+- RV12: `cs.images` ніколи не рендериться в Layout (є decision, нема рядка).
+- C1: lookup-no-ref флагається, але Type у Layout лишається «Lookup».
+- C2: сирі GUID-и стадій в умовах правил (нечитабельно).
+- RV10: CLI-summary друкує raw effective counts замість payload-filtered.
+
+**✅ ЗРОБЛЕНО — tool-дисципліна (Тема 5; ПЕРЕФОРМУЛЬОВАНО під Оркестратор; = A1+A2+drift+RV8+A3)**
+- Замість переліку readerів + хардкоду `describe-entity` — прийняти патерн Оркестратора: (1) non-resident тули через `clio-run`, не ToolSearch; (2) arg-форму брати через `get-tool-contract`, payload не вигадувати; (3) описувати ПОТРЕБУ (типи/титули/refs колонок), а не ім'я тула (`describe-entity` прибрати; він не той сервер/без env); (4) імена тулів лишити лише як gate.
+- RV8: manifest-приклад у SKILL додати `clientEditableLayers`/`template`/`targetPackage` (без них B6-removal завжди «KEEP», header без Template/Package).
+- A3 (наскрізний): fetch `detailSchemas`+`childPageSchemas` зробити обов'язковим кроком ПЕРЕД планом (інакше немає field-таблиць деталей — Тема 4-симптом, D3-білд).
+
+**🟡 P3 — покриття тестами (Тема 6)**
+- RV9: `makeOp` будує вже-нормалізовані оп-и → обходять parseLayer/normalizeDiff.
+- RV15: Contract-golden без entityColumns → гілки control() не тестуються.
+- RV10: golden «one row per effective field» тримається лише бо фікстура без seed.
+
+**🟡 P3 — білд-фаза (Тема 7)**
+- D2: `success` clio ≠ коректний рантайм → мандат браузерної перевірки перед залежними артефактами.
+- D3: порядок дочірні картки → потім деталі.
+- D1: завершення (масштаб).
+
+**⚪ P3 — гігієна (Тема 8)**
+- RV13: `.gitignore scratch_` не匹ає реальні артефакти (plan.md/manifest.json/design-spec.md) → ризик закомітити дані замовника.
