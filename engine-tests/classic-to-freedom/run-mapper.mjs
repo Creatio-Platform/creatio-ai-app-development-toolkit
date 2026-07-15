@@ -686,6 +686,22 @@ const firstTabIx = ordLines.findIndex((l) => l.startsWith("| Tab · "));
 check("#6 Layout order: all profile regions render before tabs (not interleaved)",
   lastProfileIx >= 0 && firstTabIx >= 0 && lastProfileIx < firstTabIx);
 
+// RV14 — the side-profile anchor is derived STRUCTURALLY, not from a fixed name list: a base-template
+// left container with a name NOT in PROFILE_CONTAINERS (here `LeftContainer`, the CasePageV2 base) must
+// still route its field to the side profile, and the tabs panel must NOT be mistaken for the profile.
+const anchorCs = mapToFreedom(mergeHierarchy(
+  [L("Client", { entity: "X", diff: [
+    di({ name: "Fld", parentName: "LeftContainer", propertyName: "items", bindTo: "Fld" }),
+    di({ name: "TabFld", parentName: "ESNTab", propertyName: "items", bindTo: "TabFld" })] })],
+  { seedTemplate: [L("Tpl", { diff: [
+    di({ name: "LeftContainer", itemType: 15 }),
+    di({ name: "Tabs", itemType: 15 }),
+    di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", isTab: true, itemType: 15 })] })] }));
+check("RV14: a NON-literal base left container (LeftContainer) still routes its field to the side profile",
+  anchorCs.viewConfigDiff.some(o => o.name === "Fld" && o.parentName === "SideAreaProfileContainer"));
+check("RV14: the tabs panel is NOT treated as profile — a field under a base tab stays in that tab, not the profile",
+  anchorCs.viewConfigDiff.some(o => o.name === "TabFld" && o.parentName !== "SideAreaProfileContainer"));
+
 // #7 — child-page recursion: a supplied child schema is MAPPED (its design spec nested in the plan),
 // an unsupplied child gets an explicit `<FILL: recursive sub-migration>` slot — the listing alone is
 // not enough; every child page needs its own mapping, or a visible instruction to produce one.

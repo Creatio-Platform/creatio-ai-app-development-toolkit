@@ -302,8 +302,8 @@
 - B1: зрізаний seed (тонкий real-body + рукописні контейнери) пройшов слабкий `looksSkeletal`.
 - Фікс: fail-fast у runMigration/CLI + голосно винести всі 4 сигнали в рендер + виправити SKILL на `effective.*`.
 
-**🔴 P1 — структурний profile-anchor (Тема 2)**
-- RV14: `PROFILE_CONTAINERS` — закритий список 3 імен; збій уже повторювався (LeftModulesContainer, LeftContainer/CasePageV2). Деривувати anchor структурно з seed (top-level не-Tabs контейнер), не дописувати імена.
+**✅ ЗРОБЛЕНО — структурний profile-anchor (Тема 2; RV14)**
+`deriveProfileAnchors(eff.items)` = літеральний набір ∪ структурні: top-level (parent null) templateOwned-контейнер, що НЕ tab і НЕ tabs-панель (батько isTab-елементів) → profile-anchor, хоч би як звався (LeftContainer/CasePageV2 тепер працює без дописування імені). `resolveOwner` приймає `profileAnchors`. +2 голдени (NON-literal LeftContainer→profile; tabs-панель НЕ profile). Дорогою спіймала, що API — `mergeHierarchy` + опція `seedTemplate` (не старі `mergeLayers`/`seedLayers`).
 
 **🟠 P2 — реальні баги рушія (Тема 3; голдени не ловлять)**
 - RV4: merge-onto-absent stub пропускає layout/tip/hint/generator/visible/caption.

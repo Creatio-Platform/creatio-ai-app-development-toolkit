@@ -11,6 +11,21 @@
 const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header", "LeftModulesContainer"]); // classic → SideAreaProfileContainer
 const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its parent chain is unresolvable
 
+// RV14 — the profile/left area is a STRUCTURAL role, not a fixed name. The known-name set above kept missing
+// per-template variants (LeftModulesContainer was added after #18; CasePageV2's base uses `LeftContainer`).
+// Derive it instead: a top-level base-template container (no parent, templateOwned) that is NOT a tab and NOT
+// the tabs panel IS the side-profile anchor, whatever its name. A tabbed field returns at its tab before ever
+// climbing this high, so reaching a top-level non-tabs container means the field belongs to the side profile.
+// Union with the literal set so seed-less/fallback runs keep the old behaviour.
+function deriveProfileAnchors(items) {
+  const list = items || [];
+  const anchors = new Set(PROFILE_CONTAINERS);
+  const tabPanels = new Set(list.filter(i => i.isTab).map(i => i.parent).filter(Boolean)); // holders of tab children
+  for (const i of list)
+    if (!i.parent && i.templateOwned && !i.isTab && !i.bindTo && !tabPanels.has(i.name)) anchors.add(i.name);
+  return anchors;
+}
+
 // F3 — resolve which Freedom region a field belongs to by CLIMBING the classic item tree from the
 // field's parent: hitting Header/ProfileContainer => the side profile; hitting a tab => that tab;
 // running off the tree (parent never defined) => unresolved (caller flags + falls back). This is
@@ -20,10 +35,10 @@ const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its
 // intermediate non-tab containers between the field and its tab (outermost→innermost), which the mapper
 // rebuilds as ExpansionPanel (CONTROL_GROUP, itemType 15) / GridContainer, preserving classic grouping
 // (e.g. a "Delivery" group) instead of flattening every field into one grid.
-function resolveOwner(startParent, index) {
+function resolveOwner(startParent, index, profileAnchors = PROFILE_CONTAINERS) {
   let parent = startParent, hops = 0; const groups = [];
   while (parent && hops++ < 32) {
-    if (PROFILE_CONTAINERS.has(parent)) return { kind: "profile", via: parent, groups: [...groups].reverse() };
+    if (profileAnchors.has(parent)) return { kind: "profile", via: parent, groups: [...groups].reverse() };
     const p = index.get(parent);
     // `why` distinguishes the two unresolved causes so the caller's flag is accurate (#18): the ancestor
     // name is not defined by ANY schema/template (missing seed) vs the chain is fully defined but never
@@ -191,6 +206,7 @@ export function mapToFreedom(eff, opts = {}) {
   const rowByContainer = {};
   const nameCount = {};
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
+  const profileAnchors = deriveProfileAnchors(eff.items); // RV14 — structural side-profile anchors (not just literals)
   // Fix 2 — every classic item name the mapper EMITS or knowingly recognizes. Whatever survives the merge
   // as client content but is NOT in here produced no Freedom element → surfaced as unmapped-component
   // (LOUD) at the end instead of silently vanishing (e.g. the SLA-timer LABEL/CONTAINER micro-widgets).
@@ -255,7 +271,7 @@ export function mapToFreedom(eff, opts = {}) {
     return inner;
   }
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
-  const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index) }));
+  const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index, profileAnchors) }));
   // Moment 1 — layout type: classic `Header` fields spanning >1 grid column == a WIDE multi-column
   // header (like Contract), NOT the narrow left profile island. In that case route them to a full-width
   // header GridContainer (preserving the multi-column grid) instead of cramming them into colSpan-1.
@@ -445,7 +461,7 @@ export function mapToFreedom(eff, opts = {}) {
   for (const d of payloadDetails) {
     accountedFor.add(d.key); if (d.schemaName) accountedFor.add(d.schemaName);
     // place the detail in its owning TAB (ancestry-resolved), preserving order.
-    const own = d.parent ? resolveOwner(d.parent, index) : { kind: "unresolved" };
+    const own = d.parent ? resolveOwner(d.parent, index, profileAnchors) : { kind: "unresolved" };
     const profileTab = own.kind === "profile" ? profileRegion(own) : null;
     const tab = own.kind === "tab" ? own.tab : profileTab;
     const cur = bySig.get(detailSig(d));
