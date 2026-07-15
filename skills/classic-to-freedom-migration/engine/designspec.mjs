@@ -288,7 +288,12 @@ export function renderPlan(result, opts = {}) {
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  for (const c of childs) P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | Freedom record page | Rebuild (child) |`);
+  for (const c of childs) {
+    const viewOnlyNoPage = c.editable === false && !c.editPage; // genuinely no child edit page
+    const target = viewOnlyNoPage ? "— view-only (no child page)" : "Freedom record page";
+    const call = viewOnlyNoPage ? "—" : "Rebuild (child)";
+    P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | ${target} | ${call} |`);
+  }
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)` rows are recursive sub-migrations** — each child page's own mapping is under **Child page mappings** below (generated where the schema was supplied, a `<FILL>` slot otherwise). A related list whose child entity has no Freedom form can't add/edit records.");
   P.push("");
@@ -309,8 +314,15 @@ export function renderPlan(result, opts = {}) {
         P.push(demoteHeadings(c.spec)); // nest the child's ## / ### headings two levels under this ####
       } else if (c.specError) {
         P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
+      } else if (c.editPage) {
+        // a real Classic edit page is named (from the detail's getEditPageName) → mapping is MANDATORY.
+        // Close the escape hatches a real run used to dodge this ("view-only" / "native" / "out of scope").
+        P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
+      } else if (c.editable === false) {
+        // per the classic detail (add-record hidden): genuinely view-only → there is no child edit page to map.
+        P.push(`> View-only related list (the classic detail hides add-record) → there is no child edit page, so nothing to map here. Confirm no \`*Page\` exists for \`${esc(c.entity)}\`; if one does, fetch + map it.`);
       } else {
-        P.push(`> **\`<FILL: recursive sub-migration>\`** — fetch this child's edit page${c.editPage ? ` (\`${esc(c.editPage)}\`)` : " (resolve the schema name via list-pages)"}, run \`migrate.mjs --plan\` on it (or pass it in \`childPageSchemas\`), and paste its generated design spec here. Do NOT leave this as just a row in Pages.`);
+        P.push(`> **\`<FILL: recursive sub-migration>\`** — resolve this child's Classic edit page via \`list-pages\` **by entity \`${esc(c.entity)}\`**. If a \`*Page\` exists, fetch it and map it here (\`childPageSchemas\`) — "out of scope" is never a valid skip. Only if NO \`*Page\` exists is this a legitimate skip, and you must say so.`);
       }
       P.push("");
     }

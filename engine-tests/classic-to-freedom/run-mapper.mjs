@@ -743,5 +743,27 @@ check("#7b Main scope: child rows use a fixed 'Freedom record page' target (no f
 check("#7b Main scope: the meaningless 'entity · details · lookups · backend / Reuse' row is removed",
   !/reused as-is \| Reuse/.test(recCs.plan) && !/entity · details · lookups · backend/.test(recCs.plan));
 
+// #7c — a child whose detail names a REAL Classic edit page (getEditPageName) gets a MANDATORY-map slot
+// that closes the "view-only / native / out of scope" escape hatches a real run used to dodge the mapping.
+const realChildBody = `define("StageInRecruitmentDetailV2",[],function(){return{entitySchemaName:"RecruitmentInStage",methods:{getEditPageName:function(){return "RecruitmentInStagePageV2";}},diff:[]};});`;
+const realChild = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{StageDetail:{schemaName:"StageInRecruitmentDetailV2",entitySchemaName:"RecruitmentInStage",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"StageDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { StageInRecruitmentDetailV2: { body: realChildBody, entity: "RecruitmentInStage" } } }, { baseDir: FIX });
+check("#7c child with a real edit page (getEditPageName) → editPage flows into childPages",
+  realChild.childPages.some((c) => c.editPage === "RecruitmentInStagePageV2"));
+check("#7c real edit page → MANDATORY-map slot; 'view-only/native/out of scope' explicitly rejected",
+  /RecruitmentInStagePageV2/.test(realChild.plan) && /REAL Classic edit page/.test(realChild.plan)
+  && /MUST fetch it and map it/.test(realChild.plan) && /"out of scope" are NOT skip reasons/.test(realChild.plan)
+  && /no "out of scope" in this migration/i.test(realChild.plan));
+// a genuinely view-only child (add-record hidden, no edit page) IS a legitimate skip — no child page exists
+const voChildBody = `define("VoDetail",[],function(){return{entitySchemaName:"VoEntity",methods:{getAddRecordButtonVisible:function(){return false;}},diff:[]};});`;
+const voChild = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{VoDetail:{schemaName:"VoDetail",entitySchemaName:"VoEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"VoDetail",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { VoDetail: { body: voChildBody, entity: "VoEntity" } } }, { baseDir: FIX });
+check("#7c view-only child (no edit page) is a legit skip — 'no child edit page' note, not a mandatory-map",
+  voChild.childPages.some((c) => c.entity === "VoEntity" && c.editable === false && !c.editPage)
+  && /View-only related list[\s\S]{0,80}no child edit page/.test(voChild.plan)
+  && !/MUST fetch it and map it/.test(voChild.plan));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

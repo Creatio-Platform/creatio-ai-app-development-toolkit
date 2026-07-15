@@ -335,3 +335,17 @@
 
 **⚪ P3 — гігієна (Тема 8)**
 - RV13: `.gitignore scratch_` не匹ає реальні артефакти (plan.md/manifest.json/design-spec.md) → ризик закомітити дані замовника.
+
+## Applicant run #2 — child-mapping loophole ("out of scope" invented) [✅ ЗРОБЛЕНО]
+
+Реальний прогін (Theme-5-версія кешу): агент зробив seed правильно (195 методів), змапив головну сторінку добре (read-only mirrors, native features), АЛЕ дочірні сторінки знову НЕ замапив — `childPageSchemas=0`. Причини:
+- `list-pages` кликав лише по батьківській `Applicant`, **жодного разу по дочірніх сутностях** → мандат «resolve child edit-page via list-pages by child entity» не виконано.
+- Імена дочірніх сторінок були прямо в тілах деталей (`getEditPageName`, 27 згадок), але не потягнуті.
+- Замість мапінгу — прозові відмовки: RecruitmentInStage «read-only», ContactCommunication «native», InternalRequest «out of scope».
+
+Поправка юзера: **view-only = справді без сторінки (легітимний skip)**; а **«out of scope» агент вигадав — його НЕ існує** (обмеження обсягу — рішення користувача).
+
+Фікс:
+- `designspec.renderPlan` — FILL-гілка дочірніх стала 3-складовою: (a) `editPage` відоме → **гучний MANDATORY-map слот**, що прямо відкидає "view-only/native/out of scope"; (b) `editable===false` без editPage → легітимний «no child edit page» skip; (c) інакше → resolve via `list-pages` by child entity. Main-scope рядок view-only-без-сторінки → target «— view-only (no child page)», Call «—».
+- SKILL — childPageSchemas-бульт + крок 7.3: **немає «out of scope»**; реальна `*Page` → мапиться попри розмір; єдині skip — view-only-без-сторінки або справді native; scope-trim = рішення користувача; `list-pages` по ДОЧІРНІЙ сутності + `getEditPageName`.
+- +3 голдени (#7c: editPage flows; MANDATORY-slot rejects out-of-scope; view-only legit skip). mapper 152.
