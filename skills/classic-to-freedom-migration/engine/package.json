@@ -3,8 +3,5 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic Classic→Freedom merge engine + mapper (prototype). Golden runners are the regression gate.",
-  "scripts": {
-    "test": "node run.mjs && node run-mapper.mjs"
-  }
+  "description": "Deterministic Classic→Freedom merge engine + mapper (runtime only). Golden runners + fixtures live in the repo-root engine-tests/classic-to-freedom (outside the shipped skill)."
 }

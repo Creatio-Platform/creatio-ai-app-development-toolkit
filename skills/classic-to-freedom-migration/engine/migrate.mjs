@@ -4,7 +4,7 @@
 // manual fallback) into one effective Classic page and a Freedom ChangeSet + needsDecision[]. This is the
 // deterministic 80% the skill used to ask the agent to do by hand (enumerate chain → merge diff/details/
 // businessRules by eye). A thin I/O wrapper over engine.mjs (mergeHierarchy) + mapper.mjs (mapToFreedom); the
-// golden runners (run.mjs / run-mapper.mjs) remain the regression gate for the logic itself.
+// golden runners (repo-root engine-tests/classic-to-freedom/run.mjs + run-mapper.mjs) remain the regression gate for the logic itself.
 //
 // Manifest shape (JSON):
 //   {

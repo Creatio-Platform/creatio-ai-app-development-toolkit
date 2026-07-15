@@ -2,14 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy } from "./engine.mjs";
-import { mapToFreedom } from "./mapper.mjs";
-import { runMigration } from "./migrate.mjs";
-import { renderDesignSpec } from "./designspec.mjs";
+import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { renderDesignSpec } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
 const load = (dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
@@ -322,7 +323,7 @@ check("migrate.mjs: entity '?' falls back to the merged effective entity",
   runMigration({ entity: "?", schemas: [
     { pkg: "SupportCalendar", file: "supportunitemployee/SupportCalendar_base.js" },
     { pkg: "SupportService", file: "supportunitemployee/SupportService.js" }] }, { baseDir: FIX }).entity === "SupportUnit");
-const migBad = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-"], { input: "{ not json", encoding: "utf8" });
+const migBad = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "{ not json", encoding: "utf8" });
 check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdout (not a raw stack)",
   migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
 
@@ -449,7 +450,7 @@ check("design-spec: legacy split tables gone (no Region map / Fields / Details &
   !/### Region map/.test(cli.designSpec) && !/### Fields/.test(cli.designSpec) && !/### Details & standard features/.test(cli.designSpec));
 check("design-spec: Confirm section present (⚠ worklist)",
   /#### ⚠ Confirm before I build/.test(cli.designSpec));
-const specRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--spec"], {
+const specRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
     { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });
@@ -598,7 +599,7 @@ check("--plan: verbatim / Adjustments guardrail present (agent must not edit gen
 check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
-const planRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--plan"], {
+const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
     { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }] }), encoding: "utf8" });

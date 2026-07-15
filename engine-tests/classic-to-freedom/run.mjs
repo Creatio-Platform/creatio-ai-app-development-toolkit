@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy } from "./engine.mjs";
+import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { makeSchema } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));

@@ -44,7 +44,8 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '20'
-      # zero-dependency pure-ESM engine; `npm test` = node run.mjs && node run-mapper.mjs (exit 1 on failure)
+      # zero-dependency pure-ESM goldens (live in engine-tests/, outside the shipped skill); import the
+      # runtime engine from skills/…/engine. Each runner exits 1 on any failed check.
       - name: Run merge + mapper goldens
-        working-directory: skills/classic-to-freedom-migration/engine
-        run: npm test
+        working-directory: engine-tests/classic-to-freedom
+        run: node run.mjs && node run-mapper.mjs
