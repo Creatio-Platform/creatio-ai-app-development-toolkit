@@ -248,6 +248,15 @@
 
 **Межа:** рекурсія оркеструється агентом (рушій не фетчить); процес-нейм лишається ⚠ (data-bound). Головний ризик — чи агент тепер **справді вставляє `--plan` дослівно** (наступний прогін покаже).
 
+## Восьмий прогін (успіх `--plan` verbatim) + 5 тонких правок
+
+Прогін підтвердив: агент запустив `--plan`, вставив **дослівно** (Overview/Section/Child-pages/ActionDashboard усі присутні), правки виніс в **Adjustments** — рецидив «курації» вирішено. Придивившись до змісту, вніс 5 refinements (merge 49/49, mapper 132/132, +6):
+1. **Confirm без дублів** — kinds, що вже в Layout/Logic/Child-pages (`standard-feature`/`widget`/`card-action`/`method`/`detail-editpage`), більше НЕ переспівуються в `⚠ Confirm`.
+2. **`lookup-no-ref` флаг** — lookup-поле без reference-схеми (за rich `entityColumns`) → «ймовірне read-only текст-дзеркало; confirm» (пре-емптить ручну правку Mobile phone/Email/Skype).
+3. **Logic згортає хелпери** — `set<X>Info`/`clear<X>Info` у рядку `on<X>Change` (+ …), не окремими.
+4. **Дедуп entity-filter** — кілька FILTRATION на одну колонку → один рядок «N filters (M ⚠ dynamic)».
+5. **Віджети в `Header / top`** — ActionDashboard/DCM/Recommendations під одним регіоном; base-provided → «template context».
+
 ## Backlog — окремі майбутні задачі
 
 - **[clio-fork] `list-environments` шум (~30k/прогін).** Виклик без аргументів дампить УСІ зареєстровані середовища з повним конфігом (одноразово ~30k токенів, висить у контексті). Fix = **варіант A**: додати `list-environments` **необов'язковий** `search-pattern` (match за name/URL-хостом) → повертає лише збіг. Additive/opt-in, backward-compatible; **НЕ варіант B** (обрізати вивід для всіх — зламає інших викликачів). Це **базовий** clio-тул → окрема гілка у форку, **не мішати** в `feature/classic-to-freedom-schema-tools` (окремий scope/PR). Пріоритет: низький (разовий хіт; братись лише якщо на верифікації реально муляє). Див. [[classic-freedom-discovery-token-burn]].

@@ -607,5 +607,33 @@ check("child pages: detail schema editPage flows into the recursion target",
     detailSchemas: { ReqDetail: { entity: "InternalRequest", columns: ["Number"], editPage: "InternalRequestPage" } } }, { baseDir: FIX })
     .childPages.some(c => c.entity === "InternalRequest" && c.editPage === "InternalRequestPage"));
 
+/* ---- review-round refinements: Confirm dedup · lookup-no-ref · Logic fold · filter dedup · widget region ---- */
+// #1 — Confirm must NOT re-list kinds already shown in Layout/Logic/Child-pages
+const cfTail = dsCs.designSpec.split("### ⚠ Confirm")[1] || "";
+check("#1 Confirm: standard-feature / method NOT re-listed (already in Layout / Logic)",
+  dsCs.designSpec.includes("### ⚠ Confirm") && !/\[standard-feature\]/.test(cfTail) && !/\[method\]/.test(cfTail));
+// #2 — a lookup column (rich meta) with no reference schema → probable read-only mirror flag
+const mirrorCs = runMigration({ entity: "X", entityColumns: { MobilePhone: { type: "Lookup" } },
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MobilePhone",parentName:"Header",propertyName:"items",values:{bindTo:"MobilePhone"}}]};});` }] }, { baseDir: FIX });
+check("#2 lookup-no-ref: lookup column with no reference schema flagged as a probable read-only mirror",
+  mirrorCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && n.item === "MobilePhone"));
+check("#2 lookup-no-ref: a lookup WITH a reference schema is NOT flagged (no false positive)",
+  !dsCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref"));
+// #3 — set/clear<X>Info helpers fold into on<X>Change (not separate Logic rows)
+const foldCs = runMigration({ entity: "X",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("#3 Logic: set/clear<X>Info helpers folded into on<X>Change (not separate rows)",
+  /onContactChange[^\n]*\+ setContactInfo, clearContactInfo/.test(foldCs.designSpec) && !/\| setContactInfo \| /.test(foldCs.designSpec));
+// #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
+const dupFilt = runMigration({ entity: "X",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
+check("#4 Logic: multiple filters on one attribute collapse to a single row",
+  /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
+// #5 — widgets grouped under a single 'Header / top' region
+const wReg = runMigration({ entity: "X",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("#5 widgets: grouped under a 'Header / top' region (not their own top-level region)",
+  /\| Header \/ top \| ActionDashboard \|/.test(wReg.designSpec));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

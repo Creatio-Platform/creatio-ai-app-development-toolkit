@@ -352,6 +352,12 @@ export function mapToFreedom(eff, opts = {}) {
     values.typeLabel = fieldTypeLabel(col, meta, c);
     if (c.lookup && meta.ref) values.refSchema = meta.ref;
     if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
+    // A lookup-rendered field whose column has NO reference schema (only checkable when rich entityColumns
+    // were supplied) is very likely a read-only DISPLAY MIRROR of a linked record's field, not a real
+    // lookup — flag it so it isn't shipped as an editable ComboBox (a recurring manual correction).
+    if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
+      needsDecision.push({ kind: "lookup-no-ref", item: col,
+        reason: `'${col}' renders as a lookup (classic contentType) but its entity column has no reference schema — likely a read-only text mirror of a linked record; confirm the real control (probably read-only Text) and its fill handler` });
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;

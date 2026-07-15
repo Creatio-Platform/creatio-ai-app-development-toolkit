@@ -93,7 +93,7 @@ export function renderDesignSpec(result, opts = {}) {
     rows.push({ region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] });
   }
   for (const w of cs.widgets || []) {
-    rows.push({ region: esc(w.widget), sort: 2, cells: [esc(w.widget), "Component", w.base ? "template-provided" : "native — confirm on-stand", DASH, DASH] });
+    rows.push({ region: "Header / top", sort: 2, cells: [esc(w.widget), "Component", w.base ? "template context — provided by the Freedom template" : "native — confirm on-stand", DASH, DASH] });
   }
   for (const a of cs.cardActions || []) {
     const isProc = /process/i.test(a);
@@ -128,10 +128,28 @@ export function renderDesignSpec(result, opts = {}) {
 
   // ---- Logic (behaviour that is not layout): entity filters, handlers, process launch ----
   const logic = [];
-  for (const r of cs.entityBusinessRules || [])
-    logic.push([`Filter · ${esc(r.targetAttribute)}`, `${esc(r.targetAttribute)} lookup`, r.complete ? "static filter" : "⚠ dynamic — resolve value", "entity business rule / lookup filter"]);
-  for (const h of cs.handlerStubs || [])
-    logic.push([esc(h.sourceMethod), triggerOf(h.sourceMethod), `imperative (${esc(h.category)}) — review`, "request handler / converter / virtual attr"]);
+  // entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
+  const filtBy = {};
+  for (const r of cs.entityBusinessRules || []) (filtBy[r.targetAttribute] = filtBy[r.targetAttribute] || []).push(r);
+  for (const [attr, rs] of Object.entries(filtBy)) {
+    const unresolved = rs.filter((r) => !r.complete).length;
+    const effc = rs.length === 1 ? (rs[0].complete ? "static filter" : "⚠ dynamic — resolve value")
+      : `${rs.length} filters${unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : ""}`;
+    logic.push([`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"]);
+  }
+  // handlers — fold the set<X>Info / clear<X>Info helpers into their on<X>Change trigger row (not separate
+  // rows), so the Logic table shows the meaningful behaviours, not every internal helper.
+  const stubs = cs.handlerStubs || [];
+  const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
+  const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
+  const helpersByBase = {};
+  for (const h of stubs) { const b = helperBase(h.sourceMethod); if (b) (helpersByBase[b] = helpersByBase[b] || []).push(h.sourceMethod); }
+  for (const h of stubs) {
+    if (helperBase(h.sourceMethod)) continue; // shown folded into its trigger row
+    const b = triggerBase(h.sourceMethod);
+    const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].join(", ")})` : "";
+    logic.push([esc(h.sourceMethod), triggerOf(h.sourceMethod), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"]);
+  }
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = (cs.needsDecision.find((n) => n.kind === "process-launch") || {}).item;
     logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, "⚠ run-process handler — which process?"]);
@@ -145,7 +163,11 @@ export function renderDesignSpec(result, opts = {}) {
   }
 
   // ---- Confirm before I build (the ⚠ worklist) — the agent appends discovery risks/gaps here ----
-  const nd = (cs.needsDecision || []).filter((n) => n.kind !== "process-launch"); // process-launch shown in Logic
+  // Only the GENUINE open decisions. Kinds already surfaced in Layout (standard-feature / widget /
+  // card-action), in Logic (method / process-launch) or in the Child-pages table (detail-editpage) are
+  // NOT re-listed here — that duplication is exactly the noise the plan structure was meant to remove.
+  const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
+  const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
   if (nd.length) {
     L.push(`### ⚠ Confirm before I build (${nd.length})`);
     for (const d of nd) L.push(`- **[${esc(d.kind)}]** ${esc(d.item)} — ${strip(d.reason)}`);
