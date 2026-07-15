@@ -257,6 +257,8 @@
 4. **Дедуп entity-filter** — кілька FILTRATION на одну колонку → один рядок «N filters (M ⚠ dynamic)».
 5. **Віджети в `Header / top`** — ActionDashboard/DCM/Recommendations під одним регіоном; base-provided → «template context».
 
+**Зауваження юзера #1:** дочірні сторінки деталей — у блок **`Pages`** (це і є перелік сторінок), не окремою таблицею. Зроблено: child-сторінки тепер рядки `Rebuild (child)` у Pages (opened by detail "…", editPage/⚠resolve); окрему секцію «Child pages to migrate» прибрано; SKILL крок 7 → «на кожен `Rebuild (child)` рядок Pages».
+
 ## Backlog — окремі майбутні задачі
 
 - **[clio-fork] `list-environments` шум (~30k/прогін).** Виклик без аргументів дампить УСІ зареєстровані середовища з повним конфігом (одноразово ~30k токенів, висить у контексті). Fix = **варіант A**: додати `list-environments` **необов'язковий** `search-pattern` (match за name/URL-хостом) → повертає лише збіг. Additive/opt-in, backward-compatible; **НЕ варіант B** (обрізати вивід для всіх — зламає інших викликачів). Це **базовий** clio-тул → окрема гілка у форку, **не мішати** в `feature/classic-to-freedom-schema-tools` (окремий scope/PR). Пріоритет: низький (разовий хіт; братись лише якщо на верифікації реально муляє). Див. [[classic-freedom-discovery-token-burn]].

@@ -179,7 +179,8 @@ export function renderDesignSpec(result, opts = {}) {
 
 // renderPlan — the WHOLE plan skeleton the agent presents at the gate: an Overview/What-it-does/Pages
 // header with `<FILL: …>` placeholders for the few AGENT decisions (scope, environment, package, approach,
-// business sentence, template choices), the GENERATED design spec, and the recursive child-pages table.
+// business sentence, template choices) + the GENERATED design spec. Child edit pages are folded into the
+// Pages table as `Rebuild (child)` rows (recursive sub-migrations), not a separate section.
 // The agent fills the placeholders and pastes VERBATIM — it cannot drop or restructure the generated
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
 export function renderPlan(result, opts = {}) {
@@ -206,18 +207,15 @@ export function renderPlan(result, opts = {}) {
   P.push("| --- | --- | --- |");
   P.push("| <FILL: section schema> | <FILL: Freedom list template> | Rebuild |");
   P.push(`| ${entity} form page | <FILL: Freedom form template> | Rebuild |`);
+  // child edit pages belong in Pages too — each related list's child entity opens its OWN form on
+  // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note.
+  for (const c of childs) P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | <FILL: Freedom form template / resolve via list-pages> | Rebuild (child) |`);
   P.push("| entity · details · lookups · backend | reused as-is | Reuse |");
   P.push("");
-  P.push(renderDesignSpec(result, opts));
-  if (childs.length) {
-    P.push("");
-    P.push("### Child pages to migrate (recursive)");
-    P.push("> Each related list opens the child entity's form on add/edit — migrate each as its OWN sub-plan (run the pipeline on its page). The plan is a TREE, not one page.");
-    P.push("| Child entity | Opened by | Edit page | Editable |");
-    P.push("| --- | --- | --- | --- |");
-    for (const c of childs) P.push(`| ${esc(c.entity)} | ${esc(c.via)} | ${esc(c.editPage || "⚠ resolve (list-pages)")} | ${c.editable === false ? "view-only" : "add/edit/delete (confirm)"} |`);
-  }
+  if (childs.length) P.push("> **`Rebuild (child)` rows are recursive sub-migrations** — build each by running the pipeline on that child page (step 7). A related list whose child entity has no Freedom form can't add/edit records.");
   P.push("");
-  P.push("> **Fill every `<FILL: …>` above, then present this VERBATIM.** Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit or drop the generated tables/sections (Layout · Section · Logic · Confirm · Child pages).");
+  P.push(renderDesignSpec(result, opts));
+  P.push("");
+  P.push("> **Fill every `<FILL: …>` above, then present this VERBATIM.** Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit or drop the generated tables/sections (Pages child rows · Layout · Section · Logic · Confirm).");
   return P.join("\n");
 }

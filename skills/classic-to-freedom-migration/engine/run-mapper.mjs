@@ -593,8 +593,9 @@ check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
 check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
   /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
-check("child pages (recursion): custom details → result.childPages + a Child-pages table in the plan",
-  Array.isArray(cli.childPages) && cli.childPages.length >= 1 && /### Child pages to migrate/.test(cli.plan));
+check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
+  Array.isArray(cli.childPages) && cli.childPages.length >= 1
+  && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const planRun = spawnSync(process.execPath, [path.join(DIR, "migrate.mjs"), "-", "--plan"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, layers: [
     { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
