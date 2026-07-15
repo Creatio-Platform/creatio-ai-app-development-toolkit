@@ -16,7 +16,8 @@
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
-//     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ] // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
+//     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
+//     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (layers/seed/…)… }, … } // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //   }
 // Prefer inline "body" (paste the clio get-classic-schema output) over "file" to avoid path fragility.
 import fs from "node:fs";
@@ -82,6 +83,24 @@ export function runMigration(manifest, opts = {}) {
     editPage: (detailSchemas[d.detailSchema] && detailSchemas[d.detailSchema].editPage) || null,
     editable: detailSchemas[d.detailSchema] ? detailSchemas[d.detailSchema].editable : null,
   })).filter((c) => c.entity);
+  // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
+  // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
+  // parent page + one real sub-mapping per related list. Depth-capped (parent 0 → child 1 → grandchild 2)
+  // so a self/cyclic reference can't run away; deeper levels stay listed rows to be resolved by the agent.
+  const depth = opts.depth || 0;
+  const childSchemas = manifest.childPageSchemas || {};
+  for (const c of childPages) {
+    if (depth >= 2) break;
+    const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
+    if (!key) continue;
+    try {
+      const childRes = runMigration(childSchemas[key], { baseDir, depth: depth + 1 });
+      c.spec = childRes.designSpec;              // the child page's Layout/Section/Logic/Confirm — the mapping
+      c.mappedEntity = childRes.entity;
+      c.resolvedFrom = key;
+      c.grandChildren = (childRes.childPages || []).length;
+    } catch (e) { c.specError = e.message; }     // malformed child manifest ⇒ note it, keep the listed row
+  }
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   const out = {

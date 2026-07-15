@@ -653,5 +653,23 @@ const firstTabIx = ordLines.findIndex((l) => /^\| Tab · /.test(l));
 check("#6 Layout order: all profile regions render before tabs (not interleaved)",
   lastProfileIx >= 0 && firstTabIx >= 0 && lastProfileIx < firstTabIx);
 
+// #7 — child-page recursion: a supplied child schema is MAPPED (its design spec nested in the plan),
+// an unsupplied child gets an explicit `<FILL: recursive sub-migration>` slot — the listing alone is
+// not enough; every child page needs its own mapping, or a visible instruction to produce one.
+const recCs = runMigration({ entity: "Par",
+  layers: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"ChildADetail",entitySchemaName:"ChildA",filter:{detailColumn:"M",masterColumn:"Id"}},D2:{schemaName:"ChildBDetail",entitySchemaName:"ChildB",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"D2",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "ChildA", editPage: "ChildAPage" }, D2: { entity: "ChildB", editPage: "ChildBPage" } },
+  childPageSchemas: { ChildAPage: { entity: "ChildA",
+    layers: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"ChildA",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] } } },
+  { baseDir: FIX });
+const recA = recCs.childPages.find((c) => c.entity === "ChildA") || {};
+const recB = recCs.childPages.find((c) => c.entity === "ChildB") || {};
+check("#7 child recursion: supplied child schema is mapped (childPages[].spec populated, resolvedFrom set)",
+  !!recA.spec && recA.resolvedFrom === "ChildAPage" && !recB.spec);
+check("#7 child recursion: mapped child's design spec is NESTED in the plan (headings demoted under Child page mappings)",
+  /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /##### Layout/.test(recCs.plan));
+check("#7 child recursion: unsupplied child gets an explicit recursive-sub-migration FILL slot (not just a row)",
+  /#### Child page: ChildB[\s\S]*?<FILL: recursive sub-migration>/.test(recCs.plan));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

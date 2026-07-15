@@ -40,6 +40,9 @@ function regionResolver(viewConfigDiff) {
 const dispLabel = (o) => { const l = o.values && o.values.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
 const humanizeAction = (a) => ({ "make-required": "required", "make-optional": "optional", "make-read-only": "read-only", "make-editable": "editable", "show-element": "visible", "hide-element": "hidden" }[a] || a);
 const triggerOf = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? `${mt[1]} changes` : (/init/i.test(m) ? "on load" : (/save/i.test(m) ? "on save" : "—")); };
+// demote a nested design spec's Markdown headings two levels (## → ####, ### → #####, capped at ######)
+// so a child page's spec reads as a subsection under the parent plan's `#### Child page:` heading.
+const demoteHeadings = (md) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + 2)) + " ");
 
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -217,10 +220,31 @@ export function renderPlan(result, opts = {}) {
   for (const c of childs) P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | <FILL: Freedom form template / resolve via list-pages> | Rebuild (child) |`);
   P.push("| entity · details · lookups · backend | reused as-is | Reuse |");
   P.push("");
-  if (childs.length) P.push("> **`Rebuild (child)` rows are recursive sub-migrations** — build each by running the pipeline on that child page (step 7). A related list whose child entity has no Freedom form can't add/edit records.");
+  if (childs.length) P.push("> **`Rebuild (child)` rows are recursive sub-migrations** — each child page's own mapping is under **Child page mappings** below (generated where the schema was supplied, a `<FILL>` slot otherwise). A related list whose child entity has no Freedom form can't add/edit records.");
   P.push("");
   P.push(renderDesignSpec(result, opts));
   P.push("");
-  P.push("> **Fill every `<FILL: …>` above, then present this VERBATIM.** Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit or drop the generated tables/sections (Pages child rows · Layout · Section · Logic · Confirm).");
+  // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
+  // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot
+  // that keeps the mapping a REQUIRED, visible deliverable rather than a table row the agent treats as done.
+  if (childs.length) {
+    P.push("### Child page mappings");
+    P.push("");
+    for (const c of childs) {
+      const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""}`;
+      P.push(`#### Child page: ${head}`);
+      if (c.spec) {
+        if (c.grandChildren) P.push(`> ${c.grandChildren} nested child page(s) of its own — map those recursively too (step 7).`);
+        P.push("");
+        P.push(demoteHeadings(c.spec)); // nest the child's ## / ### headings two levels under this ####
+      } else if (c.specError) {
+        P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
+      } else {
+        P.push(`> **\`<FILL: recursive sub-migration>\`** — fetch this child's edit page${c.editPage ? ` (\`${esc(c.editPage)}\`)` : " (resolve the schema name via list-pages)"}, run \`migrate.mjs --plan\` on it (or pass it in \`childPageSchemas\`), and paste its generated design spec here. Do NOT leave this as just a row in Pages.`);
+      }
+      P.push("");
+    }
+  }
+  P.push("> **Fill every `<FILL: …>` above, then present this VERBATIM.** Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit or drop the generated tables/sections (Pages child rows · Layout · Section · Logic · Confirm · Child page mappings).");
   return P.join("\n");
 }
