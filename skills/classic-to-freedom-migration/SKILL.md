@@ -51,7 +51,7 @@ Use when the Classic section being migrated **already has a Freedom UI section/p
 - The unit of work is the client's **customization delta**, not the whole Classic page. Target the existing Freedom section; never create a duplicate.
 - Reconcile in both directions: what the client added in Classic but is missing on Freedom gets **added**; what exists on Freedom but is not in the client's Classic setup — because they never added it or explicitly removed/hid it in Classic — gets **removed/hidden**, within the customization scope.
 - Never strip base/standard Freedom elements that have no Classic analog just because they are absent from the delta; absence is not intent to remove. Flag those as manual decisions.
-- Follow `references/existing-freedom-reconcile.md` for the isolate-delta → read-Freedom → diff → apply → verify procedure, and record every removal with its Classic evidence.
+- Follow `./references/existing-freedom-reconcile.md` for the isolate-delta → read-Freedom → diff → apply → verify procedure, and record every removal with its Classic evidence.
 
 ## Source Policy
 
@@ -66,18 +66,18 @@ Use a hybrid discovery strategy with fallback:
 
 Read these only when needed:
 
-- `references/classic-to-freedom-mapping.md` for Classic UI to Freedom UI mapping rules.
-- `references/migration-plan-template.md` before writing the migration plan.
-- `references/migration-documentation.md` before creating or updating the migration documentation set.
-- `references/analysis-summary.md` before presenting the structure-analysis summary to the user in chat.
-- `references/page-design-spec.md` before producing the per-page design spec for each page to rebuild.
-- `references/existing-freedom-reconcile.md` when the Classic section already has a Freedom counterpart and the client's customizations must be ported onto it and reconciled.
+- `./references/classic-to-freedom-mapping.md` for Classic UI to Freedom UI mapping rules.
+- `./references/migration-plan-template.md` before writing the migration plan.
+- `./references/migration-documentation.md` before creating or updating the migration documentation set.
+- `./references/analysis-summary.md` before presenting the structure-analysis summary to the user in chat.
+- `./references/page-design-spec.md` before producing the per-page design spec for each page to rebuild.
+- `./references/existing-freedom-reconcile.md` when the Classic section already has a Freedom counterpart and the client's customizations must be ported onto it and reconciled.
 
 ## Documentation
 
 Every migration is tracked through a persisted documentation set, not from memory. The set is the shared source of truth for the agent and the person directing it.
 
-- Follow `references/migration-documentation.md` for the document layout, status vocabulary, task IDs, Definition of Done, and update rules.
+- Follow `./references/migration-documentation.md` for the document layout, status vocabulary, task IDs, Definition of Done, and update rules.
 - Scale the set to scope: single-section needs a lightweight `plan.md` plus `worklog.md`; whole-package needs the full set (`README.md`, `discovery.md`, `plan.md`, `roadmap.md`, `decisions.md`, `worklog.md`).
 - Create the documents during step 6 (before the approval gate), then keep them updated through execution.
 - Cardinal rule: read `README.md` and `roadmap.md` at the start of every session, and after every meaningful action update `roadmap.md` and append to `worklog.md`. `plan.md` is frozen after approval; changes go through `decisions.md` and re-approval.
@@ -97,7 +97,7 @@ Initial request: `$ARGUMENTS`
    - classify each Classic schema as an **own section/page** or a **replacing/extension schema**
    - record which pages depend on which entities, details, and backend schemas
    - this inventory drives the dependency-ordered plan in step 6 and the per-section sub-plans
-   - record it in `discovery.md` (whole-package scope) per `references/migration-documentation.md`
+   - record it in `discovery.md` (whole-package scope) per `./references/migration-documentation.md`
    For single-section scope, skip the full inventory and resolve only the named target plus its direct dependencies.
 
 ### 1. Resolve The Target
@@ -178,7 +178,7 @@ Build a structured inventory of the Classic implementation:
 
 > **Tooling (read this FIRST — it avoids a long, token-burning rediscovery):** the classic-schema readers — `list-schema-layers`, `get-classic-schema`, `resolve-migration-unit`, `get-tool-contract`, `odata-read` — are **hidden long-tail** clio tools. **Invoke them through `clio-run`** (`{ "command": "<tool>", "args": { … } }`). Do **NOT** `ToolSearch` for them — that returns nothing and wastes turns. Two arg facts: `list-schema-layers` returns each layer's **UId**, and `get-classic-schema` takes **`schema-uid`** (a UId, not a schema name). You do **NOT** need to read the `engine/` source (`README`, `migrate.mjs`) to learn the manifest — its shape is in step 4.2. And do **NOT** offload the fetch to a general-purpose sub-agent; run the `clio-run` calls inline (a sub-agent just duplicates this context).
 
-1. **Acquire the layer bodies, base→top — INCLUDING the parent-template chain (the F2 seed is MANDATORY, not optional).** Use `list-schema-layers` (orders the chain by `HierarchyLevel`) + `get-classic-schema` per layer for the target's OWN layers. Then **follow the page's `parentName` up the platform template chain** (e.g. `Applicant1Page` → `BaseModulePageV2` → `BasePageV2` → `BaseEntityPage`) and fetch those base-template layers too, via `get-classic-schema`. The base template defines the base CONTAINERS (`LeftModulesContainer`, `Tabs`, `ProfileContainer`), the base ACTIONS (the `ProcessButton` = Run process), and the ESN/Feed tab. Pass the target's own layers as `layers` and the parent-template layers as `seed`. **The seed MUST be the real fetched layer bodies — the `get-classic-schema` output pasted verbatim — NOT a hand-authored skeleton.** A skeleton that merely lists container names (`Header`, `Tabs`, `LeftModulesContainer`, `ProfileContainer`) will pass the hard gate below yet silently omit the base ACTIONS (`ProcessButton` = Run process) and the exact container nesting — so `Run process` still vanishes and profile fields can still mis-route. If you truly cannot fetch a base layer body, say so and stop; do not fabricate a stand-in. **Skipping the seed is a defect, not a shortcut:** without it the base containers are undefined, profile fields collapse into a fallback tab, and base actions (Run process) vanish. If the tools are unavailable, enumerate + read each body via `get-client-unit-schema` / `download-configuration` / the designer (procedure in `references/classic-to-freedom-mapping.md`).
+1. **Acquire the layer bodies, base→top — INCLUDING the parent-template chain (the F2 seed is MANDATORY, not optional).** Use `list-schema-layers` (orders the chain by `HierarchyLevel`) + `get-classic-schema` per layer for the target's OWN layers. Then **follow the page's `parentName` up the platform template chain** (e.g. `Applicant1Page` → `BaseModulePageV2` → `BasePageV2` → `BaseEntityPage`) and fetch those base-template layers too, via `get-classic-schema`. The base template defines the base CONTAINERS (`LeftModulesContainer`, `Tabs`, `ProfileContainer`), the base ACTIONS (the `ProcessButton` = Run process), and the ESN/Feed tab. Pass the target's own layers as `layers` and the parent-template layers as `seed`. **The seed MUST be the real fetched layer bodies — the `get-classic-schema` output pasted verbatim — NOT a hand-authored skeleton.** A skeleton that merely lists container names (`Header`, `Tabs`, `LeftModulesContainer`, `ProfileContainer`) will pass the hard gate below yet silently omit the base ACTIONS (`ProcessButton` = Run process) and the exact container nesting — so `Run process` still vanishes and profile fields can still mis-route. If you truly cannot fetch a base layer body, say so and stop; do not fabricate a stand-in. **Skipping the seed is a defect, not a shortcut:** without it the base containers are undefined, profile fields collapse into a fallback tab, and base actions (Run process) vanish. If the tools are unavailable, enumerate + read each body via `get-client-unit-schema` / `download-configuration` / the designer (procedure in `./references/classic-to-freedom-mapping.md`).
 2. **Merge + map with the bundled engine — do NOT hand-merge when Node is available.** Write a manifest `{ "entity", "entityColumns", "layers":[{"pkg","body"}], "seed":[{"pkg","body"}], "resources":{…}, "columnTitles":{…}, "detailSchemas":{…} }` (paste each `get-classic-schema` body inline). **Supply the three resolution inputs so the spec shows REAL names, not codes** (otherwise the engine flags them for you):
    - **`resources`** — the schema's localizable strings (`{ "SomeTabCaption": "Vacancies", … }`, read from `SysLocalizableValue` for the page schema) → tab/group/detail captions resolve to real labels instead of `Resources.Strings.*` keys (#5/#13).
    - **`columnTitles`** — the entity's column titles (`{ "MobilePhone": "Mobile phone", "ExpertiseLevel": "Specialist expertise level", … }`, from `describe-entity`) → field LABELS read like the classic page, not raw column codes (#5/#13).
@@ -194,15 +194,15 @@ Then run `node engine/migrate.mjs <manifest.json>` (the `engine/` directory bund
    - `effective.seedQuality.looksSkeletal` true → the engine DETECTED a **hand-written skeleton seed** (0 methods / no `getActions`) and raised a `skeletal-seed` warning, which fails this gate. A skeleton clears the parent check but silently drops base actions (`Run process`) and the true container nesting. Re-fetch the parent-template layers via `get-classic-schema` and pass their **real bodies** as `seed` (step 4.1) — do not paste a skeleton you typed.
    This is the deterministic 80% — layer merge with provenance (F1 order, F2 base seed, F9 payload-vs-template), symbolic-enum-safe rule decoding. Mark each item CONFIRMED only when its source layer body was actually read and parsed.
 
-**Fallback — hand-merge (only when Node is unavailable):** merge `diff` / `details` / `businessRules` across the full package chain per `references/classic-to-freedom-mapping.md`, attributing each item to the layer it came from.
+**Fallback — hand-merge (only when Node is unavailable):** merge `diff` / `details` / `businessRules` across the full package chain per `./references/classic-to-freedom-mapping.md`, attributing each item to the layer it came from.
 
-Do not assume Classic logic has a direct Freedom equivalent. Classify each behavior using the categories from `references/classic-to-freedom-mapping.md`. Distinguish declarative `businessRules` (→ page/entity business rules) from imperative logic in `attributes`/`methods` (→ Freedom handlers, converters, virtual attributes), and report the two separately so one is not silently converted into the other.
+Do not assume Classic logic has a direct Freedom equivalent. Classify each behavior using the categories from `./references/classic-to-freedom-mapping.md`. Distinguish declarative `businessRules` (→ page/entity business rules) from imperative logic in `attributes`/`methods` (→ Freedom handlers, converters, virtual attributes), and report the two separately so one is not silently converted into the other.
 
 ### 5. Map To Freedom UI
 
 Create a Classic to Freedom mapping table before planning implementation.
 
-**If you ran `engine/migrate.mjs` (step 4), its ChangeSet IS the mapping** — `viewConfigDiff` (fields/tabs/groups/containers with placement), `pageBusinessRules`/`entityBusinessRules`, `details`, `standardFeatures`, `widgets`, `images`, `cardActions`, plus `needsDecision[]` for the judgment 20%. Do not re-derive the table by hand; review and enrich the engine's output and work each `needsDecision` item (its `kind` tells you the category — e.g. `field-control`, `standard-feature`, `unmapped-component`, `referenced-module`, `entity-filter`, `method`, `process-launch`, `ancestor-visibility`, `profile-island`, `detail-unresolved`).
+**If you ran `./engine/migrate.mjs` (step 4), its ChangeSet IS the mapping** — `viewConfigDiff` (fields/tabs/groups/containers with placement), `pageBusinessRules`/`entityBusinessRules`, `details`, `standardFeatures`, `widgets`, `images`, `cardActions`, plus `needsDecision[]` for the judgment 20%. Do not re-derive the table by hand; review and enrich the engine's output and work each `needsDecision` item (its `kind` tells you the category — e.g. `field-control`, `standard-feature`, `unmapped-component`, `referenced-module`, `entity-filter`, `method`, `process-launch`, `ancestor-visibility`, `profile-island`, `detail-unresolved`).
 
 **Prefer the native Freedom feature over a generic detail/grid (#3).** Anything the engine put in `standardFeatures` (Approvals, Attachments, Activities/Tasks, Emails, Feed) is a first-class Freedom feature — build it as that feature, never as a generic Expanded-list/DataGrid. Only entries in `details[]` are generic related lists. Do not "downgrade" a standard feature to a plain list because it is easier.
 
@@ -224,7 +224,7 @@ Before mapping individual controls, choose the Freedom page strategy:
    - `list_page_templates` results such as list page, tabs form page, right-area form page, top-area form page, blank page, mini page, or sidebar/page-specific templates
    - component capabilities from `get_component_info`
 3. Pick one strategy and record the reason:
-   - update an existing Freedom page — when a Freedom counterpart already exists for the entity, follow `references/existing-freedom-reconcile.md`: port the client's Classic customization delta onto it and reconcile away Freedom elements that contradict the client's Classic setup, instead of building a new page
+   - update an existing Freedom page — when a Freedom counterpart already exists for the entity, follow `./references/existing-freedom-reconcile.md`: port the client's Classic customization delta onto it and reconcile away Freedom elements that contradict the client's Classic setup, instead of building a new page
    - create a new Freedom page from the closest template
    - create a blank/custom Freedom page only when no standard template preserves the required structure
    - mark as manual decision if the Classic template has no safe Freedom analog
@@ -239,13 +239,13 @@ For every Classic item, choose one target:
 
 Use Clio component metadata where available. Prefer declarative Freedom UI configuration and business rules over custom handlers when the behavior is equivalent.
 
-For every page classified as Rebuild or Delta you need a per-page design spec in the format of `references/page-design-spec.md`: the Classic page mapped region by region onto the Freedom template, each field with its component, data-source attribute, and grid placement, plus rules/handlers/details/actions.
+For every page classified as Rebuild or Delta you need a per-page design spec in the format of `./references/page-design-spec.md`: the Classic page mapped region by region onto the Freedom template, each field with its component, data-source attribute, and grid placement, plus rules/handlers/details/actions.
 
 **Do NOT hand-write this spec — GENERATE it.** Run the engine with `--spec`: `node engine/migrate.mjs <manifest.json> --spec`. It prints the design spec as ready Markdown **straight from the ChangeSet**: one **`Layout`** table (`Region · Element · Type · Source · Rule · Additional` — the structure plus every field, related list, native component and card action, each once), a **`Logic`** table (entity/lookup filters, handlers, process launch), and the **`⚠ Confirm before I build`** worklist. **Present that output verbatim** (write it to `design-spec.md` and paste it at the gate); your only edits are to RESOLVE the ⚠ items and append discovery risks to `⚠ Confirm` — never to re-format or re-describe it. Hand-writing the spec is the recurring failure: it comes out as loose prose with no per-field placement and mis-labelled features (Activities→"Timeline", Approvals→"Expanded list") that the engine had already resolved correctly. The generated spec is the build contract for step 7 and is required before the plan is presented (step 6).
 
 ### 6. Write The Migration Plan And Create The Documentation Set
 
-Create the documentation set from `references/migration-documentation.md`, scaled to scope, before the approval gate. Write the plan into `plan.md` using `references/migration-plan-template.md`. For whole-package scope also create `README.md`, `discovery.md`, `roadmap.md`, `decisions.md`, and `worklog.md`, and seed `roadmap.md` with one task per migratable artifact in dependency order.
+Create the documentation set from `./references/migration-documentation.md`, scaled to scope, before the approval gate. Write the plan into `plan.md` using `./references/migration-plan-template.md`. For whole-package scope also create `README.md`, `discovery.md`, `roadmap.md`, `decisions.md`, and `worklog.md`, and seed `roadmap.md` with one task per migratable artifact in dependency order.
 
 The plan must include:
 
@@ -257,7 +257,7 @@ The plan must include:
 - layout analysis
 - business logic analysis
 - Freedom UI mapping
-- **a per-page design spec for every Rebuild/Delta page** (per `references/page-design-spec.md`) — the concrete "what goes where", not just high-level calls: each field's target container/tab **and colSpan**, each profile island, each detail's target tab **and Freedom component**, the standard features (Approvals/Attachments/Activities/Emails), the card actions (incl. `Run process`), and the page rules. Populate it **directly from the engine ChangeSet** — `viewConfigDiff` gives each field's `parentName` (container) + `layoutConfig.colSpan`; `details` / `standardFeatures` / `cardActions` give the rest — so every emitted element becomes one spec row. A plan that lists only the Rebuild/Delta calls without this per-field spec is **incomplete** and must not be presented for approval; the reader must be able to see the finished page's structure before a single build call.
+- **a per-page design spec for every Rebuild/Delta page** (per `./references/page-design-spec.md`) — the concrete "what goes where", not just high-level calls: each field's target container/tab **and colSpan**, each profile island, each detail's target tab **and Freedom component**, the standard features (Approvals/Attachments/Activities/Emails), the card actions (incl. `Run process`), and the page rules. Populate it **directly from the engine ChangeSet** — `viewConfigDiff` gives each field's `parentName` (container) + `layoutConfig.colSpan`; `details` / `standardFeatures` / `cardActions` give the rest — so every emitted element becomes one spec row. A plan that lists only the Rebuild/Delta calls without this per-field spec is **incomplete** and must not be presented for approval; the reader must be able to see the finished page's structure before a single build call.
 - ordered implementation plan
 - validation plan
 - blockers and decisions needed
@@ -275,7 +275,7 @@ For whole-package scope, produce one consolidated plan:
 - a single dependency-ordered implementation sequence across all sections (entities/data sources first, then own sections, then replacing/extension deltas, then backend/process/permission logic)
 - mark each Classic schema as own section vs replacing/extension so the reader knows which becomes a new page and which becomes an additive delta
 
-Alongside the plan, present a short user-facing structure-analysis summary in chat, following `references/analysis-summary.md`. It is the readable companion to `plan.md`: grouped by section, with each page's business rule shown on the page it belongs to and processes/code as section-level items, each carrying its migration call. Render it as plain Markdown in chat — never as HTML or a rendered artifact.
+Alongside the plan, present a short user-facing structure-analysis summary in chat, following `./references/analysis-summary.md`. It is the readable companion to `plan.md`: grouped by section, with each page's business rule shown on the page it belongs to and processes/code as section-level items, each carrying its migration call. Render it as plain Markdown in chat — never as HTML or a rendered artifact.
 
 **Present the whole plan by running `node engine/migrate.mjs <manifest> --plan`, filling every `<FILL: …>` placeholder, and pasting the output VERBATIM.** The `--plan` output already contains the Overview/What-it-does/**Main scope** header, the design spec in Main-scope order (`List page` → the form page's `Layout`/`Logic`/`⚠ Confirm`), and the `Child page mappings` section — you only supply the placeholder values (scope, environment, package, approach, business sentence, template choices). **Do not hand-author the plan, do not re-order, do not re-format, and do not drop any generated section** (that silently loses the `List page` block, list columns, child pages, etc. — the recurring failure). Corrections/enrichments (e.g. a mis-guessed control, a resolved process name) go in an **Adjustments** list at the very end, never by editing the generated tables. (Whole-package: run `--plan` per page in the current phase; keep the rest in `plan.md`.)
 
@@ -287,7 +287,7 @@ After approval:
 
 1. Re-read `README.md`, `roadmap.md`, and the approved `plan.md`, plus relevant source files, to recover state. Record the approval in `decisions.md`.
 2. For whole-package scope, migrate one section at a time in the dependency order from the plan (entities/data sources, then own sections, then replacing/extension deltas, then backend); finish and validate each section before starting the next, and re-check existing Freedom artifacts before each create to avoid duplicates.
-3. Build each page from its per-page design spec (`references/page-design-spec.md`): create or select the page from the spec's template, then add containers, fields, rules, handlers, and detail data sources in the spec's build order. **Migrate RECURSIVELY — the migration is a page TREE, not one page.** Each **`Rebuild (child)`** row in the plan's `Main scope` table has its OWN design spec under the plan's **`### Child page mappings`** section — build each child page from that nested spec exactly as you build the parent. That mapping is produced at PLAN time by passing the child edit-page schemas as `childPageSchemas` (step 4.2), so it is already in the approved plan; **a `<FILL: recursive sub-migration>` slot must have been resolved BEFORE approval** (fetch the child's edit page via `list-pages` → add it to `childPageSchemas` → re-run `--plan`), never deferred to build. If the classic section used an add-record mini page, migrate that too. A related list whose child entity has no Freedom form cannot add/edit records, so a parent page whose children were not migrated is NOT done. Execute subtasks in dependency order:
+3. Build each page from its per-page design spec (`./references/page-design-spec.md`): create or select the page from the spec's template, then add containers, fields, rules, handlers, and detail data sources in the spec's build order. **Migrate RECURSIVELY — the migration is a page TREE, not one page.** Each **`Rebuild (child)`** row in the plan's `Main scope` table has its OWN design spec under the plan's **`### Child page mappings`** section — build each child page from that nested spec exactly as you build the parent. That mapping is produced at PLAN time by passing the child edit-page schemas as `childPageSchemas` (step 4.2), so it is already in the approved plan; **a `<FILL: recursive sub-migration>` slot must have been resolved BEFORE approval** (fetch the child's edit page via `list-pages` → add it to `childPageSchemas` → re-run `--plan`), never deferred to build. If the classic section used an add-record mini page, migrate that too. A related list whose child entity has no Freedom form cannot add/edit records, so a parent page whose children were not migrated is NOT done. Execute subtasks in dependency order:
    - package/app/page scaffolding
    - same-package, replacing-package, or new-package setup according to the approved package placement decision
    - Freedom page template creation or existing page selection
@@ -321,7 +321,7 @@ Validate at the narrowest reliable level first, then broaden:
 
 Report what passed, what could not run, and what remains risky because of missing runtime, repository, permissions, or test coverage.
 
-Only move a task to `VALIDATED` after the Definition of Done in `references/migration-documentation.md` is met and the evidence is recorded in `worklog.md`. Otherwise leave it `DONE` and log the gap as a risk.
+Only move a task to `VALIDATED` after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is recorded in `worklog.md`. Otherwise leave it `DONE` and log the gap as a risk.
 
 ## Output Rules
 

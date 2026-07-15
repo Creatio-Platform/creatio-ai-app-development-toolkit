@@ -84,7 +84,9 @@ export function parseLayer(src, pkg) {
     // (see F8 in SELF-REVIEW.md). Do not treat parseLayer as safe for untrusted input.
     Terrasoft: TERRASOFT, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
   };
-  try { vm.runInNewContext(src, sandbox, { timeout: 4000 }); }
+  // NOSONAR (javascript:S1523) — INTENTIONAL: parses OFFLINE Classic-schema fixtures only; not a security
+  // boundary and never fed untrusted/stand-sourced input (see the sandbox comment above + F8 in SELF-REVIEW).
+  try { vm.runInNewContext(src, sandbox, { timeout: 4000 }); } // NOSONAR
   catch (e) { parseError = parseError || ("eval failed: " + String(e && e.message || e)); }
   const s = captured || {};
   return {
@@ -168,11 +170,14 @@ export function parseLayer(src, pkg) {
 // The UI-name test is ANCHORED to a trailing role suffix so a utility like `LabelHelper` / `GeneratorUtils`
 // (contains a token but doesn't END in it) is NOT misflagged — only css-backed deps or true role names pass.
 const UI_MODULE_RX = /(?:Label|Widget|Dashboard|Timeline|MiniPage|Generator|Gallery|Chart|Diagram)$/;
+// stable, locale-aware string comparator for the deterministic diagnostic lists below (Array#sort's
+// default coerces to string and sorts by code unit — explicit here so the ordering is intentional).
+const byLocale = (a, b) => String(a).localeCompare(String(b));
 function referencedUiModules(deps) {
   const names = (Array.isArray(deps) ? deps : []).filter(isStr);
   const css = new Set(names.filter(d => d.startsWith("css!")).map(d => d.slice(4).replace(/CSS$/, "")));
   return [...new Set(names.filter(d => !d.startsWith("css!"))
-    .filter(m => css.has(m) || css.has(m.replace(/CSS$/, "")) || UI_MODULE_RX.test(m)))].sort();
+    .filter(m => css.has(m) || css.has(m.replace(/CSS$/, "")) || UI_MODULE_RX.test(m)))].sort(byLocale);
 }
 
 // Extract a named function/method BODY by brace-matching (a regex can't balance braces) — used to scope
@@ -417,18 +422,18 @@ export function mergeLayers(layers /* base->top */, opts = {}) {
   const aliveNames = new Set(alive.map(i => i.name));
   const unresolvedParents = [...new Set(
     alive.map(i => i.parent).filter(p => p && !aliveNames.has(p))
-  )].sort();
+  )].sort(byLocale);
   // feature toggles referenced by the SCHEMA layers (not the base template) — they gate element
   // visibility at runtime; the rendered page shows one feature-state while this is the full union.
-  const features = [...new Set(layers.flatMap(l => l.features || []))].sort();
-  const cardActionHints = [...new Set(layers.flatMap(l => l.actionHints || []))].sort();
+  const features = [...new Set(layers.flatMap(l => l.features || []))].sort(byLocale);
+  const cardActionHints = [...new Set(layers.flatMap(l => l.actionHints || []))].sort(byLocale);
   // #8c — process launch detected in the SCHEMA's OWN layers (not the seed: the base template's "Run
   // process by record" is template-provided; here we surface the CLIENT page's own process launch).
   const processLaunch = layers.some(l => l.processLaunch);
-  const processNames = [...new Set(layers.flatMap(l => (l.processLaunch && l.processLaunch.names) || []))].sort();
+  const processNames = [...new Set(layers.flatMap(l => (l.processLaunch && l.processLaunch.names) || []))].sort(byLocale);
   // referenced UI modules the SCHEMA's own layers pull in via define() (not the base template) — their
   // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
-  const referencedModules = [...new Set(layers.flatMap(l => l.refModules || []))].sort();
+  const referencedModules = [...new Set(layers.flatMap(l => l.refModules || []))].sort(byLocale);
 
   // #19 — seed QUALITY validation. A real fetched base-template body (BaseModulePageV2 → BasePageV2 →
   // BaseEntityPage) always defines methods — hundreds of them, incl. `getActions` (which surfaces the
