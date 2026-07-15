@@ -88,6 +88,11 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("> ⛔ **HARD GATE — BLOCKED. DO NOT BUILD.** The engine found unresolved correctness signals; fix them and re-run:");
     for (const r of gate.reasons) L.push(`> - ${esc(r)}`);
   }
+  const structure = result.structure || { complete: true, issues: [] };
+  if (!opts.embedded && !structure.complete) {
+    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail/child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
+    for (const it of structure.issues) L.push(`> - ${esc(it)}`);
+  }
   L.push("");
 
   // ---- ONE Layout table (structure + contents) ----
@@ -264,6 +269,13 @@ export function renderPlan(result, opts = {}) {
   if (gate.blocked) {
     P.push("> ⛔ **HARD GATE — BLOCKED. This plan is NOT ready to build or approve.** Fix these and re-run `migrate.mjs --plan`:");
     for (const r of gate.reasons) P.push(`> - ${esc(r)}`);
+    P.push("");
+  }
+  // STRUCTURE VALIDATOR banner — the plan is incomplete until every detail/child-page schema is supplied.
+  const structure = result.structure || { complete: true, issues: [] };
+  if (!structure.complete) {
+    P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
+    for (const it of structure.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
   P.push("### Overview");

@@ -456,8 +456,15 @@ const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",
 const SU_SCHEMAS = [
   { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
   { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }];
+// the 3 SupportUnit details (view-only, no child edit page) — supplied so the STRUCTURE validator is
+// satisfied and these CLI runs stay gate-clean shape tests. Keyed by each detail's schemaName.
+const SU_DETAILS = {
+  SupportScheduleEmployeeDetail: { entity: "SupportSchedule" },
+  SupportUnitLogDetail: { entity: "SupportUnitLog" },
+  SupportScheduleLogDetail: { entity: "SupportScheduleLog" },
+};
 const specRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS }), encoding: "utf8" });
 check("migrate.mjs --spec: gate-clean run prints pure design-spec Markdown (## Design spec…), no JSON envelope, exit 0",
   specRun.status === 0 && (specRun.stdout || "").trim().startsWith("## Design spec") && !/"changeSet"/.test(specRun.stdout || "") && !/GATE BLOCKED/.test(specRun.stdout || ""));
 
@@ -611,13 +618,13 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || ""));
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
 const blockedRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, detailSchemas: SU_DETAILS }), encoding: "utf8" });
 check("HARD GATE: a no-seed run is blocked — CLI exits non-zero, stderr + top-of-plan ⛔ banner",
   blockedRun.status !== 0 && /GATE BLOCKED/.test(blockedRun.stderr || "")
   && /⛔ \*\*HARD GATE — BLOCKED/.test(blockedRun.stdout || "")
@@ -764,6 +771,22 @@ check("#7c view-only child (no edit page) is a legit skip — 'no child edit pag
   voChild.childPages.some((c) => c.entity === "VoEntity" && c.editable === false && !c.editPage)
   && /View-only related list[\s\S]{0,80}no child edit page/.test(voChild.plan)
   && !/MUST fetch it and map it/.test(voChild.plan));
+
+/* ---- STRUCTURE VALIDATOR — systemic completeness gate on manifest inputs (blocks the dodge in code) ---- */
+// (a) a custom detail with NO supplied detailSchema → structurally incomplete + banner in the plan.
+const stInc = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});` }] }, { baseDir: FIX });
+check("STRUCTURE: a custom detail with no supplied detailSchema → structure.complete=false + banner",
+  stInc.structure.complete === false && stInc.structure.issues.some((i) => /MyDetailV2/.test(i)) && /STRUCTURE INCOMPLETE/.test(stInc.plan));
+// (b) a child with a REAL editPage but no childPageSchemas → structurally incomplete (the dodge, blocked).
+check("STRUCTURE: a child with a real editPage but no childPageSchemas → structure.complete=false",
+  realChild.structure.complete === false && realChild.structure.issues.some((i) => /RecruitmentInStagePageV2/.test(i)));
+// (c) detail schema supplied + no child edit page → structurally COMPLETE (no false block).
+const stOk = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { MyDetailV2: { entity: "Child" } } }, { baseDir: FIX });
+check("STRUCTURE: detail schema supplied + no child edit page → structure.complete=true, no banner",
+  stOk.structure.complete === true && !/STRUCTURE INCOMPLETE/.test(stOk.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
 // RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.

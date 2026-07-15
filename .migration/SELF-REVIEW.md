@@ -349,3 +349,14 @@
 - `designspec.renderPlan` — FILL-гілка дочірніх стала 3-складовою: (a) `editPage` відоме → **гучний MANDATORY-map слот**, що прямо відкидає "view-only/native/out of scope"; (b) `editable===false` без editPage → легітимний «no child edit page» skip; (c) інакше → resolve via `list-pages` by child entity. Main-scope рядок view-only-без-сторінки → target «— view-only (no child page)», Call «—».
 - SKILL — childPageSchemas-бульт + крок 7.3: **немає «out of scope»**; реальна `*Page` → мапиться попри розмір; єдині skip — view-only-без-сторінки або справді native; scope-trim = рішення користувача; `list-pages` по ДОЧІРНІЙ сутності + `getEditPageName`.
 - +3 голдени (#7c: editPage flows; MANDATORY-slot rejects out-of-scope; view-only legit skip). mapper 152.
+
+## Applicant run #3 — STRUCTURE validator (systemic enforcement, not just rules) [✅ ЗРОБЛЕНО]
+
+Ще один прогін: агент витягнув 14 схем, ганяв migrate.mjs 4 рази, але `childPageSchemas` знову 0. Правила/гучні слоти не тримають — юзер запросив **системне** рішення: валідатор перед генерацією плану, що БЛОКУЄ обхід у коді.
+
+Фікс — `result.structure = { complete, issues[] }` у `runMigration` (валідатор МАНІФЕСТ-входів, окремо від correctness-`gate`):
+- кожна `changeSet.details[]`, чиєї схеми немає в `manifest.detailSchemas` → issue «fetch detailSchemas»;
+- кожен `childPages[]` з відомим `editPage` (getEditPageName) без `childPageSchemas`-мапінгу → issue «map the child page — no out of scope».
+- CLI: при `!complete` — stderr `⛔ STRUCTURE INCOMPLETE` + **exit 2**; renderPlan/renderDesignSpec — `⛔ STRUCTURE INCOMPLETE` банер зі списком. Перший `--plan` завжди incomplete → агент отримує точний список, фетчить, re-run до complete. Обійти в коді неможливо.
+- SKILL PLAN-COMPLETENESS-блок переписано: тепер ENFORCED (structure.complete + exit + банер), «перший --plan буде incomplete — це нормально».
+- +3 голдени STRUCTURE (detail без схеми → incomplete+банер; child editPage без childPageSchemas → incomplete; все подано → complete). Голдени CLI-run отримали `SU_DETAILS`, щоб лишитись gate/structure-clean. mapper 165.

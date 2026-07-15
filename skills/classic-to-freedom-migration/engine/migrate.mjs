@@ -116,9 +116,30 @@ export function runMigration(manifest, opts = {}) {
     if (eff.seedQuality && eff.seedQuality.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
     return { blocked: reasons.length > 0, reasons };
   })();
+  // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
+  // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
+  // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
+  // exit, and the renderer prints it into the plan — the agent literally can't present a clean plan without
+  // supplying the schemas. This is INPUT completeness (distinct from the correctness `gate` above).
+  const structure = (() => {
+    const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
+    const issues = [];
+    for (const d of (changeSet.details || [])) {
+      // a generic related list whose own schema was NOT supplied → its columns and child edit page are unknown
+      if (d.detailSchema && !suppliedDetailKeys.has(d.detailSchema))
+        issues.push(`detail '${d.detailSchema}'${d.entity ? ` (${d.entity})` : ""}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
+    }
+    for (const c of childPages) {
+      // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
+      if (c.editPage && !c.spec)
+        issues.push(`child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`);
+    }
+    return { complete: issues.length === 0, issues };
+  })();
   const out = {
     entity: manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity,
     gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal
+    structure,   // ⛔ complete:false ⇒ plan is structurally incomplete (missing detail/child schemas); issues[]
     parseErrors, // non-empty ⇒ a schema body failed to parse: FIX before trusting the ChangeSet
     // RV10 — the Freedom PAYLOAD actually emitted into the ChangeSet/design-spec (F9-filtered: template-owned
     // content is layout context, excluded). Report this ALONGSIDE `effective.*` so a reader doesn't mistake the
@@ -184,11 +205,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (specMode) output = result.designSpec + "\n";
   else output = JSON.stringify(result, null, 2) + "\n";
   process.stdout.write(output);
-  // ⛔ HARD GATE (RV1): the artifact carries the banner (renderer), but also make the CLI fail loudly so a
-  // gate-blocked run can't be mistaken for a clean one — stderr note + non-zero exit (2, distinct from the
-  // exit-1 bad-input path). The plan/spec is still printed above so the agent can see WHAT is wrong.
-  if (result.gate && result.gate.blocked) {
-    process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
-    process.exit(2);
-  }
+  // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
+  // fails loudly so a blocked/incomplete run can't be mistaken for a clean one — stderr note + non-zero exit
+  // (2, distinct from the exit-1 bad-input path). The plan/spec is still printed so the agent sees WHAT to fix.
+  const gateBad = result.gate && result.gate.blocked;
+  const structBad = result.structure && !result.structure.complete;
+  if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
+  if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
+  if (gateBad || structBad) process.exit(2);
 }
