@@ -323,10 +323,10 @@
 - RV8: manifest-приклад у SKILL додати `clientEditableLayers`/`template`/`targetPackage` (без них B6-removal завжди «KEEP», header без Template/Package).
 - A3 (наскрізний): fetch `detailSchemas`+`childPageSchemas` зробити обов'язковим кроком ПЕРЕД планом (інакше немає field-таблиць деталей — Тема 4-симптом, D3-білд).
 
-**🟡 P3 — покриття тестами (Тема 6)**
-- RV9: `makeOp` будує вже-нормалізовані оп-и → обходять parseLayer/normalizeDiff.
-- RV15: Contract-golden без entityColumns → гілки control() не тестуються.
-- RV10: golden «one row per effective field» тримається лише бо фікстура без seed.
+**✅ ЗРОБЛЕНО — покриття тестами (Тема 6; +4 голдени)**
+- RV9: `parseSchema`-тест прямо ганяє normalizeDiff-розгортання nested `values.*` (bindTo/contentType/tip/hint/caption/layout + propertyName→isTab), яке makeOp обходить; + coverage-нота (parse-layer vs merge-only сценарії).
+- RV15: покрито ВСІ гілки `control()` через entityColumns (date/datetime→DateTimePicker, int/decimal/money→NumberInput, text/richtext→Input, lookup→ComboBox) + type-labels.
+- RV10: reporting закрито в Темі 4 (payload-лічильники); golden-крихкість задокументована coverage-нотою.
 
 **🟡 P3 — білд-фаза (Тема 7)**
 - D2: `success` clio ≠ коректний рантайм → мандат браузерної перевірки перед залежними артефактами.

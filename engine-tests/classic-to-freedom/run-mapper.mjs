@@ -803,5 +803,34 @@ const rv11b = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"CompanyLogo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
 check("RV11(b): a non-bare image name (CompanyLogo) is recognized as an image", rv11b.changeSet.images.some((i) => i.classic === "CompanyLogo"));
 
+/* ---- Theme 6 — test-coverage gaps (RV9 parse layer, RV15 control() branches) ----
+   NOTE ON COVERAGE: most scenarios above build fixtures with makeSchema/makeOp (`L`/`di`), which feed
+   mergeHierarchy PRE-NORMALIZED ops — they exercise the MERGE layer only, NOT parseLayer/normalizeDiff's
+   unwrapping of the raw `values:{…}` classic shape. Scenarios that call `parseSchema(...)` or read the
+   `.js` fixture files DO exercise the parse layer. The two checks below pin the parse layer explicitly so a
+   normalizeDiff regression can't slip through, and drive every `control()` type branch. */
+const pu = parseSchema(`define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Fld",parentName:"Header",propertyName:"items",values:{bindTo:"Col",contentType:5,tip:{content:{bindTo:"Resources.Strings.ColTip"}},hint:{bindTo:"Resources.Strings.ColHint"},caption:{bindTo:"Resources.Strings.ColCap"},layout:{column:2,row:1,colSpan:12,rowSpan:1}}},{operation:"insert",name:"T",parentName:"Tabs",propertyName:"tabs",values:{caption:{bindTo:"Resources.Strings.TCap"}}}]};});`, "P");
+const puFld = pu.diff.find((o) => o.name === "Fld"), puTab = pu.diff.find((o) => o.name === "T");
+check("RV9: parseSchema/normalizeDiff unwraps nested values.* (bindTo/contentType/tip/hint/caption/layout)",
+  !!puFld && puFld.bindTo === "Col" && puFld.contentType === 5
+  && puFld.tip === "Resources.Strings.ColTip" && puFld.hint === "Resources.Strings.ColHint"
+  && puFld.caption === "Resources.Strings.ColCap" && !!puFld.layout && puFld.layout.column === 2 && puFld.layout.colSpan === 12);
+check("RV9: parseSchema marks propertyName:'tabs' as isTab (parse layer exercised, not bypassed by makeOp)",
+  !!puTab && puTab.isTab === true && puTab.caption === "Resources.Strings.TCap");
+// RV15 — drive every control() type branch via entityColumns (the rich Contract fixture passes none).
+const ctlCols = { D: { type: "date" }, DT: { type: "datetime" }, I: { type: "integer" }, DEC: { type: "decimal" }, MON: { type: "money" }, T: { type: "text", length: 100 }, RICH: { type: "30" }, LK: { type: "Lookup", ref: "Contact" } };
+const ctlNames = ["D", "DT", "I", "DEC", "MON", "T", "RICH", "LK"];
+const ctlCs = runMigration({ entity: "X", entityColumns: ctlCols,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ctlNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+const cf = (n) => ctlCs.changeSet.viewConfigDiff.find((o) => o.name === n);
+check("RV15: control() type branches — date/datetime→DateTimePicker, int/decimal/money→NumberInput, text/richtext→Input, lookup→ComboBox",
+  cf("D")?.values.type === "crt.DateTimePicker" && cf("DT")?.values.type === "crt.DateTimePicker"
+  && cf("I")?.values.type === "crt.NumberInput" && cf("DEC")?.values.type === "crt.NumberInput" && cf("MON")?.values.type === "crt.NumberInput"
+  && cf("T")?.values.type === "crt.Input" && cf("RICH")?.values.type === "crt.Input" && cf("LK")?.values.type === "crt.ComboBox");
+check("RV15: control() type LABELS — Date / Date/time / Integer / Decimal / Text (100) / Rich text / Lookup",
+  cf("D")?.values.typeLabel === "Date" && cf("DT")?.values.typeLabel === "Date/time"
+  && cf("I")?.values.typeLabel === "Integer" && cf("DEC")?.values.typeLabel === "Decimal" && cf("MON")?.values.typeLabel === "Decimal"
+  && cf("T")?.values.typeLabel === "Text (100)" && cf("RICH")?.values.typeLabel === "Rich text" && cf("LK")?.values.typeLabel === "Lookup");
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
