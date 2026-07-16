@@ -121,9 +121,15 @@ function matchFeature(schemaName) {
   const key = Object.keys(FEATURE_CATALOG).find(k => schemaName.endsWith(k));
   return key ? FEATURE_CATALOG[key] : null;
 }
-// Freedom GridContainer column model matching Classic's 24-column grid, so classic column/colSpan
-// coordinates render 1:1. A bare crt.GridContainer defaults to a different (narrow) width → wide classic
-// coordinates overflow and the layout breaks; emitting the 24-track template fixes it (#14).
+// Freedom grid model (the confirmed target convention): the left profile island is a SINGLE-column grid;
+// tab/group containers are TWO columns. Classic pages use a 24-column grid, so classic field coordinates are
+// CONVERTED into the target grid (see layoutConfig below) — NOT dumped verbatim. Dumping classic 24-col
+// coordinates into a native 2-col Freedom container overflows (e.g. column 13 in a 2-track grid) and breaks
+// the input layout — the recurring "input grid broken" build defect.
+const GRID_2 = ["minmax(32px, 1fr)", "minmax(32px, 1fr)"];
+const GRID_1 = ["minmax(32px, 1fr)"];
+// a genuinely WIDE multi-column classic Header block (>1 col, flagged as a layout-type decision) keeps the
+// full 24-col grid so its multi-column arrangement survives 1:1.
 const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
 // header/analytical widgets — recognised by MODULE key and by CONTAINER name.
 // DCM binds to the OBJECT: in Freedom the case-stage progress bar and Next-steps auto-populate from the
@@ -232,7 +238,7 @@ export function mapToFreedom(eff, opts = {}) {
       structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
         values: { type: "crt.Tab", caption: c.value } });
       structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
-        values: { type: "crt.GridContainer", columns: GRID_24 } });
+        values: { type: "crt.GridContainer", columns: GRID_2 } });
       // flag only when the caption is NOT resolved to real text (synthesized key, or an unresolved key
       // because no manifest.resources was supplied). A resolved literal caption needs no decision (#5/#13).
       if (!c.resolved) needsDecision.push({ kind: "tab-caption", item: tab,
@@ -256,7 +262,7 @@ export function mapToFreedom(eff, opts = {}) {
         values: { type: "crt.ExpansionPanel", caption: c.value, collapsible: true } });
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
-        values: { type: "crt.GridContainer", columns: GRID_24 } });
+        values: { type: "crt.GridContainer", columns: GRID_2 } });
       if (!c.resolved) needsDecision.push({ kind: "group-caption", item: g.name,
         reason: c.synthesized
           ? `synthesized ExpansionPanel caption '${c.value}' for classic group — confirm/replace with the real localized string`
@@ -265,7 +271,7 @@ export function mapToFreedom(eff, opts = {}) {
       // GRID_LAYOUT / generic structural container -> crt.GridContainer.
       inner = g.name;
       structural.push({ operation: "insert", name: inner, parentName, propertyName: "items",
-        values: { type: "crt.GridContainer", columns: GRID_24 } });
+        values: { type: "crt.GridContainer", columns: GRID_2 } });
     }
     emittedGroups.set(g.name, inner);
     return inner;
@@ -300,17 +306,17 @@ export function mapToFreedom(eff, opts = {}) {
   function ensureProfileIsland(name) {
     if (emittedIslands.has(name)) return emittedIslands.get(name);
     structural.push({ operation: "insert", name, parentName: "SideAreaProfileContainer", propertyName: "items",
-      values: { type: "crt.GridContainer", columns: GRID_24 } });
+      values: { type: "crt.GridContainer", columns: GRID_1 } });
     accountedFor.add(name);
     emittedIslands.set(name, name);
     return name;
   }
   for (const { f, own } of resolved) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
-    let parent, inProfile = false;
+    let parent;
     if (own.kind === "profile") {
-      inProfile = true; // RV6 — a side-profile field stays "narrow" even after `parent` is reassigned to a
-                        // per-island container below (multi-island pages); don't derive narrow from `parent`.
+      // the target grid width is derived from own.kind below (profile island = 1 col), so it survives `parent`
+      // being reassigned to a per-island container (multi-island pages) — RV6.
       parent = profileRegion(own);
       // the island/group wrappers between the field and the profile anchor are ACCOUNTED FOR — their
       // fields are migrated into the profile — so they are not mis-flagged as "produced no Freedom element".
@@ -344,15 +350,29 @@ export function mapToFreedom(eff, opts = {}) {
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
     if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
       reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
-    // Moment 1 — preserve the classic grid coordinates (24-col grid, 0-based) instead of inventing them;
-    // classic column N -> Freedom column N+1. Fall back to sequential/full-width only when absent.
+    // Convert the classic 24-col grid coordinates (0-based) into the TARGET Freedom grid, rather than dumping
+    // them verbatim into a native container (which overflows and breaks the layout). Target grid width:
+    //   profile island  -> 1 column  (every field full-width, stacked)
+    //   tab / group      -> 2 columns (classic left half -> col 1, right half -> col 2; full-width -> span 2)
+    //   wide header      -> 24 columns kept 1:1 (rare multi-column Header, flagged as a layout-type decision)
     const cl = f.layout || {};
-    const narrow = inProfile; // profile fields (main container OR a per-island container) default to colSpan 1
-    const defaultColSpan = narrow ? 1 : 24;
+    const gridCols = own.kind === "profile"
+      ? ((own.via === "Header" && headerIsWide) ? 24 : 1)
+      : 2;
+    let column, colSpan;
+    if (gridCols === 1) {
+      column = 1; colSpan = 1;
+    } else if (gridCols === 2) {
+      column = (cl.column ?? 0) >= 12 ? 2 : 1;      // classic right half (col >= 12) -> Freedom column 2
+      colSpan = (cl.colSpan ?? 24) >= 24 ? 2 : 1;   // classic full-width -> span both columns, else one
+    } else {
+      column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
+      colSpan = cl.colSpan != null ? cl.colSpan : 24;
+    }
     const layoutConfig = {
-      column: cl.column != null ? cl.column + 1 : 1,
+      column,
       row: cl.row != null ? cl.row + 1 : rowByContainer[parent],
-      colSpan: cl.colSpan != null ? cl.colSpan : defaultColSpan,
+      colSpan,
       rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
     };
     // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)

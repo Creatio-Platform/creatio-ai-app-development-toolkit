@@ -350,8 +350,8 @@ check("#6/#11: entity-prefixed variant (ApplicantEmailDetailV2) matched as Email
 check("#7: FileDetailV2 (Attachments) flagged templateProvided + 'do NOT create' note",
   sf("FileDetailV2")?.templateProvided === true
   && featCs.needsDecision.some(n => n.kind === "standard-feature" && n.item === "FileDetailV2" && /do NOT create/i.test(n.reason)));
-check("#14: structural GridContainer carries a 24-column grid config",
-  featCs.viewConfigDiff.some(o => o.values?.type === "crt.GridContainer" && Array.isArray(o.values.columns) && o.values.columns.length === 24));
+check("#14: structural tab/group GridContainer carries a 2-column grid (Freedom tab convention, not a 24-track dump)",
+  featCs.viewConfigDiff.some(o => o.values?.type === "crt.GridContainer" && Array.isArray(o.values.columns) && o.values.columns.length === 2));
 check("#15: a resource-key detail caption → detail-caption decision (resolve, don't invent)",
   featCs.needsDecision.some(n => n.kind === "detail-caption" && n.item === "SomeRequestDetail"));
 
@@ -854,6 +854,25 @@ check("RV15: control() type LABELS — Date / Date/time / Integer / Decimal / Te
   cf("D")?.values.typeLabel === "Date" && cf("DT")?.values.typeLabel === "Date/time"
   && cf("I")?.values.typeLabel === "Integer" && cf("DEC")?.values.typeLabel === "Decimal" && cf("MON")?.values.typeLabel === "Decimal"
   && cf("T")?.values.typeLabel === "Text (100)" && cf("RICH")?.values.typeLabel === "Rich text" && cf("LK")?.values.typeLabel === "Lookup");
+
+// GRID — classic 24-col coordinates are CONVERTED into the Freedom target grid, not dumped verbatim (which
+// overflowed a native 2-col container and broke the input grid — the recurring build defect). Tab/group = 2
+// columns (classic left half -> col 1, right half -> col 2, full-width -> span 2); profile island = 1 column.
+const grid = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "T1", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "LeftHalf",  parentName: "T1", propertyName: "items", bindTo: "LeftHalf",  layout: { column: 0,  row: 0, colSpan: 12, rowSpan: 1 } }),
+  di({ name: "RightHalf", parentName: "T1", propertyName: "items", bindTo: "RightHalf", layout: { column: 12, row: 0, colSpan: 12, rowSpan: 1 } }),
+  di({ name: "FullWide",  parentName: "T1", propertyName: "items", bindTo: "FullWide",  layout: { column: 0,  row: 1, colSpan: 24, rowSpan: 1 } }),
+] })]));
+const gl = (n) => grid.viewConfigDiff.find((o) => o.name === n)?.values.layoutConfig;
+check("GRID: classic left-half tab field (col0/span12) -> Freedom column 1, colSpan 1",
+  gl("LeftHalf")?.column === 1 && gl("LeftHalf")?.colSpan === 1);
+check("GRID: classic right-half tab field (col12/span12) -> Freedom column 2, colSpan 1",
+  gl("RightHalf")?.column === 2 && gl("RightHalf")?.colSpan === 1);
+check("GRID: classic full-width tab field (span24) -> Freedom column 1, colSpan 2 (both columns)",
+  gl("FullWide")?.column === 1 && gl("FullWide")?.colSpan === 2);
+check("GRID: a client-owned tab's GridContainer is a 2-column grid (not the old 24-track override)",
+  grid.viewConfigDiff.find((o) => o.name === "T1Grid")?.values.columns?.length === 2);
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
