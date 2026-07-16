@@ -107,10 +107,15 @@ const FEATURE_CATALOG = {
   VisaDetailV2: { feature: "Approvals", freedom: "Freedom Approvals feature (approval process + list)", uiShape: "component",
     note: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." },
   FileDetailV2: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component" },
-  // Activities is the related TASKS/activities list — NOT the Timeline widget (Timeline is a separate
-  // classic component, mapped via WIDGET_BY_MODULE.Timeline). Do not conflate the two (#6).
-  ActivityDetailV2: { feature: "Activities", freedom: "Freedom Activities (Tasks) related list", uiShape: "list" },
-  EmailDetailV2: { feature: "Emails", freedom: "Freedom Email component", uiShape: "list" },
+  // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
+  // filtered to the master record, the SAME UI as any other child list. They are NOT the Freedom Timeline
+  // (an aggregate chronological feed; a separate classic component mapped via WIDGET_BY_MODULE.Timeline) and
+  // Emails is NOT the email-client component. A real agent rebuilt these as a Timeline — do not conflate the
+  // list feature with the Timeline widget (#6).
+  ActivityDetailV2: { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list",
+    note: "Activities = a plain FILTERED RELATED LIST of Activity/Task records (a DataGrid filtered by the master FK) — NOT a Timeline and NOT an aggregate activity feed. Build it as a related list, exactly like any other child list." },
+  EmailDetailV2: { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list",
+    note: "Emails = a plain FILTERED RELATED LIST of Email records (a DataGrid filtered by the master) — NOT a Timeline and NOT the email-client component. Build it as a related list." },
 };
 // Match a classic detail schema to a standard feature by exact name OR entity-prefixed suffix — e.g.
 // `ApplicantEmailDetailV2` → `EmailDetailV2`, `ApplicantVisaDetail` → (no)…: prefixed variants of the

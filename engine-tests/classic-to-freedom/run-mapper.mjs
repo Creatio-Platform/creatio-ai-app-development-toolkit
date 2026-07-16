@@ -484,6 +484,11 @@ check("design-spec: component feature (Approvals) shown by name; list feature (A
 check("Approvals: Visa carries the 'don't downgrade' domain note in the feature + design-spec Layout row",
   dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && /how Approvals is stored/.test(s.note || ""))
   && /Approvals[\s\S]*?how Approvals is stored/.test(spec));
+// #6 — Activities/Emails are FILTERED RELATED LISTS, not a Timeline; the 'NOT a Timeline' note must ride on
+// the standardFeature AND surface in the Layout row (a real agent rebuilt them as a crt.Timeline — wrong).
+check("#6: Activities carries a 'NOT a Timeline' note that surfaces in the Layout row",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && /NOT a Timeline/i.test(s.note || ""))
+  && /Activities[\s\S]*?NOT a Timeline/i.test(spec));
 check("design-spec: Logic table lists the handler (onContactChanged → Contact changes)",
   /#### Logic/.test(spec) && /onContactChanged \| Contact changes/.test(spec));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
