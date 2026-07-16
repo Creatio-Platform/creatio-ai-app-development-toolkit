@@ -122,16 +122,16 @@ other:
   under (clio is often registered as an admin/service account such as Supervisor). So tell the user
   the theme is applied to the account clio is signed in as, and name it — if they browse under a
   different account, they will not see it and should either sign in as that account or apply the
-  theme there. When it is their account, they only need to **refresh the page** to see it — an
-  already-open page keeps the old look until it is reloaded.
+  theme there.
   - Skip this step only when the user explicitly does not want to switch now — for example "just
     create it", "don't apply it yet", or they are preparing themes for other people. Then leave
-    the theme created and tell them it can be applied to their profile later, or selected in
-    Creatio. When in doubt, apply it — it is easy to reverse (reset, or pick another theme).
+    the theme created and tell them how to turn it on later: apply it to a profile, select it in
+    Creatio, or make it the environment default for everyone. When in doubt, apply it — it is easy
+    to reverse (reset, or pick another theme).
 - **Default for everyone** — making a theme the **default** changes the look for **every** user on
   the environment, so treat it as its own decision.
-  - If the user did **not** ask for this: don't make it the default. After applying it to them you
-    may note that it can also be made the environment default for everyone, and do that only if
+  - If the user did **not** ask for this: don't make it the default. After the create/apply step
+    you may note that it can also be made the environment default for everyone, and do that only if
     they ask.
   - If the user **already** asked to make it the default (or to roll it out to everyone): create
     it and set it as the default in one go, with no extra question. The default then covers every
@@ -139,6 +139,10 @@ other:
     if clio's account already has one applied (for example from an earlier theming session) the new
     default will not show for it; clear that account's personal theme if you need to see the new
     default there.
+
+Whenever the theme an account actually renders changes — because you applied it to that account,
+or because you made it the default and that account has no personal theme of its own — remind that
+user that an already-open page keeps the old look until it is **refreshed**.
 
 ## Tone
 
