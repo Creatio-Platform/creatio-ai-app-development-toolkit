@@ -138,10 +138,10 @@ export function renderDesignSpec(result, opts = {}) {
     let type = "Action", note = DASH;
     if (/process/i.test(name)) {
       // migrate the Run-process button ONLY if a process is actually connected to the entity; show HOW to check.
-      note = "⚠ Migrate ONLY if a process is connected to this entity. Check on-stand: read `VwSysProcessEntityConnection` filtered by the entity (that is what populates the \"Run process\" menu — each process's \"Which section to display in\" setting). None connected ⇒ the button is NOT migrated; if some are, name each connected process in the plan.";
+      note = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand: read `ProcessInModules` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) — that is what fills the \"Run process\" menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the process name. None connected ⇒ the button is NOT migrated; if some are, name each connected process in the plan. (`SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
     } else if (/print/i.test(name)) {
       // migrate Print ONLY if printables/reports exist for the section; show HOW to check.
-      note = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read the reports/printables configured for the section (e.g. `SysModuleReport` for this section's `SysModule` — confirm the exact source). None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
+      note = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
     } else if (name === "ViewOptions") {
       type = "—"; note = "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action.";
     } else if (name === "Tag") {
@@ -243,7 +243,7 @@ export function renderDesignSpec(result, opts = {}) {
   }
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
-    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection)"]);
+    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
   }
   if (logic.length) {
     L.push("#### Logic");

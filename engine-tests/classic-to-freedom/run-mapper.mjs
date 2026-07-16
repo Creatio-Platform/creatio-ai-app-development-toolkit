@@ -604,8 +604,9 @@ check("card-actions: ViewOptions NOT migrated; Tag template-provided (Type '—'
   && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
 check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
   /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
-check("card-actions: Process migrates only if a process is connected + shows how to check (VwSysProcessEntityConnection)",
-  /\| Process \| Action \|.*Migrate ONLY if a process is connected.*VwSysProcessEntityConnection/.test(caCs.designSpec));
+check("card-actions: Process migrates only if a process is connected + shows how to check (ProcessInModules → VwSysProcess)",
+  /\| Process \| Action \|.*Migrate ONLY if a process is connected.*ProcessInModules/.test(caCs.designSpec)
+  && !/VwSysProcessEntityConnection/.test(caCs.designSpec));
 
 /* ---- ancestor-visibility: a field inside a hidden/dynamic container inherits + is flagged ---- */
 const avCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
