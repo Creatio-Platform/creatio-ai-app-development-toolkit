@@ -15,7 +15,7 @@ const FIX = path.join(DIR, "fixtures");
 const load = (dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 
-// SupportUnit entity column types (from describe-entity) — lets the mapper pick precise controls.
+// SupportUnit entity column types (from get-entity-schema-properties) — lets the mapper pick precise controls.
 const SU_COLS = {
   ParentSupportUnit: "Lookup", Contact: "Lookup", Calendar: "Lookup", SupportWorkingDayType: "Lookup",
   Active: "Boolean", SupportEmpIndex: "Integer", Canprocessreopencases: "Boolean", SupportCaseLimit: "Integer",
@@ -103,8 +103,8 @@ check("F3/actions: card actions / ACTIONS-menu flagged (B7)",
 const wCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   modules: [{ key: "ActionsDashboardModule", moduleName: "ActionsDashboardModule" }],
   diff: [di({ name: "DuplicatesWidgetContainer", itemType: 0, parentName: "LeftModulesContainer" })] })]));
-check("F3/widgets: Action Dashboard (module) + Duplicates (container) recognized → Freedom analogs",
-  wCs.widgets.some(w => w.widget === "ActionDashboard") && wCs.widgets.some(w => w.widget === "Duplicates"));
+check("F3/widgets: Action Dashboard (module → Next steps) + Duplicates (container) recognized → Freedom analogs",
+  wCs.widgets.some(w => w.widget === "Next steps") && wCs.widgets.some(w => w.widget === "Duplicates"));
 check("F3: layout is NOT flattened (≥2 distinct field containers)",
   new Set(co.viewConfigDiff.filter(o => o.values?.control).map(o => o.parentName)).size >= 2);
 check("F3: no field left in the old catch-all GeneralInfoTabContainer",
@@ -595,6 +595,17 @@ const plRun = runMigration({ entity: "X", schemas: [{ pkg: "P", body:
 check("#8c: process-launch → RunProcess card action + process-launch decision naming the process",
   plRun.changeSet.cardActions.includes("RunProcess")
   && plRun.changeSet.needsDecision.some(n => n.kind === "process-launch" && /RecruitingSecurityCheckProcess/.test(n.item)));
+// card-action DISPOSITION — standard toolbar buttons are not all migratable: ViewOptions is not migrated,
+// Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
+const caCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ViewOptionsButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("card-actions: ViewOptions NOT migrated; Tag template-provided (Type '—', clear disposition)",
+  /\| ViewOptions \| — \|.*Not migrated/.test(caCs.designSpec)
+  && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
+check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
+  /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
+check("card-actions: Process migrates only if a process is connected + shows how to check (VwSysProcessEntityConnection)",
+  /\| Process \| Action \|.*Migrate ONLY if a process is connected.*VwSysProcessEntityConnection/.test(caCs.designSpec));
 
 /* ---- ancestor-visibility: a field inside a hidden/dynamic container inherits + is flagged ---- */
 const avCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
@@ -627,6 +638,24 @@ const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || ""));
+// Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
+const pmRun = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  planMeta: { scope: "single-section", environment: "workbuild103", package: "HR (locked) → UsrApplicantPoC", approach: "Parallel rebuild", whatItDoes: "Candidate register.", sectionSchema: "Applicant1Section", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" } }, { baseDir: FIX });
+check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeholders resolved)",
+  /\*\*Scope:\*\* single-section ·/.test(pmRun.plan) && /\*\*Environment:\*\* workbuild103 ·/.test(pmRun.plan)
+  && /Applicant1Section \(list page\) \| ListPageV3 \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
+  && !/<FILL: single-section/.test(pmRun.plan) && !/<FILL: environment/.test(pmRun.plan));
+// Smell #2 — --out WRITES the artifact to a file (agent presents the file; stdout is only a confirmation).
+const outPath = path.join(DIR, "_planout_test.md");
+fs.rmSync(outPath, { force: true });
+const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
+  input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
+check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
+  outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
+  && /wrote plan to/.test(outRun.stdout || "") && !/Classic → Freedom UI/.test(outRun.stdout || ""));
+fs.rmSync(outPath, { force: true });
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
 const blockedRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
@@ -701,21 +730,33 @@ const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
   /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
-// #5 — widgets grouped under a single 'Header / top' region
+// #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("#5 widgets: grouped under a 'Header / top' region (not their own top-level region)",
-  /\| Header \/ top \| ActionDashboard \|/.test(wReg.designSpec));
+check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — not template-provided",
+  /\| Tab · Next steps \(new\) \| Next steps \| Component \| ⚠ ADD — not in the default Freedom template \|/.test(wReg.designSpec));
 
-// #8 — DCM widget carries the "binds to the object" note (stages + Next steps auto-populate from the
-// object's case), on the widget, in its decision, and in the design spec's Additional column.
+// #8 — Action Dashboard = TWO Freedom components (Case progress bar + Next steps); the default template ships
+// NEITHER, so each is flagged "ADD — not in the default template" and auto-populates from the object's case.
 const dcmCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("#8 DCM: widget + decision carry the 'binds to the object' note (stages/Next steps auto-populate)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "CaseStages (DCM)" && /binds to the object/.test(w.note || ""))
-  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /binds to the object/.test(n.reason)));
-check("#8 DCM: the note surfaces in the design spec (Additional column of the widget row)",
-  /CaseStages \(DCM\)[\s\S]*?binds to the object/.test(dcmCs.designSpec));
+check("#8 DCM: Action Dashboard emits BOTH Case progress bar and Next steps components",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar")
+  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps"));
+check("#8 DCM: each component carries the 'NOT in the default template — ADD it' + auto-populate note (widget + decision)",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /NOT in the default Freedom form template/.test(w.note || "") && /auto-populates/.test(w.note || ""))
+  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /NOT in the default Freedom form template/.test(n.reason)));
+check("#8 DCM: design spec places Next steps as a new tab and flags both as ADD (not template context)",
+  /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
+  && /Case progress bar \| Component \| ⚠ ADD — not in the default Freedom template/.test(dcmCs.designSpec));
+// Recommendations is an inherited base-template container (empty by default, runtime-filled). It is classified
+// `chrome` and HIDDEN from the plan (kept in chromeWidgets for inspection) — not via a hardcoded per-run "ignore".
+const recoCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"RecommendationModuleContainer",itemType:0,parentName:"LeftModulesContainer",values:{}}]};});` }] }, { baseDir: FIX });
+check("widgets: Recommendations is inherited base-template chrome — hidden from the plan (in chromeWidgets, no widget row, keeps its NBO note)",
+  recoCs.changeSet.chromeWidgets.some((w) => w.widget === "Recommendations" && /Next-Best-Offer|NBO/.test(w.note || ""))
+  && !recoCs.changeSet.widgets.some((w) => w.widget === "Recommendations")
+  && !/Recommendations/.test(recoCs.designSpec));
 
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.

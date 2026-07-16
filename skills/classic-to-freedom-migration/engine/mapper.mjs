@@ -149,21 +149,28 @@ const GRID_1 = ["minmax(32px, 1fr)"];
 // a genuinely WIDE multi-column classic Header block (>1 col, flagged as a layout-type decision) keeps the
 // full 24-col grid so its multi-column arrangement survives 1:1.
 const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
-// header/analytical widgets — recognised by MODULE key and by CONTAINER name.
-// DCM binds to the OBJECT: in Freedom the case-stage progress bar and Next-steps auto-populate from the
-// object's configured case (nothing to place/configure per page). No case on the object ⇒ no stages to migrate.
-const DCM_NOTE = "DCM binds to the object — the stage progress bar + Next steps auto-populate from the object's case; do NOT rebuild stages per page. No case configured on the object ⇒ nothing to migrate here.";
+// header/analytical widgets — recognised by MODULE key and by CONTAINER name. Catalog values are ARRAYS of
+// Freedom component-defs, because one classic module can map to MORE THAN ONE Freedom component.
+// Action Dashboard in Freedom is TWO components — a case-stage PROGRESS BAR and a NEXT STEPS panel — and the
+// default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
+// progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
+// auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
+const DCM_PROGRESS_NOTE = "Case-stage progress bar — NOT in the default Freedom form template; ADD it to the page top when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author stages). No case on the object ⇒ nothing to add.";
+const DCM_NEXTSTEPS_NOTE = "Next steps — NOT in the default Freedom form template; ADD it as a NEW tab in the tab container, next to the Feed tab, when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author steps). No case on the object ⇒ nothing to add.";
+const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top" };
+const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed" };
 const WIDGET_BY_MODULE = {
-  ActionsDashboardModule: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps", note: DCM_NOTE },
-  DcmActionsDashboardModule: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator", note: DCM_NOTE },
-  Timeline: { widget: "Timeline", freedom: "Freedom Timeline" },
+  DcmActionsDashboardModule: [DCM_PROGRESS, DCM_NEXTSTEPS], // DCM case dashboard → BOTH Freedom components
+  ActionsDashboardModule: [DCM_NEXTSTEPS],
+  Timeline: [{ widget: "Timeline", freedom: "Freedom Timeline" }],
 };
 const WIDGET_BY_CONTAINER = {
-  ActionDashboardContainer: { widget: "ActionDashboard", freedom: "Freedom action dashboard / Next steps", note: DCM_NOTE },
-  DcmActionsDashboardContainer: { widget: "CaseStages (DCM)", freedom: "Freedom case-stage indicator", note: DCM_NOTE },
-  RecommendationModuleContainer: { widget: "Recommendations", freedom: "Freedom recommendations widget" },
-  DuplicatesWidgetContainer: { widget: "Duplicates", freedom: "Freedom duplicates widget" },
-  ESNFeedContainer: { widget: "Feed (ESN)", freedom: "Freedom Feed" },
+  DcmActionsDashboardContainer: [DCM_PROGRESS, DCM_NEXTSTEPS],
+  ActionDashboardContainer: [DCM_NEXTSTEPS],
+  RecommendationModuleContainer: [{ widget: "Recommendations", chrome: true, freedom: "Freedom product-selection / NBO recommendations component",
+    note: "Inherited base-template container (from BasePageV2) — inserted EMPTY (items:[], no `visible` binding) and filled at RUNTIME by the RecommendationModuleUtilities mixin. It shows the Next-Best-Offer (NBO) / product recommendations (RecommendedProduct) only if recommendation rules are configured for the entity; the page schema can't say whether it's used. Check on-stand: does the LIVE Classic page actually render recommendations (are NBO/recommendation rules configured for this entity)? If yes → wire the Freedom product-selection / recommendations component; if it renders empty → inherited chrome, drop it." }],
+  DuplicatesWidgetContainer: [{ widget: "Duplicates", freedom: "Freedom duplicates widget" }],
+  ESNFeedContainer: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }],
 };
 // standard card actions (from the classic ACTIONS menu / toolbar) -> Freedom card actions (B7).
 const KNOWN_ACTION_ITEMS = new Set([
@@ -193,11 +200,11 @@ export function mapToFreedom(eff, opts = {}) {
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
   // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
   const detailSchemas = opts.detailSchemas || {};
-  // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from describe-entity, so a field's
+  // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from get-entity-schema-properties, so a field's
   // LABEL is the human title, not the raw column code. Falls back to the page resources, then the code.
   const columnTitles = opts.columnTitles || {};
   // entityColumns entries may be a plain dataType STRING (back-compat) OR an object { type, length, ref, title }
-  // (from describe-entity) — the richer form lets the design-spec Type column show "Text (250)" and a
+  // (from get-entity-schema-properties) — the richer form lets the design-spec Type column show "Text (250)" and a
   // lookup's referenced object "Lookup (Contact)".
   const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
   const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
@@ -451,9 +458,9 @@ export function mapToFreedom(eff, opts = {}) {
   if (splitIslands) needsDecision.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
     reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — each is rebuilt as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Confirm the Freedom left area supports stacked containers; if it must be one profile card, merge them.` });
   // #5/#13 (fields) — if NO field label resolved to a real title, the spec shows column CODES. Nudge the
-  // agent to pass describe-entity column titles so labels read like the classic page, not raw codes.
+  // agent to pass get-entity-schema-properties column titles so labels read like the classic page, not raw codes.
   if (payloadFields.length && fieldsWithTitle === 0) needsDecision.push({ kind: "field-labels", item: "(all fields)",
-    reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from describe-entity) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
+    reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from get-entity-schema-properties) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
 
   // ---- rules ----
   const pageBusinessRules = [], entityBusinessRules = [];
@@ -571,13 +578,26 @@ export function mapToFreedom(eff, opts = {}) {
 
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
   const widgets = [];
+  const chromeWidgets = [];  // inherited base-template chrome (catalog `chrome:true`) — kept OUT of the plan to
+                             // avoid noise, but preserved here so nothing is silently destroyed (inspectable).
   const seenWidget = new Set();
-  const addWidget = (w, classic, base) => {
-    if (w) { accountedFor.add(classic); }
-    if (w && !seenWidget.has(w.widget)) { seenWidget.add(w.widget);
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null });
-    needsDecision.push({ kind: "widget", item: w.widget,
-      reason: `${w.widget}${base ? " (base-provided)" : ""} → ${w.freedom}${base ? " — usually provided by the Freedom template; confirm or re-apply any customization" : "; confirm the Freedom component"}${w.note ? ` — ${w.note}` : ""}` }); } };
+  const addWidget = (defs, classic, base) => {
+    if (!defs) return;
+    accountedFor.add(classic);
+    for (const w of (Array.isArray(defs) ? defs : [defs])) {
+      if (seenWidget.has(w.widget)) continue;
+      seenWidget.add(w.widget);
+      // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited base-template
+      // scaffolding, not page content — hide them from the design spec instead of hardcoding an "ignore" per run.
+      if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); continue; }
+      widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+      // a widget with its own note (DCM) carries that note; otherwise fall back to the base/native wording.
+      const tail = w.note ? ` — ${w.note}`
+        : base ? " — usually provided by the Freedom template; confirm or re-apply any customization"
+        : "; confirm the Freedom component";
+      needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
+    }
+  };
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
 
@@ -701,6 +721,8 @@ export function mapToFreedom(eff, opts = {}) {
     standardFeatures,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
     widgets,
+    // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
+    chromeWidgets,
     // image/photo components (generator-based) → Freedom image component.
     images,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).

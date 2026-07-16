@@ -9,7 +9,7 @@
 // Manifest shape (JSON):
 //   {
 //     "entity": "Case",                       // optional; else inferred from the schemas
-//     "entityColumns": { "Col": "Lookup", … },// optional; from describe-entity — sharpens control choice
+//     "entityColumns": { "Col": "Lookup", … },// optional; from get-entity-schema-properties — sharpens control choice
 //     "schemas": [ { "pkg": "Case", "body": "<define(...) source>" } | { "pkg": "Case", "file": "..." }, … ],
 //     "seed":   [ { "pkg": "BaseModulePageV2/CrtUIPlatform7x", "body"|"file": … }, … ],  // parent template chain
 //     "clientEditableSchemas": ["WorkOverride", …], // optional; drives B6 removal confidence
@@ -17,8 +17,10 @@
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
-//     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … } // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
+//     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
+//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate } // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
 //   }
+// CLI: `--plan`/`--spec` print the artifact; add `--out <file>` to WRITE it (the agent presents the file, not stdout).
 // Prefer inline "body" (paste the clio get-classic-schema-by-uid output) over "file" to avoid path fragility.
 import fs from "node:fs";
 import path from "node:path";
@@ -181,7 +183,7 @@ export function runMigration(manifest, opts = {}) {
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
   //   plan       = the WHOLE plan skeleton (Overview/Pages placeholders + the design spec + child pages)
-  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage };
+  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta };
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);
   return out;
@@ -195,7 +197,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const argv = process.argv.slice(2);
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
-  const arg = argv.find((a) => a !== "--spec" && a !== "--plan");
+  const outIdx = argv.indexOf("--out");        // --out <file>: WRITE the output to a file so the agent presents the file, not a hand-paste
+  const outFile = outIdx >= 0 ? argv[outIdx + 1] : null;
+  const arg = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--out"); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   let raw;
   try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
@@ -214,7 +218,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else output = JSON.stringify(result, null, 2) + "\n";
-  process.stdout.write(output);
+  if (outFile) {
+    // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
+    try { fs.writeFileSync(outFile, output); }
+    catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
+    process.stdout.write(`migrate.mjs: wrote ${planMode ? "plan" : specMode ? "design spec" : "result"} to ${outFile} — present that file verbatim.\n`);
+  } else {
+    process.stdout.write(output);
+  }
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
   // fails loudly so a blocked/incomplete run can't be mistaken for a clean one — stderr note + non-zero exit
   // (2, distinct from the exit-1 bad-input path). The plan/spec is still printed so the agent sees WHAT to fix.

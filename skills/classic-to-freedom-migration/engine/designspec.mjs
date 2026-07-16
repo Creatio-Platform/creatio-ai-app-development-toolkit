@@ -124,14 +124,30 @@ export function renderDesignSpec(result, opts = {}) {
     rows.push({ region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] });
   }
   for (const w of cs.widgets || []) {
-    rows.push({ region: "Header / top", sort: 2, cells: [esc(w.widget), "Component", w.base ? "template context — provided by the Freedom template" : "native — confirm on-stand", DASH, w.note ? esc(w.note) : DASH] });
+    // DCM components (placement set) are NOT in the default Freedom template — they must be ADDED, and Next
+    // steps goes in a new tab next to Feed. Other widgets keep the base/native wording.
+    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
+    const source = w.placement ? "⚠ ADD — not in the default Freedom template"
+      : w.note ? "⚠ confirm on-stand — see note"   // specific guidance (e.g. NBO) — do NOT assert template-provided
+      : w.base ? "template context — provided by the Freedom template"
+      : "native — confirm on-stand";
+    rows.push({ region, sort: 2, cells: [esc(w.widget), "Component", source, DASH, w.note ? esc(w.note) : DASH] });
   }
   for (const a of cs.cardActions || []) {
-    const isProc = /process/i.test(a);
-    const isPrint = /print/i.test(a);
-    const printAdd = isPrint ? "⚠ only if print reports exist — verify" : DASH;
-    const add = isProc ? "⚠ which process — resolve via connected processes on-stand (VwSysProcessEntityConnection); base button names none" : printAdd;
-    rows.push({ region: "Card actions", sort: 3, cells: [esc(a.replace(/Button$/, "")), "Action", DASH, DASH, add] });
+    const name = a.replace(/Button$/, "");
+    let type = "Action", note = DASH;
+    if (/process/i.test(name)) {
+      // migrate the Run-process button ONLY if a process is actually connected to the entity; show HOW to check.
+      note = "⚠ Migrate ONLY if a process is connected to this entity. Check on-stand: read `VwSysProcessEntityConnection` filtered by the entity (that is what populates the \"Run process\" menu — each process's \"Which section to display in\" setting). None connected ⇒ the button is NOT migrated; if some are, name each connected process in the plan.";
+    } else if (/print/i.test(name)) {
+      // migrate Print ONLY if printables/reports exist for the section; show HOW to check.
+      note = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read the reports/printables configured for the section (e.g. `SysModuleReport` for this section's `SysModule` — confirm the exact source). None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
+    } else if (name === "ViewOptions") {
+      type = "—"; note = "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action.";
+    } else if (name === "Tag") {
+      type = "—"; note = "Provided by the default Freedom template (tags) — nothing to migrate.";
+    }
+    rows.push({ region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] });
   }
   // RV12 — image/photo components (mapper emits them in cs.images, each with its own needsDecision) were the
   // only category with no Layout row. Give them one, placed in the region their parent resolves to.
@@ -269,6 +285,11 @@ export function renderPlan(result, opts = {}) {
   const entity = result.entity || "?";
   const fields = (cs.viewConfigDiff || []).filter(isField);
   const childs = result.childPages || [];
+  // planMeta (manifest.planMeta) supplies the few AGENT decisions so the engine can render a COMPLETE plan and
+  // WRITE it (CLI --out) — the agent presents the written file instead of hand-pasting/editing the tables. Any
+  // value not supplied falls back to its `<FILL: …>` placeholder (resolve by adding it to planMeta and re-running).
+  const pm = opts.planMeta || {};
+  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? String(v) : ph);
   const P = [];
   P.push(`## ${entity} — Classic → Freedom UI`);
   P.push("");
@@ -288,23 +309,23 @@ export function renderPlan(result, opts = {}) {
     P.push("");
   }
   P.push("### Overview");
-  P.push("**Scope:** <FILL: single-section | whole-package> ·");
-  P.push("**Environment:** <FILL: environment name> ·");
-  P.push("**Package:** <FILL: owning package(s) + lock state → target package>");
+  P.push(`**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`);
+  P.push(`**Environment:** ${fill(pm.environment, "<FILL: environment name>")} ·`);
+  P.push(`**Package:** ${fill(pm.package, "<FILL: owning package(s) + lock state → target package>")}`);
   P.push("");
   P.push(`- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`);
-  P.push("- **Approach:** <FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>");
+  P.push(`- **Approach:** ${fill(pm.approach, "<FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>")}`);
   P.push("");
   P.push("### What it does");
-  P.push("<FILL: 1–2 sentences, business language — what it is for and who uses it>");
+  P.push(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>"));
   P.push("");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   P.push("### Main scope");
   P.push("| Classic | Freedom target | Call |");
   P.push("| --- | --- | --- |");
-  P.push("| <FILL: section schema> (list page) | <FILL: Freedom list template> | Rebuild |");
-  P.push(`| ${entity} form page | <FILL: Freedom form template> | Rebuild |`);
+  P.push(`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | Rebuild |`);
+  P.push(`| ${entity} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | Rebuild |`);
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
@@ -358,6 +379,6 @@ export function renderPlan(result, opts = {}) {
       P.push("");
     }
   }
-  P.push("> **Fill every `<FILL: …>` above, then present this VERBATIM.** Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
+  P.push("> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
   return P.join("\n");
 }

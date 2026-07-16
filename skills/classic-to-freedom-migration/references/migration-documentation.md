@@ -17,6 +17,8 @@ Match the user's language inside the documents.
 
 Never skip `worklog.md`: it is the persisted memory of what actually happened.
 
+For single-section, this is deliberately light: **`plan.md` is engine-WRITTEN** (`migrate.mjs --plan --out plan.md`, its values supplied via `manifest.planMeta`), so the only hand-maintained document is `worklog.md`. Do not add `README.md`/`discovery.md`/`roadmap.md`/`decisions.md` for a single section — those are the whole-package set.
+
 ## Location And Naming
 
 Create one folder per migration project and keep it versioned in the repo/workspace:
@@ -55,7 +57,7 @@ Read-only findings from runtime and repository discovery.
 Separate confirmed facts from inferences.
 
 ### plan.md — the approval-gated plan
-Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) with its `<FILL: …>` placeholders filled, plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
+Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) — **written directly by `--out`**, its Overview/Main-scope values supplied via `manifest.planMeta`, plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
 - This is the contract the user approves.
 - **Frozen after approval.** Do not edit it to reflect progress.
 - Any scope or strategy change requires a new entry in `decisions.md`, explicit re-approval, and a version bump in `plan.md` (for example `v2`), recording what changed and why.
