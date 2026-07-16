@@ -55,7 +55,7 @@ Read-only findings from runtime and repository discovery.
 Separate confirmed facts from inferences.
 
 ### plan.md — the approval-gated plan
-Use `references/migration-plan-template.md`.
+Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL.md Contract rule 2) with its `<FILL: …>` placeholders filled, plus the discovery provenance behind it. `references/migration-plan-template.md` is the *contents reference / Node-unavailable fallback*, not a second hand-filled plan.
 - This is the contract the user approves.
 - **Frozen after approval.** Do not edit it to reflect progress.
 - Any scope or strategy change requires a new entry in `decisions.md`, explicit re-approval, and a version bump in `plan.md` (for example `v2`), recording what changed and why.

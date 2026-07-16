@@ -1,6 +1,18 @@
-# Migration Plan Template
+# Migration Plan — Contents Reference
 
-Use this structure for the approval-gated migration report. Match the user's language.
+> **You do not hand-fill this template on the normal path.** The plan the user approves is the
+> **verbatim output of `node engine/migrate.mjs <manifest> --plan`** (SKILL.md Contract rule 2) — the
+> engine generates it, you fill the `<FILL: …>` placeholders and paste it whole. This document exists for
+> two reasons only:
+>
+> 1. **Reference** — so you (and the reader) know *what a complete plan covers*. Every section below is
+>    already produced, in a page-centric shape, by `--plan` (Overview + Main scope + per-page
+>    `Layout`/`Logic`/`⚠ Confirm` + `Child page mappings`). Do not build a second, template-shaped plan
+>    alongside it.
+> 2. **Hand-authoring fallback** — when Node is genuinely unavailable and the engine cannot run, author
+>    the plan by hand using the structure below, filling each section from the merged schema chain.
+>
+> Match the user's language.
 
 ## 1. Input And Resolved Target
 

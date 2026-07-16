@@ -69,6 +69,28 @@ For each Classic page/detail, record:
 | Actions menu | Freedom actions, buttons, or handler-backed commands. |
 | Mini page | Freedom mini page, modal, side panel, or explicit UX decision if the Classic interaction has no direct analog. |
 
+## Standard features, widgets & actions
+
+The single source of truth for the components agents most often mis-map. When you ran the engine, every
+`standardFeatures` entry carries a `uiShape`, widgets arrive under `widgets`, and process launches under
+`cardActions` / `needsDecision` (`process-launch`) — the generated design spec already renders each in the
+right shape. Honor that shape; do not invent a generic Expanded-list.
+
+| Classic thing | Engine signal | Freedom target | Do NOT |
+| --- | --- | --- | --- |
+| Approvals / Visa | `standardFeatures` `uiShape: "component"` | `crt.ApprovalList` (native — brings its own approve/reject actions, needs no child edit page) | rebuild as a plain list/DataGrid. A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
+| Attachments / Feed | `standardFeatures` `uiShape: "component"` | the native Attachments / Feed component | rebuild as a generic list. |
+| Activities / Emails | `standardFeatures` `uiShape: "list"` | a **filtered related list** — a DataGrid of the child records (Activity/Task, Email) filtered to the master. This IS their native form, not a downgrade. | turn them into a `crt.Timeline` or an email-client component. |
+| Timeline | `widgets` (only when the classic page has an actual Timeline) | `crt.Timeline` | invent a Timeline for Activities/Emails — those are lists (row above). |
+| Case stages (DCM) / Action dashboard = Next steps | `widgets` (`CaseStages` / `ActionDashboard`) | bind the widget to the **object**; the case-stage bar and Next-steps panel **auto-populate from the object's configured DCM case**. If the object has no case, there is nothing to migrate (it was base-template context). | hand-author stage lists or next-step logic per page — that duplicates what the object's case already drives. Confirm on-stand whether the object has a case (the schema alone doesn't say). |
+| Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
+| Run process (record page) | `needsDecision` `process-launch` / `cardActions` | a Freedom "Run process" card action / handler | fabricate the process name. The base `ProcessButton` names none; a *specific* connected process is bound through **data** (`SysProcessEntityConnection` / `VwSysProcessEntityConnection`), not the schema — the engine renders `⚠ which process` and you resolve it on-stand (read the processes connected to the entity). Only a literal `executeProcess`/`RunProcessRequest` name in a method is captured directly. |
+| Section actions / add-record mini page / list columns | manifest `section` → the spec's `### List page` block | Freedom list-page actions / a mini page / confirmed list columns | treat these as record-page concerns — they are a *separate* list-page surface the record-page migration does not cover. |
+
+Keep an engine-matched standard feature AS its shape unless you confirm on-stand it genuinely does not use
+that feature's infrastructure. Build the native component up front — never build a generic list first and
+"switch" it later.
+
 ## Data And Binding Mapping
 
 | Classic UI Pattern | Freedom UI Analog |
