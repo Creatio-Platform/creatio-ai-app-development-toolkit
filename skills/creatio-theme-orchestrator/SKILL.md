@@ -111,18 +111,27 @@ the summary.
 
 After the single final confirmation, follow clio's theming guidance to build the theme CSS from
 the collected inputs and create the theme on the environment. The build, the exact tool
-sequence, and the license preconditions live in that guidance.
+sequence, the license preconditions, and how a theme is applied live in that guidance.
 
-Making a theme the **default** changes the look for **everyone** on the environment, so treat it
-as its own decision:
-- If the user did **not** already ask to make the theme the default: after the theme is created,
-  tell them it exists but is **not yet visible** — nothing changes until it is made the default —
-  and ask whether to make it the default now.
-  - Yes → set it as the default.
-  - No → leave the theme created, and explain it can be turned on later (made the default, or
-    selected manually in Creatio).
-- If the user **already** asked to make it the default (or to apply it live): create it and set
-  it as the default in one go, with no extra question.
+A theme has two independent levels of visibility — keep them distinct and never fold one into the
+other:
+- **Applied to you** — always do this right after creating, unless the user explicitly asked you
+  not to. Apply the new theme to your own Creatio profile so you can see it; this changes nothing
+  for anyone else and needs no confirmation, because it only touches the account clio is signed in
+  as. Then tell the user the theme is applied to them and to **refresh the page** to see it — an
+  already-open page keeps the old look until it is reloaded.
+  - Skip this step only when the user explicitly does not want to switch now — for example "just
+    create it", "don't apply it yet", or they are preparing themes for other people. Then leave
+    the theme created and tell them it can be applied to their profile later, or selected in
+    Creatio. When in doubt, apply it — it is easy to reverse (reset, or pick another theme).
+- **Default for everyone** — making a theme the **default** changes the look for **every** user on
+  the environment, so treat it as its own decision.
+  - If the user did **not** ask for this: don't make it the default. After applying it to them you
+    may note that it can also be made the environment default for everyone, and do that only if
+    they ask.
+  - If the user **already** asked to make it the default (or to roll it out to everyone): create
+    it and set it as the default in one go, with no extra question — applying it to your own
+    profile is then unnecessary, since the default already covers you.
 
 ## Tone
 
