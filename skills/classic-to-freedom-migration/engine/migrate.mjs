@@ -51,12 +51,16 @@ export function runMigration(manifest, opts = {}) {
     const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(body);
     // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown.
     const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body) || /"?addRecordButtonVisible"?\s*:\s*false/.test(body);
+    const eObj = (e && typeof e === "object") ? e : {};
     detailSchemas[name] = {
-      entity: (e && typeof e === "object" && e.entity) || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
+      entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
       columns: [...new Set((p.diff || []).filter((d) => d.bindTo).map((d) => d.bindTo))],
-      title: (e && typeof e === "object" && e.title) || null, // human detail title (from its resources)
-      editPage: (e && typeof e === "object" && e.editPage) || (epM ? epM[1] : null),
-      editable: viewOnly ? false : null, // null = unknown (default add/edit/delete)
+      title: eObj.title || null, // human detail title (from its resources)
+      // editPage: explicit manifest value WINS — a string names the child edit page; `false` = the agent verified
+      // on-stand that NO Classic *Page exists. Else the name from getEditPageName; else null = unverified.
+      editPage: ("editPage" in eObj) ? eObj.editPage : (epM ? epM[1] : null),
+      // editable: explicit manifest value WINS (false = verified view/attach-only); else the body heuristic; else null.
+      editable: ("editable" in eObj) ? eObj.editable : (viewOnly ? false : null),
       error: p.error || null,
     };
   }
@@ -81,7 +85,8 @@ export function runMigration(manifest, opts = {}) {
   const childPages = (changeSet.details || []).map((d) => ({
     entity: d.entity || null,
     via: d.caption || d.detailSchema || d.entity,
-    editPage: detailSchemas[d.detailSchema]?.editPage || null,
+    // preserve an explicit `false` (agent verified: no page) — `|| null` would swallow it into "unverified".
+    editPage: detailSchemas[d.detailSchema] ? (detailSchemas[d.detailSchema].editPage ?? null) : null,
     editable: detailSchemas[d.detailSchema] ? detailSchemas[d.detailSchema].editable : null,
   })).filter((c) => c.entity);
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
@@ -130,9 +135,14 @@ export function runMigration(manifest, opts = {}) {
         issues.push(`detail '${d.detailSchema}'${d.entity ? ` (${d.entity})` : ""}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
     }
     for (const c of childPages) {
-      // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
-      if (c.editPage && !c.spec)
+      if (c.spec) continue;                                   // mapped -> fine
+      if (c.editPage === false || c.editable === false) continue; // verified no page, or view/attach-only from this detail -> fine
+      if (typeof c.editPage === "string" && c.editPage)
+        // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
         issues.push(`child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`);
+      else
+        // unverified: we do not yet know whether the child entity has a Classic *Page — resolve before the plan.
+        issues.push(`child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false on this detail if no *Page exists. No self-declared "out of scope".`);
     }
     return { complete: issues.length === 0, issues };
   })();

@@ -52,17 +52,30 @@ function resolveOwner(startParent, index, profileAnchors = PROFILE_CONTAINERS) {
 }
 const tabGridName = (tab) => `${tab}Grid`;
 
-// entity column dataType (+ classic contentType) -> Freedom control
-function control(dataType, contentType) {
-  const t = (dataType || "").toLowerCase();
-  if (contentType === 5 || t === "lookup") return { type: "crt.ComboBox", lookup: true };
+// entity column dataType -> Freedom control (the DATA type decides the control).
+function scalarControl(t) {
   if (t === "boolean") return { type: "crt.Checkbox" };
   if (t === "datetime") return { type: "crt.DateTimePicker", picker: "datetime" };
   if (t === "date") return { type: "crt.DateTimePicker", picker: "date" };
   if (["integer", "decimal", "float", "money", "32"].includes(t)) return { type: "crt.NumberInput" };
   if (["29", "30"].includes(t)) return { type: "crt.Input", multiline: true }; // long text / rich text
   if (t === "text" || t === "27" || t === "28") return { type: "crt.Input" };
-  return null; // unknown -> needsDecision
+  return null; // unknown scalar -> caller flags needsDecision
+}
+// control = the DATA type first; the classic `contentType` is only a PAGE control HINT, not the data type.
+// It forces a lookup ONLY when the column really is one (has a `ref`) or when we have no entity type at all
+// (fallback). A contentType-5 hint on a KNOWN scalar column with NO ref is NOT a lookup — the classic page just
+// rendered a scalar via a picker, which is a read-only VALUE FROM A LINKED RECORD (linkedDisplay): keep the real
+// data type (Email/Phone/Text) and flag the linked-value intent instead of mislabelling the control as a lookup.
+function control(dataType, contentType, ref) {
+  const t = (dataType || "").toLowerCase();
+  if (t === "lookup") return { type: "crt.ComboBox", lookup: true };
+  const scalar = scalarControl(t);
+  if (contentType === 5) {
+    if (ref || !scalar) return { type: "crt.ComboBox", lookup: true }; // real lookup, or no entity type -> trust the hint
+    return { ...scalar, linkedDisplay: true }; // scalar shown via a picker -> read-only value from a linked record
+  }
+  return scalar; // null -> caller emits a field-control decision
 }
 
 // Short, human data-type label for the design-spec Type column. Lookups are flagged by `ctl.lookup` (the
@@ -346,7 +359,7 @@ export function mapToFreedom(eff, opts = {}) {
     rowByContainer[parent] = (rowByContainer[parent] || 0) + 1;
     const col = f.bindTo || f.name || "Field";
     const meta = colMeta(col);
-    const ctl = control(meta.type, f.contentType);
+    const ctl = control(meta.type, f.contentType, meta.ref);
     if (!ctl) needsDecision.push({ kind: "field-control", item: col,
       reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });
     const c = ctl || { type: "crt.Input" };
@@ -404,12 +417,15 @@ export function mapToFreedom(eff, opts = {}) {
     values.typeLabel = fieldTypeLabel(col, meta, c);
     if (c.lookup && meta.ref) values.refSchema = meta.ref;
     if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
-    // A lookup-rendered field whose column has NO reference schema (only checkable when rich entityColumns
-    // were supplied) is very likely a read-only DISPLAY MIRROR of a linked record's field, not a real
-    // lookup — flag it so it isn't shipped as an editable ComboBox (a recurring manual correction).
+    // linkedDisplay: the classic page shows a plain scalar column via a picker (contentType 5, no ref) — it is a
+    // read-only VALUE FROM A LINKED RECORD, not a lookup. Keep the real data type (Email/Phone/Text), mark it
+    // read-only, and carry a plain-language note (rendered in the design-spec's Additional cell, not as jargon).
+    if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
+    // A field the ENTITY itself types as a lookup but with no reference schema is a genuine data anomaly —
+    // flag it so it isn't shipped as an editable ComboBox pointing nowhere.
     if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
       needsDecision.push({ kind: "lookup-no-ref", item: col,
-        reason: `'${col}' renders as a lookup (classic contentType) but its entity column has no reference schema — likely a read-only text mirror of a linked record; confirm the real control (probably read-only Text) and its fill handler` });
+        reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
     if (c.lookup) { values.listActions = []; values.controlActions = []; }
     if (c.picker) values.pickerType = c.picker;
     if (c.multiline) values.multiline = true;

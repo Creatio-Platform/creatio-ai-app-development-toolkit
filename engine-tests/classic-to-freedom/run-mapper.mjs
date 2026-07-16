@@ -456,12 +456,13 @@ const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",
 const SU_SCHEMAS = [
   { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
   { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }];
-// the 3 SupportUnit details (view-only, no child edit page) — supplied so the STRUCTURE validator is
-// satisfied and these CLI runs stay gate-clean shape tests. Keyed by each detail's schemaName.
+// the 3 SupportUnit details (view-only, no child edit page) — `editPage: false` records the agent's on-stand
+// verification that no Classic *Page exists, so the STRUCTURE validator is satisfied and these CLI runs stay
+// gate-clean shape tests. Keyed by each detail's schemaName.
 const SU_DETAILS = {
-  SupportScheduleEmployeeDetail: { entity: "SupportSchedule" },
-  SupportUnitLogDetail: { entity: "SupportUnitLog" },
-  SupportScheduleLogDetail: { entity: "SupportScheduleLog" },
+  SupportScheduleEmployeeDetail: { entity: "SupportSchedule", editPage: false },
+  SupportUnitLogDetail: { entity: "SupportUnitLog", editPage: false },
+  SupportScheduleLogDetail: { entity: "SupportScheduleLog", editPage: false },
 };
 const specRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
   input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS }), encoding: "utf8" });
@@ -656,9 +657,20 @@ check("#2 lookup-no-ref: lookup column with no reference schema flagged as a pro
   mirrorCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && n.item === "MobilePhone"));
 check("#2 lookup-no-ref: a lookup WITH a reference schema is NOT flagged (no false positive)",
   !dsCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref"));
-// C1 — the lookup-no-ref doubt must show in the Layout Type cell, not silently read "Lookup"
-check("C1: lookup-no-ref field renders Type '⚠ Text? (lookup, no ref)' in Layout, not 'Lookup'",
-  /MobilePhone \| ⚠ Text\? \(lookup, no ref\)/.test(mirrorCs.designSpec) && !/MobilePhone \| Lookup/.test(mirrorCs.designSpec));
+// C1 — an entity-typed lookup with no ref: trust the DATA type (Type = 'Lookup') AND raise the anomaly decision.
+check("C1: entity-typed lookup with no ref renders Type 'Lookup' (trust the data type) + a lookup-no-ref decision",
+  /MobilePhone \| Lookup \|/.test(mirrorCs.designSpec)
+  && mirrorCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && n.item === "MobilePhone"));
+// C1b — a plain Text column the classic page renders via a picker (contentType 5, no ref) is a read-only VALUE
+// FROM A LINKED RECORD, NOT a lookup: keep the real data type (Email/Phone), mark read-only, plain-language note.
+const linkedCs = runMigration({ entity: "X", entityColumns: { Email: { type: "Text" }, MobilePhone: { type: "Text" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Email",parentName:"Header",propertyName:"items",values:{bindTo:"Email",contentType:5}},{operation:"insert",name:"MobilePhone",parentName:"Header",propertyName:"items",values:{bindTo:"MobilePhone",contentType:5}}]};});` }] }, { baseDir: FIX });
+check("linked-value: Text column shown via a picker (contentType 5, no ref) keeps its real type (Email/Phone), not a false Lookup",
+  /Email \| Email \|/.test(linkedCs.designSpec) && /MobilePhone \| Phone \|/.test(linkedCs.designSpec)
+  && !/lookup, no ref/i.test(linkedCs.designSpec));
+check("linked-value: renders read-only + a plain-language 'Value from a linked record' note (no jargon, no lookup-no-ref flag)",
+  /Value from a linked record/.test(linkedCs.designSpec)
+  && !linkedCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && (n.item === "Email" || n.item === "MobilePhone")));
 // RV12 — an image/photo component gets its own Layout row (it had a decision but no row before)
 const imageRowCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
@@ -669,6 +681,13 @@ const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
 check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
   /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+// Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
+// with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
+check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
+  /#### Logic/.test(guidCs.designSpec)
+  && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
+  /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
@@ -731,8 +750,8 @@ check("RV14: the tabs panel is NOT treated as profile — a field under a base t
   anchorCs.viewConfigDiff.some(o => o.name === "TabFld" && o.parentName !== "SideAreaProfileContainer"));
 
 // #7 — child-page recursion: a supplied child schema is MAPPED (its design spec nested in the plan),
-// an unsupplied child gets an explicit `<FILL: recursive sub-migration>` slot — the listing alone is
-// not enough; every child page needs its own mapping, or a visible instruction to produce one.
+// an UNVERIFIED child gets an explicit `<FILL: verify child page>` slot — the listing alone is
+// not enough; every child page needs its own mapping, or a visible instruction to resolve it.
 const recCs = runMigration({ entity: "Par",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"ChildADetail",entitySchemaName:"ChildA",filter:{detailColumn:"M",masterColumn:"Id"}},D2:{schemaName:"ChildBDetail",entitySchemaName:"ChildB",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"D2",parentName:"T",values:{itemType:2}}]};});` }],
   detailSchemas: { D1: { entity: "ChildA", editPage: "ChildAPage" }, D2: { entity: "ChildB", editPage: "ChildBPage" } },
@@ -745,8 +764,8 @@ check("#7 child recursion: supplied child schema is mapped (childPages[].spec po
   !!recA.spec && recA.resolvedFrom === "ChildAPage" && !recB.spec);
 check("#7 child recursion: mapped child's design spec is NESTED in the plan (headings demoted under Child page mappings)",
   /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
-check("#7 child recursion: unsupplied child gets an explicit recursive-sub-migration FILL slot (not just a row)",
-  /#### Child page: ChildB[\s\S]*?<FILL: recursive sub-migration>/.test(recCs.plan));
+check("#7 child recursion: unverified child gets an explicit verify-child-page FILL slot (not just a row)",
+  /#### Child page: ChildB[\s\S]*?<FILL: verify child page>/.test(recCs.plan));
 // #7b Main-scope hygiene: child rows get a fixed clean target (no free-text FILL that invited status prose),
 // and the meaningless "entity · details · lookups · backend → Reuse" row is gone.
 check("#7b Main scope: child rows use a fixed 'Freedom record page' target (no free-text FILL)",
@@ -772,9 +791,9 @@ const voChildBody = `define("VoDetail",[],function(){return{entitySchemaName:"Vo
 const voChild = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",details:{VoDetail:{schemaName:"VoDetail",entitySchemaName:"VoEntity",filter:{detailColumn:"Applicant",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"VoDetail",parentName:"T",values:{itemType:2}}]};});` }],
   detailSchemas: { VoDetail: { body: voChildBody, entity: "VoEntity" } } }, { baseDir: FIX });
-check("#7c view-only child (no edit page) is a legit skip — 'no child edit page' note, not a mandatory-map",
+check("#7c view/attach-only child (no edit page) is a legit skip — 'read/attach-only' note, not a mandatory-map",
   voChild.childPages.some((c) => c.entity === "VoEntity" && c.editable === false && !c.editPage)
-  && /View-only related list[\s\S]{0,80}no child edit page/.test(voChild.plan)
+  && /Read\/attach-only[\s\S]{0,80}no child edit page/.test(voChild.plan)
   && !/MUST fetch it and map it/.test(voChild.plan));
 
 /* ---- STRUCTURE VALIDATOR — systemic completeness gate on manifest inputs (blocks the dodge in code) ---- */
@@ -786,12 +805,21 @@ check("STRUCTURE: a custom detail with no supplied detailSchema → structure.co
 // (b) a child with a REAL editPage but no childPageSchemas → structurally incomplete (the dodge, blocked).
 check("STRUCTURE: a child with a real editPage but no childPageSchemas → structure.complete=false",
   realChild.structure.complete === false && realChild.structure.issues.some((i) => /RecruitmentInStagePageV2/.test(i)));
-// (c) detail schema supplied + no child edit page → structurally COMPLETE (no false block).
-const stOk = runMigration({ entity: "X",
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});` }],
+// (c) detail supplied but child-page existence UNVERIFIED (no getEditPageName, not view-only) → INCOMPLETE:
+//     the agent must verify via list-pages, then map it or record editPage:false. (Problem-1 fix: never a
+//     silent "Rebuild (child)" for a child we never checked.)
+const stBody = `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});`;
+const stUnverified = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }],
   detailSchemas: { MyDetailV2: { entity: "Child" } } }, { baseDir: FIX });
-check("STRUCTURE: detail schema supplied + no child edit page → structure.complete=true, no banner",
-  stOk.structure.complete === true && !/STRUCTURE INCOMPLETE/.test(stOk.plan));
+check("STRUCTURE: detail supplied but child page UNVERIFIED → structure.complete=false (must verify, not assume)",
+  stUnverified.structure.complete === false && stUnverified.structure.issues.some((i) => /NOT verified/.test(i)));
+// (c2) recording editPage:false (agent verified no *Page on-stand) → COMPLETE, and Main scope shows 'Reuse'
+//      (the resolved reality) instead of a contradictory 'Rebuild (child)'.
+const stVerifiedNone = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }],
+  detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } } }, { baseDir: FIX });
+check("STRUCTURE: detail with editPage:false (verified no page) → complete=true + Main scope 'Reuse', no banner",
+  stVerifiedNone.structure.complete === true && !/STRUCTURE INCOMPLETE/.test(stVerifiedNone.plan)
+  && /\| Reuse \|/.test(stVerifiedNone.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
 // RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.

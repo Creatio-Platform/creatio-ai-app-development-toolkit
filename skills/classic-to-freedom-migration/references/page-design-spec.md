@@ -19,9 +19,10 @@ HTML or a rendered artifact.
 - **One `Layout` table = structure + contents.** The `Region` column is the page structure (side-profile
   islands, tabs, card actions) and REPEATS down its rows (Markdown can't merge cells). Every field,
   related list, native component and card action is ONE row — nothing is listed twice.
-- **`Logic` is behaviour, not layout** — entity/lookup filters, handlers/converters, process launch. A
-  field's own declarative state (required / read-only / visible-when) stays in the Layout `Rule` column;
-  imperative multi-field logic goes here.
+- **`Logic` is where the business rules live** — the declarative page rules (required / read-only /
+  visible-when, each with its condition) render here, together with entity/lookup filters,
+  handlers/converters, and process launch. The Layout `Rule` column carries only intrinsic field state
+  (e.g. a read-only mirror), never a business rule — a reader finds all the rules in ONE place.
 - **`⚠ Confirm before I build`** collects everything needing a human answer (the engine's ⚠ worklist plus
   any discovery risks/gaps you append).
 - Feed the resolution inputs so names are real, not codes: `resources` (captions), `columnTitles` (field
@@ -44,7 +45,7 @@ HTML or a rendered artifact.
 #### Layout
 | Region | Element | Type | Source | Rule | Additional |
 | --- | --- | --- | --- | --- | --- |
-| Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Date / Number / Boolean | PDS.<col> | required / read-only / visible-when … | tip: … |
+| Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
 | Tab · <name> | <field label> | … | PDS.<col> | … | … |
 | Tab · <name> | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
 | Tab · <name> | <feature> | Approvals / Attachments / Feed (component) | template-provided / native — confirm component on-stand | — | — |
@@ -54,6 +55,7 @@ HTML or a rendered artifact.
 #### Logic
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
+| <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
 | <handler method> | <trigger> | imperative (<category>) — review | request handler / converter / virtual attr |
 | Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
@@ -83,11 +85,11 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Region | Element | Type | Source | Rule | Additional |
 | --- | --- | --- | --- | --- | --- |
 | Side profile › Contact | Contact | Lookup (Contact) | PDS.Contact | — | — |
-| Side profile › Contact | Mobile phone | Phone | PDS.MobilePhone | read-only | — |
-| Side profile › Contact | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | required @ Stage = Job Offer | — |
-| Side profile › Request | Request | Lookup (InternalRequest) | PDS.InternalRequest | required @ Stage ∈ {Job Offer, Attendance} | — |
-| Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | — |
-| Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | required @ Stage ∈ {Rejected, Refusal} | — |
+| Side profile › Contact | Mobile phone | Phone | PDS.MobilePhone | read-only | Value from linked Contact |
+| Side profile › Contact | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | — | — |
+| Side profile › Request | Request | Lookup (InternalRequest) | PDS.InternalRequest | — | — |
+| Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
+| Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
 | Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
 | Tab · Basic information | Attachments | Attachments | template-provided | — | — |
 | Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
@@ -99,6 +101,9 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 #### Logic
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
+| Specialist expertise level | when Stage | required (else optional) | page business rule |
+| Request | when Stage | required (else optional) | page business rule |
+| Reject reason | when Stage | required (else optional) | page business rule |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 | onContactChanged | Contact changes | imperative — fill Mobile phone / Email / Skype | request handler + virtual attrs |
 | onInternalRequestChanged | Request changes | imperative — fill Department / Staff unit | request handler + virtual attrs |

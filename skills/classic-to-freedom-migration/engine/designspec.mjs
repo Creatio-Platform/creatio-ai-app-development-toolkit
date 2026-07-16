@@ -60,12 +60,9 @@ export function renderDesignSpec(result, opts = {}) {
   const tabRegion = (tab) => regionOf(tab);
   const fields = vcd.filter(isField);
 
-  // page-rule effect per element (declarative field state)
-  const ruleByEl = new Map();
-  for (const r of cs.pageBusinessRules || []) {
-    const line = humanizeAction(r.action) + (Array.isArray(r.conditions) && r.conditions.length ? " (conditional)" : "");
-    ruleByEl.set(r.element, ruleByEl.has(r.element) ? ruleByEl.get(r.element) + "; " + line : line);
-  }
+  // Declarative page business rules render in the LOGIC table (below), NOT in the Layout Rule column — a reader
+  // looks for the business rules in ONE place. The Layout Rule column carries only intrinsic field state
+  // (read-only mirrors / column metadata), never rule-driven state.
 
   const L = [];
   // `embedded` (rendered inside renderPlan): the plan's Overview already carries entity/template/package/
@@ -97,17 +94,19 @@ export function renderDesignSpec(result, opts = {}) {
 
   // ---- ONE Layout table (structure + contents) ----
   const rows = []; // { region, sort, cells:[element,type,source,rule,additional] }
-  // C1 — a lookup-no-ref column renders as a lookup contentType but has no reference schema; the Type cell must
-  // reflect that doubt (it is almost always a read-only text mirror), not silently say "Lookup" while the ⚠
-  // Confirm list says otherwise (a real run had to hand-correct Mobile phone/Email/Skype from that mismatch).
-  const lookupNoRef = new Set((cs.needsDecision || []).filter((n) => n.kind === "lookup-no-ref").map((n) => n.item));
   for (const f of fields) {
     const col = strip(f.values.control);
     const v = f.values || {};
-    const type = lookupNoRef.has(col) ? "⚠ Text? (lookup, no ref)" : esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
-    const rule = v.readOnly ? "read-only" : (ruleByEl.get(col) || DASH);
-    const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : DASH;
-    rows.push({ region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, tip] });
+    const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
+    const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
+    // linkedValue: a read-only value shown from a linked record — say it in PLAIN language in the Additional
+    // cell (a human reading the plan should not have to decode "mirror" / "lookup-no-ref").
+    const linked = v.linkedValue
+      ? "Value from a linked record — bind a read-only field to the source object's column, or fill it on the source lookup's change if it must be stored"
+      : null;
+    const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
+    const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
+    rows.push({ region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] });
   }
   for (const d of cs.details || []) {
     const src = `${esc(d.entity || "?")}${d.dependency ? ` · by ${esc(d.dependency.attributePath)}` : " · ⚠ FK"}`;
@@ -185,8 +184,18 @@ export function renderDesignSpec(result, opts = {}) {
   }
   L.push("");
 
-  // ---- Logic (behaviour that is not layout): entity filters, handlers, process launch ----
+  // ---- Logic (behaviour): declarative business rules FIRST, then entity filters, handlers, process launch ----
   const logic = [];
+  // Declarative page business rules — this is where a reader expects the business rules (not beside the fields).
+  // One row each: field · condition · effect (+ inverse) · target. GUID conditions are flagged for on-stand
+  // resolution in the ⚠ Confirm list (C2), so the condition here stays a readable attribute name.
+  const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
+  for (const r of cs.pageBusinessRules || []) {
+    const attrs = condAttrs(r.conditions);
+    const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : ((r.conditions || []).length ? "conditional" : "always");
+    const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
+    logic.push([esc(r.element), trigger, effect, "page business rule"]);
+  }
   // entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
   const filtBy = {};
   for (const r of cs.entityBusinessRules || []) {
@@ -301,13 +310,20 @@ export function renderPlan(result, opts = {}) {
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
   for (const c of childs) {
-    const viewOnlyNoPage = c.editable === false && !c.editPage; // genuinely no child edit page
-    const target = viewOnlyNoPage ? "— view-only (no child page)" : "Freedom record page";
-    const call = viewOnlyNoPage ? "—" : "Rebuild (child)";
-    P.push(`| ${esc(c.editPage || (c.entity + " form page"))} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""} | ${target} | ${call} |`);
+    // Honest label by resolution state — never assert "Rebuild (child)" for a child we have not resolved:
+    //   mapped, or a real edit page is named -> Rebuild (child); verified-none / view-only -> Reuse; else -> ⚠ resolve.
+    let target, call, label;
+    if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
+      target = "Freedom record page"; call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
+    } else if (c.editPage === false || c.editable === false) {
+      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
+    } else {
+      target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
+    }
+    P.push(`| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`);
   }
   P.push("");
-  if (childs.length) P.push("> **`Rebuild (child)` rows are recursive sub-migrations** — each child page's own mapping is under **Child page mappings** below (generated where the schema was supplied, a `<FILL>` slot otherwise). A related list whose child entity has no Freedom form can't add/edit records.");
+  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   P.push("");
   P.push(renderDesignSpec(result, { ...opts, embedded: true }));
   P.push("");
@@ -318,7 +334,7 @@ export function renderPlan(result, opts = {}) {
     P.push("### Child page mappings");
     P.push("");
     for (const c of childs) {
-      const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view-only" : ""}`;
+      const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
       P.push(`#### Child page: ${head}`);
       if (c.spec) {
         if (c.grandChildren) P.push(`> ${c.grandChildren} nested child page(s) of its own — map those recursively too (step 7).`);
@@ -326,15 +342,18 @@ export function renderPlan(result, opts = {}) {
         P.push(demoteHeadings(c.spec)); // nest the child's ## / ### headings two levels under this ####
       } else if (c.specError) {
         P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
-      } else if (c.editPage) {
-        // a real Classic edit page is named (from the detail's getEditPageName) → mapping is MANDATORY.
-        // Close the escape hatches a real run used to dodge this ("view-only" / "native" / "out of scope").
+      } else if (typeof c.editPage === "string" && c.editPage) {
+        // a real Classic edit page is named (from getEditPageName) → mapping is MANDATORY.
         P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
+      } else if (c.editPage === false) {
+        // agent verified on-stand (recorded "editPage": false in the manifest): no separate Classic *Page.
+        P.push(`> **Verified: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list; nothing to migrate here.`);
       } else if (c.editable === false) {
-        // per the classic detail (add-record hidden): genuinely view-only → there is no child edit page to map.
-        P.push(`> View-only related list (the classic detail hides add-record) → there is no child edit page, so nothing to map here. Confirm no \`*Page\` exists for \`${esc(c.entity)}\`; if one does, fetch + map it.`);
+        // classic detail hides add-record → view/attach-only; no child edit page to map.
+        P.push(`> **Read/attach-only** related list (the classic detail hides add-record) → no child edit page to map. Confirm no \`*Page\` exists for \`${esc(c.entity)}\`; if one does, add it and re-run.`);
       } else {
-        P.push(`> **\`<FILL: recursive sub-migration>\`** — resolve this child's Classic edit page via \`list-pages\` **by entity \`${esc(c.entity)}\`**. If a \`*Page\` exists, fetch it and map it here (\`childPageSchemas\`) — "out of scope" is never a valid skip. Only if NO \`*Page\` exists is this a legitimate skip, and you must say so.`);
+        // UNVERIFIED — the structure gate blocks the plan until this is resolved one way or the other.
+        P.push(`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`**: if a \`*Page\` exists, add it to \`childPageSchemas\` and re-run; if none exists, record \`"editPage": false\` on this detail and re-run. "out of scope" is never a valid self-declared skip.`);
       }
       P.push("");
     }
