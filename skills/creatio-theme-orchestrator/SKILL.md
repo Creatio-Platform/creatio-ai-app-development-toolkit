@@ -118,7 +118,11 @@ other:
 - **Applied to you** — always do this right after creating, unless the user explicitly asked you
   not to. Apply the new theme to your own Creatio profile so you can see it; this changes nothing
   for anyone else and needs no confirmation, because it only touches the account clio is signed in
-  as. Then tell the user the theme is applied to them and to **refresh the page** to see it — an
+  as. That account is clio's own credentials, which may not be the account the user browses Creatio
+  under (clio is often registered as an admin/service account such as Supervisor). So tell the user
+  the theme is applied to the account clio is signed in as, and name it — if they browse under a
+  different account, they will not see it and should either sign in as that account or apply the
+  theme there. When it is their account, they only need to **refresh the page** to see it — an
   already-open page keeps the old look until it is reloaded.
   - Skip this step only when the user explicitly does not want to switch now — for example "just
     create it", "don't apply it yet", or they are preparing themes for other people. Then leave
@@ -130,8 +134,11 @@ other:
     may note that it can also be made the environment default for everyone, and do that only if
     they ask.
   - If the user **already** asked to make it the default (or to roll it out to everyone): create
-    it and set it as the default in one go, with no extra question — applying it to your own
-    profile is then unnecessary, since the default already covers you.
+    it and set it as the default in one go, with no extra question. The default then covers every
+    account that has no personal theme of its own — but a personal theme overrides the default, so
+    if clio's account already has one applied (for example from an earlier theming session) the new
+    default will not show for it; clear that account's personal theme if you need to see the new
+    default there.
 
 ## Tone
 
