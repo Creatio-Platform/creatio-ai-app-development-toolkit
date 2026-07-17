@@ -1,6 +1,6 @@
 // Ф2 — Merge engine. Pure Node module, no Creatio/stand dependency.
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
-// into one effective page model + provenance. See .migration/solution-design.md §3.1.
+// into one effective page model + provenance.
 import vm from "node:vm";
 
 // Universal proxy: any property access / call / construct returns itself.

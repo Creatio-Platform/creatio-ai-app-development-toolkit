@@ -28,3 +28,8 @@ output/
 # in the client's own migration-project repo — it is intentionally NOT ignored (and its names collide with the
 # toolkit's own references/*.md, so they must never be blanket-ignored here).
 scratch_*
+
+# Classic→Freedom migration DESIGN scratch — internal self-review, POC schema bodies, design docs and the
+# architecture deck produced while building the skill. Kept on disk for reference but NOT shipped with the
+# plugin: it would bloat the client bundle and leak internal notes. Untracked via `git rm -r --cached .migration`.
+.migration/
