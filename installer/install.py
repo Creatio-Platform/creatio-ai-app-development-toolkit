@@ -633,8 +633,12 @@ def remove_codex_plugin_section(config_path: Path, plugin_name: str, marketplace
     _remove_toml_table_block(config_path, markers)
 
 
-def repo_file(repo_root: Path, relative_path: str) -> Path:
-    return repo_root / relative_path
+def repo_file(repo_root: Path, relative_path: str) -> str:
+    # Render forward-slash paths so the agent load order stays consistent and
+    # portable across hosts. Windows accepts forward slashes for reads, and the
+    # rest of the toolkit references paths this way, so an absolute install path
+    # like `D:/…/runbooks/03-app-implementation.md` reads the same everywhere.
+    return (repo_root / relative_path).as_posix()
 
 
 def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
