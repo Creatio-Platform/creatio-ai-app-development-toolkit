@@ -13,7 +13,8 @@ Match the user's language inside the documents.
 > `manifest.resources` / `columnTitles`, plus stand schema/package names. Treat the doc set as potentially
 > sensitive — keep the migration-project repo private, or redact captions/values before committing to a
 > shared/public repo or pasting into an issue. (The stand-sourced INPUTS — manifest + fetched bodies — are
-> already gitignored under `scratch_*`; this warning is about the OUTPUT doc set, which is meant to be versioned.)
+> written to a temp dir OUTSIDE the repo and deleted when the migration completes, so they are never in git;
+> this warning is about the OUTPUT doc set, which IS meant to be versioned.)
 
 ## Scale The Document Set To The Scope
 
