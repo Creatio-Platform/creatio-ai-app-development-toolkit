@@ -1,8 +1,9 @@
 # Migration Plan — Contents Reference
 
 > **You do not hand-fill this template on the normal path.** The plan the user approves is the
-> **verbatim output of `node engine/migrate.mjs <manifest> --plan`** (SKILL.md Contract rule 2) — the
-> engine generates it, you fill the `<FILL: …>` placeholders and paste it whole. This document exists for
+> **engine-written output of `node engine/migrate.mjs <manifest> --plan --out plan.md`** (SKILL.md Contract
+> rule 2) — you supply the Overview/Main-scope values via `manifest.planMeta`, the engine writes the file,
+> and you present it verbatim (never hand-type the `<FILL: …>` placeholders). This document exists for
 > two reasons only:
 >
 > 1. **Reference** — so you (and the reader) know *what a complete plan covers*. Every section below is
