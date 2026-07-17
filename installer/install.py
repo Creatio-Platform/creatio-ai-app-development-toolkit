@@ -54,6 +54,7 @@ REQUIRED_REFERENCE_PATHS = (
     "context/model-discovery-evidence.md",
     "runbooks/01-environment-setup.md",
     "runbooks/02-requirements-gathering.md",
+    "runbooks/03-app-implementation.md",
     "runtime/scripts/mcp_client.py",
     "runtime/scripts/workflow_validators.py",
 )
@@ -665,7 +666,9 @@ def render_load_order(repo_root: Path) -> str:
         f"3. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
         f"4. For environment setup, read `{repo_file(repo_root, 'runbooks/01-environment-setup.md')}`.\n"
         f"5. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
-        f"6. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
+        f"6. For post-Gate-R implementation and scaffolding (including the transient section-creation "
+        f"failure playbook), read `{repo_file(repo_root, 'runbooks/03-app-implementation.md')}`.\n"
+        f"7. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
 

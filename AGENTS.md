@@ -218,12 +218,13 @@ Execution order:
 
 Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP tools
 
-**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan. Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
+**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
 
 ## Agent Responsibilities
 
 1. Environment Setup — resolves env name, DataForge availability, and reports them in conversation
 2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `runtime/scripts/workflow_validators.py`
+3. App Implementation — post-Gate-R scaffolding via clio MCP: sequential section creation and the transient section-creation failure playbook (`runbooks/03-app-implementation.md`)
 
 Agent 2 is interactive and must not be delegated.
 
@@ -282,7 +283,7 @@ Approval-ready vs delivery-ready rule:
 0. At workflow start, establish telemetry consent and emit `session_started` per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
 1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Emit the `pre_plan_*` events as you ask for and receive pre-plan input.
 2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan emit `business_plan_generated` (and `business_plan_regenerated` on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; emit `business_plan_approved` then.
-3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan. Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
