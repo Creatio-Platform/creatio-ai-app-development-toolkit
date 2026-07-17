@@ -327,6 +327,16 @@ const migBad = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs")
 check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdout (not a raw stack)",
   migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
 
+/* ---- gate coverage: a syntactically BROKEN schema body must propagate parseErrors -> gate.blocked -> exit 2,
+   so a corrupt plan can NEVER read as gate-clean (regression guard for parseSchema error-propagation — esp.
+   after the AST switch: a broken body now fails the acorn parse instead of the old vm eval). ---- */
+const brokenBody = 'define("X", function() { return { entitySchemaName: "X", diff: [ ';
+const brokenRun = runMigration({ schemas: [{ pkg: "Broken", body: brokenBody }] });
+check("migrate.mjs: broken body -> parseErrors > 0 (parse error propagated, not swallowed)", brokenRun.parseErrors.length > 0);
+check("migrate.mjs: broken body -> gate.blocked (a corrupt plan does NOT read as gate-clean)", brokenRun.gate.blocked === true);
+const migGate = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: JSON.stringify({ schemas: [{ pkg: "Broken", body: brokenBody }] }), encoding: "utf8" });
+check("migrate.mjs CLI: gate-blocked broken body exits 2 with a GATE BLOCKED diagnostic", migGate.status === 2 && /GATE BLOCKED/.test(migGate.stderr || ""));
+
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   details: {
