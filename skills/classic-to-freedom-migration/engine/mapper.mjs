@@ -1,6 +1,6 @@
 // Ф3 — Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
-// + needsDecision[] for the judgment 20%. See .migration/solution-design.md §3.3.
+// + needsDecision[] for the judgment 20%.
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -208,11 +208,8 @@ export function mapToFreedom(eff, opts = {}) {
   // lookup's referenced object "Lookup (Contact)".
   const colMeta = (col) => { const v = cols[col]; return (v && typeof v === "object") ? v : { type: v || null }; };
   const labelFor = (col) => columnTitles[col] ?? resolveText(col) ?? resolveText(col + "Caption") ?? colMeta(col).title ?? null;
-  let fieldsWithTitle = 0;
   const needsDecision = [];
-  const viewConfigDiff = [];
-  const attributes = {};
-  const pdsColumns = {};
+  const accountedFor = new Set();
 
   // F9: migrate only the page's OWN content, not the platform template chain seeded for layout.
   // `fromTemplate` elements (e.g. BaseEntityPage's framework methods, base-template details) are
@@ -233,27 +230,97 @@ export function mapToFreedom(eff, opts = {}) {
     components: (eff.components || []).length - payloadComponents.length,
   };
 
-  // ---- fields (3-part binding: control + attribute + dataSource) ----
-  const rowByContainer = {};
-  const nameCount = {};
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
-  const profileAnchors = deriveProfileAnchors(eff.items); // RV14 — structural side-profile anchors (not just literals)
-  // Fix 2 — every classic item name the mapper EMITS or knowingly recognizes. Whatever survives the merge
-  // as client content but is NOT in here produced no Freedom element → surfaced as unmapped-component
-  // (LOUD) at the end instead of silently vanishing (e.g. the SLA-timer LABEL/CONTAINER micro-widgets).
-  const accountedFor = new Set();
+  const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
+  const ctx = { eff, cols, resources, resolveText, caption, detailSchemas, columnTitles, colMeta, labelFor,
+    index, profileAnchors, payloadFields, payloadDetails };
+  // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
+  const containers = createContainers(ctx);
+  const F = mapFields(ctx, containers);
+  F.needsDecision.forEach(d => needsDecision.push(d));
+  F.accountedFor.forEach(a => accountedFor.add(a));
+
+  // ---- rules ----
+  const _r = mapRules(payloadRules, payloadFields);
+  const { pageBusinessRules, entityBusinessRules } = _r;
+  _r.needsDecision.forEach(d => needsDecision.push(d));
+
+  // ---- details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list) ----
+  const D = mapDetails(ctx, containers, F.profileRegion);
+  D.needsDecision.forEach(d => needsDecision.push(d));
+  D.accountedFor.forEach(a => accountedFor.add(a));
+
+  // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
+  const _w = mapWidgets(eff);
+  const { widgets, chromeWidgets } = _w;
+  _w.needsDecision.forEach(d => needsDecision.push(d));
+  _w.accountedFor.forEach(a => accountedFor.add(a));
+
+  // ---- image / photo components (generator-based, no bindTo) → Freedom image component ----
+  const _img = mapImages(eff);
+  const images = _img.images;
+  _img.needsDecision.forEach(d => needsDecision.push(d));
+  _img.accountedFor.forEach(a => accountedFor.add(a));
+
+  // ---- Moment 5: card actions / ACTIONS menu → Freedom card actions (B7) ----
+  const _ca = mapCardActions(eff);
+  const cardActions = _ca.cardActions;
+  _ca.needsDecision.forEach(d => needsDecision.push(d));
+  _ca.accountedFor.forEach(a => accountedFor.add(a));
+
+  // feature toggles / charts / methods → handler stubs / removals / referenced modules
+  const _rl = mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditableSchemas);
+  const handlerStubs = _rl.handlerStubs;
+  _rl.needsDecision.forEach(d => needsDecision.push(d));
+
+  // ---- Fix 2: LOUD unmapped-component drop ----
+  const _drop = mapUnmappedDrop(eff, accountedFor);
+  _drop.needsDecision.forEach(d => needsDecision.push(d));
+
+  return {
+    entity: eff.entity,
+    // structural (tab + grid containers) first so field inserts resolve their parentName.
+    viewConfigDiff: [...containers.structural, ...F.viewConfigDiff],
+    viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
+    modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
+    pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, needsDecision,
+    // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
+    standardFeatures: D.standardFeatures,
+    // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
+    widgets,
+    // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
+    chromeWidgets,
+    // image/photo components (generator-based) → Freedom image component.
+    images,
+    // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
+    cardActions,
+    // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
+    referencedModules: eff.referencedModules || [],
+    // F9: how many effective elements were platform-template context excluded from the payload.
+    baseContextExcluded,
+  };
+}
+
+// Container builder: emits each classic tab / group / profile-island as a Freedom container ONCE (tracking
+// what's emitted) and accumulates them in `structural`. ensure* route their decisions/accountedFor into the
+// CALLING phase's sinks (nd array, accounted Set) so needsDecision order matches the original single pass —
+// fields and details share ONE builder (a detail-only tab must still be emitted).
+function createContainers(ctx) {
+  const { index, caption } = ctx;
   const structural = [];            // tab + tab-grid container inserts (emitted once, only when used)
-  const emittedTabs = new Map(); // tab -> resolved parent container for routed fields
-  function ensureTab(tab, templateOwned) {
+  const emittedTabs = new Map();    // tab -> resolved parent container for routed fields
+  const emittedGroups = new Map();  // group name -> inner container fields route into (emitted once)
+  const emittedIslands = new Map();
+  function ensureTab(tab, templateOwned, nd, accounted) {
     if (emittedTabs.has(tab)) return emittedTabs.get(tab);
-    accountedFor.add(tab);
+    accounted.add(tab);
     let parentName;
     if (templateOwned) {
       // F9×F3: a BASE-TEMPLATE tab (e.g. ESNTab) is provided by the Freedom counterpart template —
       // synthesizing a fresh crt.Tab here would duplicate/conflict with it. Route the field to the
       // EXISTING tab and flag placement; never emit a new crt.Tab/grid for a template-owned tab.
       parentName = tab;
-      needsDecision.push({ kind: "base-tab-placement", item: tab,
+      nd.push({ kind: "base-tab-placement", item: tab,
         reason: `payload field(s) target base-template tab '${tab}' — place into the Freedom template's existing equivalent (do NOT create a new tab); confirm the target container` });
     } else {
       // client-owned tab: the page defines it, so we build it. Its grid holds the routed fields.
@@ -266,19 +333,18 @@ export function mapToFreedom(eff, opts = {}) {
         values: { type: "crt.GridContainer", columns: GRID_2 } });
       // flag only when the caption is NOT resolved to real text (synthesized key, or an unresolved key
       // because no manifest.resources was supplied). A resolved literal caption needs no decision (#5/#13).
-      if (!c.resolved) needsDecision.push({ kind: "tab-caption", item: tab,
+      if (!c.resolved) nd.push({ kind: "tab-caption", item: tab,
         reason: c.synthesized
           ? `synthesized caption key '${c.value}' — classic caption not in model; confirm/replace with the real localized string`
           : `tab caption '${c.value}' is an unresolved resource key — pass the schema's localizable strings as manifest.resources to resolve it, or confirm the real label` });
     }
-    accountedFor.add(parentName);
+    accounted.add(parentName);
     emittedTabs.set(tab, parentName);
     return parentName;
   }
-  const emittedGroups = new Map(); // group name -> inner container fields route into (emitted once)
-  function ensureGroup(g, parentName) {
+  function ensureGroup(g, parentName, nd, accounted) {
     if (emittedGroups.has(g.name)) return emittedGroups.get(g.name);
-    accountedFor.add(g.name);
+    accounted.add(g.name);
     let inner;
     if (g.itemType === 15) {
       // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
@@ -288,7 +354,7 @@ export function mapToFreedom(eff, opts = {}) {
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_2 } });
-      if (!c.resolved) needsDecision.push({ kind: "group-caption", item: g.name,
+      if (!c.resolved) nd.push({ kind: "group-caption", item: g.name,
         reason: c.synthesized
           ? `synthesized ExpansionPanel caption '${c.value}' for classic group — confirm/replace with the real localized string`
           : `group caption '${c.value}' is an unresolved resource key — pass manifest.resources to resolve it, or confirm the real label` });
@@ -301,6 +367,29 @@ export function mapToFreedom(eff, opts = {}) {
     emittedGroups.set(g.name, inner);
     return inner;
   }
+  function ensureProfileIsland(name, accounted) {
+    if (emittedIslands.has(name)) return emittedIslands.get(name);
+    structural.push({ operation: "insert", name, parentName: "SideAreaProfileContainer", propertyName: "items",
+      values: { type: "crt.GridContainer", columns: GRID_1 } });
+    accounted.add(name);
+    emittedIslands.set(name, name);
+    return name;
+  }
+  return { structural, ensureTab, ensureGroup, ensureProfileIsland };
+}
+
+// fields (3-part binding: control + attribute + dataSource). Routes each payload field into its Freedom
+// container by climbing the classic ancestry, converting the classic 24-col grid into the target grid.
+// Returns viewConfigDiff/attributes/pdsColumns + its needsDecision[]/accountedFor[] + the profileRegion
+// resolver the details phase reuses.
+function mapFields(ctx, containers) {
+  const { eff, cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
+  const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
+  const needsDecision = [], viewConfigDiff = [], accountedFor = new Set();
+  const attributes = {}, pdsColumns = {};
+  let fieldsWithTitle = 0;
+  const rowByContainer = {};
+  const nameCount = {};
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index, profileAnchors) }));
   // Moment 1 — layout type: classic `Header` fields spanning >1 grid column == a WIDE multi-column
@@ -311,7 +400,7 @@ export function mapToFreedom(eff, opts = {}) {
     .map(r => r.f.layout.column));
   const headerIsWide = headerCols.size > 1;
   if (headerIsWide) {
-    structural.push({ operation: "insert", name: "HeaderContainer", parentName: "Header", propertyName: "items",
+    containers.structural.push({ operation: "insert", name: "HeaderContainer", parentName: "Header", propertyName: "items",
       values: { type: "crt.GridContainer", columns: GRID_24 } });
     needsDecision.push({ kind: "layout-type", item: "Header",
       reason: `classic Header is a WIDE ${headerCols.size}-column block, not the default left profile island — mapped to a full-width header grid; confirm the target Freedom page uses a header region (no left profile) and the column layout` });
@@ -320,40 +409,28 @@ export function mapToFreedom(eff, opts = {}) {
   // #9b — the classic left area can group fields into MORE THAN ONE island container (e.g. ContactContainer
   // + InternalRequestContainer, both under LeftModulesContainer). The island = the OUTERMOST group between
   // the field and the profile anchor (groups[0]). If there is >1 distinct island, rebuild each as its own
-  // container in the side profile instead of flattening every field into one stack (which loses the split
-  // the user sees on the classic page). A single island stays flat (no redundant wrapper).
+  // container in the side profile instead of flattening every field into one stack.
   const islandOf = (own) => own.groups?.length ? own.groups[0].name : null;
   const distinctProfileIslands = new Set(resolved
     .filter(r => r.own.kind === "profile" && !(r.own.via === "Header" && headerIsWide))
     .map(r => islandOf(r.own)).filter(Boolean));
   const splitIslands = distinctProfileIslands.size > 1;
-  const emittedIslands = new Map();
-  function ensureProfileIsland(name) {
-    if (emittedIslands.has(name)) return emittedIslands.get(name);
-    structural.push({ operation: "insert", name, parentName: "SideAreaProfileContainer", propertyName: "items",
-      values: { type: "crt.GridContainer", columns: GRID_1 } });
-    accountedFor.add(name);
-    emittedIslands.set(name, name);
-    return name;
-  }
   for (const { f, own } of resolved) {
     // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
     let parent;
     if (own.kind === "profile") {
-      // the target grid width is derived from own.kind below (profile island = 1 col), so it survives `parent`
-      // being reassigned to a per-island container (multi-island pages) — RV6.
       parent = profileRegion(own);
-      // the island/group wrappers between the field and the profile anchor are ACCOUNTED FOR — their
-      // fields are migrated into the profile — so they are not mis-flagged as "produced no Freedom element".
+      // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields are
+      // migrated into the profile) so they are not mis-flagged as "produced no Freedom element".
       for (const g of own.groups) accountedFor.add(g.name);
       // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
       const island = islandOf(own);
-      if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island);
+      if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
     } else if (own.kind === "tab") {
-      parent = ensureTab(own.tab, own.tabTemplateOwned);
+      parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
       // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
       // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
-      if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent);
+      if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
       else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
     } else {
       parent = FLAT_FALLBACK; // parent chain unresolvable
@@ -401,11 +478,9 @@ export function mapToFreedom(eff, opts = {}) {
       rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
     };
     // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
-    // → visible + a decision (the rendered page shows one runtime state — see feature-toggle note too).
-    // ancestor-visibility: a field inside a container that is itself hidden (static) or conditionally
-    // shown (dynamic/rule) does NOT become unconditionally visible just because the field's own `visible`
-    // is unset — it inherits the container's visibility. Surface it so the container-level condition is
-    // wired onto the Freedom field/group rather than silently dropped.
+    // → visible + a decision. A field inside a container that is itself hidden (static) or conditionally
+    // shown (dynamic/rule) inherits the container's visibility — surface it so the container-level condition
+    // is wired onto the Freedom field/group rather than silently dropped.
     const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
     let vis = f.visible !== false;
     if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
@@ -424,9 +499,8 @@ export function mapToFreedom(eff, opts = {}) {
     values.typeLabel = fieldTypeLabel(col, meta, c);
     if (c.lookup && meta.ref) values.refSchema = meta.ref;
     if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
-    // linkedDisplay: the classic page shows a plain scalar column via a picker (contentType 5, no ref) — it is a
-    // read-only VALUE FROM A LINKED RECORD, not a lookup. Keep the real data type (Email/Phone/Text), mark it
-    // read-only, and carry a plain-language note (rendered in the design-spec's Additional cell, not as jargon).
+    // linkedDisplay: the classic page shows a plain scalar column via a picker (contentType 5, no ref) — a
+    // read-only VALUE FROM A LINKED RECORD, not a lookup. Keep the real data type, mark it read-only.
     if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
     // A field the ENTITY itself types as a lookup but with no reference schema is a genuine data anomaly —
     // flag it so it isn't shipped as an editable ComboBox pointing nowhere.
@@ -440,8 +514,7 @@ export function mapToFreedom(eff, opts = {}) {
     // classic `hint` is ALSO a field tooltip (a DIFFERENT property from `tip`). Decouple the two effects so
     // a dynamic hint is never silently swallowed when the field already has a `tip`:
     //  • a static Resources.Strings.* hint fills the Freedom tooltip only if no tip already occupies it;
-    //  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision — even when
-    //    a tip is present — so the competing non-static tooltip doesn't vanish without a reviewer signal.
+    //  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision.
     if (f.hint) {
       const staticHint = f.hint.startsWith("Resources.Strings.");
       if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
@@ -453,55 +526,23 @@ export function mapToFreedom(eff, opts = {}) {
     pdsColumns[col] = { path: col };
   }
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
-  // preserving the split the user sees on the classic page. Surface it as a KNOWN decision so the exact
-  // Freedom left-area representation (stacked containers vs one profile card) is confirmed, not assumed.
+  // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
   if (splitIslands) needsDecision.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
     reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — each is rebuilt as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Confirm the Freedom left area supports stacked containers; if it must be one profile card, merge them.` });
   // #5/#13 (fields) — if NO field label resolved to a real title, the spec shows column CODES. Nudge the
   // agent to pass get-entity-schema-properties column titles so labels read like the classic page, not raw codes.
   if (payloadFields.length && fieldsWithTitle === 0) needsDecision.push({ kind: "field-labels", item: "(all fields)",
     reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from get-entity-schema-properties) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
+  return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion };
+}
 
-  // ---- rules ----
-  const pageBusinessRules = [], entityBusinessRules = [];
-  for (const r of payloadRules) {
-    if (r.ruleType === "FILTRATION") {
-      const filter = r.filterColumn
-        ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
-        : null;
-      // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
-      // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
-      const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
-      entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-        conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
-        provenance: r.provenance });
-      if (!complete) needsDecision.push({ kind: "entity-filter", item: r.attr,
-        reason: `FILTRATION on '${r.attr}' has no resolved static value (dynamic / column-reference / macro filter) — resolve the target column, comparison and value (or column ref) before applying` });
-    } else if (r.ruleType === "BINDPARAMETER") {
-      const acts = PROP_ACTION[r.property];
-      if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); continue; }
-      pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
-        conditions: r.conditions,
-        note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
-        provenance: r.provenance });
-    } else {
-      // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
-      needsDecision.push({ kind: "rule", item: r.attr,
-        reason: `rule '${r.attr}' ruleType is '${r.ruleType}' (enum unresolved) — resolve and re-map, do not assume` });
-    }
-  }
-  // C4: a rule whose target column has NO field insert in this ChangeSet (its field is template context
-  // excluded from payload, or an entity-only column) would dangle on a non-existent element — flag it.
-  const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
-  const ruleTargets = new Set(
-    [...pageBusinessRules.map(r => r.element), ...entityBusinessRules.map(r => r.targetAttribute)].filter(Boolean));
-  for (const t of ruleTargets) if (!emittedCols.has(t))
-    needsDecision.push({ kind: "rule-target-missing", item: t,
-      reason: `business rule targets '${t}' but no field for it is inserted (base/template field or entity-only column) — ensure the Freedom target provides the element` });
-
-  // ---- details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list) ----
-  const details = [];              // genuine custom details
-  const standardFeatures = [];     // Approvals/Attachments/Activities/Emails → their Freedom feature
+// details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
+// signature, ensures the owning tab exists (via the shared container builder), and resolves titles/columns
+// from manifest.detailSchemas. Returns details[]/standardFeatures[] + its needsDecision[]/accountedFor[].
+function mapDetails(ctx, containers, profileRegion) {
+  const { index, profileAnchors, detailSchemas, resolveText, payloadDetails } = ctx;
+  const { ensureTab } = containers;
+  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set();
   // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
   // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
   // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
@@ -523,7 +564,7 @@ export function mapToFreedom(eff, opts = {}) {
     // Ensure the OWNING tab is emitted as a container so the related list / feature has a home AND its
     // caption resolves — a tab holding ONLY details would otherwise never be built (ensureTab is
     // otherwise reached only from field routing).
-    if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned);
+    if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
     // #11(ii)/B2 — the detail's OWN schema (when passed in manifest.detailSchemas) gives its real child
     // entity + list columns, resolving even an auto-named SchemaNDetail.
     const dinfo = detailSchemas[d.schemaName];
@@ -553,8 +594,7 @@ export function mapToFreedom(eff, opts = {}) {
       reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
     // a related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
     // page, if the classic detail used one) is a SEPARATE migration, not covered by migrating this master
-    // page. Surface it so it isn't silently skipped: a related list without a Freedom form for its entity
-    // cannot add/edit records.
+    // page. Surface it so it isn't silently skipped.
     needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
       reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
     // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
@@ -575,55 +615,16 @@ export function mapToFreedom(eff, opts = {}) {
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
     });
   }
+  return { details, standardFeatures, needsDecision, accountedFor };
+}
 
-  // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
-  const widgets = [];
-  const chromeWidgets = [];  // inherited base-template chrome (catalog `chrome:true`) — kept OUT of the plan to
-                             // avoid noise, but preserved here so nothing is silently destroyed (inspectable).
-  const seenWidget = new Set();
-  const addWidget = (defs, classic, base) => {
-    if (!defs) return;
-    accountedFor.add(classic);
-    for (const w of (Array.isArray(defs) ? defs : [defs])) {
-      if (seenWidget.has(w.widget)) continue;
-      seenWidget.add(w.widget);
-      // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited base-template
-      // scaffolding, not page content — hide them from the design spec instead of hardcoding an "ignore" per run.
-      if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); continue; }
-      widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
-      // a widget with its own note (DCM) carries that note; otherwise fall back to the base/native wording.
-      const tail = w.note ? ` — ${w.note}`
-        : base ? " — usually provided by the Freedom template; confirm or re-apply any customization"
-        : "; confirm the Freedom component";
-      needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
-    }
-  };
-  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
-  for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
-
-  // ---- image / photo components (generator-based, no bindTo) → Freedom image component ----
-  const images = [];
-  for (const i of (eff.items || [])) {
-    // RV11 — (a) skip template-owned items: a base-template Photo/Logo is layout context, not client payload
-    // (it triggered a spurious `image` decision on every migration built on that template). (b) the no-
-    // generator fallback recognised only bare Photo/Image/Logo — broaden to Avatar/Thumbnail/Picture and to
-    // *-suffixed names (CompanyLogo/UserAvatar), while still excluding structural containers/tabs/details.
-    if (i.templateOwned) continue;
-    const genImg = i.generator && /image/i.test(i.generator);
-    const nameImg = !i.bindTo && i.itemType !== 2 && i.itemType !== 15 && !i.isTab
-      && (/^(?:Photo|Image|Logo|Avatar|Thumbnail|Picture)\d*$/i.test(i.name) || /(?:Photo|Logo|Avatar|Thumbnail|Picture)$/.test(i.name));
-    if (!genImg && !nameImg) continue;
-    accountedFor.add(i.name);
-    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
-    needsDecision.push({ kind: "image", item: i.name,
-      reason: `image/photo component '${i.name}'${i.generator ? ` (generator ${i.generator})` : ""} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
-  }
-
-  // ---- Moment 5: card actions / ACTIONS menu → Freedom card actions (B7) ----
+// Moment 5: card actions / ACTIONS menu → Freedom card actions (B7). Returns needsDecision[] / accountedFor[].
+function mapCardActions(eff) {
+  const needsDecision = [], accountedFor = [];
   // static toolbar buttons + custom actions surfaced from getActions bodies (navigate*/goTo*), so a real
   // action like navigateToTaxesByCountriesLookup isn't silently lost (its body is imperative → review).
   const cardActions = [...(eff.items || []).filter(i => KNOWN_ACTION_ITEMS.has(i.name)).map(i => i.name), ...(eff.cardActionHints || [])];
-  for (const i of (eff.items || [])) if (KNOWN_ACTION_ITEMS.has(i.name)) accountedFor.add(i.name);
+  for (const i of (eff.items || [])) if (KNOWN_ACTION_ITEMS.has(i.name)) accountedFor.push(i.name);
   // #8c — the page launches a business process imperatively (a "Run process" action). Surface it as a
   // Freedom "Run process" card action + a decision naming the process(es) so it isn't lost.
   if (eff.processLaunch) {
@@ -635,25 +636,31 @@ export function mapToFreedom(eff, opts = {}) {
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
     reason: `card actions / ACTIONS-menu → Freedom card actions (B7): ${cardActions.join(", ") || "getActions"}. ` +
       `Custom getActions items${(eff.cardActionHints || []).length ? " incl. " + eff.cardActionHints.join(", ") : ""} are built imperatively — review the getActions body to wire them.` });
+  return { cardActions, needsDecision, accountedFor };
+}
 
+// feature toggles, catalog-miss charts, methods → handler stubs, client removals, referenced UI modules.
+// Returns handlerStubs[] + its own needsDecision[].
+function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditableSchemas) {
+  const needsDecision = [];
   // feature toggles gate WHICH elements render — the ChangeSet is the full static UNION of blocks/fields;
   // the rendered page shows one feature-state (e.g. old ProductCategoryBlock vs new one). Flag for review;
   // which feature gates which element lives in method bodies (imperative → judgment).
   if ((eff.features || []).length) needsDecision.push({ kind: "feature-toggle", item: eff.features.join(", "),
     reason: `page uses feature toggles (${eff.features.join(", ")}) that gate element visibility — mapping is the full union of blocks/fields; the live page renders one feature-state. Review which feature-gated blocks/fields to migrate (gating is in method bodies).` });
 
-  // ---- charts/widgets not in the catalog -> B9/B10 (generic) ----
+  // charts/widgets not in the catalog -> B9/B10 (generic)
   for (const c of payloadComponents)
     if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName])) needsDecision.push({ kind: "component", item: c.key,
       reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
-  // ---- methods -> handler stubs (judgment) ----
+  // methods -> handler stubs (judgment)
   const handlerStubs = payloadMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
   for (const m of payloadMethods)
     needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
 
-  // ---- removals (B6) — client removals only; template-internal removes are context (F9, C3) ----
-  for (const rm of eff.removed.filter(notTpl)) {
+  // removals (B6) — client removals only; template-internal removes are context (F9, C3)
+  for (const rm of eff.removed.filter(x => !x.fromTemplate)) {
     const clientRemoved = clientEditableSchemas.has(rm.removedBy);
     needsDecision.push({ kind: "removal", item: rm.name,
       reason: clientRemoved
@@ -661,19 +668,20 @@ export function mapToFreedom(eff, opts = {}) {
         : `removed by '${rm.removedBy}' (not confirmed client-editable) — KEEP on Freedom unless confirmed` });
   }
 
-  // ---- Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff) ----
+  // Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff)
   // e.g. CasesEstimateLabel → the SLA response/solution timer + its START/END buttons. The migration
   // unit is the page schema, so these modules' rendered controls are invisible to schema analysis and are
   // NOT in this ChangeSet. Surface them for a manual Freedom port instead of under-reporting the surface.
   for (const rm of (eff.referencedModules || []))
     needsDecision.push({ kind: "referenced-module", item: rm,
       reason: `page composes UI from referenced module '${rm}' (declared in define() deps + own CSS) — its rendered controls (buttons/labels/timers) are OUTSIDE the page-schema migration unit and are NOT in this ChangeSet; port it manually to Freedom or confirm the target template provides it` });
+  return { handlerStubs, needsDecision };
+}
 
-  // ---- Fix 2: LOUD unmapped-component drop ----
-  // Any alive, CLIENT-authored (non-template) item the mapper produced NOTHING for is surfaced instead of
-  // silently vanishing: the SLA-timer LABEL/CONTAINER micro-widgets, custom buttons, etc. Skip fields
-  // (handled), details (itemType 2 → detail logic), the grid/tab scaffolding the mapper itself rebuilds,
-  // and anything already emitted/recognized (accountedFor).
+// Fix 2: LOUD unmapped-component drop — any alive CLIENT-authored item the mapper produced nothing for is
+// surfaced (one decision per dropped subtree root), instead of silently vanishing. Reads the final accountedFor.
+function mapUnmappedDrop(eff, accountedFor) {
+  const needsDecision = [];
   // Candidate = alive, CLIENT-authored (non-template) item the mapper produced NOTHING for. Skip STRUCTURAL
   // containers the mapper builds on demand: a tab (isTab), a CONTROL_GROUP (itemType 15) or detail
   // (itemType 2). itemType isn't always resolvable, so back it with the naming convention — but a name
@@ -709,29 +717,95 @@ export function mapToFreedom(eff, opts = {}) {
       : `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
     needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
   }
+  return { needsDecision };
+}
 
-  return {
-    entity: eff.entity,
-    // structural (tab + grid containers) first so field inserts resolve their parentName.
-    viewConfigDiff: [...structural, ...viewConfigDiff],
-    viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: attributes }],
-    modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: pdsColumns }],
-    pageBusinessRules, entityBusinessRules, details, handlerStubs, needsDecision,
-    // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
-    standardFeatures,
-    // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
-    widgets,
-    // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
-    chromeWidgets,
-    // image/photo components (generator-based) → Freedom image component.
-    images,
-    // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
-    cardActions,
-    // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
-    referencedModules: eff.referencedModules || [],
-    // F9: how many effective elements were platform-template context excluded from the payload.
-    baseContextExcluded,
+// rules → page/entity business rules (declarative). Returns its own needsDecision[].
+function mapRules(payloadRules, payloadFields) {
+  const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
+  for (const r of payloadRules) {
+    if (r.ruleType === "FILTRATION") {
+      const filter = r.filterColumn
+        ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
+        : null;
+      // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
+      // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
+      const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
+      entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
+        conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+        provenance: r.provenance });
+      if (!complete) needsDecision.push({ kind: "entity-filter", item: r.attr,
+        reason: `FILTRATION on '${r.attr}' has no resolved static value (dynamic / column-reference / macro filter) — resolve the target column, comparison and value (or column ref) before applying` });
+    } else if (r.ruleType === "BINDPARAMETER") {
+      const acts = PROP_ACTION[r.property];
+      if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); continue; }
+      pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
+        conditions: r.conditions,
+        note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
+        provenance: r.provenance });
+    } else {
+      // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
+      needsDecision.push({ kind: "rule", item: r.attr,
+        reason: `rule '${r.attr}' ruleType is '${r.ruleType}' (enum unresolved) — resolve and re-map, do not assume` });
+    }
+  }
+  // C4: a rule whose target column has NO field insert in this ChangeSet (its field is template context
+  // excluded from payload, or an entity-only column) would dangle on a non-existent element — flag it.
+  const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
+  const ruleTargets = new Set(
+    [...pageBusinessRules.map(r => r.element), ...entityBusinessRules.map(r => r.targetAttribute)].filter(Boolean));
+  for (const t of ruleTargets) if (!emittedCols.has(t))
+    needsDecision.push({ kind: "rule-target-missing", item: t,
+      reason: `business rule targets '${t}' but no field for it is inserted (base/template field or entity-only column) — ensure the Freedom target provides the element` });
+  return { pageBusinessRules, entityBusinessRules, needsDecision };
+}
+
+// image / photo components (generator-based, no bindTo) → Freedom image component.
+function mapImages(eff) {
+  const images = [], needsDecision = [], accountedFor = [];
+  for (const i of (eff.items || [])) {
+    // RV11 — (a) skip template-owned items: a base-template Photo/Logo is layout context, not client payload
+    // (it triggered a spurious `image` decision on every migration built on that template). (b) the no-
+    // generator fallback recognised only bare Photo/Image/Logo — broaden to Avatar/Thumbnail/Picture and to
+    // *-suffixed names (CompanyLogo/UserAvatar), while still excluding structural containers/tabs/details.
+    if (i.templateOwned) continue;
+    const genImg = i.generator && /image/i.test(i.generator);
+    const nameImg = !i.bindTo && i.itemType !== 2 && i.itemType !== 15 && !i.isTab
+      && (/^(?:Photo|Image|Logo|Avatar|Thumbnail|Picture)\d*$/i.test(i.name) || /(?:Photo|Logo|Avatar|Thumbnail|Picture)$/.test(i.name));
+    if (!genImg && !nameImg) continue;
+    accountedFor.push(i.name);
+    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
+    needsDecision.push({ kind: "image", item: i.name,
+      reason: `image/photo component '${i.name}'${i.generator ? ` (generator ${i.generator})` : ""} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
+  }
+  return { images, needsDecision, accountedFor };
+}
+
+// Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
+// Returns its own needsDecision[] / accountedFor[]; the orchestrator merges them.
+function mapWidgets(eff) {
+  const widgets = [], chromeWidgets = [], needsDecision = [], accountedFor = [];
+  const seenWidget = new Set();
+  const addWidget = (defs, classic, base) => {
+    if (!defs) return;
+    accountedFor.push(classic);
+    for (const w of (Array.isArray(defs) ? defs : [defs])) {
+      if (seenWidget.has(w.widget)) continue;
+      seenWidget.add(w.widget);
+      // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited base-template
+      // scaffolding, not page content — hide them from the design spec instead of hardcoding an "ignore" per run.
+      if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); continue; }
+      widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+      // a widget with its own note (DCM) carries that note; otherwise fall back to the base/native wording.
+      const tail = w.note ? ` — ${w.note}`
+        : base ? " — usually provided by the Freedom template; confirm or re-apply any customization"
+        : "; confirm the Freedom component";
+      needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
+    }
   };
+  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
+  for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
+  return { widgets, chromeWidgets, needsDecision, accountedFor };
 }
 
 function categorize(name) {
