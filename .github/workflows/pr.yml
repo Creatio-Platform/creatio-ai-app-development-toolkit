@@ -46,6 +46,10 @@ jobs:
           node-version: '20'
       # zero-dependency pure-ESM goldens (live in engine-tests/, outside the shipped skill); import the
       # runtime engine from skills/…/engine. Each runner exits 1 on any failed check.
-      - name: Run merge + mapper goldens
+      - name: Run merge goldens
         working-directory: engine-tests/classic-to-freedom
-        run: node run.mjs && node run-mapper.mjs
+        run: node run.mjs
+      - name: Run mapper goldens
+        if: always()   # run even if the merge goldens failed, so one runner's failure never hides the other's results
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-mapper.mjs

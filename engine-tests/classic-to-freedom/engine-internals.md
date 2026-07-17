@@ -15,7 +15,7 @@ node run.mjs && node run-mapper.mjs  # merge + mapper, exit 1 при фейлі
 ```
 (це ж робить CI-джоб `Classic→Freedom engine goldens`.)
 
-## Golden-результат (merge 46/46 ✅)
+## Golden-результат (merge — усі перевірки зелені; актуальну кількість друкує `run.mjs`)
 - **SupportUnit** (SupportCalendar + SupportService): entity=SupportUnit; 8 полів; 3 вкладки; 3 деталі (вкл. `SupportScheduleEmployeeDetail`); 4 правила (ParentSupportUnit/SupportWorkingDayType FILTRATION, Contact/Calendar Required); метод `setName`.
 - **Contract** (9 шарів): entity=Contract; 25 полів; 5 вкладок; 14 деталей; 19 активних правил; **removed** `State`(WorkContractsProcess), `Contact`+`ContractSumGroup`(WorkOverride); `Owner` FILTRATION + `Parent` Required (WorkContractsProcess); 71 метод.
 - **F1 (порядок):** шари подаються у справжньому порядку залежностей (`HierarchyLevel` зі стенду: 299<320<…<607). `mergeHierarchy` віддає `warnings` (op б'є по відсутньому item) і `unresolvedParents` (діагностика порядку/seed).

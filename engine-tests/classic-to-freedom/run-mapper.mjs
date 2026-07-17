@@ -337,6 +337,16 @@ check("migrate.mjs: broken body -> gate.blocked (a corrupt plan does NOT read as
 const migGate = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: JSON.stringify({ schemas: [{ pkg: "Broken", body: brokenBody }] }), encoding: "utf8" });
 check("migrate.mjs CLI: gate-blocked broken body exits 2 with a GATE BLOCKED diagnostic", migGate.status === 2 && /GATE BLOCKED/.test(migGate.stderr || ""));
 
+/* ---- recursion depth cap: a CYCLIC childPageSchemas must terminate + stay bounded (review #4).
+   If the depth>=2 guard regresses, this self-referential manifest would recurse without bound (RangeError),
+   so simply COMPLETING this check proves the runaway guard holds. ---- */
+const loopBody = 'define("LoopPage", [], function() { return { entitySchemaName: "Loop", diff: [], details: { D: { schemaName: "LoopDetail", entitySchemaName: "Loop", filter: { detailColumn: "Parent", masterColumn: "Id" } } } }; });';
+const loopManifest = { schemas: [{ pkg: "LoopPage", body: loopBody }] };
+loopManifest.childPageSchemas = { Loop: loopManifest, LoopPage: loopManifest }; // self-cycle
+const loopRun = runMigration(loopManifest);
+check("recursion depth cap: cyclic childPageSchemas terminates and is bounded (no runaway)",
+  !!loopRun && Array.isArray(loopRun.childPages) && loopRun.childPages.length > 0);
+
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   details: {

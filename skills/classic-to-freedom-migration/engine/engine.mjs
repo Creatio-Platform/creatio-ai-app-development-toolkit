@@ -271,9 +271,16 @@ function extractFnBody(src, name) {
     if (!m) continue;
     const open = m.index + m[0].length - 1; // index of the opening {
     let depth = 0;
+    // brace-count, but SKIP string literals and line/block comments so a `{`/`}` inside them is not counted
+    // (fixes mis-scoped getActions / section-action / column scans). Regex literals with braces stay a rare
+    // unhandled edge — acceptable for these hint-only text scans.
     for (let j = open; j < src.length; j++) {
-      if (src[j] === "{") depth++;
-      else if (src[j] === "}" && --depth === 0) return src.slice(open + 1, j);
+      const c = src[j], c2 = src[j + 1];
+      if (c === "/" && c2 === "/") { const nl = src.indexOf("\n", j); if (nl < 0) return src.slice(open + 1); j = nl; continue; }
+      if (c === "/" && c2 === "*") { const e = src.indexOf("*/", j + 2); j = e < 0 ? src.length : e + 1; continue; }
+      if (c === '"' || c === "'" || c === "`") { for (j++; j < src.length && src[j] !== c; j++) if (src[j] === "\\") j++; continue; }
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) return src.slice(open + 1, j);
     }
     return src.slice(open + 1); // unbalanced source — return the remainder defensively
   }
@@ -452,6 +459,9 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
         // e.g. Product's IsArchive/"Inactive" checkbox).
         if (cur) {
           if (op.parentName) { cur.parent = op.parentName; }
+          // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
+          // (previously only the parent was updated, so a pure reorder silently kept the old position).
+          if (op.order != null) { cur.order = op.order; }
           if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
           cur.provenance.push(L.pkg);
         } else {

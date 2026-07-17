@@ -216,5 +216,18 @@ check("return object still extracted (entity = Evil)", evil.entitySchemaName ===
 check("diff field extracted without executing (Amount)", evil.diff.length === 1 && evil.diff[0].bindTo === "Amount");
 check("enum resolved statically (itemType GRID_LAYOUT = 0)", evil.diff[0].itemType === 0);
 
+/* ---- extractFnBody: a brace inside a string/comment must not truncate the method scan (review #1) ---- */
+console.log("\n===== extractFnBody string safety + move-order fidelity =====");
+const braceBody = 'define("X", [], function() { return { entitySchemaName: "X", diff: [], getActions: function() { var s = "a } b { c"; return [ { "Tag": "runEscalation", "Click": "navigateToEscalation" } ]; } }; });';
+const braceRes = parseSchema(braceBody, "X");
+check("extractFnBody: a `{`/`}` inside a string no longer truncates the getActions scan",
+  braceRes.actionHints.includes("runEscalation") && braceRes.actionHints.includes("navigateToEscalation"));
+
+/* ---- move op must apply the new order/index, not just the parent (review #2) ---- */
+const mvBase = parseSchema('define("Base", [], function() { return { entitySchemaName: "E", diff: [ { operation: "insert", name: "A", parentName: "P", index: 0, values: { bindTo: "A" } }, { operation: "insert", name: "B", parentName: "P", index: 1, values: { bindTo: "B" } } ] }; });', "Base");
+const mvTop = parseSchema('define("Top", [], function() { return { entitySchemaName: "E", diff: [ { operation: "move", name: "A", parentName: "P", index: 9 } ] }; });', "Top");
+const mvA = mergeHierarchy([mvBase, mvTop]).items.find((i) => i.name === "A");
+check("move op applies the new order/index (A repositioned to 9, not stuck at 0)", !!mvA && mvA.order === 9);
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
