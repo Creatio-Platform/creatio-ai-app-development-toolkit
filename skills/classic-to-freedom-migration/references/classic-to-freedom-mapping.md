@@ -76,6 +76,12 @@ The single source of truth for the components agents most often mis-map. When yo
 `cardActions` / `needsDecision` (`process-launch`) — the generated design spec already renders each in the
 right shape. Honor that shape; do not invent a generic Expanded-list.
 
+> **Keep this in sync with the engine.** These rows encode the same standard-feature / widget knowledge as
+> `../engine/mapper.mjs` (`FEATURE_CATALOG`, `WIDGET_BY_MODULE`, `WIDGET_BY_CONTAINER`) — the engine is what
+> actually emits `standardFeatures` / `widgets` / `cardActions` at runtime; this table is the human-readable
+> guidance and the hand-mapping fallback when Node is unavailable. When you add, rename, or reclassify a
+> feature/widget, change **both in the same commit** — they must not drift.
+
 | Classic thing | Engine signal | Freedom target | Do NOT |
 | --- | --- | --- | --- |
 | Approvals / Visa | `standardFeatures` `uiShape: "component"` | `crt.ApprovalList` (native — brings its own approve/reject actions, needs no child edit page) | rebuild as a plain list/DataGrid. A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
