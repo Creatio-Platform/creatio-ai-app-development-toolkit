@@ -32,8 +32,7 @@ class ScaffoldingPlaybookDocTests(unittest.TestCase):
         # AC1: check existence -> wait 60-120 s -> single same-name retry -> poll.
         content = read_text(RUNBOOK)
         self.assertIn("list-app-sections", content)
-        self.assertIn("60", content)
-        self.assertIn("120", content)
+        self.assertIn("60–120 s", content)
         self.assertIn("in-progress", content)
         self.assertTrue(
             contains_all(content, ["InsertQuery failed", "Select query failed"]),
