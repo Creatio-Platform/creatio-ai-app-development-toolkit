@@ -54,13 +54,17 @@ const tabGridName = (tab) => `${tab}Grid`;
 
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
+  // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by
+  // NAME (Boolean/DateTime/Integer/Float/Money/ShortText/MediumText/LongText/MaxSizeText/RichText), but Date
+  // arrives as the numeric code "8". (Earlier phantom codes 27/28/29/30/32 were never emitted — text came by
+  // name, so those columns wrongly fell to null.) Genuinely unknown codes (18=Color, 44=URL, 31, …) stay null.
   if (t === "boolean") return { type: "crt.Checkbox" };
   if (t === "datetime") return { type: "crt.DateTimePicker", picker: "datetime" };
-  if (t === "date") return { type: "crt.DateTimePicker", picker: "date" };
-  if (["integer", "decimal", "float", "money", "32"].includes(t)) return { type: "crt.NumberInput" };
-  if (["29", "30"].includes(t)) return { type: "crt.Input", multiline: true }; // long text / rich text
-  if (t === "text" || t === "27" || t === "28") return { type: "crt.Input" };
-  return null; // unknown scalar -> caller flags needsDecision
+  if (t === "date" || t === "8") return { type: "crt.DateTimePicker", picker: "date" };
+  if (["integer", "decimal", "float", "money"].includes(t)) return { type: "crt.NumberInput" };
+  if (["longtext", "maxsizetext", "richtext"].includes(t)) return { type: "crt.Input", multiline: true };
+  if (["text", "shorttext", "mediumtext"].includes(t)) return { type: "crt.Input" };
+  return null; // unknown scalar -> caller flags needsDecision (loud)
 }
 // control = the DATA type first; the classic `contentType` is only a PAGE control HINT, not the data type.
 // It forces a lookup ONLY when the column really is one (has a `ref`) or when we have no entity type at all
@@ -88,10 +92,10 @@ function fieldTypeLabel(col, meta, ctl) {
   if (/phone|mobile/i.test(col)) return "Phone";
   if (ctl.type === "crt.Checkbox" || t === "boolean") return "Boolean";
   if (ctl.picker === "datetime" || t === "datetime") return "Date/time";
-  if (ctl.picker === "date" || t === "date") return "Date";
-  if (["integer", "32"].includes(t)) return "Integer";
+  if (ctl.picker === "date" || t === "date" || t === "8") return "Date";
+  if (t === "integer") return "Integer";
   if (["decimal", "float", "money"].includes(t)) return "Decimal";
-  if (ctl.multiline) return "Rich text";
+  if (ctl.multiline) return t === "richtext" ? "Rich text" : "Long text";
   return meta.length ? `Text (${meta.length})` : "Text";
 }
 

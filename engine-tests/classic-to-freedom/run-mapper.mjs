@@ -936,7 +936,7 @@ check("RV9: parseSchema/normalizeDiff unwraps nested values.* (bindTo/contentTyp
 check("RV9: parseSchema marks propertyName:'tabs' as isTab (parse layer exercised, not bypassed by makeOp)",
   !!puTab && puTab.isTab === true && puTab.caption === "Resources.Strings.TCap");
 // RV15 — drive every control() type branch via entityColumns (the rich Contract fixture passes none).
-const ctlCols = { D: { type: "date" }, DT: { type: "datetime" }, I: { type: "integer" }, DEC: { type: "decimal" }, MON: { type: "money" }, T: { type: "text", length: 100 }, RICH: { type: "30" }, LK: { type: "Lookup", ref: "Contact" } };
+const ctlCols = { D: { type: "date" }, DT: { type: "datetime" }, I: { type: "integer" }, DEC: { type: "decimal" }, MON: { type: "money" }, T: { type: "text", length: 100 }, RICH: { type: "richtext" }, LK: { type: "Lookup", ref: "Contact" } };
 const ctlNames = ["D", "DT", "I", "DEC", "MON", "T", "RICH", "LK"];
 const ctlCs = runMigration({ entity: "X", entityColumns: ctlCols,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ctlNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
@@ -981,6 +981,23 @@ const secProc = runMigration({ entity: "Applicant",
   section: [{ pkg: "S", body: `define("ApplicantSection",["ProcessModuleUtilities"],function(){return{entitySchemaName:"Applicant",methods:{runIt:function(){ProcessModuleUtilities.executeProcess({sysProcessName:"MySectionProcess"});}},diff:[]};});` }] }, { baseDir: FIX });
 check("L5: section processLaunch + processNames captured from an executeProcess literal in a *Section body",
   secProc.section?.processLaunch === true && (secProc.section?.processNames || []).includes("MySectionProcess"));
+
+// scalarControl aligned to what get-entity-schema-properties ACTUALLY returns (verified on-stand): Date
+// arrives as the numeric code "8"; text subtypes arrive by NAME (Short/Medium/Long/MaxSize). These used to
+// fall to a loud field-control decision (phantom numeric codes 27/28/29/30/32 were never emitted); now they
+// map. A genuinely unknown code (44=URL) still falls to a loud field-control decision.
+const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "44" } };
+const rdNames = ["DT8", "ST", "MT", "LT", "XT", "UNK"];
+const rdCs = runMigration({ entity: "X", entityColumns: rdCols,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+const rf = (n) => rdCs.changeSet.viewConfigDiff.find((o) => o.name === n);
+check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Short/Medium text→Input; Long/MaxSize→Input (Long text label)",
+  rf("DT8")?.values.type === "crt.DateTimePicker" && rf("DT8")?.values.typeLabel === "Date"
+  && rf("ST")?.values.type === "crt.Input" && rf("MT")?.values.type === "crt.Input"
+  && rf("LT")?.values.type === "crt.Input" && rf("LT")?.values.typeLabel === "Long text"
+  && rf("XT")?.values.type === "crt.Input" && rf("XT")?.values.typeLabel === "Long text");
+check("scalarControl: a genuinely unknown type code (44=URL) still falls to a loud field-control decision",
+  rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && d.item === "UNK"));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
