@@ -1,98 +1,11 @@
 // Ф2 — Merge engine. Pure Node module, no Creatio/stand dependency.
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance.
-import vm from "node:vm";
+import { parse as acornParse } from "./vendor/acorn.mjs";
 
-// Universal proxy: any property access / call / construct returns itself.
-// Lets us eval a classic define(...) body whose factory touches Terrasoft/Ext/this
-// without executing real platform code — we only want the returned data literal.
-function makeProxy() {
-  const handler = {
-    get: (_t, prop) => {
-      if (prop === Symbol.toPrimitive) return () => 0;
-      if (prop === "toJSON") return () => null;
-      if (prop === Symbol.iterator) return undefined;
-      return PROXY;
-    },
-    apply: () => PROXY,
-    construct: () => PROXY,
-  };
-  const PROXY = new Proxy(function () {}, handler);
-  return PROXY;
-}
-const PROXY = makeProxy();
-
-// Enum tables seeded into the sandbox so SYMBOLIC refs (BusinessRuleModule.enums.RuleType.FILTRATION,
-// ...Property.REQUIRED) resolve to their real numeric value during parse instead of collapsing to a
-// Proxy (which silently mis-decoded to BINDPARAMETER/Visible). Backed proxy: known member -> number,
-// unknown -> PROXY (never crash a body).
-function enumProxy(table) {
-  return new Proxy({}, { get: (_t, p) => (p in table ? table[p] : PROXY), apply: () => PROXY });
-}
-const BUSINESS_RULE_MODULE = new Proxy({}, {
-  get: (_t, p) => p === "enums" ? new Proxy({}, {
-    get: (_t2, e) => {
-      if (e === "RuleType") return enumProxy({ BINDPARAMETER: 0, FILTRATION: 1 });
-      if (e === "Property") return enumProxy({ VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 });
-      return PROXY;
-    },
-  }) : PROXY,
-  apply: () => PROXY,
-});
-// ViewItemType — ONLY members CONFIRMED from real stand data (0/2/15 seen as numeric literals on the
-// same pages); others stay PROXY->null, never guessed (E1 lesson: a wrong enum value silently corrupts).
-// Seeded so symbolic `Terrasoft.controls.ViewItemType.CONTROL_GROUP` resolves to a number instead of
-// null — otherwise most group/grid containers lose their itemType and the mapper can't tell a
-// CONTROL_GROUP (→ ExpansionPanel) from a GRID_LAYOUT (→ GridContainer).
-const VIEW_ITEM_TYPE = enumProxy({ GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 });
-const enumHolder = (member, val) => new Proxy({}, { get: (_t, p) => p === member ? val : PROXY, apply: () => PROXY, construct: () => PROXY });
-// Terrasoft stub: resolves `.ViewItemType`, `.controls.ViewItemType`, `.core.enums.ViewItemType` to the
-// seeded table; everything else stays the universal PROXY (unchanged behaviour).
-const TERRASOFT = new Proxy({}, {
-  get: (_t, p) => {
-    if (p === "ViewItemType") return VIEW_ITEM_TYPE;
-    if (p === "controls") return enumHolder("ViewItemType", VIEW_ITEM_TYPE);
-    if (p === "core") return new Proxy({}, { get: (_t2, c) => c === "enums" ? enumHolder("ViewItemType", VIEW_ITEM_TYPE) : PROXY, apply: () => PROXY });
-    return PROXY;
-  },
-  apply: () => PROXY, construct: () => PROXY,
-});
-// Resolve an AMD dependency name to a stub. Only BusinessRuleModule needs real values (for rule enums);
-// everything else (terrasoft, Ext, helpers) is the universal Proxy.
-function resolveDep(name) {
-  return name === "BusinessRuleModule" ? BUSINESS_RULE_MODULE : PROXY;
-}
-
-// Extract the schema object literal from a schema body by capturing define().
-export function parseSchema(src, pkg) {
-  let captured = null, parseError = null, amdDeps = [];
-  // factory `this` also exposes BusinessRuleModule (bodies reference this.BusinessRuleModule too).
-  const thisProxy = new Proxy(function () {}, {
-    get: (_t, p) => p === "BusinessRuleModule" ? BUSINESS_RULE_MODULE : PROXY,
-    apply: () => PROXY, construct: () => PROXY,
-  });
-  const sandbox = {
-    define(_name, depsOrFactory, maybeFactory) {
-      const factory = typeof depsOrFactory === "function" ? depsOrFactory : maybeFactory;
-      const deps = Array.isArray(depsOrFactory) ? depsOrFactory : [];
-      amdDeps = deps; // AMD dependency list — captured for referenced-UI-module detection (Fix 3)
-      if (typeof factory !== "function") { parseError = "define() has no factory function"; return; }
-      try { captured = factory.apply(thisProxy, deps.map(resolveDep)); }
-      catch (e) { parseError = "factory threw: " + String(e && e.message || e); }
-    },
-    // window/console are PROXY (not plain host objects) to close the obvious window.constructor.constructor
-    // vector — but this is NOT a security boundary. `define` (and the enum proxies) are real host-realm
-    // functions, so a body can still escape via define.constructor.constructor("return process")(). node:vm
-    // is not a sandbox for untrusted code; today's inputs are OFFLINE fixtures only. Before any production
-    // seed-fetch feeds stand-sourced bodies here, replace this with a non-executing parser / real isolation
-    // (see F8 in SELF-REVIEW.md). Do not treat parseSchema as safe for untrusted input.
-    Terrasoft: TERRASOFT, Ext: PROXY, BusinessRuleModule: BUSINESS_RULE_MODULE, window: PROXY, console: PROXY,
-  };
-  // NOSONAR (javascript:S1523) — INTENTIONAL: parses OFFLINE Classic-schema fixtures only; not a security
-  // boundary and never fed untrusted/stand-sourced input (see the sandbox comment above + F8 in SELF-REVIEW).
-  try { vm.runInNewContext(src, sandbox, { timeout: 4000 }); } // NOSONAR
-  catch (e) { parseError = parseError || ("eval failed: " + String(e && e.message || e)); }
-  const s = captured || {};
+// Build the parse RESULT from the extracted schema object `s` (+ text-scanned signals from `src`).
+// Kept separate from the AST extraction so the "what fields the merge consumes" shape lives in one place.
+function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
   return {
     pkg,
     error: parseError,
@@ -165,6 +78,168 @@ export function parseSchema(src, pkg) {
       return [...new Set([...body.matchAll(/(?:"?(?:path|bindTo)"?)\s*:\s*["']([A-Za-z][\w.]*)["']/g)].map(mt => mt[1]))];
     })(),
   };
+}
+
+// ---- Schema parser: reads the define() return object WITHOUT executing it. ----
+// SECURITY: the previous implementation ran the body through vm.runInNewContext. node:vm is NOT a safe
+// boundary (a body can escape via define.constructor.constructor("return process")()), an RCE risk once
+// SKILL step 4 feeds bodies fetched from a live stand into the engine. This instead parses `src` to an AST
+// and statically evaluates the returned object literal — no code runs, so a hostile body cannot reach
+// process/fs/env. Anything it cannot resolve statically is left null AND recorded in `astDiagnostics`
+// (fail-loud) rather than silently guessed.
+const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
+const AST_RULE_TYPE = { BINDPARAMETER: 0, FILTRATION: 1 };
+const AST_PROPERTY = { VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 };
+const AST_FN = Symbol("fn"); // placeholder for function values (methods/attributes) — only their KEYS matter
+
+// Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
+// to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
+function resolveMemberValue(node, scope) {
+  const path = [];
+  let cur = node;
+  while (cur && cur.type === "MemberExpression") {
+    if (cur.computed) return null;                 // dynamic index -> proxy -> null under vm too
+    const p = cur.property;
+    const name = p.type === "Identifier" ? p.name : (p.type === "Literal" ? String(p.value) : null);
+    if (name == null) return null;
+    path.unshift(name);
+    cur = cur.object;
+  }
+  let tag;
+  if (cur && cur.type === "ThisExpression") tag = "this";
+  else if (cur && cur.type === "Identifier") {
+    if (scope.has(cur.name)) tag = scope.get(cur.name).kind === "brm" ? "brm" : "proxy"; // param shadows global
+    else if (cur.name === "Terrasoft") tag = "terrasoft";
+    else tag = "proxy";
+  } else return null;
+  for (const k of path) {
+    if (tag === "this") { tag = k === "BusinessRuleModule" ? "brm" : "proxy"; continue; }
+    if (tag === "brm") { tag = k === "enums" ? "brm.enums" : "proxy"; continue; }
+    if (tag === "brm.enums") { tag = k === "RuleType" ? "t:rule" : (k === "Property" ? "t:prop" : "proxy"); continue; }
+    if (tag === "terrasoft") { tag = k === "ViewItemType" ? "t:vit" : (k === "controls" ? "terrasoft.controls" : (k === "core" ? "terrasoft.core" : "proxy")); continue; }
+    if (tag === "terrasoft.controls") { tag = k === "ViewItemType" ? "t:vit" : "proxy"; continue; }
+    if (tag === "terrasoft.core") { tag = k === "enums" ? "terrasoft.core.enums" : "proxy"; continue; }
+    if (tag === "terrasoft.core.enums") { tag = k === "ViewItemType" ? "t:vit" : "proxy"; continue; }
+    if (tag === "t:vit") return k in AST_VIEW_ITEM_TYPE ? AST_VIEW_ITEM_TYPE[k] : null;
+    if (tag === "t:rule") return k in AST_RULE_TYPE ? AST_RULE_TYPE[k] : null;
+    if (tag === "t:prop") return k in AST_PROPERTY ? AST_PROPERTY[k] : null;
+    return null; // proxy (or already a value) — any further access is null
+  }
+  return null; // ended on a resolver, not a concrete value
+}
+
+function makeAstEvaluator(scope, diagnostics, src) {
+  const snippet = (n) => { try { return src.slice(n.start, Math.min(n.end, n.start + 60)).replace(/\s+/g, " "); } catch { return "?"; } };
+  const flag = (kind, node, path) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node) });
+  function evalNode(node, path) {
+    if (!node) return null;
+    switch (node.type) {
+      case "Literal": return node.value instanceof RegExp ? null : node.value;
+      case "TemplateLiteral":
+        if (node.expressions.length === 0) return node.quasis.map(q => q.value.cooked).join("");
+        flag("dynamic-template", node, path); return null;
+      case "ObjectExpression": {
+        const out = {};
+        for (const p of node.properties) {
+          if (p.type === "SpreadElement") { flag("spread-in-object", p, path); continue; }
+          if (p.computed) { flag("computed-key", p, path); continue; }
+          const key = p.key.type === "Identifier" ? p.key.name : String(p.key.value);
+          out[key] = evalNode(p.value, [...path, key]);
+        }
+        return out;
+      }
+      case "ArrayExpression":
+        return node.elements.map((el, i) => {
+          if (!el) return null;
+          if (el.type === "SpreadElement") { flag("spread-in-array", el, path); return null; }
+          return evalNode(el, [...path, i]);
+        });
+      case "MemberExpression": return resolveMemberValue(node, scope);
+      case "FunctionExpression":
+      case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
+      case "Identifier":
+        if (node.name === "undefined") return undefined;
+        if (scope.has(node.name)) { const m = scope.get(node.name); return m.kind === "value" ? m.value : null; }
+        flag("unresolved-identifier", node, path); return null;
+      case "UnaryExpression": {
+        const v = evalNode(node.argument, path);
+        if (node.operator === "-" && typeof v === "number") return -v;
+        if (node.operator === "+" && typeof v === "number") return +v;
+        if (node.operator === "!") return !v;
+        return null;
+      }
+      case "BinaryExpression": {
+        const l = evalNode(node.left, path), r = evalNode(node.right, path);
+        if (l != null && r != null && ["string", "number", "boolean"].includes(typeof l) && ["string", "number", "boolean"].includes(typeof r)) {
+          switch (node.operator) { case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r; }
+        }
+        flag("dynamic-binary", node, path); return null;
+      }
+      case "ConditionalExpression": {
+        const t = evalNode(node.test, path);
+        if (typeof t === "boolean") return evalNode(t ? node.consequent : node.alternate, path);
+        flag("dynamic-conditional", node, path); return null;
+      }
+      case "CallExpression": flag("dynamic-call", node, path); return null;
+      case "NewExpression": flag("dynamic-new", node, path); return null;
+      case "ThisExpression": return null;
+      default: flag("unhandled:" + node.type, node, path); return null;
+    }
+  }
+  return evalNode;
+}
+
+function findDefineCall(ast) {
+  for (const st of ast.body)
+    if (st.type === "ExpressionStatement" && st.expression.type === "CallExpression"
+        && st.expression.callee.type === "Identifier" && st.expression.callee.name === "define")
+      return st.expression;
+  return null;
+}
+
+function buildAstScope(factory, amdDeps) {
+  const scope = new Map();
+  (factory.params || []).forEach((p, i) => {
+    if (p.type === "Identifier") scope.set(p.name, amdDeps[i] === "BusinessRuleModule" ? { kind: "brm" } : { kind: "proxy" });
+  });
+  // top-level literal consts/vars in the factory body, so `var x = "Foo"; return { name: x }` resolves.
+  const body = factory.body && factory.body.type === "BlockStatement" ? factory.body.body : [];
+  for (const st of body)
+    if (st.type === "VariableDeclaration")
+      for (const d of st.declarations)
+        if (d.id.type === "Identifier" && d.init && d.init.type === "Literal" && !(d.init.value instanceof RegExp))
+          scope.set(d.id.name, { kind: "value", value: d.init.value });
+  return scope;
+}
+
+function findFactoryReturnObject(factory) {
+  if (factory.body.type === "ObjectExpression") return factory.body;   // arrow with implicit object return
+  if (factory.body.type !== "BlockStatement") return null;
+  for (const st of factory.body.body)
+    if (st.type === "ReturnStatement" && st.argument && st.argument.type === "ObjectExpression") return st.argument;
+  return null;
+}
+
+// Parse a Classic schema body into the effective-page inputs, WITHOUT executing it (AST + static eval).
+// Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
+// construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
+export function parseSchema(src, pkg) {
+  const astDiagnostics = [];
+  let ast;
+  try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
+  catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e && e.message || e), {}, []), astDiagnostics }; }
+  const call = findDefineCall(ast);
+  if (!call) return { ...buildSchemaResult(pkg, src, "no define() call found", {}, []), astDiagnostics };
+  const depsNode = call.arguments.find(a => a.type === "ArrayExpression");
+  const amdDeps = depsNode ? depsNode.elements.filter(el => el && el.type === "Literal" && typeof el.value === "string").map(el => el.value) : [];
+  const factory = call.arguments.find(a => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
+  if (!factory) return { ...buildSchemaResult(pkg, src, "define() has no factory function", {}, amdDeps), astDiagnostics };
+  const retObj = findFactoryReturnObject(factory);
+  if (!retObj) { astDiagnostics.push({ kind: "no-return-object", path: "", snippet: "" });
+    return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics }; }
+  const scope = buildAstScope(factory, amdDeps);
+  const captured = makeAstEvaluator(scope, astDiagnostics, src)(retObj, []);
+  return { ...buildSchemaResult(pkg, src, null, captured || {}, amdDeps), astDiagnostics };
 }
 
 // AMD define() dependency list → the CUSTOM modules that likely RENDER UI (ship their own CSS, or have a

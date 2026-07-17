@@ -16,7 +16,8 @@ node migrate.mjs <manifest.json> --spec   # render just the per-page design spec
 
 ## Files
 
-- `engine.mjs` — `parseSchema()` (sandboxed parse of a classic `define(...)` body) + `mergeHierarchy()` (replay the layer chain into one effective page + provenance).
+- `engine.mjs` — `parseSchema()` (AST parse of a classic `define(...)` body — reads the returned object, never executes it) + `mergeHierarchy()` (replay the layer chain into one effective page + provenance).
+- `vendor/acorn.mjs` — vendored JS parser (MIT) used by `parseSchema`; keeps the engine self-contained (no `npm install`).
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec as Markdown.
 - `migrate.mjs` — CLI driver.

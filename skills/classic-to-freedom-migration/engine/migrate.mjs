@@ -74,6 +74,11 @@ export function runMigration(manifest, opts = {}) {
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
   });
   const parseErrors = [...schemas, ...seedTemplate, ...sectionSchemas].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
+  // fail-loud parse diagnostics: constructs the AST parser could not statically resolve (dynamic call /
+  // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
+  // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
+  const parseDiagnostics = [...schemas, ...seedTemplate, ...sectionSchemas]
+    .flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d })));
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = sectionSchemas.length ? {
     addRecordMiniPage: sectionSchemas.map((l) => l.addRecordMiniPage).filter((v) => v != null).pop() ?? null,
@@ -153,6 +158,7 @@ export function runMigration(manifest, opts = {}) {
     gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal
     structure,   // ⛔ complete:false ⇒ plan is structurally incomplete (missing detail/child schemas); issues[]
     parseErrors, // non-empty ⇒ a schema body failed to parse: FIX before trusting the ChangeSet
+    parseDiagnostics, // AST constructs not statically resolved (advisory; review during battle-testing)
     // RV10 — the Freedom PAYLOAD actually emitted into the ChangeSet/design-spec (F9-filtered: template-owned
     // content is layout context, excluded). Report this ALONGSIDE `effective.*` so a reader doesn't mistake the
     // merged totals (which include base-template context, always larger once a real seed is supplied) for
@@ -233,5 +239,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const structBad = result.structure && !result.structure.complete;
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
+  if (result.parseDiagnostics && result.parseDiagnostics.length)
+    process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   if (gateBad || structBad) process.exit(2);
 }

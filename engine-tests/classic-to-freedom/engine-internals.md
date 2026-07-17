@@ -3,7 +3,7 @@
 Детермінований merge-рушій: N шарів класичної ClientUnitSchema (base→top) → одна **ефективна сторінка** + provenance. Чистий Node-модуль, **без залежності від Creatio/стенду** — тестується офлайн на golden-фікстурах.
 
 ## Файли (рантайм — усе, що потрапляє клієнту)
-- `engine.mjs` — `parseSchema(src,pkg)` (sandbox-парсинг тіла `define(...)` через `node:vm` + універсальний Proxy для Terrasoft/Ext/this) і `mergeHierarchy(schemas)` (replay diff · merge businessRules/rules/details по ключу · override-стек методів · provenance).
+- `engine.mjs` — `parseSchema(src,pkg)` (**AST-парсинг** тіла `define(...)` через vendored `acorn`: читає повернений об'єкт-літерал статично, **не виконуючи** тіло — RCE-безпечно для stand-sourced входу; нерозв'язане статично → `astDiagnostics`, fail-loud) і `mergeHierarchy(schemas)` (replay diff · merge businessRules/rules/details по ключу · override-стек методів · provenance).
 - `mapper.mjs` / `designspec.mjs` / `migrate.mjs` — Ф3-mapper, рендер design-spec/плану, і CLI-драйвер.
 
 Тестового коду тут **немає навмисно**: golden-раннери (`run.mjs`, `run-mapper.mjs`), їхній `_testkit.mjs` і `fixtures/` живуть **поза скілом** — у репо-корені `engine-tests/classic-to-freedom/` — щоб клієнтська тека скіла містила лише рантайм. Раннери імпортують рушій звідси відносним шляхом.

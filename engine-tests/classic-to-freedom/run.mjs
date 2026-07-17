@@ -199,5 +199,22 @@ check("refModules: a true role-suffix name (OrderTimeline) is captured even with
   (hl.refModules || []).includes("OrderTimeline"));
 check("mergeHierarchy aggregates referencedModules", (he.referencedModules || []).includes("CasesEstimateLabel"));
 
+/* ---- SECURITY (RCE fix): the parser reads the body as an AST — it must NEVER execute it. ---- */
+delete globalThis.__ENGINE_TEST_PWNED; delete globalThis.__ENGINE_TEST_PWNED2;
+const evilSrc = [
+  'define("Evil", ["BusinessRuleModule"], function(BusinessRuleModule) {',
+  '  globalThis.__ENGINE_TEST_PWNED = true;                                   // would run under vm — must NOT',
+  '  (function(){}).constructor("globalThis.__ENGINE_TEST_PWNED2 = true")();  // classic vm-escape shape',
+  '  return { entitySchemaName: "Evil", diff: [',
+  '    { operation: "insert", name: "F1", values: { bindTo: "Amount", itemType: Terrasoft.ViewItemType.GRID_LAYOUT } } ] };',
+  '});',
+].join("\n");
+const evil = parseSchema(evilSrc, "Evil");
+console.log("\n===== SECURITY: schema body is parsed, never executed =====");
+check("factory body did NOT execute (RCE markers unset)", globalThis.__ENGINE_TEST_PWNED === undefined && globalThis.__ENGINE_TEST_PWNED2 === undefined);
+check("return object still extracted (entity = Evil)", evil.entitySchemaName === "Evil");
+check("diff field extracted without executing (Amount)", evil.diff.length === 1 && evil.diff[0].bindTo === "Amount");
+check("enum resolved statically (itemType GRID_LAYOUT = 0)", evil.diff[0].itemType === 0);
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
