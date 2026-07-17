@@ -135,10 +135,11 @@ other:
     they ask.
   - If the user **already** asked to make it the default (or to roll it out to everyone): create
     it and set it as the default in one go, with no extra question. The default then covers every
-    account that has no personal theme of its own — but a personal theme overrides the default, so
-    if clio's account already has one applied (for example from an earlier theming session) the new
-    default will not show for it; clear that account's personal theme if you need to see the new
-    default there.
+    account that has no personal theme of its own. A personal theme overrides the default, so if
+    clio's account has a **different** theme applied personally (for example from an earlier run),
+    the new default will not show for it — clear that personal theme so the default takes effect.
+    If the "Applied to you" step above already applied this same theme to clio's account, leave it:
+    it matches the new default, so there is nothing to clear and nothing changes.
 
 Whenever the theme an account actually renders changes — because you applied it to that account,
 or because you made it the default and that account has no personal theme of its own — remind that
