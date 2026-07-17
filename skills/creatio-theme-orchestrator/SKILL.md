@@ -117,8 +117,9 @@ A theme has two independent levels of visibility — keep them distinct and neve
 other:
 - **Applied to you** — always do this right after creating, unless the user explicitly asked you
   not to. Apply the new theme to your own Creatio profile so you can see it; this changes nothing
-  for anyone else and needs no confirmation, because it only touches the account clio is signed in
-  as. That account is clio's own credentials, which may not be the account the user browses Creatio
+  for anyone else — it touches only the account clio is signed in as. (Applying is a confirmed
+  write, so your host may ask you to approve it once; that is expected, and it stays reversible.)
+  That account is clio's own credentials, which may not be the account the user browses Creatio
   under (clio is often registered as an admin/service account such as Supervisor). So tell the user
   the theme is applied to the account clio is signed in as, and name it — if they browse under a
   different account, they will not see it and should either sign in as that account or apply the
