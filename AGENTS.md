@@ -152,10 +152,10 @@ First-turn latency rule:
 - Optimize for first visible response latency over completeness on the first turn.
 - The first turn should include:
   - a short "What I understood"
-  - the main 3-5 highest-priority business discovery questions when they are needed
+  - the main highest-priority business discovery questions, up to the 10-question ceiling — cover the full critical set in this one batch, since a follow-up batch often does not happen
 - The first discovery questions should appear in that same first user-facing interaction, whether via compact text or structured input.
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
-- Additional discovery questions should be asked in the next small themed batch.
+- Prefer to cover the full critical set in the first batch (up to the 10-question ceiling); ask a follow-up batch only if something critical genuinely remains, since a second round often does not happen.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
 - Do not read large repository files before the first clarification turn (routing + initial discovery batch) is completed for the current request.
 - First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and `session_started` is emitted silently at workflow start.
@@ -163,7 +163,7 @@ First-turn latency rule:
 Business discovery must follow a Business Analyst style:
 
 - ask only the minimum critical questions
-- keep the discovery set within 3-7 questions
+- keep the business discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest; technical questions stay limited to execution blockers)
 - prioritize: business goal, core problem, key users/roles, MVP scope, success criteria
 - avoid minor implementation questions during approval of the business plan
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
