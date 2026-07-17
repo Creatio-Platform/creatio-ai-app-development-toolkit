@@ -224,19 +224,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else output = JSON.stringify(result, null, 2) + "\n";
-  if (outFile) {
-    // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
-    try { fs.writeFileSync(outFile, output); }
-    catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
-    process.stdout.write(`migrate.mjs: wrote ${planMode ? "plan" : specMode ? "design spec" : "result"} to ${outFile} — present that file verbatim.\n`);
-  } else {
-    process.stdout.write(output);
-  }
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
   // fails loudly so a blocked/incomplete run can't be mistaken for a clean one — stderr note + non-zero exit
   // (2, distinct from the exit-1 bad-input path). The plan/spec is still printed so the agent sees WHAT to fix.
   const gateBad = result.gate && result.gate.blocked;
   const structBad = result.structure && !result.structure.complete;
+  const label = planMode ? "plan" : specMode ? "design spec" : "result";
+  if (outFile) {
+    // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
+    try { fs.writeFileSync(outFile, output); }
+    catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
+    // do NOT say "present verbatim" on a blocked/incomplete run (L3): the file carries a ⛔ banner and is not approvable.
+    process.stdout.write(gateBad || structBad
+      ? `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`
+      : `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`);
+  } else {
+    process.stdout.write(output);
+  }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (result.parseDiagnostics && result.parseDiagnostics.length)

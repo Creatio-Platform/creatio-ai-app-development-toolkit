@@ -969,5 +969,18 @@ check("GRID: classic full-width tab field (span24) -> Freedom column 1, colSpan 
 check("GRID: a client-owned tab's GridContainer is a 2-column grid (not the old 24-track override)",
   grid.viewConfigDiff.find((o) => o.name === "T1Grid")?.values.columns?.length === 2);
 
+// L5 — advisory channels had no golden: (a) parseDiagnostics (a non-static construct the AST evaluator
+// can't resolve is surfaced, advisory — not a gate block); (b) section processLaunch/processNames captured
+// from an executeProcess literal in a *Section body. A regression would stop surfacing either, silently.
+const pdCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F",caption:makeCaption()}}]};});` }] }, { baseDir: FIX });
+check("L5: a non-static construct (dynamic-call caption) surfaces as parseDiagnostics, advisory (not a gate block)",
+  Array.isArray(pdCs.parseDiagnostics) && pdCs.parseDiagnostics.length > 0 && pdCs.parseDiagnostics[0].pkg === "P");
+const secProc = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: [{ pkg: "S", body: `define("ApplicantSection",["ProcessModuleUtilities"],function(){return{entitySchemaName:"Applicant",methods:{runIt:function(){ProcessModuleUtilities.executeProcess({sysProcessName:"MySectionProcess"});}},diff:[]};});` }] }, { baseDir: FIX });
+check("L5: section processLaunch + processNames captured from an executeProcess literal in a *Section body",
+  secProc.section?.processLaunch === true && (secProc.section?.processNames || []).includes("MySectionProcess"));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

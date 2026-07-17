@@ -64,7 +64,7 @@ Classify every item on both sides:
 - Custom entity columns the client added: make sure they exist on the entity/data source before
   binding any field to them.
 - Removals: remove or hide only the elements that map to a client removal/hide in Classic. Prefer
-  **hide** over hard delete when the element holds data or is referenced elsewhere. `validate_page`
+  **hide** over hard delete when the element holds data or is referenced elsewhere. `validate-page`
   before saving.
 
 ## Step 5 — Verify the reconciliation (both directions)
