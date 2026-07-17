@@ -27,7 +27,7 @@ banner at the top, so you see *what* to fix). Exit **0** = both gates clear = an
 ## Files
 
 - `engine.mjs` — `parseSchema()` (AST parse of a classic `define(...)` body — reads the returned object, never executes it) + `mergeHierarchy()` (replay the layer chain into one effective page + provenance).
-- `vendor/acorn.mjs` — vendored JS parser (MIT) used by `parseSchema`; keeps the engine self-contained (no `npm install`).
+- `vendor/acorn.mjs` — vendored **acorn 8.17.0** (MIT), the JS parser `parseSchema` uses; keeps the engine self-contained (no `npm install`). **Not in `package.json` by design** (zero runtime deps) — so there is no automatic security patching: track acorn advisories manually and re-vendor the bundle (updating this version note) when a relevant fix ships. `vendor/acorn-LICENSE.txt` holds its license.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec as Markdown.
 - `migrate.mjs` — CLI driver.

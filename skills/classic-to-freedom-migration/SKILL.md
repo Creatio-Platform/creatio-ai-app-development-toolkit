@@ -212,16 +212,13 @@ Read each only when the step that names it says so:
 
 Real failures from prior runs, kept short so they don't bury the flow above. Each is enforced by a gate or a reference — this list is a memory aid, not new rules.
 
-- **Hand-authored plan / spec.** The single most common failure. The engine already generates both; paraphrasing drops the List page, child pages, and columns. → Contract rule 2.
 - **Empty block ≠ no behavior.** A thin top schema with empty `diff`/`businessRules`/`details` is not evidence the page has none — merge the chain. → step 4.
 - **Skeleton seed.** A hand-typed container-name skeleton passes the parent check but drops base actions (Run process) and true nesting. The engine catches it as `seedQuality.looksSkeletal`. → step 4.1 / 4.3.
-- **Self-declared "out of scope".** Skipping a child page or detail because it is "big / shared / view-only / native / follow-on". → Contract rule 4; the structure gate blocks it.
 - **Feature downgraded to a list.** Rebuilding a Visa (Approvals) as a plain `ApplicantVisa` DataGrid, or Activities/Emails as a `crt.Timeline`. → the mapping reference's standard-features table.
 - **DCM stages hand-authored per page.** Case stages / Next steps auto-populate from the object's DCM case — bind the widget to the object, don't hand-write stage lists. → the mapping reference.
 - **`success` mistaken for "works".** clio returns `success` for bodies that fail at runtime — render in the browser. → step 7.5 / step 8.
 
 ## Output Rules
 
-- Match the user's language. Use concrete schema/package/page names and tool evidence when known. Separate confirmed facts from inferences. Do not hide fallback gaps — put them in the missing-source risks section.
-- Always show the plan before implementing, for every scope — as the verbatim `--plan` output (Contract rules 1–2), plain Markdown in chat, never HTML or an artifact, and stop for explicit approval.
+- Use concrete schema/package/page names and tool evidence when known. Separate confirmed facts from inferences. Do not hide fallback gaps — put them in the missing-source risks section. (Language, plain-Markdown-not-HTML, show-before-approval — Contract rules 1/2/6.)
 - Do not commit or push without explicit user approval. Keep the migration document set current — it is the shared source of truth for progress, not the chat history.
