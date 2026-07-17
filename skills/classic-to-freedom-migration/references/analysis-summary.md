@@ -1,5 +1,12 @@
 # App Structure Analysis Summary (user-facing response)
 
+> **You do not hand-write this on the normal path.** The engine generates the whole plan — `Overview`,
+> `What it does`, and `Main scope` — via `node engine/migrate.mjs <manifest> --plan` (values supplied
+> through `manifest.planMeta`, written to `plan.md` with `--out`); the per-page design spec comes from
+> `--spec`. Present that output **verbatim** (SKILL.md Contract rule 2). This document is a **format
+> reference / Node-unavailable fallback only** — hand-authoring the summary is the recurring failure that
+> silently drops the List page, child pages, and columns the engine produced. Match the user's language.
+
 After analyzing the Classic structure (Workflow steps 0–5), present the plan in chat in two parts:
 
 1. **This summary** — `Overview`, `What it does`, `Pages` — orients the reader on scope, size and which
