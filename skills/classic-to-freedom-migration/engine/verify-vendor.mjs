@@ -20,7 +20,7 @@ const VENDOR_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "vend
 const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 
 const sha256Lf = (buf) =>
-  createHash("sha256").update(Buffer.from(buf.toString("utf8").replace(/\r\n/g, "\n"), "utf8")).digest("hex");
+  createHash("sha256").update(Buffer.from(buf.toString("utf8").replaceAll("\r\n", "\n"), "utf8")).digest("hex");
 
 function main() {
   let manifest;

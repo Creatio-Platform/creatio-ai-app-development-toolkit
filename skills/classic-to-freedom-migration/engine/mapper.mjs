@@ -190,7 +190,7 @@ export function mapToFreedom(eff, opts = {}) {
   const resources = opts.resources || {};
   const resolveText = (raw) => {
     if (!raw) return null;
-    const key = String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*$/, "");
+    const key = String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "");
     return resources[key] ?? resources[raw] ?? null;
   };
   // Produce a Freedom caption VALUE from a classic caption reference: the resolved literal text if the
@@ -203,7 +203,7 @@ export function mapToFreedom(eff, opts = {}) {
   // synthesized `<name>Caption`. `resolved` = the text is known (no manual decision needed).
   const resourceStrings = {}; // resource key -> default-language text: the map the agent registers at build
   const captionKey = (raw, fallbackName) => raw
-    ? String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*$/, "")
+    ? String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "")
     : (fallbackName || "") + "Caption";
   const caption = (raw, fallbackName) => {
     const key = captionKey(raw, fallbackName);
@@ -344,10 +344,12 @@ function createContainers(ctx) {
       parentName = tabGridName(tab);
       const tItem = index.get(tab);
       const c = caption(tItem?.caption, tab);
-      structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
-        values: { type: "crt.Tab", caption: c.binding } });
-      structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
-        values: { type: "crt.GridContainer", columns: GRID_2 } });
+      structural.push(
+        { operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
+          values: { type: "crt.Tab", caption: c.binding } },
+        { operation: "insert", name: parentName, parentName: tab, propertyName: "items",
+          values: { type: "crt.GridContainer", columns: GRID_2 } },
+      );
       // flag only when the caption is NOT resolved to real text (synthesized key, or an unresolved key
       // because no manifest.resources was supplied). A resolved literal caption needs no decision (#5/#13).
       if (!c.resolved) nd.push({ kind: "tab-caption", item: tab,
@@ -400,7 +402,7 @@ function createContainers(ctx) {
 // Returns viewConfigDiff/attributes/pdsColumns + its needsDecision[]/accountedFor[] + the profileRegion
 // resolver the details phase reuses.
 function mapFields(ctx, containers) {
-  const { eff, cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
+  const { cols, colMeta, labelFor, index, profileAnchors, payloadFields } = ctx;
   const { ensureTab, ensureGroup, ensureProfileIsland } = containers;
   const needsDecision = [], viewConfigDiff = [], accountedFor = new Set();
   const attributes = {}, pdsColumns = {};
@@ -479,9 +481,8 @@ function mapFields(ctx, containers) {
     //   tab / group      -> 2 columns (classic left half -> col 1, right half -> col 2; full-width -> span 2)
     //   wide header      -> 24 columns kept 1:1 (rare multi-column Header, flagged as a layout-type decision)
     const cl = f.layout || {};
-    const gridCols = own.kind === "profile"
-      ? ((own.via === "Header" && headerIsWide) ? 24 : 1)
-      : 2;
+    const profileGridCols = (own.via === "Header" && headerIsWide) ? 24 : 1;
+    const gridCols = own.kind === "profile" ? profileGridCols : 2;
     let column, colSpan;
     if (gridCols === 1) {
       column = 1; colSpan = 1;
@@ -630,14 +631,25 @@ function mapDetails(ctx, containers, profileRegion) {
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
       standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
+      const featWhat = featByEntity
+        ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the`
+        : `classic '${d.schemaName}' is the`;
+      const featProvided = feat.templateProvided
+        ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
+        : "; confirm the exact Freedom component + wiring";
+      const featInferred = featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : "";
+      const featNote = feat.note ? ` — ${feat.note}` : "";
       needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
-        reason: `${featByEntity ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${feat.templateProvided ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one" : "; confirm the exact Freedom component + wiring"}${featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : ""}${feat.note ? ` — ${feat.note}` : ""}` });
+        reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
       continue;
     }
     // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied
     // (real entity + columns known). Only flag detail-unresolved when the schema was NOT provided.
-    if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
-      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${dentity ? ` (child entity '${dentity}')` : ""} — fetch its schema (get-classic-schema-by-uid) and pass it as manifest.detailSchemas to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
+    if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
+      const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
+      needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
+        reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema (get-classic-schema-by-uid) and pass it as manifest.detailSchemas to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
+    }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
     // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
@@ -656,7 +668,7 @@ function mapDetails(ctx, containers, profileRegion) {
     // detail TITLE: resolved page-caption resource → the detail's own title (manifest.detailSchemas.title)
     // → a plain caption → null. Flag only when it stays an unresolved resource key.
     const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
-    if (!detailTitle && d.caption && d.caption.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
+    if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
       reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
     details.push({
       composite: "Expanded list", entity: dentity, detailSchema: d.schemaName,
@@ -681,8 +693,9 @@ function mapCardActions(eff) {
   // Freedom "Run process" card action + a decision naming the process(es) so it isn't lost.
   if (eff.processLaunch) {
     if (!cardActions.includes("RunProcess")) cardActions.push("RunProcess");
+    const processNote = eff.processNames?.length ? ` (${eff.processNames.join(", ")})` : "";
     needsDecision.push({ kind: "process-launch", item: eff.processNames?.length ? eff.processNames.join(", ") : "RunProcess",
-      reason: `the classic page launches a business process imperatively${eff.processNames?.length ? ` (${eff.processNames.join(", ")})` : ""} — map it to a Freedom "Run process" card action / handler (ProcessModuleUtilities → run-process request); confirm the process schema name` });
+      reason: `the classic page launches a business process imperatively${processNote} — map it to a Freedom "Run process" card action / handler (ProcessModuleUtilities → run-process request); confirm the process schema name` });
   }
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
@@ -749,7 +762,7 @@ function mapUnmappedDrop(eff, accountedFor) {
     // RV7 — a template-owned item is normally layout context (skip), EXCEPT a `…Button` outside the known
     // action set: it is neither emitted as a card action nor otherwise accounted, so without this it vanished
     // with zero warning (unlike an identically-named CUSTOM button, which was already flagged).
-    const isButton = /Button$/.test(i.name);
+    const isButton = i.name.endsWith("Button");
     if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
     if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
     if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
@@ -762,45 +775,52 @@ function mapUnmappedDrop(eff, accountedFor) {
     const isBtn = i.name.endsWith("Button");
     const captionNote = i.caption ? ` (caption ${i.caption})` : "";
     const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
-    const reason = isBtn
-      ? (i.templateOwned
-        ? `standard/template button '${i.name}' is not in the recognized action set and got no card-action mapping — confirm the Freedom template already provides it, else wire it as a Freedom card action (RV7)`
-        : `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`)
-      : `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
+    let reason;
+    if (!isBtn) {
+      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
+    } else if (i.templateOwned) {
+      reason = `standard/template button '${i.name}' is not in the recognized action set and got no card-action mapping — confirm the Freedom template already provides it, else wire it as a Freedom card action (RV7)`;
+    } else {
+      reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
+    }
     needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
   }
   return { needsDecision };
 }
 
+// Map ONE classic rule into its Freedom page/entity business rule, or a needsDecision when it can't be mapped.
+// Mutates the three sinks — keeps the ruleType dispatch (and its nesting) out of mapRules's loop.
+function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
+  if (r.ruleType === "FILTRATION") {
+    const filter = r.filterColumn
+      ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
+      : null;
+    // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
+    // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
+    const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
+    entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
+      conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
+      provenance: r.provenance });
+    if (!complete) needsDecision.push({ kind: "entity-filter", item: r.attr,
+      reason: `FILTRATION on '${r.attr}' has no resolved static value (dynamic / column-reference / macro filter) — resolve the target column, comparison and value (or column ref) before applying` });
+  } else if (r.ruleType === "BINDPARAMETER") {
+    const acts = PROP_ACTION[r.property];
+    if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); return; }
+    pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
+      conditions: r.conditions,
+      note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
+      provenance: r.provenance });
+  } else {
+    // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
+    needsDecision.push({ kind: "rule", item: r.attr,
+      reason: `rule '${r.attr}' ruleType is '${r.ruleType}' (enum unresolved) — resolve and re-map, do not assume` });
+  }
+}
+
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
 function mapRules(payloadRules, payloadFields) {
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
-  for (const r of payloadRules) {
-    if (r.ruleType === "FILTRATION") {
-      const filter = r.filterColumn
-        ? { columnPath: r.filterColumn, comparisonType: r.comparison ?? null, value: r.value ?? null, dataValueType: r.dataValueType ?? null }
-        : null;
-      // Gap 4: a "static" filter needs a comparison AND a constant value. Many FILTRATIONs are dynamic
-      // (filter by another column / macro) → no constant here; don't present a half-filter as complete.
-      const complete = !!(filter && typeof r.comparison === "number" && r.value !== null && r.value !== undefined);
-      entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
-        conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
-        provenance: r.provenance });
-      if (!complete) needsDecision.push({ kind: "entity-filter", item: r.attr,
-        reason: `FILTRATION on '${r.attr}' has no resolved static value (dynamic / column-reference / macro filter) — resolve the target column, comparison and value (or column ref) before applying` });
-    } else if (r.ruleType === "BINDPARAMETER") {
-      const acts = PROP_ACTION[r.property];
-      if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); continue; }
-      pageBusinessRules.push({ action: acts[0], element: r.attr, inverseAction: acts[1],
-        conditions: r.conditions,
-        note: "page-level; ALSO create the inverse rule (opposite condition -> inverseAction)",
-        provenance: r.provenance });
-    } else {
-      // symbolic/unknown ruleType — the enum did not resolve to a number; do NOT guess (would corrupt logic).
-      needsDecision.push({ kind: "rule", item: r.attr,
-        reason: `rule '${r.attr}' ruleType is '${r.ruleType}' (enum unresolved) — resolve and re-map, do not assume` });
-    }
-  }
+  for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision);
   // C4: a rule whose target column has NO field insert in this ChangeSet (its field is template context
   // excluded from payload, or an entity-only column) would dangle on a non-existent element — flag it.
   const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
@@ -827,8 +847,9 @@ function mapImages(eff) {
     if (!genImg && !nameImg) continue;
     accountedFor.push(i.name);
     images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
+    const genNote = i.generator ? ` (generator ${i.generator})` : "";
     needsDecision.push({ kind: "image", item: i.name,
-      reason: `image/photo component '${i.name}'${i.generator ? ` (generator ${i.generator})` : ""} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
+      reason: `image/photo component '${i.name}'${genNote} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
   }
   return { images, needsDecision, accountedFor };
 }
@@ -849,9 +870,10 @@ function mapWidgets(eff) {
       if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); continue; }
       widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
       // a widget with its own note (DCM) carries that note; otherwise fall back to the base/native wording.
-      const tail = w.note ? ` — ${w.note}`
-        : base ? " — usually provided by the Freedom template; confirm or re-apply any customization"
-        : "; confirm the Freedom component";
+      let tail;
+      if (w.note) tail = ` — ${w.note}`;
+      else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+      else tail = "; confirm the Freedom component";
       needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
     }
   };

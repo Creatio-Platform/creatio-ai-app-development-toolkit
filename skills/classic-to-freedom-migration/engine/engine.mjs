@@ -101,15 +101,31 @@ const AST_RULE_TYPE = { BINDPARAMETER: 0, FILTRATION: 1 };
 const AST_PROPERTY = { VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 };
 const AST_FN = Symbol("fn"); // placeholder for function values (methods/attributes) — only their KEYS matter
 
+// resolveMemberValue models a small finite automaton over a member-access chain (mirroring the old vm proxy
+// graph). TAG_TRANSITIONS[state][key] = the next state; any key absent from a state's map collapses to "proxy"
+// (an opaque value → further access is null). TAG_ENUMS[state] marks a TERMINAL state whose next key indexes a
+// concrete enum table (→ the resolved number, or null when the key is unknown).
+const TAG_TRANSITIONS = {
+  this: { BusinessRuleModule: "brm" },
+  brm: { enums: "brm.enums" },
+  "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
+  terrasoft: { ViewItemType: "t:vit", controls: "terrasoft.controls", core: "terrasoft.core" },
+  "terrasoft.controls": { ViewItemType: "t:vit" },
+  "terrasoft.core": { enums: "terrasoft.core.enums" },
+  "terrasoft.core.enums": { ViewItemType: "t:vit" },
+};
+const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY };
+
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
 function resolveMemberValue(node, scope) {
   const path = [];
   let cur = node;
-  while (cur && cur.type === "MemberExpression") {
+  while (cur?.type === "MemberExpression") {
     if (cur.computed) return null;                 // dynamic index -> proxy -> null under vm too
     const p = cur.property;
-    const name = p.type === "Identifier" ? p.name : (p.type === "Literal" ? String(p.value) : null);
+    const litName = p.type === "Literal" ? String(p.value) : null;
+    const name = p.type === "Identifier" ? p.name : litName;
     if (name == null) return null;
     path.unshift(name);
     cur = cur.object;
@@ -128,24 +144,18 @@ function resolveMemberValue(node, scope) {
     path.unshift(...seg); cur = a;
   }
   let tag;
-  if (cur && cur.type === "ThisExpression") tag = "this";
-  else if (cur && cur.type === "Identifier") {
+  if (cur?.type === "ThisExpression") tag = "this";
+  else if (cur?.type === "Identifier") {
     if (scope.has(cur.name)) tag = scope.get(cur.name).kind === "brm" ? "brm" : "proxy"; // param shadows global
     else if (cur.name === "Terrasoft") tag = "terrasoft";
     else tag = "proxy";
   } else return null;
   for (const k of path) {
-    if (tag === "this") { tag = k === "BusinessRuleModule" ? "brm" : "proxy"; continue; }
-    if (tag === "brm") { tag = k === "enums" ? "brm.enums" : "proxy"; continue; }
-    if (tag === "brm.enums") { tag = k === "RuleType" ? "t:rule" : (k === "Property" ? "t:prop" : "proxy"); continue; }
-    if (tag === "terrasoft") { tag = k === "ViewItemType" ? "t:vit" : (k === "controls" ? "terrasoft.controls" : (k === "core" ? "terrasoft.core" : "proxy")); continue; }
-    if (tag === "terrasoft.controls") { tag = k === "ViewItemType" ? "t:vit" : "proxy"; continue; }
-    if (tag === "terrasoft.core") { tag = k === "enums" ? "terrasoft.core.enums" : "proxy"; continue; }
-    if (tag === "terrasoft.core.enums") { tag = k === "ViewItemType" ? "t:vit" : "proxy"; continue; }
-    if (tag === "t:vit") return k in AST_VIEW_ITEM_TYPE ? AST_VIEW_ITEM_TYPE[k] : null;
-    if (tag === "t:rule") return k in AST_RULE_TYPE ? AST_RULE_TYPE[k] : null;
-    if (tag === "t:prop") return k in AST_PROPERTY ? AST_PROPERTY[k] : null;
-    return null; // proxy (or already a value) — any further access is null
+    const enumTable = TAG_ENUMS[tag];
+    if (enumTable) return k in enumTable ? enumTable[k] : null; // terminal: the next key indexes the enum table
+    const next = TAG_TRANSITIONS[tag];
+    if (!next) return null;                                     // proxy (or already a value) — further access is null
+    tag = next[k] || "proxy";                                   // unknown key at this state collapses to proxy
   }
   return null; // ended on a resolver, not a concrete value
 }
@@ -239,7 +249,7 @@ function buildAstScope(factory, amdDeps, src) {
   // NO diagnostic and the gate stayed green. Deferring to the reference site means the FINAL evaluator (with
   // the real diagnostics sink) descends the alias at its true path (`diff.0.values`), so an unresolved
   // structural value is flagged and the gate blocks — the alias case is now diagnosed exactly like an inline one.
-  const body = factory.body && factory.body.type === "BlockStatement" ? factory.body.body : [];
+  const body = factory.body?.type === "BlockStatement" ? factory.body.body : [];
   for (const st of body)
     if (st.type === "VariableDeclaration")
       for (const d of st.declarations) {
@@ -272,11 +282,11 @@ export function parseSchema(src, pkg) {
   const astDiagnostics = [];
   let ast;
   try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
-  catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e && e.message || e), {}, []), astDiagnostics }; }
+  catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e?.message || e), {}, []), astDiagnostics }; }
   const call = findDefineCall(ast);
   if (!call) return { ...buildSchemaResult(pkg, src, "no define() call found", {}, []), astDiagnostics };
   const depsNode = call.arguments.find(a => a.type === "ArrayExpression");
-  const amdDeps = depsNode ? depsNode.elements.filter(el => el && el.type === "Literal" && typeof el.value === "string").map(el => el.value) : [];
+  const amdDeps = depsNode ? depsNode.elements.filter(el => el?.type === "Literal" && typeof el.value === "string").map(el => el.value) : [];
   const factory = call.arguments.find(a => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
   if (!factory) return { ...buildSchemaResult(pkg, src, "define() has no factory function", {}, amdDeps), astDiagnostics };
   const retArg = findFactoryReturn(factory);
@@ -333,14 +343,28 @@ function extractFnBody(src, name) {
     let depth = 0;
     // brace-count, but SKIP string literals and line/block comments so a `{`/`}` inside them is not counted
     // (fixes mis-scoped getActions / section-action / column scans). Regex literals with braces stay a rare
-    // unhandled edge — acceptable for these hint-only text scans.
-    for (let j = open; j < src.length; j++) {
+    // unhandled edge — acceptable for these hint-only text scans. A hand-advanced index (a while loop, not a
+    // for-counter) because comment/string spans jump `j` forward past whole regions in one step.
+    let j = open;
+    while (j < src.length) {
       const c = src[j], c2 = src[j + 1];
-      if (c === "/" && c2 === "/") { const nl = src.indexOf("\n", j); if (nl < 0) return src.slice(open + 1); j = nl; continue; }
-      if (c === "/" && c2 === "*") { const e = src.indexOf("*/", j + 2); j = e < 0 ? src.length : e + 1; continue; }
-      if (c === '"' || c === "'" || c === "`") { for (j++; j < src.length && src[j] !== c; j++) if (src[j] === "\\") j++; continue; }
+      if (c === "/" && c2 === "/") {                       // line comment → skip to the newline
+        const nl = src.indexOf("\n", j);
+        if (nl < 0) return src.slice(open + 1);
+        j = nl + 1; continue;
+      }
+      if (c === "/" && c2 === "*") {                       // block comment → skip past the closing */
+        const e = src.indexOf("*/", j + 2);
+        j = e < 0 ? src.length : e + 2; continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {           // string literal → skip to the matching quote
+        j++;
+        while (j < src.length && src[j] !== c) { if (src[j] === "\\") j++; j++; }
+        j++; continue;
+      }
       if (c === "{") depth++;
       else if (c === "}" && --depth === 0) return src.slice(open + 1, j);
+      j++;
     }
     return src.slice(open + 1); // unbalanced source — return the remainder defensively
   }
@@ -367,6 +391,7 @@ function normalizeDiff(diff) {
     // visibility: static false / a dynamic expression (bind/rule) / true; null = this op didn't set it.
     const visibleDynamic = v.visible && typeof v.visible === "object" ? "dynamic" : null;
     const visible = typeof v.visible === "boolean" ? v.visible : visibleDynamic;
+    const opIndex = isNum(op.index) ? op.index : null; // diff-op index fallback (RV5, used for `order` below)
     return {
       operation: isStr(op.operation) ? op.operation : "?",
       name: isStr(op.name) ? op.name : "?",
@@ -383,7 +408,7 @@ function normalizeDiff(diff) {
       caption,
       // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
       // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
-      order: v && isNum(v.order) ? v.order : (isNum(op.index) ? op.index : null),
+      order: v && isNum(v.order) ? v.order : opIndex,
       // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
       // (e.g. a wide 3-column header) instead of inventing a single narrow column.
       layout: normalizeLayout(v.layout),
@@ -604,7 +629,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // #8c — process launch detected in the SCHEMA's OWN schemas (not the seed: the base template's "Run
   // process by record" is template-provided; here we surface the CLIENT page's own process launch).
   const processLaunch = schemas.some(l => l.processLaunch);
-  const processNames = [...new Set(schemas.flatMap(l => (l.processLaunch && l.processLaunch.names) || []))].sort(byLocale);
+  const processNames = [...new Set(schemas.flatMap(l => l.processLaunch?.names || []))].sort(byLocale);
   // referenced UI modules the SCHEMA's own schemas pull in via define() (not the base template) — their
   // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
   const referencedModules = [...new Set(schemas.flatMap(l => l.refModules || []))].sort(byLocale);

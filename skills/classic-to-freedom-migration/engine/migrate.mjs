@@ -29,6 +29,21 @@ import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan } from "./designspec.mjs";
 
+// The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
+// edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
+// child is fine. Returns the issue string, or null when the child page raises no structure issue.
+function childPageIssue(c) {
+  if (c.spec) return c.childStructIncomplete
+    ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
+    : null;
+  if (c.editPage === false || c.editable === false) return null; // verified no page, or view/attach-only -> fine
+  if (typeof c.editPage === "string" && c.editPage)
+    // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
+    return `child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`;
+  // unverified: we do not yet know whether the child entity has a Classic *Page — resolve before the plan.
+  return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false on this detail if no *Page exists. No self-declared "out of scope".`;
+}
+
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
@@ -54,15 +69,17 @@ export function runMigration(manifest, opts = {}) {
     // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown.
     const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body) || /"?addRecordButtonVisible"?\s*:\s*false/.test(body);
     const eObj = (e && typeof e === "object") ? e : {};
+    const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
+    const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
     detailSchemas[name] = {
       entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
       columns: [...new Set((p.diff || []).filter((d) => d.bindTo).map((d) => d.bindTo))],
       title: eObj.title || null, // human detail title (from its resources)
       // editPage: explicit manifest value WINS — a string names the child edit page; `false` = the agent verified
       // on-stand that NO Classic *Page exists. Else the name from getEditPageName; else null = unverified.
-      editPage: ("editPage" in eObj) ? eObj.editPage : (epM ? epM[1] : null),
+      editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
       // editable: explicit manifest value WINS (false = verified view/attach-only); else the body heuristic; else null.
-      editable: ("editable" in eObj) ? eObj.editable : (viewOnly ? false : null),
+      editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
       error: p.error || null,
       // Major 4 — a detail body's AST diagnostics must reach the gate too: a detail whose `diff` is built by
       // an unresolved call parses WITHOUT an error but yields columns:null. Keeping them here lets the gate
@@ -94,7 +111,7 @@ export function runMigration(manifest, opts = {}) {
   ];
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = sectionSchemas.length ? {
-    addRecordMiniPage: sectionSchemas.map((l) => l.addRecordMiniPage).filter((v) => v != null).pop() ?? null,
+    addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
     listColumns: [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
@@ -129,8 +146,8 @@ export function runMigration(manifest, opts = {}) {
       c.grandChildren = (childRes.childPages || []).length;
       // Major 3: a nested child's spec is a VALID mapping only if the child cleared its OWN gates. Carry the
       // child's verdict up so a blocked/incomplete child can't be embedded into a green parent plan at exit 0.
-      c.childBlocked = !!(childRes.gate && childRes.gate.blocked);
-      c.childReasons = (childRes.gate && childRes.gate.reasons) || [];
+      c.childBlocked = !!childRes.gate?.blocked;
+      c.childReasons = childRes.gate?.reasons || [];
       c.childStructIncomplete = !!(childRes.structure && !childRes.structure.complete);
     } catch (e) { c.specError = e.message; }     // malformed child manifest ⇒ note it, keep the listed row
   }
@@ -145,7 +162,7 @@ export function runMigration(manifest, opts = {}) {
     if (parseErrors.length) reasons.push(`parseErrors (${parseErrors.length}): ${parseErrors.map((e) => e.pkg).join(", ")} — a schema body failed to parse`);
     if ((eff.unresolvedParents || []).length) reasons.push(`unresolvedParents: ${eff.unresolvedParents.join(", ")} — base-template seed incomplete (F2) or schemas out of order (F1)`);
     if ((eff.warnings || []).length) reasons.push(`warnings (${eff.warnings.length}): ${[...new Set(eff.warnings.map((w) => w.name || w.op))].join(", ")} — op hit a missing item / skeletal seed`);
-    if (eff.seedQuality && eff.seedQuality.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
+    if (eff.seedQuality?.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
     // Major 3 (this round) — the seed being SKELETAL was gated, but its ABSENCE was not. A Classic page always
     // extends a base template (BaseModulePageV2/BasePageV2/BaseEntityPage); building with no seed silently drops
     // inherited base actions + container layout. This normally trips `unresolvedParents`, but a body that defines
@@ -174,10 +191,16 @@ export function runMigration(manifest, opts = {}) {
       return IDENTITY_FIELDS.has(seg[2]);
     };
     const structDiag = parseDiagnostics.filter((d) => isStructural(d.path));
-    if (structDiag.length) reasons.push(`parse could not statically resolve structural field(s): ${[...new Set(structDiag.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ")} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
+    if (structDiag.length) {
+      const structFields = [...new Set(structDiag.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
+      reasons.push(`parse could not statically resolve structural field(s): ${structFields} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
+    }
     // Major 3: aggregate child gates — a nested child that failed its OWN correctness gate blocks the parent.
     const blockedChildren = childPages.filter((c) => c.childBlocked);
-    if (blockedChildren.length) reasons.push(`nested child page(s) failed their own gate: ${blockedChildren.map((c) => `${c.resolvedFrom || c.editPage} [${(c.childReasons || []).join("; ").slice(0, 90)}]`).join(" | ")} — a blocked child's spec is not a valid mapping; fix the child before the parent plan is approvable`);
+    if (blockedChildren.length) {
+      const blockedList = blockedChildren.map((c) => `${c.resolvedFrom || c.editPage} [${(c.childReasons || []).join("; ").slice(0, 90)}]`).join(" | ");
+      reasons.push(`nested child page(s) failed their own gate: ${blockedList} — a blocked child's spec is not a valid mapping; fix the child before the parent plan is approvable`);
+    }
     return { blocked: reasons.length > 0, reasons };
   })();
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
@@ -190,21 +213,14 @@ export function runMigration(manifest, opts = {}) {
     const issues = [];
     for (const d of (changeSet.details || [])) {
       // a generic related list whose own schema was NOT supplied → its columns and child edit page are unknown
-      if (d.detailSchema && !suppliedDetailKeys.has(d.detailSchema))
-        issues.push(`detail '${d.detailSchema}'${d.entity ? ` (${d.entity})` : ""}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
+      if (d.detailSchema && !suppliedDetailKeys.has(d.detailSchema)) {
+        const entityNote = d.entity ? ` (${d.entity})` : "";
+        issues.push(`detail '${d.detailSchema}'${entityNote}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
+      }
     }
-    for (const c of childPages) {
-      // Major 3: a child that WAS mapped but whose own structure is incomplete (its nested detail/child
-      // schemas were not supplied) is not "done" — the tree is incomplete. Surface it (recursive aggregation).
-      if (c.spec) { if (c.childStructIncomplete) issues.push(`child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`); continue; }
-      if (c.editPage === false || c.editable === false) continue; // verified no page, or view/attach-only from this detail -> fine
-      if (typeof c.editPage === "string" && c.editPage)
-        // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
-        issues.push(`child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`);
-      else
-        // unverified: we do not yet know whether the child entity has a Classic *Page — resolve before the plan.
-        issues.push(`child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false on this detail if no *Page exists. No self-declared "out of scope".`);
-    }
+    // Major 3: a mapped child whose OWN structure is incomplete, a real-but-unmapped edit page, or an
+    // unverified child each contribute a structure issue (recursive aggregation) — see childPageIssue.
+    for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
     return { complete: issues.length === 0, issues };
   })();
   const out = {
@@ -218,7 +234,7 @@ export function runMigration(manifest, opts = {}) {
     // merged totals (which include base-template context, always larger once a real seed is supplied) for
     // "silently dropped" content. The design spec/plan already count the payload — this exposes it in the JSON too.
     payload: {
-      fields: (changeSet.viewConfigDiff || []).filter((o) => o.values && o.values.control).length,
+      fields: (changeSet.viewConfigDiff || []).filter((o) => o.values?.control).length,
       details: (changeSet.details || []).length,
       standardFeatures: (changeSet.standardFeatures || []).length,
       pageRules: (changeSet.pageBusinessRules || []).length,
@@ -281,8 +297,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!fromFile && process.stdin.isTTY)
     fail("no manifest: pass a manifest path, or pipe JSON to stdin. (`--out <file>` names the OUTPUT — the manifest is a separate argument.)");
   let raw;
+  const manifestLabel = fromFile ? `'${arg}'` : "from stdin";
   try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
-  catch (e) { fail(`cannot read manifest ${fromFile ? `'${arg}'` : "from stdin"}: ${e.message}`); }
+  catch (e) { fail(`cannot read manifest ${manifestLabel}: ${e.message}`); }
   let manifest;
   try { manifest = JSON.parse(raw); }
   catch (e) { fail(`manifest is not valid JSON: ${e.message}`); }
@@ -300,13 +317,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
   // fails loudly so a blocked/incomplete run can't be mistaken for a clean one — stderr note + non-zero exit
   // (2, distinct from the exit-1 bad-input path). The plan/spec is still printed so the agent sees WHAT to fix.
-  const gateBad = result.gate && result.gate.blocked;
+  const gateBad = result.gate?.blocked;
   const structBad = result.structure && !result.structure.complete;
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
-  const planIncomplete = planMode && result.planMetaMissing && result.planMetaMissing.length > 0;
+  const planIncomplete = planMode && result.planMetaMissing?.length > 0;
   const notReady = gateBad || structBad || planIncomplete;
-  const label = planMode ? "plan" : specMode ? "design spec" : "result";
+  let label = "result";
+  if (planMode) label = "plan";
+  else if (specMode) label = "design spec";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }
@@ -321,7 +340,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (planIncomplete) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
-  if (result.parseDiagnostics && result.parseDiagnostics.length)
+  if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   if (notReady) process.exit(2);
 }
