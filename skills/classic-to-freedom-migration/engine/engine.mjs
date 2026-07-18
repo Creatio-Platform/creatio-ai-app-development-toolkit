@@ -403,6 +403,20 @@ function sanitizeConditions(conds) {
 //     content (fields/rules/details/methods/components touched by a schema schema) and treats
 //     template-only elements — e.g. the 300+ framework methods on BaseEntityPage — as context, not
 //     payload. Without this, seeding the full chain floods the ChangeSet with base noise.
+// Single source of truth for a freshly-DEFINED diff item's record shape. BOTH the `insert` branch and
+// the `merge`-onto-absent stub produce this exact shape; keeping one factory means a new field is added
+// in ONE place — the asymmetric-drift risk RV4 hit (a field added to one branch, missed in the other).
+// `seed` = the defining op came from a parent-template schema (templateOwned); `pkg` = the defining schema.
+function makeItem(op, seed, pkg) {
+  return {
+    name: op.name, parent: op.parentName, propertyName: op.propertyName,
+    bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
+    isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
+    tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
+    templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
+  };
+}
+
 export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
@@ -433,13 +447,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     for (const op of L.diff) {
       const cur = items.get(op.name);
       if (op.operation === "insert") {
-        items.set(op.name, {
-          name: op.name, parent: op.parentName, propertyName: op.propertyName,
-          bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
-          isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
-          tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
-          templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
-        });
+        items.set(op.name, makeItem(op, seed, L.pkg));
       } else if (op.operation === "merge") {
         // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
         // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
@@ -452,13 +460,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
           // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
           // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
           // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
-          items.set(op.name, {
-            name: op.name, parent: op.parentName, propertyName: op.propertyName,
-            bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
-            isTab: op.isTab, removed: false, provenance: [L.pkg], order: op.order, layout: op.layout,
-            tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
-            templateOwned: seed,
-          });
+          items.set(op.name, makeItem(op, seed, L.pkg));
           warnings.push({ op: "merge", name: op.name, schema: L.pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
         }
       } else if (op.operation === "move") {

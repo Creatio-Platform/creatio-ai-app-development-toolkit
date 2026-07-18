@@ -27,7 +27,8 @@ banner at the top, so you see *what* to fix). Exit **0** = both gates clear = an
 ## Files
 
 - `engine.mjs` — `parseSchema()` (AST parse of a classic `define(...)` body — reads the returned object, never executes it) + `mergeHierarchy()` (replay the layer chain into one effective page + provenance).
-- `vendor/acorn.mjs` — vendored **acorn 8.17.0** (MIT), the JS parser `parseSchema` uses; keeps the engine self-contained (no `npm install`). **Not in `package.json` by design** (zero runtime deps) — so there is no automatic security patching: track acorn advisories manually and re-vendor the bundle (updating this version note) when a relevant fix ships. `vendor/acorn-LICENSE.txt` holds its license.
+- `vendor/acorn.mjs` — vendored **acorn 8.17.0** (MIT), the JS parser `parseSchema` uses; keeps the engine self-contained (no `npm install`). **Not in `package.json` by design** (zero runtime deps) — so there is no automatic security patching: track acorn advisories manually and re-vendor the bundle when a relevant fix ships. `vendor/acorn-LICENSE.txt` holds its license.
+  - **Integrity pin** — because this bundle is the one executable component that processes *untrusted* stand schema-body, its provenance is pinned in `vendor/provenance.json` (upstream package + version + SHA-256 of the LF-normalized bytes, which equals the published npm artifact's hash). `verify-vendor.mjs` recomputes the hash and exits non-zero on any mismatch; CI (`.github/workflows/pr.yml` → *Verify vendored parser integrity*) runs it on every PR, so a swapped or silently-drifted parser fails the build. **To re-vendor:** replace the file, confirm the new LF-normalized SHA-256 against the pinned upstream artifact, then update `version` + `sha256` in `provenance.json` together.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec as Markdown.
 - `migrate.mjs` — CLI driver.

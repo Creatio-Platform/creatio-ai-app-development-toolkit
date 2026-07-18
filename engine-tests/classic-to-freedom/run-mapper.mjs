@@ -1051,5 +1051,15 @@ const m3child = runMigration({ entity: "X",
 check("Major3(child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
   m3child.gate.blocked === true && m3child.gate.reasons.some((r) => /nested child/.test(r)));
 
+/* ---- Major (supply-chain): the vendored acorn parser matches its pinned upstream provenance ---- */
+// The one executable that processes untrusted schema-body must be integrity-checked. verify-vendor.mjs is
+// the CI gate; running it here ties the same check into the local golden run (exit 0 on a clean tree).
+const vv = spawnSync(process.execPath, [path.join(ENGINE_DIR, "verify-vendor.mjs")], { encoding: "utf8" });
+check("vendor-integrity: verify-vendor.mjs passes on the checked-in acorn bundle (exit 0, hash verified)",
+  vv.status === 0 && /verified/.test(vv.stdout || ""));
+const prov = JSON.parse(fs.readFileSync(path.join(ENGINE_DIR, "vendor", "provenance.json"), "utf8"));
+check("vendor-integrity: provenance.json pins acorn with a 64-hex SHA-256 (the gate has something to enforce)",
+  prov.files?.["acorn.mjs"]?.package === "acorn" && /^[0-9a-f]{64}$/.test(prov.files["acorn.mjs"].sha256 || ""));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
