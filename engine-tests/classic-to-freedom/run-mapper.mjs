@@ -1,6 +1,7 @@
 // Golden test for the Ф3 mapper: merge -> map -> assert Freedom ChangeSet.
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
@@ -35,12 +36,21 @@ console.log("handlerStubs:", cs.handlerStubs.map(h => `${h.sourceMethod}(${h.cat
 console.log("needsDecision:", cs.needsDecision.length, "->", [...new Set(cs.needsDecision.map(n => n.kind))].join(", "));
 
 let pass = 0, fail = 0;
-const check = (n, c) => (c ? (pass++, console.log("  ✅ " + n)) : (fail++, console.log("  ❌ " + n)));
+// `detail` (optional) is a value or a thunk — evaluated and printed ONLY on FAILURE, so a red golden in CI
+// shows computed-vs-expected without a local rerun. Zero-dependency; keeps the pure-ESM design.
+const check = (n, c, detail) => {
+  if (c) { pass++; console.log("  ✅ " + n); return; }
+  fail++; console.log("  ❌ " + n);
+  if (detail !== undefined) {
+    let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; }
+    console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d)));
+  }
+};
 const field = (b) => cs.viewConfigDiff.find(o => o.name === b);
 
 console.log("assertions:");
 const suFieldOps = cs.viewConfigDiff.filter(o => o.values?.control);
-check("8 field inserts", suFieldOps.length === 8);
+check("8 field inserts", suFieldOps.length === 8, () => `expected 8, got ${suFieldOps.length}: ${suFieldOps.map(o => o.name).join(", ")}`);
 check("all fields into SideAreaProfileContainer (container-role mapping)",
   suFieldOps.every(o => o.parentName === "SideAreaProfileContainer"));
 check("lookups -> crt.ComboBox", ["ParentSupportUnit", "Contact", "Calendar", "SupportWorkingDayType"]
@@ -326,6 +336,21 @@ check("migrate.mjs: entity '?' falls back to the merged effective entity",
 const migBad = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "{ not json", encoding: "utf8" });
 check("migrate.mjs CLI: malformed manifest exits 1 with a diagnostic and no stdout (not a raw stack)",
   migBad.status === 1 && /migrate\.mjs:/.test(migBad.stderr || "") && (migBad.stdout || "").trim() === "");
+// a manifest whose schemas[].file does not exist on disk → clean diagnostic + exit 1 (NOT an unhandled stack)
+const migNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], {
+  input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", file: "does_not_exist_zzz.js" }] }), encoding: "utf8" });
+check("migrate.mjs CLI: a missing schema file exits 1 with a clean diagnostic (no stdout, no raw stack)",
+  migNoFile.status === 1 && /migrate\.mjs:/.test(migNoFile.stderr || "") && /ENOENT|no such file|cannot/i.test(migNoFile.stderr || "")
+  && !/\bat \w+.*:\d+:\d+/.test(migNoFile.stderr || "") && (migNoFile.stdout || "").trim() === "",
+  () => ({ status: migNoFile.status, stderr: (migNoFile.stderr || "").slice(0, 160) }));
+// `--out` without a path must FAIL LOUDLY, not silently fall back to stdout (trailing) or swallow a flag.
+const okManifest = JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[]};});` }] });
+const migOutTrail = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out"], { input: okManifest, encoding: "utf8" });
+check("migrate.mjs CLI: trailing --out (no path) exits 1 with a clear diagnostic — not a silent stdout fallback",
+  migOutTrail.status === 1 && /--out/.test(migOutTrail.stderr || "") && (migOutTrail.stdout || "").trim() === "");
+const migOutFlag = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--out", "--plan"], { input: okManifest, encoding: "utf8" });
+check("migrate.mjs CLI: --out followed by a flag (--plan) exits 1 — does not swallow the flag as a filename",
+  migOutFlag.status === 1 && /--out/.test(migOutFlag.stderr || ""));
 
 /* ---- gate coverage: a syntactically BROKEN schema body must propagate parseErrors -> gate.blocked -> exit 2,
    so a corrupt plan can NEVER read as gate-clean (regression guard for parseSchema error-propagation — esp.
@@ -336,6 +361,19 @@ check("migrate.mjs: broken body -> parseErrors > 0 (parse error propagated, not 
 check("migrate.mjs: broken body -> gate.blocked (a corrupt plan does NOT read as gate-clean)", brokenRun.gate.blocked === true);
 const migGate = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: JSON.stringify({ schemas: [{ pkg: "Broken", body: brokenBody }] }), encoding: "utf8" });
 check("migrate.mjs CLI: gate-blocked broken body exits 2 with a GATE BLOCKED diagnostic", migGate.status === 2 && /GATE BLOCKED/.test(migGate.stderr || ""));
+
+/* ---- DoS: a pathologically DEEP-nested (untrusted) body must degrade cleanly, never crash the process.
+   The static evaluator is depth-capped and acorn has its own recursion guard; either way a hostile body
+   yields a parseError → gate-blocked, and the CLI exits 2 (not an uncaught RangeError stack). ---- */
+const deepBody = `define("P",[],function(){ return {entitySchemaName:"X", diff: ${"[".repeat(3000)}${"]".repeat(3000)}}; });`;
+const deepIn = runMigration({ entity: "X", schemas: [{ pkg: "P", body: deepBody }] });
+check("deep-nest DoS: a deeply nested body degrades to gate-blocked in-process (no throw, no clean pass)",
+  deepIn.gate?.blocked === true && deepIn.parseErrors.length > 0);
+const deepCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], {
+  input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: deepBody }] }), encoding: "utf8" });
+check("deep-nest DoS: the CLI exits cleanly (2, GATE BLOCKED) — not an uncaught RangeError stack",
+  deepCli.status === 2 && /GATE BLOCKED/.test(deepCli.stderr || "") && !/RangeError|Maximum call stack/.test(deepCli.stderr || ""),
+  () => ({ status: deepCli.status, stderr: (deepCli.stderr || "").slice(0, 120) }));
 
 /* ---- recursion depth cap: a CYCLIC childPageSchemas must terminate + stay bounded (review #4).
    If the depth>=2 guard regresses, this self-referential manifest would recurse without bound (RangeError),
@@ -690,15 +728,21 @@ check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeho
   && /Applicant1Section \(list page\) \| ListPageV3 \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
   && !/<FILL: single-section/.test(pmRun.plan) && !/<FILL: environment/.test(pmRun.plan));
 // Smell #2 — --out WRITES the artifact to a file (agent presents the file; stdout is only a confirmation).
-const outPath = path.join(DIR, "_planout_test.md");
-fs.rmSync(outPath, { force: true });
-const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
-  input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
-const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
-check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
-  outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
-  && /wrote plan to/.test(outRun.stdout || "") && !/Classic → Freedom UI/.test(outRun.stdout || ""));
-fs.rmSync(outPath, { force: true });
+// Write OUTSIDE the repo tree (os.tmpdir) and clean up in a finally, so a throw before cleanup can never
+// strand a test artifact in source control (the tracked-dir path relied on a trailing rmSync that a mid-test
+// failure or a kill would skip).
+const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
+try {
+  fs.rmSync(outPath, { force: true });
+  const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
+    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+  const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
+  check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
+    outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
+    && /wrote plan to/.test(outRun.stdout || "") && !/Classic → Freedom UI/.test(outRun.stdout || ""));
+} finally {
+  fs.rmSync(outPath, { force: true });
+}
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
 const blockedRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
@@ -990,6 +1034,26 @@ check("GRID: classic full-width tab field (span24) -> Freedom column 1, colSpan 
   gl("FullWide")?.column === 1 && gl("FullWide")?.colSpan === 2);
 check("GRID: a client-owned tab's GridContainer is a 2-column grid (not the old 24-track override)",
   grid.viewConfigDiff.find((o) => o.name === "T1Grid")?.values.columns?.length === 2);
+
+// R9 rows — a container mixing an EXPLICIT-row field and an AUTO-row field must NOT collide: the old counter
+// bumped on every field, so the auto field dropped onto the explicit field's row. The auto field now skips it.
+const mixRows = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "T9", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "Explicit", parentName: "T9", propertyName: "items", bindTo: "Explicit", layout: { column: 0, row: 1, colSpan: 24, rowSpan: 1 } }), // → Freedom row 2
+  di({ name: "Auto", parentName: "T9", propertyName: "items", bindTo: "Auto" }),                                                                // no layout → auto row
+] })]));
+const ml = (n) => mixRows.viewConfigDiff.find((o) => o.name === n)?.values.layoutConfig;
+check("R9 rows: explicit-row field keeps its row; the auto field takes a DIFFERENT row (no collision)",
+  ml("Explicit")?.row === 2 && ml("Auto")?.row != null && ml("Auto").row !== ml("Explicit").row,
+  () => ({ explicit: ml("Explicit")?.row, auto: ml("Auto")?.row }));
+const autoOnly = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "T10", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "P1", parentName: "T10", propertyName: "items", bindTo: "P1" }),
+  di({ name: "P2", parentName: "T10", propertyName: "items", bindTo: "P2" }),
+] })]));
+const al = (n) => autoOnly.viewConfigDiff.find((o) => o.name === n)?.values.layoutConfig;
+check("R9 rows: a pure-auto container still stacks at consecutive rows 1,2 (no regression)",
+  al("P1")?.row === 1 && al("P2")?.row === 2, () => ({ p1: al("P1")?.row, p2: al("P2")?.row }));
 
 // L5 — advisory channels had no golden: (a) parseDiagnostics (a non-static construct the AST evaluator
 // can't resolve is surfaced, advisory — not a gate block); (b) section processLaunch/processNames captured

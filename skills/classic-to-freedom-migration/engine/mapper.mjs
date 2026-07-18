@@ -1,6 +1,7 @@
 // Ф3 — Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
+import { VIEW_ITEM_TYPE, CONTENT_TYPE } from "./engine.mjs";
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -75,7 +76,7 @@ function control(dataType, contentType, ref) {
   const t = (dataType || "").toLowerCase();
   if (t === "lookup") return { type: "crt.ComboBox", lookup: true };
   const scalar = scalarControl(t);
-  if (contentType === 5) {
+  if (contentType === CONTENT_TYPE.LOOKUP) {
     if (ref || !scalar) return { type: "crt.ComboBox", lookup: true }; // real lookup, or no entity type -> trust the hint
     return { ...scalar, linkedDisplay: true }; // scalar shown via a picker -> read-only value from a linked record
   }
@@ -362,7 +363,7 @@ function createContainers(ctx) {
     if (emittedGroups.has(g.name)) return emittedGroups.get(g.name);
     accounted.add(g.name);
     let inner;
-    if (g.itemType === 15) {
+    if (g.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP) {
       // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
       const c = caption(g.caption, g.name);
       structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
@@ -404,7 +405,12 @@ function mapFields(ctx, containers) {
   const needsDecision = [], viewConfigDiff = [], accountedFor = new Set();
   const attributes = {}, pdsColumns = {};
   let fieldsWithTitle = 0;
-  const rowByContainer = {};
+  // R9 — faithful per-container row assignment. An explicit classic row is authoritative and kept verbatim;
+  // a field with NO explicit row takes the next row not already claimed in that container. The old code kept
+  // a single counter bumped on EVERY field (explicit ones too), so a container mixing explicit and auto rows
+  // mis-numbered the autos — an auto field landing on an explicit field's row, or leaving gaps.
+  const autoRow = {};   // parent -> next auto row to try (1-based)
+  const usedRows = {};  // parent -> Set of rows already taken (explicit + assigned auto), so autos skip them
   const nameCount = {};
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index, profileAnchors) }));
@@ -456,7 +462,6 @@ function mapFields(ctx, containers) {
       needsDecision.push({ kind: "container", item: f.name || f.bindTo,
         reason: `${why} — placed in ${parent} for now` });
     }
-    rowByContainer[parent] = (rowByContainer[parent] || 0) + 1;
     const col = f.bindTo || f.name || "Field";
     const meta = colMeta(col);
     const ctl = control(meta.type, f.contentType, meta.ref);
@@ -487,9 +492,24 @@ function mapFields(ctx, containers) {
       column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
       colSpan = cl.colSpan != null ? cl.colSpan : 24;
     }
+    // Row assignment (R9): an explicit classic row is authoritative (kept as-is); an auto field takes the
+    // next row not already claimed in this container, so it never collides with an explicit field or another
+    // auto field. (Two explicit fields sharing a classic row is source data we preserve, not our decision.)
+    const taken = usedRows[parent] || (usedRows[parent] = new Set());
+    const explicitRow = cl.row != null ? cl.row + 1 : null;
+    let row;
+    if (explicitRow != null) {
+      row = explicitRow;
+    } else {
+      let cur = autoRow[parent] || 1;
+      while (taken.has(cur)) cur++;              // skip rows an explicit (or prior auto) field already holds
+      row = cur;
+      autoRow[parent] = cur + 1;
+    }
+    taken.add(row);
     const layoutConfig = {
       column,
-      row: cl.row != null ? cl.row + 1 : rowByContainer[parent],
+      row,
       colSpan,
       rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
     };
@@ -718,7 +738,7 @@ function mapUnmappedDrop(eff, accountedFor) {
     // action set: it is neither emitted as a card action nor otherwise accounted, so without this it vanished
     // with zero warning (unlike an identically-named CUSTOM button, which was already flagged).
     const isButton = /Button$/.test(i.name);
-    if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === 2 || i.itemType === 15 || i.isTab) continue;
+    if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
     if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
     if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
     dropped.add(i.name);

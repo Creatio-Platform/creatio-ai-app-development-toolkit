@@ -88,6 +88,15 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
 // process/fs/env. Anything it cannot resolve statically is left null AND recorded in `astDiagnostics`
 // (fail-loud) rather than silently guessed.
 const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
+// The classic Terrasoft.core.enums vocabulary the mapper also switches on — one named source of truth so the
+// two files never drift on a raw itemType/contentType literal (an off-by-value waiting to happen).
+export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE; // ViewItemType: GridLayout 0 · Detail 2 · ControlGroup 15
+export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a column rendered via a picker)
+// Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
+// not blow the call stack (DoS). `path.length` is the current nesting depth — bail to null + a diagnostic
+// well before any real stack limit. Real page schemas nest only a handful of levels; 500 is unreachable by
+// legitimate input yet far under Node's stack ceiling.
+const MAX_AST_DEPTH = 500;
 const AST_RULE_TYPE = { BINDPARAMETER: 0, FILTRATION: 1 };
 const AST_PROPERTY = { VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 };
 const AST_FN = Symbol("fn"); // placeholder for function values (methods/attributes) — only their KEYS matter
@@ -133,6 +142,7 @@ function makeAstEvaluator(scope, diagnostics, src) {
   const flag = (kind, node, path) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node) });
   function evalNode(node, path) {
     if (!node) return null;
+    if (path.length > MAX_AST_DEPTH) { flag("max-nesting-depth", node, path); return null; }
     switch (node.type) {
       case "Literal": return node.value instanceof RegExp ? null : node.value;
       case "TemplateLiteral":
@@ -245,9 +255,16 @@ export function parseSchema(src, pkg) {
   const retObj = findFactoryReturnObject(factory);
   if (!retObj) { astDiagnostics.push({ kind: "no-return-object", path: "", snippet: "" });
     return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics }; }
-  const scope = buildAstScope(factory, amdDeps, src);
-  const captured = makeAstEvaluator(scope, astDiagnostics, src)(retObj, []);
-  return { ...buildSchemaResult(pkg, src, null, captured || {}, amdDeps), astDiagnostics };
+  // The static eval is depth-capped (MAX_AST_DEPTH), but keep a belt: any residual stack blow-up on a
+  // hostile body degrades to a clean parseError (→ gate blocks), never an uncaught RangeError crash.
+  try {
+    const scope = buildAstScope(factory, amdDeps, src);
+    const captured = makeAstEvaluator(scope, astDiagnostics, src)(retObj, []);
+    return { ...buildSchemaResult(pkg, src, null, captured || {}, amdDeps), astDiagnostics };
+  } catch (e) {
+    const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e && e.message || e);
+    return { ...buildSchemaResult(pkg, src, "static evaluation failed: " + why, {}, amdDeps), astDiagnostics };
+  }
 }
 
 // AMD define() dependency list → the CUSTOM modules that likely RENDER UI (ship their own CSS, or have a

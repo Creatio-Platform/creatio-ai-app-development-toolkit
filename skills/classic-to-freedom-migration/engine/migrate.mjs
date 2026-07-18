@@ -226,9 +226,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const outIdx = argv.indexOf("--out");        // --out <file>: WRITE the output to a file so the agent presents the file, not a hand-paste
+  // `--out` must be followed by a real path. Without this guard a trailing `--out` silently fell back to
+  // stdout (documented flag → no write), and `--out --plan` swallowed the next flag — both silent misfires.
+  if (outIdx >= 0) {
+    const next = argv[outIdx + 1];
+    if (next === undefined || next.startsWith("--"))
+      fail("`--out` needs a file path (e.g. `--out plan.md`) — got " + (next === undefined ? "no argument" : `the flag '${next}'`) + "; nothing was written");
+  }
   const outFile = outIdx >= 0 ? argv[outIdx + 1] : null;
   const arg = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--out"); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
+  // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
+  // instead (also the `--out manifest.json` typo, where the only path was consumed by --out, lands here).
+  if (!fromFile && process.stdin.isTTY)
+    fail("no manifest: pass a manifest path, or pipe JSON to stdin. (`--out <file>` names the OUTPUT — the manifest is a separate argument.)");
   let raw;
   try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
   catch (e) { fail(`cannot read manifest ${fromFile ? `'${arg}'` : "from stdin"}: ${e.message}`); }

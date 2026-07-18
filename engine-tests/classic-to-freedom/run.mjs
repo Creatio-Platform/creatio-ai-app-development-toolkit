@@ -33,7 +33,16 @@ function report(title, eff) {
 }
 
 let pass = 0, fail = 0;
-const check = (name, cond) => { (cond ? (pass++, console.log("  ✅ " + name)) : (fail++, console.log("  ❌ " + name))); };
+// `detail` (optional) is a value or a thunk — evaluated and printed ONLY when the check FAILS, so a red
+// golden in CI shows computed-vs-expected without a local rerun. Zero-dependency; keeps the pure-ESM design.
+const check = (name, cond, detail) => {
+  if (cond) { pass++; console.log("  ✅ " + name); return; }
+  fail++; console.log("  ❌ " + name);
+  if (detail !== undefined) {
+    let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; }
+    console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d)));
+  }
+};
 
 /* ---- SupportUnit (2 schemas) — definitive golden ---- */
 const su = mergeHierarchy(load("supportunitemployee", ["SupportCalendar_base.js", "SupportService.js"]));
