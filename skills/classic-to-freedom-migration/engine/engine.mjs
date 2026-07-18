@@ -197,18 +197,26 @@ function findDefineCall(ast) {
   return null;
 }
 
-function buildAstScope(factory, amdDeps) {
+function buildAstScope(factory, amdDeps, src) {
   const scope = new Map();
   (factory.params || []).forEach((p, i) => {
     if (p.type === "Identifier") scope.set(p.name, amdDeps[i] === "BusinessRuleModule" ? { kind: "brm" } : { kind: "proxy" });
   });
-  // top-level literal consts/vars in the factory body, so `var x = "Foo"; return { name: x }` resolves.
+  // Top-level consts/vars in the factory body so BOTH `var x = "Foo"; return { name: x }` and
+  // `var d = [ … ]; return { diff: d }` resolve. The AST parser (which replaced the vm) lost the array/object
+  // alias case — the vm EXECUTED the body so the alias just worked (Blocker 1: an aliased diff silently
+  // became []). Literals go straight in; array/object initializers are statically evaluated over the scope
+  // built SO FAR (earlier decls visible to later). A throwaway diagnostics sink keeps scope-building silent —
+  // if the return object then references a value that stayed unresolved AT a structural key, the gate blocks.
   const body = factory.body && factory.body.type === "BlockStatement" ? factory.body.body : [];
+  const preEval = makeAstEvaluator(scope, [], src);
   for (const st of body)
     if (st.type === "VariableDeclaration")
-      for (const d of st.declarations)
-        if (d.id.type === "Identifier" && d.init && d.init.type === "Literal" && !(d.init.value instanceof RegExp))
-          scope.set(d.id.name, { kind: "value", value: d.init.value });
+      for (const d of st.declarations) {
+        if (d.id.type !== "Identifier" || !d.init) continue;
+        if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
+        else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "value", value: preEval(d.init, []) });
+      }
   return scope;
 }
 
@@ -237,7 +245,7 @@ export function parseSchema(src, pkg) {
   const retObj = findFactoryReturnObject(factory);
   if (!retObj) { astDiagnostics.push({ kind: "no-return-object", path: "", snippet: "" });
     return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics }; }
-  const scope = buildAstScope(factory, amdDeps);
+  const scope = buildAstScope(factory, amdDeps, src);
   const captured = makeAstEvaluator(scope, astDiagnostics, src)(retObj, []);
   return { ...buildSchemaResult(pkg, src, null, captured || {}, amdDeps), astDiagnostics };
 }

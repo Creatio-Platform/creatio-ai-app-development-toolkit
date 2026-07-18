@@ -126,6 +126,13 @@ export function runMigration(manifest, opts = {}) {
     if ((eff.unresolvedParents || []).length) reasons.push(`unresolvedParents: ${eff.unresolvedParents.join(", ")} — base-template seed incomplete (F2) or schemas out of order (F1)`);
     if ((eff.warnings || []).length) reasons.push(`warnings (${eff.warnings.length}): ${[...new Set(eff.warnings.map((w) => w.name || w.op))].join(", ")} — op hit a missing item / skeletal seed`);
     if (eff.seedQuality && eff.seedQuality.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
+    // Blocker 1: an unresolved construct AT a structural key (the WHOLE diff/details/… couldn't be statically
+    // resolved — e.g. built via an unresolved variable or a call) yields an EMPTY effective page that would
+    // otherwise pass clean. Block it. Deep leaves (a dynamic caption at `diff.N.values.caption`) stay advisory
+    // — the field itself resolved; only a diagnostic ON the structural key blocks.
+    const STRUCTURAL_KEYS = new Set(["diff", "details", "businessRules", "rules", "modules", "entitySchemaName"]);
+    const structDiag = parseDiagnostics.filter((d) => STRUCTURAL_KEYS.has(d.path));
+    if (structDiag.length) reasons.push(`parse could not statically resolve structural field(s): ${[...new Set(structDiag.map((d) => `${d.path} (${d.kind})`))].join(", ")} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
     return { blocked: reasons.length > 0, reasons };
   })();
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be

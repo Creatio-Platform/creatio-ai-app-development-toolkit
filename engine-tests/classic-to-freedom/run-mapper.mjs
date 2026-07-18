@@ -999,5 +999,20 @@ check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Sho
 check("scalarControl: a genuinely unknown type code (44=URL) still falls to a loud field-control decision",
   rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && d.item === "UNK"));
 
+// Blocker 1 — the AST parser (which replaced the vm) must not let an unresolved structural field pass as a
+// clean-but-EMPTY page. (a) A diff built via a top-level const alias now resolves statically (part 2); (b) a
+// diff the parser genuinely cannot resolve (built by a call) BLOCKS the gate, not a hollow pass (part 1);
+// (c) a DEEP-leaf dynamic (a field's caption) stays advisory — it does NOT add the structural-field block.
+const b1alias = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
+check("Blocker1(part2): a diff built via an array const alias resolves statically — no parse diagnostic, field captured",
+  b1alias.parseDiagnostics.length === 0 && b1alias.changeSet.viewConfigDiff.some((o) => o.name === "F"));
+const b1call = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ return {entitySchemaName:"X", diff: makeDiff()}; });` }] }, { baseDir: FIX });
+check("Blocker1(part1): an unresolved construct AT a structural key (diff via a call) BLOCKS the gate, not a hollow pass",
+  b1call.gate.blocked === true && b1call.gate.reasons.some((r) => /structural field/.test(r) && /diff/.test(r)));
+check("Blocker1(boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
+  !pdCs.gate.reasons.some((r) => /structural field/.test(r)));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
