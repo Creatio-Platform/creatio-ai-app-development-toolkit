@@ -9,8 +9,22 @@
 // not layout) + a Confirm list (the ⚠ worklist). Input = the runMigration() result. Output = Markdown.
 // Markdown tables cannot merge cells, so the Region column REPEATS per row (grouped, first-seen order).
 
-const strip = (s) => (s == null ? "" : String(s).replace(/^\$/, ""));
-const esc = (s) => strip(s).replace(/\|/g, "\\|"); // keep table cells from breaking on a literal pipe
+// UNTRUSTED-INPUT HARDENING. Captions, titles, entity/column/detail/process/page names and notes are
+// STAND-DERIVED — they end up in the Markdown plan the agent presents "verbatim" and acts on. A raw
+// newline, control char, heading (`#`), blockquote (`>`) or table pipe in one of them can break the table
+// OR inject a line that reads as an instruction (indirect prompt injection into a doc the agent executes).
+// `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
+// enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
+// since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
+const strip = (s) => (s == null ? "" : String(s)
+  .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
+  .replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]+/g, " ") // control/CR/LF/tab + Unicode line/para separators -> space
+  .trim());
+// `esc` is for STAND-DERIVED VALUES placed in table cells / inline code spans. On top of strip it (a)
+// escapes the table pipe and (b) neutralizes backticks to an inert look-alike (U+02CB) so a value can never
+// break out of an inline `code` span — a real caption/identifier never legitimately contains a backtick.
+// (Engine-authored reason/note text keeps `strip`, not `esc`, so its intentional `code` spans survive.)
+const esc = (s) => strip(s).replace(/`/g, "ˋ").replace(/\|/g, "\\|");
 const isField = (o) => !!o?.values?.control;
 const DASH = "—";
 
