@@ -169,7 +169,12 @@ function makeAstEvaluator(scope, diagnostics, src) {
       case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
       case "Identifier":
         if (node.name === "undefined") return undefined;
-        if (scope.has(node.name)) { const m = scope.get(node.name); return m.kind === "value" ? m.value : null; }
+        if (scope.has(node.name)) {
+          const m = scope.get(node.name);
+          if (m.kind === "value") return m.value;
+          if (m.kind === "node") return evalNode(m.node, path); // lazy alias: evaluate at the REFERENCE path with the real sink
+          return null; // proxy / BusinessRuleModule param — not a static value
+        }
         flag("unresolved-identifier", node, path); return null;
       case "UnaryExpression": {
         const v = evalNode(node.argument, path);
@@ -215,17 +220,19 @@ function buildAstScope(factory, amdDeps, src) {
   // Top-level consts/vars in the factory body so BOTH `var x = "Foo"; return { name: x }` and
   // `var d = [ … ]; return { diff: d }` resolve. The AST parser (which replaced the vm) lost the array/object
   // alias case — the vm EXECUTED the body so the alias just worked (Blocker 1: an aliased diff silently
-  // became []). Literals go straight in; array/object initializers are statically evaluated over the scope
-  // built SO FAR (earlier decls visible to later). A throwaway diagnostics sink keeps scope-building silent —
-  // if the return object then references a value that stayed unresolved AT a structural key, the gate blocks.
+  // became []). Literals go straight in as values. Array/object initializers are stored as LAZY AST NODES,
+  // not pre-computed values: pre-computing them with a throwaway diagnostics sink silently DROPPED any dynamic
+  // construct inside (e.g. `var d=[{…, values: makeValues()}]`), so the aliased diff resolved to a hole with
+  // NO diagnostic and the gate stayed green. Deferring to the reference site means the FINAL evaluator (with
+  // the real diagnostics sink) descends the alias at its true path (`diff.0.values`), so an unresolved
+  // structural value is flagged and the gate blocks — the alias case is now diagnosed exactly like an inline one.
   const body = factory.body && factory.body.type === "BlockStatement" ? factory.body.body : [];
-  const preEval = makeAstEvaluator(scope, [], src);
   for (const st of body)
     if (st.type === "VariableDeclaration")
       for (const d of st.declarations) {
         if (d.id.type !== "Identifier" || !d.init) continue;
         if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
-        else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "value", value: preEval(d.init, []) });
+        else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "node", node: d.init });
       }
   return scope;
 }

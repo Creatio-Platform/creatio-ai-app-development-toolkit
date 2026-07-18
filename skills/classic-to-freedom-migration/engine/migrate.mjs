@@ -64,6 +64,10 @@ export function runMigration(manifest, opts = {}) {
       // editable: explicit manifest value WINS (false = verified view/attach-only); else the body heuristic; else null.
       editable: ("editable" in eObj) ? eObj.editable : (viewOnly ? false : null),
       error: p.error || null,
+      // Major 4 — a detail body's AST diagnostics must reach the gate too: a detail whose `diff` is built by
+      // an unresolved call parses WITHOUT an error but yields columns:null. Keeping them here lets the gate
+      // block on an unresolved STRUCTURAL detail field (below), instead of a silent green with empty columns.
+      astDiagnostics: p.astDiagnostics || [],
     };
   }
   const changeSet = mapToFreedom(eff, {
@@ -82,8 +86,12 @@ export function runMigration(manifest, opts = {}) {
   // fail-loud parse diagnostics: constructs the AST parser could not statically resolve (dynamic call /
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
-  const parseDiagnostics = [...schemas, ...seedTemplate, ...sectionSchemas]
-    .flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d })));
+  const parseDiagnostics = [
+    ...[...schemas, ...seedTemplate, ...sectionSchemas].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
+    // Major 4 — detail-schema diagnostics join the pool tagged `detail:<name>`; a structural one (an unresolved
+    // detail `diff`) then blocks the gate just like a main-schema one, instead of silently emptying its columns.
+    ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
+  ];
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = sectionSchemas.length ? {
     addRecordMiniPage: sectionSchemas.map((l) => l.addRecordMiniPage).filter((v) => v != null).pop() ?? null,
@@ -136,13 +144,34 @@ export function runMigration(manifest, opts = {}) {
     if ((eff.unresolvedParents || []).length) reasons.push(`unresolvedParents: ${eff.unresolvedParents.join(", ")} — base-template seed incomplete (F2) or schemas out of order (F1)`);
     if ((eff.warnings || []).length) reasons.push(`warnings (${eff.warnings.length}): ${[...new Set(eff.warnings.map((w) => w.name || w.op))].join(", ")} — op hit a missing item / skeletal seed`);
     if (eff.seedQuality && eff.seedQuality.looksSkeletal) reasons.push("seedQuality.looksSkeletal — the seed is a hand-typed skeleton, not a real fetched parent-template body (#19)");
+    // Major 3 (this round) — the seed being SKELETAL was gated, but its ABSENCE was not. A Classic page always
+    // extends a base template (BaseModulePageV2/BasePageV2/BaseEntityPage); building with no seed silently drops
+    // inherited base actions + container layout. This normally trips `unresolvedParents`, but a body that defines
+    // its own containers (the skeleton-dodge) slips through green. Require a real seed, OR an explicit VERIFIED
+    // opt-out (`manifest.noParentTemplate: true`) for the rare page that genuinely has no parent template.
+    if (eff.seedQuality && !eff.seedQuality.seeded && !manifest.noParentTemplate)
+      reasons.push("no parent-template seed — a Classic page extends a base template (BaseModulePageV2/BasePageV2/…); building without its fetched body drops inherited base actions + container layout (F2). Fetch the parent-template schemas and pass them as `seed`, or set `noParentTemplate: true` ONLY if you have VERIFIED on-stand that this page has no parent template.");
     // Blocker 1: an unresolved construct AT a structural key (the WHOLE diff/details/… couldn't be statically
     // resolved — e.g. built via an unresolved variable or a call) yields an EMPTY effective page that would
     // otherwise pass clean. Block it. Deep leaves (a dynamic caption at `diff.N.values.caption`) stay advisory
     // — the field itself resolved; only a diagnostic ON the structural key blocks.
-    const STRUCTURAL_KEYS = new Set(["diff", "details", "businessRules", "rules", "modules", "entitySchemaName"]);
-    const structDiag = parseDiagnostics.filter((d) => STRUCTURAL_KEYS.has(d.path));
-    if (structDiag.length) reasons.push(`parse could not statically resolve structural field(s): ${[...new Set(structDiag.map((d) => `${d.path} (${d.kind})`))].join(", ")} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
+    // A diagnostic BLOCKS when it sits on a structural position — not only the exact root key, but a whole
+    // diff item or its identity fields (built via an unresolved var/call). Deep leaves (a dynamic caption /
+    // tip / hint / visible) stay advisory: the field itself resolved. This is what makes the aliased-diff
+    // Blocker visible — `var d=[{…, values: makeValues()}]` now flags `diff.0.values` and blocks.
+    const STRUCTURAL_ROOTS = new Set(["diff", "details", "businessRules", "rules", "modules", "entitySchemaName"]);
+    const IDENTITY_FIELDS = new Set(["operation", "name", "parentName", "propertyName", "bindTo", "itemType", "contentType", "isTab"]);
+    const isStructural = (p) => {
+      const seg = String(p).split(".");
+      if (!STRUCTURAL_ROOTS.has(seg[0])) return false;   // dynamic under a non-structural top key → advisory
+      if (seg[0] !== "diff") return true;                // details/businessRules/rules/modules/entitySchemaName: any unresolved sub-path is structural
+      if (seg.length <= 2) return true;                  // `diff` (whole array) or `diff.<n>` (whole item)
+      if (seg.length === 3) return seg[2] === "values" || IDENTITY_FIELDS.has(seg[2]); // `diff.<n>.values` (whole values obj) or a top-level identity field
+      if (seg[2] === "values") return IDENTITY_FIELDS.has(seg[3]);  // `diff.<n>.values.<field>`: identity → block; caption/tip/hint/visible → advisory
+      return IDENTITY_FIELDS.has(seg[2]);
+    };
+    const structDiag = parseDiagnostics.filter((d) => isStructural(d.path));
+    if (structDiag.length) reasons.push(`parse could not statically resolve structural field(s): ${[...new Set(structDiag.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ")} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
     // Major 3: aggregate child gates — a nested child that failed its OWN correctness gate blocks the parent.
     const blockedChildren = childPages.filter((c) => c.childBlocked);
     if (blockedChildren.length) reasons.push(`nested child page(s) failed their own gate: ${blockedChildren.map((c) => `${c.resolvedFrom || c.editPage} [${(c.childReasons || []).join("; ").slice(0, 90)}]`).join(" | ")} — a blocked child's spec is not a valid mapping; fix the child before the parent plan is approvable`);

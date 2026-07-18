@@ -1099,6 +1099,20 @@ check("Blocker1(part1): an unresolved construct AT a structural key (diff via a 
   b1call.gate.blocked === true && b1call.gate.reasons.some((r) => /structural field/.test(r) && /diff/.test(r)));
 check("Blocker1(boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
   !pdCs.gate.reasons.some((r) => /structural field/.test(r)));
+// Blocker (this round): an alias array whose ITEM carries a dynamic STRUCTURAL value (`values: makeValues()`)
+// must NOT resolve to a silent hole. The lazy-node alias eval flags `diff.0.values` in the real sink → the
+// gate blocks, instead of the old green pass with 0 fields and the field mislabelled unmapped-component.
+const b1aliasDyn = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values: makeValues()}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
+check("Blocker (alias): an aliased diff item with a dynamic values object is diagnosed (diff.N.values) and BLOCKS the gate",
+  b1aliasDyn.gate.blocked === true && b1aliasDyn.gate.reasons.some((r) => /structural field/.test(r) && /diff\.0\.values/.test(r)),
+  () => ({ blocked: b1aliasDyn.gate.blocked, reasons: b1aliasDyn.gate.reasons, diags: b1aliasDyn.parseDiagnostics }));
+// and the sibling advisory boundary via an alias: a dynamic CAPTION deep in an aliased item stays advisory.
+const b1aliasCap = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F",caption:makeCaption()}}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
+check("Blocker (alias): a dynamic caption inside an aliased item stays ADVISORY (surfaced, not a structural block)",
+  b1aliasCap.parseDiagnostics.some((d) => /diff\.0\.values\.caption/.test(d.path)) && !b1aliasCap.gate.reasons.some((r) => /structural field/.test(r)),
+  () => ({ diags: b1aliasCap.parseDiagnostics, reasons: b1aliasCap.gate.reasons }));
 
 // Major 3 — the hard gate must aggregate detail + child-page failures, not pass them green.
 // (a) a detail-schema body that fails to parse reaches parseErrors (was captured per-detail but never gated);
@@ -1114,6 +1128,26 @@ const m3child = runMigration({ entity: "X",
   childPageSchemas: { C: m3childBad, CPage: m3childBad } }, { baseDir: FIX });
 check("Major3(child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
   m3child.gate.blocked === true && m3child.gate.reasons.some((r) => /nested child/.test(r)));
+// Major 4 (this round) — a detail body that PARSES but builds its `diff` via an unresolved call resolves to
+// columns:null. Its astDiagnostics must reach the gate (tagged detail:<name>) and BLOCK on the structural diff,
+// not pass green with empty columns.
+const m4detDyn = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"DynDetail",entitySchemaName:"C",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { DynDetail: { entity: "C", editPage: false, body: `define("DynDetail",[],function(){ return {entitySchemaName:"C", diff: buildCols()}; });` } } }, { baseDir: FIX });
+check("Major4(detail): a detail whose diff is built by an unresolved call BLOCKS the gate (detail:<name> structural diag), not green columns:null",
+  m4detDyn.gate.blocked === true && m4detDyn.gate.reasons.some((r) => /structural field/.test(r) && /detail:DynDetail/.test(r)),
+  () => ({ blocked: m4detDyn.gate.blocked, reasons: m4detDyn.gate.reasons }));
+// Major 3 (this round) — a page built with NO parent-template seed must BLOCK (a Classic page always extends a
+// base template; skipping the seed drops inherited actions + layout). The skeleton-dodge (page defines its own
+// containers so `unresolvedParents` stays empty) previously slipped through green. Verified opt-out clears it.
+const dodgeBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}},{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});`;
+const noSeedRun = runMigration({ entity: "X", schemas: [{ pkg: "P", body: dodgeBody }] }, { baseDir: FIX });
+check("Major3(seed): a page with NO seed (skeleton-dodge) is gate-BLOCKED with a 'no parent-template seed' reason",
+  noSeedRun.gate.blocked === true && noSeedRun.gate.reasons.some((r) => /no parent-template seed/.test(r)),
+  () => noSeedRun.gate.reasons);
+const optOutRun = runMigration({ entity: "X", noParentTemplate: true, schemas: [{ pkg: "P", body: dodgeBody }] }, { baseDir: FIX });
+check("Major3(seed): the verified opt-out (noParentTemplate:true) clears the no-seed block (rare no-parent page)",
+  !optOutRun.gate.reasons.some((r) => /no parent-template seed/.test(r)));
 
 /* ---- Minor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
 // The design spec is presented "verbatim" and acted on. A hostile/garbled stand caption or column title
