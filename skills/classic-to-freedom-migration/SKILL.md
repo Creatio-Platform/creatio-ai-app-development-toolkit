@@ -18,6 +18,8 @@ These six rules are non-negotiable. Everything else in this skill serves them. *
 5. **The engine does the mechanical 80%; you do the judgment 20%.** It merges the schema chain, maps to Freedom, and renders the plan/spec deterministically. Your job is to feed it complete inputs and resolve its `needsDecision[]` / `⚠` worklist — not to re-derive by hand what it generates.
 6. **Plain Markdown in chat, never HTML or a rendered artifact.** Match the user's language. Never commit or push without explicit approval.
 
+> **This plan is standalone.** A Classic→Freedom migration is a technical UI-transformation, not a business-requirements task — so its plan is the engine-written `plan.md` above (Overview / Main scope / Layout / Logic / ⚠ Confirm), **not** a BA-style Business Plan, and it does **not** go through the orchestrator's Gate P/R (`AGENTS.md` exempts this skill). Present the engine's `plan.md` verbatim (rule 2).
+
 ## Inputs
 
 - A Creatio section/page URL, or a section/page/entity name.

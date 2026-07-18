@@ -10,6 +10,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
 - **The plan output MUST be a BA-style Business Plan.** The BA-style Business Plan (Agent 2 output) must be shown inline in the visible conversation body. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
+- **Exception — Classic→Freedom UI migration.** Everything above governs **business-requirements planning** — app creation and any other business task that needs requirements working-through. A Classic→Freedom UI migration is **not** such a task: it is a deterministic technical UI-transformation. The `classic-to-freedom-migration` skill therefore does **not** use the BA-style Business Plan or Gate P/R — it presents its OWN engine-written migration plan (`node engine/migrate.mjs <manifest> --plan`: Overview / Main scope / Layout / Logic / ⚠ Confirm), and for it the written `plan.md` **is** the deliverable, presented verbatim. That skill's Contract governs its plan format and approval; do not force it into the 7-section structure.
 
 
 The required top-level sections of every BA-style Business Plan are, in order:
@@ -235,6 +236,7 @@ Gate P:
 
 Gate R:
 
+- **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
 - Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
 - Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
