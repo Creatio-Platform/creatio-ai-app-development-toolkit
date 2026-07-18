@@ -1014,5 +1014,20 @@ check("Blocker1(part1): an unresolved construct AT a structural key (diff via a 
 check("Blocker1(boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
   !pdCs.gate.reasons.some((r) => /structural field/.test(r)));
 
+// Major 3 — the hard gate must aggregate detail + child-page failures, not pass them green.
+// (a) a detail-schema body that fails to parse reaches parseErrors (was captured per-detail but never gated);
+// (b) a nested child that fails its OWN gate blocks the parent (its spec is not a valid mapping).
+const m3det = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  detailSchemas: { BrokenDetail: { body: "define(" } } }, { baseDir: FIX });
+check("Major3(detail): a detail-schema body that fails to parse reaches parseErrors → gate blocks",
+  m3det.gate.blocked === true && m3det.gate.reasons.some((r) => /detail:BrokenDetail/.test(r)));
+const m3childBad = { schemas: [{ pkg: "CP", body: `define("CP",[],function(){ return {entitySchemaName:"C", diff: makeDiff()}; });` }] };
+const m3child = runMigration({ entity: "X",
+  schemas: [{ pkg: "PP", body: `define("PP",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}],details:{D:{schemaName:"CDetail",entitySchemaName:"C",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  childPageSchemas: { C: m3childBad, CPage: m3childBad } }, { baseDir: FIX });
+check("Major3(child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
+  m3child.gate.blocked === true && m3child.gate.reasons.some((r) => /nested child/.test(r)));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

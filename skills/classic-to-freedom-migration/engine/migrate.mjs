@@ -73,7 +73,12 @@ export function runMigration(manifest, opts = {}) {
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
   });
-  const parseErrors = [...schemas, ...seedTemplate, ...sectionSchemas].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error }));
+  const parseErrors = [
+    ...[...schemas, ...seedTemplate, ...sectionSchemas].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
+    // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
+    // page silently resolve to null while the plan stays green. Its error was captured per-detail above.
+    ...Object.entries(detailSchemas).filter(([, d]) => d.error).map(([name, d]) => ({ pkg: `detail:${name}`, error: d.error })),
+  ];
   // fail-loud parse diagnostics: constructs the AST parser could not statically resolve (dynamic call /
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
@@ -112,6 +117,11 @@ export function runMigration(manifest, opts = {}) {
       c.mappedEntity = childRes.entity;
       c.resolvedFrom = key;
       c.grandChildren = (childRes.childPages || []).length;
+      // Major 3: a nested child's spec is a VALID mapping only if the child cleared its OWN gates. Carry the
+      // child's verdict up so a blocked/incomplete child can't be embedded into a green parent plan at exit 0.
+      c.childBlocked = !!(childRes.gate && childRes.gate.blocked);
+      c.childReasons = (childRes.gate && childRes.gate.reasons) || [];
+      c.childStructIncomplete = !!(childRes.structure && !childRes.structure.complete);
     } catch (e) { c.specError = e.message; }     // malformed child manifest ⇒ note it, keep the listed row
   }
   const decisionSummary = {};
@@ -133,6 +143,9 @@ export function runMigration(manifest, opts = {}) {
     const STRUCTURAL_KEYS = new Set(["diff", "details", "businessRules", "rules", "modules", "entitySchemaName"]);
     const structDiag = parseDiagnostics.filter((d) => STRUCTURAL_KEYS.has(d.path));
     if (structDiag.length) reasons.push(`parse could not statically resolve structural field(s): ${[...new Set(structDiag.map((d) => `${d.path} (${d.kind})`))].join(", ")} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);
+    // Major 3: aggregate child gates — a nested child that failed its OWN correctness gate blocks the parent.
+    const blockedChildren = childPages.filter((c) => c.childBlocked);
+    if (blockedChildren.length) reasons.push(`nested child page(s) failed their own gate: ${blockedChildren.map((c) => `${c.resolvedFrom || c.editPage} [${(c.childReasons || []).join("; ").slice(0, 90)}]`).join(" | ")} — a blocked child's spec is not a valid mapping; fix the child before the parent plan is approvable`);
     return { blocked: reasons.length > 0, reasons };
   })();
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
@@ -149,7 +162,9 @@ export function runMigration(manifest, opts = {}) {
         issues.push(`detail '${d.detailSchema}'${d.entity ? ` (${d.entity})` : ""}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
     }
     for (const c of childPages) {
-      if (c.spec) continue;                                   // mapped -> fine
+      // Major 3: a child that WAS mapped but whose own structure is incomplete (its nested detail/child
+      // schemas were not supplied) is not "done" — the tree is incomplete. Surface it (recursive aggregation).
+      if (c.spec) { if (c.childStructIncomplete) issues.push(`child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`); continue; }
       if (c.editPage === false || c.editable === false) continue; // verified no page, or view/attach-only from this detail -> fine
       if (typeof c.editPage === "string" && c.editPage)
         // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
