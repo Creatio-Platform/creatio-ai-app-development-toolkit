@@ -554,11 +554,16 @@ const capClient = () => L("Client", { entity: "X", diff: [
   di({ name: "Grp", parentName: "MyTab", itemType: 15, caption: "Resources.Strings.GrpCaption" }),
   di({ name: "GF", parentName: "Grp", propertyName: "items", bindTo: "GF" })] });
 const capResolved = mapToFreedom(mergeHierarchy([capClient()]), { resources: { MyTabCaption: "Vacancies", GrpCaption: "Details" } });
-check("#5/#13: resolved tab caption becomes literal text + no tab-caption decision",
-  capResolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "Vacancies"
+// Major 4 — user-visible text on the page is a LOCALIZABLE BINDING, never an inline literal. A resolved
+// caption keeps the `$Resources.Strings.<key>` binding on the page; the human text lands in cs.resources
+// (plan metadata the agent authors), and the "resolved" state just clears the needs-decision nudge.
+check("#5/#13 (Major 4): resolved tab caption stays a $Resources binding + text in resources map + no tab-caption decision",
+  capResolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "$Resources.Strings.MyTabCaption"
+  && capResolved.resources.MyTabCaption === "Vacancies"
   && !capResolved.needsDecision.some(n => n.kind === "tab-caption"));
-check("#5/#13: resolved group caption becomes literal text + no group-caption decision",
-  capResolved.viewConfigDiff.find(o => o.name === "Grp")?.values.caption === "Details"
+check("#5/#13 (Major 4): resolved group caption stays a $Resources binding + text in resources map + no group-caption decision",
+  capResolved.viewConfigDiff.find(o => o.name === "Grp")?.values.caption === "$Resources.Strings.GrpCaption"
+  && capResolved.resources.GrpCaption === "Details"
   && !capResolved.needsDecision.some(n => n.kind === "group-caption"));
 const capUnresolved = mapToFreedom(mergeHierarchy([capClient()]));
 check("#5/#13: without resources, captions keep the binding + are flagged unresolved (tab + group)",
@@ -571,13 +576,29 @@ const lblClient = () => L("Client", { entity: "X", diff: [
   di({ name: "MobilePhone", parentName: "Header", propertyName: "items", bindTo: "MobilePhone" }),
   di({ name: "ExpertiseLevel", parentName: "Header", propertyName: "items", bindTo: "ExpertiseLevel" })] });
 const lblResolved = mapToFreedom(mergeHierarchy([lblClient()]), { columnTitles: { MobilePhone: "Mobile phone", ExpertiseLevel: "Specialist expertise level" } });
-check("#5/#13 fields: columnTitles → field label is the human title, not the column code",
-  lblResolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.label === "Mobile phone"
-  && lblResolved.viewConfigDiff.find(o => o.name === "ExpertiseLevel")?.values.label === "Specialist expertise level");
+// Major 4 — a column-bound field AUTO-labels from its entity column on the page, so we NEVER write an inline
+// `label`. The human title rides along as PLAN-only `titleText` (so the design spec reads the title, not the code).
+const mpVals = lblResolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values;
+check("#5/#13 fields (Major 4): columnTitles → field titleText is the human title (plan metadata), and NO inline page label",
+  mpVals?.titleText === "Mobile phone" && !("label" in mpVals)
+  && lblResolved.viewConfigDiff.find(o => o.name === "ExpertiseLevel")?.values.titleText === "Specialist expertise level");
 const lblUnresolved = mapToFreedom(mergeHierarchy([lblClient()]));
-check("#5/#13 fields: without columnTitles, labels keep the binding + ONE aggregate field-labels nudge",
-  lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.label === "$Resources.Strings.MobilePhone"
+check("#5/#13 fields (Major 4): without columnTitles, NO inline label AND no titleText on the page + ONE aggregate field-labels nudge",
+  !("label" in lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone").values)
+  && lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.titleText === undefined
   && lblUnresolved.needsDecision.filter(n => n.kind === "field-labels").length === 1);
+
+/* ---- Major 4 INVARIANT: viewConfigDiff carries NO inline user-visible text ---- */
+// The localization guarantee (AGENTS.md): every caption emitted onto the page is a $Resources.Strings binding,
+// and a field never carries an inline `label`. Asserted across the rich Contract changeset (many tabs/groups/
+// fields) so a regression that ships a literal caption/label anywhere trips this — plus resources is exposed.
+const capValued = co.viewConfigDiff.filter(o => o.values && "caption" in o.values);
+check("Major 4 invariant: every page caption is a $Resources.Strings binding (no inline literals)",
+  capValued.length > 0 && capValued.every(o => String(o.values.caption).startsWith("$Resources.Strings.")));
+check("Major 4 invariant: NO field carries an inline `label` (fields auto-label from their entity column)",
+  co.viewConfigDiff.every(o => !o.values || !("label" in o.values)));
+check("Major 4 invariant: the ChangeSet exposes a resources map (page string keys → default text)",
+  co.resources && typeof co.resources === "object");
 
 /* ---- #13 (detail title): detailSchemas[...].title becomes the detail's display caption ---- */
 const dtCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {
@@ -594,8 +615,9 @@ const dtabCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: 
   diff: [di({ name: "OnlyDetailTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.ODTCap" }),
          di({ name: "D", parentName: "OnlyDetailTab", propertyName: "items", itemType: 2 })] })]),
   { resources: { ODTCap: "Vacancies" } });
-check("detail-only tab: the owning tab is emitted as crt.Tab (the related list has a home) + caption resolves",
-  dtabCs.viewConfigDiff.some(o => o.name === "OnlyDetailTab" && o.values?.type === "crt.Tab" && o.values.caption === "Vacancies"));
+check("detail-only tab: the owning tab is emitted as crt.Tab (the related list has a home) + caption is a resolved $Resources binding",
+  dtabCs.viewConfigDiff.some(o => o.name === "OnlyDetailTab" && o.values?.type === "crt.Tab" && o.values.caption === "$Resources.Strings.ODTCap")
+  && dtabCs.resources.ODTCap === "Vacancies");
 
 /* ---- #11(ii)/B2: a supplied detail schema resolves the related-list columns + kills detail-unresolved ---- */
 const detCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", details: {

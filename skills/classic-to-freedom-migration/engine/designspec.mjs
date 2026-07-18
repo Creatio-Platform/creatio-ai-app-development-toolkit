@@ -17,9 +17,12 @@ const DASH = "—";
 // Climb the emitted insert tree from a container to the region that holds it: crt.Tab → that tab,
 // SideAreaProfileContainer → the side profile (with the island container appended, #9b), Header → header,
 // else the raw container name (a base-template container not re-emitted here).
-function regionResolver(viewConfigDiff) {
+function regionResolver(viewConfigDiff, resources = {}) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
-  const label = (o) => esc(o.values?.caption ? strip(o.values.caption) : o.name);
+  // Major 4 — a caption is a `$Resources.Strings.<key>` binding; show its human text from the resource map
+  // (the plan stays readable) — fall back to the key when the text is not resolved.
+  const capText = (raw) => { const k = String(raw).replace(/^\$?Resources\.Strings\./, ""); return resources[k] ?? k; };
+  const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
   return (parentName) => {
     let p = parentName, hops = 0, first = null;
     while (p && hops++ < 64) {
@@ -36,8 +39,9 @@ function regionResolver(viewConfigDiff) {
   };
 }
 
-// field display name = its resolved label (human title) when available, else the column code.
-const dispLabel = (o) => { const l = o.values?.label; return (l && !String(l).startsWith("$")) ? String(l) : strip(o.values.control); };
+// field display name = its human title (PLAN-only `titleText` metadata; the page itself auto-labels from the
+// entity column — Major 4), else the column code.
+const dispLabel = (o) => o.values?.titleText || strip(o.values?.control);
 const humanizeAction = (a) => ({ "make-required": "required", "make-optional": "optional", "make-read-only": "read-only", "make-editable": "editable", "show-element": "visible", "hide-element": "hidden" }[a] || a);
 const triggerOf = (m) => {
   const mt = /^on(.+?)Chang/.exec(m);

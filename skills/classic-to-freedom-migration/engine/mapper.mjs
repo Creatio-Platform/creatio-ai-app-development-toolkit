@@ -195,11 +195,20 @@ export function mapToFreedom(eff, opts = {}) {
   // Produce a Freedom caption VALUE from a classic caption reference: the resolved literal text if the
   // manifest carries the string, else the `$`-binding as-is, else a synthesized key from the fallback
   // name. `resolved` gates whether the caller still flags it for manual resolution (#5/#13).
+  // Major 4 — user-visible text on the page must be a LOCALIZABLE BINDING, never an inline literal (clio
+  // rejects hardcoded page text; AGENTS.md). So a caption returns the `$Resources.Strings.<key>` BINDING for
+  // the page body, plus the display `text` for the PLAN ONLY, registered in `resourceStrings` so the agent
+  // knows what to author. `key` = the ORIGINAL classic resource key when the schema had one, else a
+  // synthesized `<name>Caption`. `resolved` = the text is known (no manual decision needed).
+  const resourceStrings = {}; // resource key -> default-language text: the map the agent registers at build
+  const captionKey = (raw, fallbackName) => raw
+    ? String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*$/, "")
+    : (fallbackName || "") + "Caption";
   const caption = (raw, fallbackName) => {
-    const txt = resolveText(raw) ?? resolveText((fallbackName || "") + "Caption");
-    if (txt != null) return { value: txt, resolved: true, synthesized: false };
-    if (raw) return { value: "$" + raw, resolved: false, synthesized: false };
-    return { value: "$Resources.Strings." + fallbackName + "Caption", resolved: false, synthesized: true };
+    const key = captionKey(raw, fallbackName);
+    const text = resolveText(raw) ?? resolveText((fallbackName || "") + "Caption");
+    if (text != null) resourceStrings[key] = text;
+    return { binding: "$Resources.Strings." + key, text, key, resolved: text != null, synthesized: !raw };
   };
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
   // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
@@ -288,6 +297,9 @@ export function mapToFreedom(eff, opts = {}) {
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, needsDecision,
+    // Major 4 — resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
+    // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
+    resources: resourceStrings,
     // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
     standardFeatures: D.standardFeatures,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
@@ -332,15 +344,15 @@ function createContainers(ctx) {
       const tItem = index.get(tab);
       const c = caption(tItem?.caption, tab);
       structural.push({ operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
-        values: { type: "crt.Tab", caption: c.value } });
+        values: { type: "crt.Tab", caption: c.binding } });
       structural.push({ operation: "insert", name: parentName, parentName: tab, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_2 } });
       // flag only when the caption is NOT resolved to real text (synthesized key, or an unresolved key
       // because no manifest.resources was supplied). A resolved literal caption needs no decision (#5/#13).
       if (!c.resolved) nd.push({ kind: "tab-caption", item: tab,
         reason: c.synthesized
-          ? `synthesized caption key '${c.value}' — classic caption not in model; confirm/replace with the real localized string`
-          : `tab caption '${c.value}' is an unresolved resource key — pass the schema's localizable strings as manifest.resources to resolve it, or confirm the real label` });
+          ? `synthesized caption key '${c.key}' — classic caption not in model; author the localized string for it`
+          : `tab caption '${c.key}' is an unresolved resource key — pass the schema's localizable strings as manifest.resources to resolve it, or confirm the real label` });
     }
     accounted.add(parentName);
     emittedTabs.set(tab, parentName);
@@ -354,14 +366,14 @@ function createContainers(ctx) {
       // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
       const c = caption(g.caption, g.name);
       structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
-        values: { type: "crt.ExpansionPanel", caption: c.value, collapsible: true } });
+        values: { type: "crt.ExpansionPanel", caption: c.binding, collapsible: true } });
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_2 } });
       if (!c.resolved) nd.push({ kind: "group-caption", item: g.name,
         reason: c.synthesized
-          ? `synthesized ExpansionPanel caption '${c.value}' for classic group — confirm/replace with the real localized string`
-          : `group caption '${c.value}' is an unresolved resource key — pass manifest.resources to resolve it, or confirm the real label` });
+          ? `synthesized ExpansionPanel caption key '${c.key}' for classic group — author the localized string for it`
+          : `group caption '${c.key}' is an unresolved resource key — pass manifest.resources to resolve it, or confirm the real label` });
     } else {
       // GRID_LAYOUT / generic structural container -> crt.GridContainer.
       inner = g.name;
@@ -495,9 +507,13 @@ function mapFields(ctx, containers) {
     const lbl = labelFor(col);
     if (lbl != null) fieldsWithTitle++;
     const values = {
-      type: c.type, control: "$" + col, label: lbl != null ? lbl : "$Resources.Strings." + col,
+      type: c.type, control: "$" + col,
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
+    // Major 4 — a column-bound field AUTO-labels from the entity column's own (localized) title, so we do NOT
+    // write an inline `label`/caption onto the page (clio rejects hardcoded page text; AGENTS.md). `titleText`
+    // is PLAN-only metadata (like `typeLabel`) so the design spec still reads the human title, not the code.
+    if (lbl != null) values.titleText = lbl;
     // design-spec Type column: a short human data type ("Text (250)", "Lookup", "Email") + the lookup's
     // referenced object when known — carried on the field so designspec.mjs renders it without re-deriving.
     values.typeLabel = fieldTypeLabel(col, meta, c);
