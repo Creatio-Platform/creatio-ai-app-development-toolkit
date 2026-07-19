@@ -26,6 +26,10 @@ const strip = (s) => (s == null ? "" : String(s)
 // break out of an inline `code` span — a real caption/identifier never legitimately contains a backtick.
 // (Engine-authored reason/note text keeps `strip`, not `esc`, so its intentional `code` spans survive.)
 const esc = (s) => strip(s).replaceAll("`", "ˋ").replaceAll("|", String.raw`\|`);
+// A value rendered on its OWN line (not after an inline label) must ALSO not START with a Markdown block
+// marker — `#` `>` `-` `+` `*` or `N.` — else e.g. "## Boom" becomes a real heading. Escapes the leading
+// marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
+const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+-]|\d+\.)/, "$1\\$2");
 const isField = (o) => !!o?.values?.control;
 const DASH = "—";
 
@@ -216,7 +220,7 @@ export function renderDesignSpec(result, opts = {}) {
       const acts = section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ");
       L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`);
     }
-    if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).join(", ") || "a process"} — wire as a list-page run-process action`);
+    if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
     L.push("");
   }
 
@@ -361,7 +365,7 @@ export function renderPlan(result, opts = {}) {
     `- **Approach:** ${fill(pm.approach, "<FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>")}`,
     "",
     "### What it does",
-    fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>"),
+    escBareLine(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>")), // bare line → also escape a leading block marker (finding 5)
     "",
   );
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER

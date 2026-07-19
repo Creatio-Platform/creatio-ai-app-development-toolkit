@@ -1,4 +1,4 @@
-// Golden test runner for the Ф2 merge engine.
+// Golden test runner for the merge engine.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

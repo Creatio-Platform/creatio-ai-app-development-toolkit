@@ -1,4 +1,4 @@
-// Ф2 — Merge engine. Pure Node module, no Creatio/stand dependency.
+// Merge engine. Pure Node module, no Creatio/stand dependency.
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance.
 import { parse as acornParse } from "./vendor/acorn.mjs";

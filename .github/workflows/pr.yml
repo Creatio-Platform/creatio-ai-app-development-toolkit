@@ -39,6 +39,7 @@ jobs:
   engine-goldens:
     name: Classic→Freedom engine goldens (${{ matrix.os }})
     strategy:
+      fail-fast: false   # a failure on one OS must NOT cancel the other — the engine + verify-vendor deliberately normalize CRLF/LF, so a platform-specific red is exactly the signal we need to see
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}

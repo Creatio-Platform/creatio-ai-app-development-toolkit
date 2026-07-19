@@ -1,4 +1,4 @@
-// Ф3 — Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
+// Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
 import { VIEW_ITEM_TYPE, CONTENT_TYPE } from "./engine.mjs";
@@ -108,7 +108,7 @@ const PROP_ACTION = {
   Visible: ["show-element", "hide-element"],
 };
 
-// Шар-3 knowledge: STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as
+// Standard-feature knowledge: STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as
 // a generic detail/widget. Matched by classic detail/module/container name. The Freedom analog is named
 // descriptively (the exact crt.* component is confirmed on-stand — never fabricated here; E1 lesson).
 // `templateProvided` = most Freedom FORM templates already ship this component → account for it / merge

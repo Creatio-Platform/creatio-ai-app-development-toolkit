@@ -16,7 +16,9 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VENDOR_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
+// Vendor dir defaults to the one co-located with this script. An optional argv[2] override lets the goldens
+// point the SAME integrity check at a tampered fixture (negative-path coverage) without touching the real bundle.
+const VENDOR_DIR = process.argv[2] ? path.resolve(process.argv[2]) : path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
 const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 
 const sha256Lf = (buf) =>

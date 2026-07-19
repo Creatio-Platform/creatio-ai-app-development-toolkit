@@ -1,4 +1,4 @@
-// Golden test for the Ф3 mapper: merge -> map -> assert Freedom ChangeSet.
+// Golden test for the mapper: merge -> map -> assert Freedom ChangeSet.
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -1311,6 +1311,53 @@ check("vendor-integrity: verify-vendor.mjs passes on the checked-in acorn bundle
 const prov = JSON.parse(fs.readFileSync(path.join(ENGINE_DIR, "vendor", "provenance.json"), "utf8"));
 check("vendor-integrity: provenance.json pins acorn with a 64-hex SHA-256 (the gate has something to enforce)",
   prov.files?.["acorn.mjs"]?.package === "acorn" && /^[0-9a-f]{64}$/.test(prov.files["acorn.mjs"].sha256 || ""));
+// NEGATIVE paths — the gate's whole point is FAILING on a tampered/absent bundle. verify-vendor.mjs takes an
+// optional vendor-dir arg so we can point it at a temp fixture without touching the real bundle. Cover every
+// exit-1 branch (mismatch / missing file / empty manifest / unreadable manifest) — a green-only test proves nothing.
+const VVBIN = path.join(ENGINE_DIR, "verify-vendor.mjs");
+const vvOn = (dir) => spawnSync(process.execPath, [VVBIN, dir], { encoding: "utf8" });
+const vvDir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_vv_"));
+try {
+  const provPath = path.join(vvDir, "provenance.json");
+  // (a) SHA-256 MISMATCH: pin a file to a wrong hash, write different content
+  fs.writeFileSync(provPath, JSON.stringify({ files: { "t.txt": { package: "x", version: "1", sha256: "0".repeat(64) } } }));
+  fs.writeFileSync(path.join(vvDir, "t.txt"), "hello");
+  const vMis = vvOn(vvDir);
+  check("vendor-integrity(neg): a tampered file (SHA mismatch) FAILS — exit 1 + 'SHA-256 MISMATCH' diagnostic",
+    vMis.status === 1 && /SHA-256 MISMATCH/.test(vMis.stderr || ""), () => ({ status: vMis.status, err: (vMis.stderr || "").slice(0, 120) }));
+  // (b) MISSING pinned file: pin t.txt but remove it
+  fs.rmSync(path.join(vvDir, "t.txt"));
+  const vMiss = vvOn(vvDir);
+  check("vendor-integrity(neg): a MISSING pinned file FAILS — exit 1 + 'cannot read'",
+    vMiss.status === 1 && /cannot read/.test(vMiss.stderr || ""));
+  // (c) EMPTY manifest: nothing pinned
+  fs.writeFileSync(provPath, JSON.stringify({ files: {} }));
+  const vEmpty = vvOn(vvDir);
+  check("vendor-integrity(neg): an EMPTY manifest FAILS — exit 1 + 'nothing pinned'",
+    vEmpty.status === 1 && /nothing pinned|no files/.test(vEmpty.stderr || ""));
+  // (d) UNREADABLE manifest: no provenance.json at all
+  fs.rmSync(provPath);
+  const vNoMan = vvOn(vvDir);
+  check("vendor-integrity(neg): an unreadable/absent manifest FAILS — exit 1 + 'cannot read'",
+    vNoMan.status === 1 && /cannot read/.test(vNoMan.stderr || ""));
+} finally {
+  fs.rmSync(vvDir, { recursive: true, force: true });
+}
+
+// Minor 2 — section.processNames are ESCAPED at the sink (defense-in-depth), not left to a remote parser
+// regex invariant. Feed a hostile name straight to the renderer (bypassing the parser) → the pipe is escaped.
+const procSpec = renderDesignSpec({ entity: "X", changeSet: {}, section: { processLaunch: true, processNames: ["Ev|il"] } });
+check("Minor2: section processNames are escaped at the sink (pipe neutralized), not reliant on a remote parser invariant",
+  procSpec.includes(String.raw`Ev\|il`) && !procSpec.includes("Ev|il"),
+  () => procSpec.split("\n").find((l) => /Section process/.test(l)));
+
+// Minor 5 — a bare-line planMeta value (whatItDoes) that STARTS with a Markdown block marker must not render
+// as a real heading in the verbatim plan (esc collapses newlines but not a leading `##`; escBareLine does).
+const widPlan = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: { ...FULL_PLANMETA, whatItDoes: "## Boom is not a heading" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX }).plan;
+check("Minor5: a whatItDoes value starting with a block marker does NOT render as a heading (bare-line escaped)",
+  !/^\s{0,3}#{1,6}\s+Boom/m.test(widPlan) && /Boom is not a heading/.test(widPlan),
+  () => JSON.stringify(widPlan.split("\n").find((l) => /Boom/.test(l))));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
