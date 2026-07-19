@@ -232,6 +232,15 @@ export function mapToFreedom(eff, opts = {}) {
   // the counts so the exclusion is transparent, not silent.
   const notTpl = (x) => !x.fromTemplate;                          // keyed categories + removals
   const payloadFields = eff.fields.filter(f => !f.templateOwned); // diff-items: by INSERT origin (C6)
+  // Blocker — a base (template-owned) field a CLIENT schema RECONFIGURED (merge/move: hid it, moved it, …) is
+  // excluded from the payload as template context, so its client override would silently vanish and the gate
+  // stayed green. Surface each as a decision: the Freedom template provides the field, but the client's
+  // customization (the reconcile delta) must be re-applied to it — never shipped as the bare template default.
+  for (const f of eff.fields.filter(f => f.templateOwned && f.schemaTouched)) {
+    const changes = [f.visible === false ? "hidden" : null, f.layout ? "moved/re-laid-out" : null].filter(Boolean).join(", ") || "reconfigured";
+    needsDecision.push({ kind: "base-field-override", item: f.bindTo || f.name,
+      reason: `base field '${f.bindTo || f.name}' is provided by the Freedom template, but a client schema ${changes} it — the parallel-analog build does NOT re-create base fields, so APPLY this customization onto the Freedom base field. Do not silently ship the template default.` });
+  }
   const payloadRules = eff.rules.filter(notTpl);
   const payloadDetails = eff.details.filter(notTpl);
   const payloadMethods = eff.methods.filter(notTpl);
@@ -415,7 +424,13 @@ function mapFields(ctx, containers) {
   const usedCells = {};  // parent -> Set of "col:row" cells already taken (span-aware), so nothing overlaps
   const nameCount = {};
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
-  const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index, profileAnchors) }));
+  // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
+  // classic layout order is `order`/index — without this a field with a lower order that appears later in the
+  // Map was assigned a LATER row (wrong vertical order). Fields with no explicit order keep their Map position
+  // (Infinity sorts last, stably). Row assignment below then walks fields in true layout order.
+  const resolved = payloadFields
+    .map((f, i) => ({ f, i, own: resolveOwner(f.parent, index, profileAnchors) }))
+    .sort((a, b) => ((a.f.order ?? Infinity) - (b.f.order ?? Infinity)) || (a.i - b.i));
   // Moment 1 — layout type: classic `Header` fields spanning >1 grid column == a WIDE multi-column
   // header (like Contract), NOT the narrow left profile island. In that case route them to a full-width
   // header GridContainer (preserving the multi-column grid) instead of cramming them into colSpan-1.
@@ -499,32 +514,36 @@ function mapFields(ctx, containers) {
     // authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
     // field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
     // coexist; only true overlaps are moved.
+    const rowSpan = cl.rowSpan != null ? cl.rowSpan : 1;
+    // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
+    // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
-    const spanCols = (c, span) => Array.from({ length: Math.max(1, span) }, (_, i) => c + i);
-    const cellFree = (c, span, r) => spanCols(c, span).every((cc) => !cells.has(cc + ":" + r));
-    const claimCells = (c, span, r) => spanCols(c, span).forEach((cc) => cells.add(cc + ":" + r));
+    const span = (start, n) => Array.from({ length: Math.max(1, n) }, (_, i) => start + i);
+    const cellKeys = (c, cs, r, rs) => span(c, cs).flatMap((cc) => span(r, rs).map((rr) => cc + ":" + rr));
+    const cellFree = (c, cs, r, rs) => cellKeys(c, cs, r, rs).every((k) => !cells.has(k));
+    const claimCells = (c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) => cells.add(k));
     const explicitRow = cl.row != null ? cl.row + 1 : null;
     let row;
     if (explicitRow != null) {
       row = explicitRow;
-      if (!cellFree(column, colSpan, row)) {          // 24→N collapse dropped this field onto an occupied cell
+      if (!cellFree(column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
         const wanted = row;
-        while (!cellFree(column, colSpan, row)) row++;
+        while (!cellFree(column, colSpan, row, rowSpan)) row++;
         needsDecision.push({ kind: "layout-collision", item: col,
-          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}) — the classic 24-col layout collapsed two fields onto one cell in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
+          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${rowSpan > 1 ? `, spans ${rowSpan} rows` : ""}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
       }
     } else {
       let cur = autoRow[parent] || 1;
-      while (!cellFree(column, colSpan, cur)) cur++;   // skip cells already taken in this column span
+      while (!cellFree(column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
       row = cur;
       autoRow[parent] = cur + 1;
     }
-    claimCells(column, colSpan, row);
+    claimCells(column, colSpan, row, rowSpan);
     const layoutConfig = {
       column,
       row,
       colSpan,
-      rowSpan: cl.rowSpan != null ? cl.rowSpan : 1,
+      rowSpan,
     };
     // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
     // → visible + a decision. A field inside a container that is itself hidden (static) or conditionally

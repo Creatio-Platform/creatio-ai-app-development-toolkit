@@ -36,12 +36,15 @@ function childPageIssue(c) {
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
     : null;
-  if (c.editPage === false || c.editable === false) return null; // verified no page, or view/attach-only -> fine
+  // A REAL Classic edit page must be mapped REGARDLESS of the add-record button — hiding Add stops NEW records,
+  // not editing EXISTING ones, so the edit page still governs the record UI. Checked FIRST, so a hidden-Add
+  // heuristic can never waive a real child page (Major).
   if (typeof c.editPage === "string" && c.editPage)
-    // a child whose detail names a REAL Classic edit page, but no childPageSchemas mapping was supplied
     return `child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`;
-  // unverified: we do not yet know whether the child entity has a Classic *Page — resolve before the plan.
-  return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false on this detail if no *Page exists. No self-declared "out of scope".`;
+  if (c.editPage === false) return null;                       // agent verified: no Classic *Page exists
+  if (c.editable === false && c.editableVerified) return null; // agent VERIFIED view/attach-only (not just the hidden-Add heuristic)
+  // unverified — incl. a hidden-Add heuristic that did NOT confirm no edit page: resolve before the plan.
+  return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false / "editable": false on this detail once confirmed. No self-declared "out of scope".`;
 }
 
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
@@ -80,6 +83,10 @@ export function runMigration(manifest, opts = {}) {
       editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
       // editable: explicit manifest value WINS (false = verified view/attach-only); else the body heuristic; else null.
       editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
+      // editableVerified: was `editable:false` an EXPLICIT agent assertion (view/attach-only confirmed), or only
+      // the add-record-hidden heuristic? Hiding Add stops NEW records, not editing EXISTING ones, so the heuristic
+      // alone must NOT waive a child page — only a verified false does (Major).
+      editableVerified: ("editable" in eObj),
       error: p.error || null,
       // Major 4 — a detail body's AST diagnostics must reach the gate too: a detail whose `diff` is built by
       // an unresolved call parses WITHOUT an error but yields columns:null. Keeping them here lets the gate
@@ -109,6 +116,21 @@ export function runMigration(manifest, opts = {}) {
     // detail `diff`) then blocks the gate just like a main-schema one, instead of silently emptying its columns.
     ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
   ];
+  // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
+  // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
+  // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
+  // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
+  const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
+  for (const s of schemas) {
+    for (const d of (s.astDiagnostics || [])) {
+      const m = /^diff\.(\d+)\.values\.(\w+)$/.exec(d.path || "");
+      if (!m || !MAPPING_PROPS.has(m[2])) continue;
+      const el = (s.diff || [])[+m[1]];
+      const item = el?.name || el?.bindTo || `diff[${m[1]}]`;
+      changeSet.needsDecision.push({ kind: "dynamic-property", item,
+        reason: `'${item}' has a dynamic '${m[2]}' (${d.kind}) the parser could not resolve statically — the ChangeSet shows the DEFAULT (e.g. visible:true). Wire the real Freedom behavior (business rule / binding) instead of shipping the static default.` });
+    }
+  }
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
   const section = sectionSchemas.length ? {
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
@@ -125,6 +147,7 @@ export function runMigration(manifest, opts = {}) {
     // preserve an explicit `false` (agent verified: no page) — `|| null` would swallow it into "unverified".
     editPage: detailSchemas[d.detailSchema] ? (detailSchemas[d.detailSchema].editPage ?? null) : null,
     editable: detailSchemas[d.detailSchema] ? detailSchemas[d.detailSchema].editable : null,
+    editableVerified: detailSchemas[d.detailSchema] ? !!detailSchemas[d.detailSchema].editableVerified : false,
   })).filter((c) => c.entity);
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:

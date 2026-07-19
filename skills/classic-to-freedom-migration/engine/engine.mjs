@@ -532,6 +532,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
           for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
           for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
           cur.provenance.push(L.pkg);
+          if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
         }
         else {
           // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
@@ -551,6 +552,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
           if (op.order != null) { cur.order = op.order; }
           if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
           cur.provenance.push(L.pkg);
+          if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
         } else {
           warnings.push({ op: "move", name: op.name, schema: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
         }
@@ -642,15 +644,19 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // building on it silently drops base actions + the true nesting. Surface it as a WARNING so the SKILL's
   // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
   const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
-  const looksSkeletal = seedTemplate.length > 0 && seedMethodNames.size === 0;
+  const hasGetActions = seedMethodNames.has("getActions");
+  // A real fetched base-template chain ALWAYS defines `getActions` (it surfaces the base ProcessButton / Run
+  // process). So the skeleton test keys on getActions, NOT merely a non-zero method count: a hand-typed stub
+  // with a token `dummy(){}` method has size 1 but still no getActions — it must NOT clear this gate.
+  const looksSkeletal = seedTemplate.length > 0 && !hasGetActions;
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
-    seedMethods: seedMethodNames.size, hasGetActions: seedMethodNames.has("getActions"),
+    seedMethods: seedMethodNames.size, hasGetActions,
     looksSkeletal,
   };
   if (looksSkeletal) warnings.push({
     op: "seed", name: "skeletal-seed", schema: "(seed)",
-    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) contribute 0 methods and no getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines methods incl. getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton, not the fetched template body. Re-fetch the parent-template schemas via get-classic-schema-by-uid and pass their real bodies as \`seed\` — do NOT build on a skeleton.`,
+    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) but NO getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton (or a partial chain), not the fetched template body. Re-fetch the parent-template schemas via get-classic-schema-by-uid and pass their real bodies as \`seed\` — do NOT build on a skeleton.`,
   });
 
   return {
@@ -663,7 +669,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
       visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
-    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+    fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
     // mapper can put the Expanded list in the right tab, in order (Gap: detail→tab/order was dropped).

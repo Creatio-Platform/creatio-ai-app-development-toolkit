@@ -25,7 +25,16 @@ const strip = (s) => (s == null ? "" : String(s)
 // escapes the table pipe and (b) neutralizes backticks to an inert look-alike (U+02CB) so a value can never
 // break out of an inline `code` span — a real caption/identifier never legitimately contains a backtick.
 // (Engine-authored reason/note text keeps `strip`, not `esc`, so its intentional `code` spans survive.)
-const esc = (s) => strip(s).replaceAll("`", "ˋ").replaceAll("|", String.raw`\|`);
+// On top of strip: neutralize every construct that could be ACTIVE Markdown/HTML in a rendered plan — the
+// table pipe, an inline code-span breakout (backtick), an HTML tag (`<img onerror=…>` → angle brackets are
+// HTML-encoded so it can never be a tag), and a Markdown link/image (`[x](javascript:…)` / `![x](…)` → break
+// the `](` so it renders literally). `&` is left as-is: a legitimate caption like "R&D" must read cleanly, and
+// since `<`/`>` are encoded there is no tag for a bare `&` to complete.
+const esc = (s) => strip(s)
+  .replaceAll("`", "ˋ")
+  .replaceAll("|", String.raw`\|`)
+  .replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+  .replaceAll("](", "]\\(");
 // A value rendered on its OWN line (not after an inline label) must ALSO not START with a Markdown block
 // marker — `#` `>` `-` `+` `*` or `N.` — else e.g. "## Boom" becomes a real heading. Escapes the leading
 // marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
@@ -92,8 +101,8 @@ export function renderDesignSpec(result, opts = {}) {
   // headings are the divider. Standalone (`--spec`) keeps the full header. The unresolvedParents gate is
   // safety-critical, so it is shown in BOTH modes.
   if (!opts.embedded) {
-    const templatePart = opts.template ? ` · **Template:** ${opts.template}` : "";
-    const packagePart = opts.targetPackage ? ` · **Package:** ${opts.targetPackage}` : "";
+    const templatePart = opts.template ? ` · **Template:** ${esc(opts.template)}` : "";       // stand/user-supplied → sanitize (Major 5)
+    const packagePart = opts.targetPackage ? ` · **Package:** ${esc(opts.targetPackage)}` : "";
     L.push(
       `## Design spec — ${entity} (generated)`,
       "",

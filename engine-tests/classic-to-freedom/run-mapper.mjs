@@ -1284,8 +1284,11 @@ const htmlCap = "T <img src=x onerror=alert(1)> [x](javascript:alert(1))\n## INJ
 const htmlRun = runMigration({ entity: "X", resources: { TC2: htmlCap }, seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"HT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.TC2"}},{operation:"insert",name:"F",parentName:"HT",propertyName:"items",values:{bindTo:"F"}}]};});` }],
 }, { baseDir: FIX });
-check("sanitize: an inline HTML/link + newline caption injects NO new line (contained in one cell)",
-  !/^\s{0,3}#{1,6}\s+INJECT/m.test(htmlRun.designSpec) && /onerror/.test(htmlRun.designSpec) /* contained, not dropped */);
+check("sanitize (Major 5): an inline HTML tag + Markdown link + newline caption is NEUTRALIZED — no new line, no live <img> tag, no live link",
+  !/^\s{0,3}#{1,6}\s+INJECT/m.test(htmlRun.designSpec)     // newline can't start a heading
+  && !/<img/.test(htmlRun.designSpec) && /&lt;img/.test(htmlRun.designSpec)  // angle brackets HTML-encoded → not a live tag
+  && !/\]\(javascript/.test(htmlRun.designSpec) && /\]\\\(javascript/.test(htmlRun.designSpec), // link syntax broken
+  () => htmlRun.designSpec.split("\n").filter((l) => /img|javascript|INJECT/.test(l)));
 // entity-heading path (Major 1): entity from an untrusted body can't start a new heading line in the SPEC.
 const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
@@ -1358,6 +1361,63 @@ const widPlan = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: { ...FUL
 check("Minor5: a whatItDoes value starting with a block marker does NOT render as a heading (bare-line escaped)",
   !/^\s{0,3}#{1,6}\s+Boom/m.test(widPlan) && /Boom is not a heading/.test(widPlan),
   () => JSON.stringify(widPlan.split("\n").find((l) => /Boom/.test(l))));
+
+/* ---- This round's Blocker + Majors on payload/gate/layout/seed ---- */
+// Blocker — a CLIENT merge that reconfigures a BASE (template-owned) field (hides it, moves it) is excluded
+// from the payload as template context; its override must be SURFACED (base-field-override), not silently lost.
+const boSeed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }), di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" })], methods: ["init", "getActions"] });
+const boClient = L("Client", { entity: "X", diff: [di({ operation: "merge", name: "BaseFld", visible: false, layout: { column: 6, row: 2 } })] });
+const boCs = mapToFreedom(mergeHierarchy([boClient], { seedTemplate: [boSeed] }));
+check("Blocker: a client override of a BASE field (visible/layout) is surfaced as base-field-override, not silently dropped",
+  boCs.needsDecision.some((n) => n.kind === "base-field-override" && n.item === "BaseCol"),
+  () => boCs.needsDecision.map((n) => n.kind));
+const boUntouched = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "MyF", parentName: "Header", propertyName: "items", bindTo: "MyF" })] })], { seedTemplate: [boSeed] }));
+check("Blocker: an UNTOUCHED base field is NOT flagged (only client-reconfigured base fields surface)",
+  !boUntouched.needsDecision.some((n) => n.kind === "base-field-override"));
+
+// Major 2 — a REAL child edit page must require mapping even when add-record is hidden (editable heuristic).
+const m2Body = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"ChildDetail",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;
+const m2ChildBody = `define("ChildDetail",[],function(){return{entitySchemaName:"Child",diff:[],methods:{getEditPageName:function(){return "ChildPageV2";},getAddRecordButtonVisible:function(){return false;}}};});`;
+const m2 = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: m2Body }], detailSchemas: { ChildDetail: { entity: "Child", body: m2ChildBody } } }, { baseDir: FIX });
+check("Major2: a real editPage + hidden add-record → structure INCOMPLETE (hidden Add does not waive a real child page)",
+  m2.structure.complete === false && m2.structure.issues.some((i) => /ChildPageV2/.test(i)),
+  () => ({ complete: m2.structure.complete, issues: m2.structure.issues }));
+
+// Major 3 — a dynamic mapping-affecting property (visible via a call) → an explicit dynamic-property decision.
+const m3 = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F",visible:computeVisibility()}}]};});` }] }, { baseDir: FIX });
+check("Major3: a dynamic 'visible' (call) surfaces as a dynamic-property decision + reaches the plan (not a silent static default)",
+  m3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "F") && /dynamic 'visible'/.test(m3.designSpec),
+  () => m3.changeSet.needsDecision.map((n) => n.kind));
+
+// Major 4 — field ORDER drives row assignment (not Map order); rowSpan occupancy prevents vertical overlap.
+const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "TO", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "A", parentName: "TO", propertyName: "items", bindTo: "A", order: 1, layout: { column: 0, row: 0, colSpan: 24 } }),
+  di({ name: "B", parentName: "TO", propertyName: "items", bindTo: "B", order: 0, layout: { column: 0, row: 0, colSpan: 24 } }),
+] })]));
+const m4a = m4ord.viewConfigDiff.find((o) => o.name === "A")?.values.layoutConfig;
+const m4b = m4ord.viewConfigDiff.find((o) => o.name === "B")?.values.layoutConfig;
+check("Major4: lower classic order → earlier row (B.order 0 before A.order 1), no overlap",
+  m4b && m4a && m4b.row < m4a.row, () => ({ A: m4a, B: m4b }));
+const m4span = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "TS", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "Tall", parentName: "TS", propertyName: "items", bindTo: "Tall", layout: { column: 0, row: 0, colSpan: 12, rowSpan: 2 } }),
+  di({ name: "Nxt", parentName: "TS", propertyName: "items", bindTo: "Nxt", layout: { column: 0, row: 1, colSpan: 12, rowSpan: 1 } }),
+] })]));
+const mtTall = m4span.viewConfigDiff.find((o) => o.name === "Tall")?.values.layoutConfig;
+const mtNxt = m4span.viewConfigDiff.find((o) => o.name === "Nxt")?.values.layoutConfig;
+check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap) + flagged",
+  mtTall && mtNxt && !(mtNxt.column === mtTall.column && mtNxt.row >= mtTall.row && mtNxt.row < mtTall.row + mtTall.rowSpan)
+  && m4span.needsDecision.some((n) => n.kind === "layout-collision"),
+  () => ({ Tall: mtTall, Nxt: mtNxt }));
+
+// Major 7 — a skeleton seed with a token method (no getActions) is STILL skeletal (keys on getActions, not count).
+const m7 = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
+  { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["dummy"] })] });
+check("Major7: a seed with a token method but NO getActions is still looksSkeletal (not cleared by a non-zero count)",
+  m7.seedQuality.looksSkeletal === true && m7.seedQuality.hasGetActions === false && m7.warnings.some((w) => w.name === "skeletal-seed"),
+  () => m7.seedQuality);
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
