@@ -114,6 +114,19 @@ function resolveMemberValue(node, scope) {
     path.unshift(name);
     cur = cur.object;
   }
+  // If the base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
+  // `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
+  let guard = 0;
+  while (cur && cur.type === "Identifier" && scope.has(cur.name) && scope.get(cur.name).kind === "memberAlias" && guard++ < 20) {
+    let a = scope.get(cur.name).node, seg = [];
+    while (a && a.type === "MemberExpression") {
+      if (a.computed) return null;
+      const nm = a.property.type === "Identifier" ? a.property.name : (a.property.type === "Literal" ? String(a.property.value) : null);
+      if (nm == null) return null;
+      seg.unshift(nm); a = a.object;
+    }
+    path.unshift(...seg); cur = a;
+  }
   let tag;
   if (cur && cur.type === "ThisExpression") tag = "this";
   else if (cur && cur.type === "Identifier") {
@@ -233,15 +246,22 @@ function buildAstScope(factory, amdDeps, src) {
         if (d.id.type !== "Identifier" || !d.init) continue;
         if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
         else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "node", node: d.init });
+        // an enum-object alias (`var vt = Terrasoft.core.enums.ViewItemType`) — remembered so `vt.GridLayout`
+        // resolves via the alias chain instead of silently collapsing to null (a mis-classified container).
+        else if (d.init.type === "MemberExpression") scope.set(d.id.name, { kind: "memberAlias", node: d.init });
       }
   return scope;
 }
 
-function findFactoryReturnObject(factory) {
-  if (factory.body.type === "ObjectExpression") return factory.body;   // arrow with implicit object return
-  if (factory.body.type !== "BlockStatement") return null;
+// The factory's return EXPRESSION — inline `return {…}`, an arrow implicit return, OR `return <expr>` where
+// <expr> is an identifier alias / ternary / call. We return the argument NODE (any type) and let the static
+// evaluator resolve it over the scope (so `var cfg={…}; return cfg;` resolves), instead of only accepting an
+// inline object literal — the old behaviour silently produced an EMPTY page for an aliased/ternary return and
+// the gate saw nothing to block (Major). Returns null only when the factory has no return value at all.
+function findFactoryReturn(factory) {
+  if (factory.body.type !== "BlockStatement") return factory.body;   // arrow implicit return (any expression)
   for (const st of factory.body.body)
-    if (st.type === "ReturnStatement" && st.argument && st.argument.type === "ObjectExpression") return st.argument;
+    if (st.type === "ReturnStatement" && st.argument) return st.argument;
   return null;
 }
 
@@ -259,15 +279,23 @@ export function parseSchema(src, pkg) {
   const amdDeps = depsNode ? depsNode.elements.filter(el => el && el.type === "Literal" && typeof el.value === "string").map(el => el.value) : [];
   const factory = call.arguments.find(a => a.type === "FunctionExpression" || a.type === "ArrowFunctionExpression");
   if (!factory) return { ...buildSchemaResult(pkg, src, "define() has no factory function", {}, amdDeps), astDiagnostics };
-  const retObj = findFactoryReturnObject(factory);
-  if (!retObj) { astDiagnostics.push({ kind: "no-return-object", path: "", snippet: "" });
+  const retArg = findFactoryReturn(factory);
+  // A missing return is a ROOT-level structural hole (path "" → gate blocks): the schema contributes nothing.
+  if (!retArg) { astDiagnostics.push({ kind: "no-return", path: "", snippet: "" });
     return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics }; }
   // The static eval is depth-capped (MAX_AST_DEPTH), but keep a belt: any residual stack blow-up on a
   // hostile body degrades to a clean parseError (→ gate blocks), never an uncaught RangeError crash.
   try {
     const scope = buildAstScope(factory, amdDeps, src);
-    const captured = makeAstEvaluator(scope, astDiagnostics, src)(retObj, []);
-    return { ...buildSchemaResult(pkg, src, null, captured || {}, amdDeps), astDiagnostics };
+    const captured = makeAstEvaluator(scope, astDiagnostics, src)(retArg, []);
+    // The return resolved to something that is NOT a plain object (an alias to a dynamic value, a ternary the
+    // evaluator could not decide, a call) → the effective page is empty. Flag it at the ROOT (path "") so the
+    // gate blocks, instead of a silent clean run on a hollow page.
+    if (captured == null || typeof captured !== "object" || Array.isArray(captured)) {
+      astDiagnostics.push({ kind: "unresolved-return", path: "", snippet: src.slice(retArg.start, Math.min(retArg.end, retArg.start + 60)).replace(/\s+/g, " ") });
+      return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics };
+    }
+    return { ...buildSchemaResult(pkg, src, null, captured, amdDeps), astDiagnostics };
   } catch (e) {
     const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e && e.message || e);
     return { ...buildSchemaResult(pkg, src, "static evaluation failed: " + why, {}, amdDeps), astDiagnostics };

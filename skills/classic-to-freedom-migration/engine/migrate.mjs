@@ -164,6 +164,7 @@ export function runMigration(manifest, opts = {}) {
     const STRUCTURAL_ROOTS = new Set(["diff", "details", "businessRules", "rules", "modules", "entitySchemaName"]);
     const IDENTITY_FIELDS = new Set(["operation", "name", "parentName", "propertyName", "bindTo", "itemType", "contentType", "isTab"]);
     const isStructural = (p) => {
+      if (p === "") return true;                         // a ROOT-level unresolved return / no-return → empty page → block
       const seg = String(p).split(".");
       if (!STRUCTURAL_ROOTS.has(seg[0])) return false;   // dynamic under a non-structural top key → advisory
       if (seg[0] !== "diff") return true;                // details/businessRules/rules/modules/entitySchemaName: any unresolved sub-path is structural

@@ -610,7 +610,7 @@ function mapDetails(ctx, containers, profileRegion) {
     const cur = bySig.get(detailSig(d));
     if (!cur) bySig.set(detailSig(d), { d, tab, own });
     else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; cur.own = own; } // prefer a resolved placement
-    else if (!cur.d.caption && d.caption) cur.d.caption = d.caption;         // else keep first, backfill caption
+    else if (!cur.d.caption && d.caption) cur.d = { ...cur.d, caption: d.caption }; // else keep first, backfill caption on a COPY (don't mutate the shared input detail — mapToFreedom stays pure)
   }
   for (const { d, tab, own } of bySig.values()) {
     // Ensure the OWNING tab is emitted as a container so the related list / feature has a home AND its

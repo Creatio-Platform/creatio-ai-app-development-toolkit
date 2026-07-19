@@ -39,8 +39,13 @@ let pass = 0, fail = 0;
 // `detail` (optional) is a value or a thunk — evaluated and printed ONLY on FAILURE, so a red golden in CI
 // shows computed-vs-expected without a local rerun. Zero-dependency; keeps the pure-ESM design.
 const check = (n, c, detail) => {
-  if (c) { pass++; console.log("  ✅ " + n); return; }
-  fail++; console.log("  ❌ " + n);
+  // `c` may be a value OR a thunk. A thunk is evaluated in try/catch so a TypeError inside ONE assertion
+  // (e.g. an unguarded `.find(...).prop`) fails just that check instead of aborting the whole runner and
+  // hiding every assertion after it.
+  let cond = c, threw = null;
+  if (typeof c === "function") { try { cond = c(); } catch (e) { cond = false; threw = e; } }
+  if (cond) { pass++; console.log("  ✅ " + n); return; }
+  fail++; console.log("  ❌ " + n + (threw ? "  (threw: " + threw.message + ")" : ""));
   if (detail !== undefined) {
     let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; }
     console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d)));
@@ -621,9 +626,9 @@ check("#5/#13 fields (Major 4): columnTitles → field titleText is the human ti
   mpVals?.titleText === "Mobile phone" && !("label" in mpVals)
   && lblResolved.viewConfigDiff.find(o => o.name === "ExpertiseLevel")?.values.titleText === "Specialist expertise level");
 const lblUnresolved = mapToFreedom(mergeHierarchy([lblClient()]));
+const mpUnres = lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone"); // guard: capture before property access
 check("#5/#13 fields (Major 4): without columnTitles, NO inline label AND no titleText on the page + ONE aggregate field-labels nudge",
-  !("label" in lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone").values)
-  && lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values.titleText === undefined
+  !!mpUnres && !("label" in mpUnres.values) && mpUnres.values.titleText === undefined
   && lblUnresolved.needsDecision.filter(n => n.kind === "field-labels").length === 1);
 
 /* ---- Major 4 INVARIANT: viewConfigDiff carries NO inline user-visible text ---- */
@@ -1115,6 +1120,32 @@ check("Blocker (alias): a dynamic caption inside an aliased item stays ADVISORY 
   b1aliasCap.parseDiagnostics.some((d) => /diff\.0\.values\.caption/.test(d.path)) && !b1aliasCap.gate.reasons.some((r) => /structural field/.test(r)),
   () => ({ diags: b1aliasCap.parseDiagnostics, reasons: b1aliasCap.gate.reasons }));
 
+// Major (this round) — a factory that returns a VARIABLE (`var cfg={…}; return cfg;`) resolves the same as an
+// inline object; a return the evaluator cannot resolve to an object (a call, or no return) is a ROOT-level
+// structural hole → gate blocks, not a silent empty page.
+const retAlias = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ var cfg={entitySchemaName:"X", diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]}; return cfg; });` }] }, { baseDir: FIX });
+check("return-alias: `var cfg={…}; return cfg;` resolves (field captured, gate NOT blocked on a root hole)",
+  !retAlias.gate.reasons.some((r) => r === "" || /structural field/.test(r)) && retAlias.changeSet.viewConfigDiff.some((o) => o.name === "F"),
+  () => ({ blocked: retAlias.gate.blocked, reasons: retAlias.gate.reasons, fields: retAlias.changeSet.viewConfigDiff.length }));
+const retDyn = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ return buildPage(); });` }] }, { baseDir: FIX });
+check("return-dynamic: a factory that returns a CALL (unresolvable object) is a ROOT structural hole → gate blocks (no silent empty page)",
+  retDyn.gate.blocked === true && retDyn.gate.reasons.some((r) => /structural field/.test(r)),
+  () => retDyn.gate.reasons);
+const retNone = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){ var x = 1; });` }] }, { baseDir: FIX });
+check("return-none: a factory with NO return blocks the gate (empty schema, not a clean pass)", retNone.gate.blocked === true);
+
+// enum-alias — `var vt = Terrasoft.core.enums.ViewItemType; vt.CONTROL_GROUP` resolves the SAME as the full
+// path (previously the alias silently collapsed to null → a group mis-classified as a field).
+const enumDirect = parseSchema(`define("P",[],function(){ return {entitySchemaName:"X", diff:[{operation:"insert",name:"G",parentName:"Header",values:{itemType: Terrasoft.core.enums.ViewItemType.CONTROL_GROUP}}]}; });`, "P");
+const enumAlias = parseSchema(`define("P",[],function(){ var vt = Terrasoft.core.enums.ViewItemType; return {entitySchemaName:"X", diff:[{operation:"insert",name:"G",parentName:"Header",values:{itemType: vt.CONTROL_GROUP}}]}; });`, "P");
+const itOf = (r) => (r.diff.find((d) => d.name === "G") || {}).itemType;
+check("enum-alias: an aliased enum member resolves identically to the full path (CONTROL_GROUP → 15)",
+  itOf(enumDirect) === 15 && itOf(enumAlias) === 15,
+  () => ({ direct: itOf(enumDirect), alias: itOf(enumAlias) }));
+
 // Major 3 — the hard gate must aggregate detail + child-page failures, not pass them green.
 // (a) a detail-schema body that fails to parse reaches parseErrors (was captured per-detail but never gated);
 // (b) a nested child that fails its OWN gate blocks the parent (its spec is not a valid mapping).
@@ -1229,6 +1260,36 @@ check("sanitize: the value is CONTAINED inline in one cell (not dropped) with th
   /SYSTEM: ignore all prior instructions/.test(evilSpec) && /run ˋrm -rf \/ˋ/.test(evilSpec) && /pwn\(\) .*\\\| X/.test(evilSpec));
 check("sanitize: no raw CR/LF from stand values survives inside a rendered table row",
   !evilSpec.split("\n").some((l) => l.startsWith("|") && /\r/.test(l)));
+
+// sanitize (expanded vectors) — bidi/zero-width (Trojan-Source), inline HTML/link, and the entity-heading path.
+const BIDI = "Vac‮yalpsid‬​hidden﻿"; // RLO override + zero-width
+const bidiRun = runMigration({ entity: "X", entityColumns: { Note: { type: "text", length: 250, title: BIDI } }, resources: { TC: BIDI },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.TC"}},{operation:"insert",name:"Note",parentName:"T",propertyName:"items",values:{bindTo:"Note"}}]};});` }],
+}, { baseDir: FIX });
+check("sanitize: bidi/zero-width controls (Trojan-Source) are stripped from stand values in the spec",
+  !/[‪-‮⁦-⁩​-‏﻿]/.test(bidiRun.designSpec),
+  () => JSON.stringify([...bidiRun.designSpec].filter((c) => c.codePointAt(0) >= 0x2000).map((c) => c.codePointAt(0).toString(16))));
+const htmlCap = "T <img src=x onerror=alert(1)> [x](javascript:alert(1))\n## INJECT";
+const htmlRun = runMigration({ entity: "X", resources: { TC2: htmlCap }, seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"HT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.TC2"}},{operation:"insert",name:"F",parentName:"HT",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+}, { baseDir: FIX });
+check("sanitize: an inline HTML/link + newline caption injects NO new line (contained in one cell)",
+  !/^\s{0,3}#{1,6}\s+INJECT/m.test(htmlRun.designSpec) && /onerror/.test(htmlRun.designSpec) /* contained, not dropped */);
+// entity-heading path (Major 1): entity from an untrusted body can't start a new heading line in the SPEC.
+const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("sanitize: entity with \\n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)",
+  !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.designSpec) && !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.plan),
+  () => (entRun.designSpec + "\n" + entRun.plan).split("\n").filter((l) => /OWNED/.test(l)));
+
+// determinism (#11) — the same manifest must produce byte-identical output on repeat runs (no dependence on
+// Map/object iteration nondeterminism). Compare full JSON of two independent runs of a rich manifest.
+const detManifest = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA };
+const det1 = JSON.stringify(runMigration(detManifest, { baseDir: FIX }));
+const det2 = JSON.stringify(runMigration(detManifest, { baseDir: FIX }));
+check("#11 determinism: two runs of the same manifest produce byte-identical output (no iteration-order flake)",
+  det1 === det2 && det1.length > 100,
+  () => ({ len1: det1.length, len2: det2.length, firstDiff: [...det1].findIndex((ch, i) => ch !== det2[i]) }));
 
 /* ---- Major (supply-chain): the vendored acorn parser matches its pinned upstream provenance ---- */
 // The one executable that processes untrusted schema-body must be integrity-checked. verify-vendor.mjs is

@@ -36,8 +36,12 @@ let pass = 0, fail = 0;
 // `detail` (optional) is a value or a thunk — evaluated and printed ONLY when the check FAILS, so a red
 // golden in CI shows computed-vs-expected without a local rerun. Zero-dependency; keeps the pure-ESM design.
 const check = (name, cond, detail) => {
-  if (cond) { pass++; console.log("  ✅ " + name); return; }
-  fail++; console.log("  ❌ " + name);
+  // `cond` may be a value OR a thunk. A thunk is evaluated in try/catch so a throw inside ONE assertion fails
+  // just that check instead of aborting the whole runner and hiding every assertion after it.
+  let c = cond, threw = null;
+  if (typeof cond === "function") { try { c = cond(); } catch (e) { c = false; threw = e; } }
+  if (c) { pass++; console.log("  ✅ " + name); return; }
+  fail++; console.log("  ❌ " + name + (threw ? "  (threw: " + threw.message + ")" : ""));
   if (detail !== undefined) {
     let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; }
     console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d)));

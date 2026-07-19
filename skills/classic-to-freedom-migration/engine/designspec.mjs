@@ -18,6 +18,7 @@
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
+  .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
   .replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]+/g, " ") // control/CR/LF/tab + Unicode line/para separators -> space
   .trim());
 // `esc` is for STAND-DERIVED VALUES placed in table cells / inline code spans. On top of strip it (a)
