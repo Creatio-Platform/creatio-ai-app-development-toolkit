@@ -72,9 +72,9 @@ export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const eff = result.effective || {};
   const section = result.section || null;
-  const entity = result.entity || "?";
+  const entity = strip(result.entity || "?"); // stand-derived → collapse to one line so it can't inject a heading (finding 6)
   const vcd = cs.viewConfigDiff || [];
-  const regionOf = regionResolver(vcd);
+  const regionOf = regionResolver(vcd, cs.resources || {}); // pass the resource map so a resolved tab caption shows its text, not the $Resources key
   const tabRegion = (tab) => regionOf(tab);
   const fields = vcd.filter(isField);
 
@@ -300,16 +300,19 @@ export function renderDesignSpec(result, opts = {}) {
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
-  const entity = result.entity || "?";
+  const entity = strip(result.entity || "?"); // stand-derived → one line (finding 6): can't inject a heading/row
   const fields = (cs.viewConfigDiff || []).filter(isField);
   const childs = result.childPages || [];
   // planMeta (manifest.planMeta) supplies the few AGENT decisions so the engine can render a COMPLETE plan and
   // WRITE it (CLI --out) — the agent presents the written file instead of hand-pasting/editing the tables. Any
   // value not supplied falls back to its `<FILL: …>` placeholder (resolve by adding it to planMeta and re-running).
   const pm = opts.planMeta || {};
-  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? String(v) : ph);
+  // planMeta + entity are STAND/USER-derived and land in the plan the agent presents "verbatim". Sanitize every
+  // filled value (esc → single inert line, pipe-escaped) so a value like `X\n## INJECTED` cannot inject a new
+  // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
+  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
   const P = [];
-  P.push(`## ${entity} — Classic → Freedom UI`);
+  P.push(`## ${strip(entity)} — Classic → Freedom UI`);
   P.push("");
   // ⛔ HARD GATE banner at the VERY TOP of the plan (RV1/RV2) — first thing the agent (and the user it pastes
   // to) sees, above Overview. A blocked plan is NOT an approvable plan: fix the signals and re-run `--plan`.
@@ -324,6 +327,12 @@ export function renderPlan(result, opts = {}) {
   if (!structure.complete) {
     P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
     for (const it of structure.issues) P.push(`> - ${esc(it)}`);
+    P.push("");
+  }
+  // planMeta completeness banner — an unfilled Overview/Main-scope value is not an approvable plan (finding 8).
+  const planMetaMissing = opts.planMetaMissing || [];
+  if (planMetaMissing.length) {
+    P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`);
     P.push("");
   }
   P.push("### Overview");
@@ -343,7 +352,7 @@ export function renderPlan(result, opts = {}) {
   P.push("| Classic | Freedom target | Call |");
   P.push("| --- | --- | --- |");
   P.push(`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | Rebuild |`);
-  P.push(`| ${entity} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | Rebuild |`);
+  P.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | Rebuild |`);
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the

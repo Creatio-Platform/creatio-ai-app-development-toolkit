@@ -715,10 +715,11 @@ check("--plan: verbatim / Adjustments guardrail present (agent must not edit gen
 check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
+const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
 const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS }), encoding: "utf8" });
-check("migrate.mjs --plan: gate-clean run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
-  planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || ""));
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA }), encoding: "utf8" });
+check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
+  planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || "") && !/PLAN INCOMPLETE/.test(planRun.stdout || ""));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -735,7 +736,7 @@ const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
 try {
   fs.rmSync(outPath, { force: true });
   const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
-    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
   const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
   check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
     outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
@@ -1148,6 +1149,67 @@ check("Major3(seed): a page with NO seed (skeleton-dodge) is gate-BLOCKED with a
 const optOutRun = runMigration({ entity: "X", noParentTemplate: true, schemas: [{ pkg: "P", body: dodgeBody }] }, { baseDir: FIX });
 check("Major3(seed): the verified opt-out (noParentTemplate:true) clears the no-seed block (rare no-parent page)",
   !optOutRun.gate.reasons.some((r) => /no parent-template seed/.test(r)));
+
+/* ---- This round's Majors/Minors on the plan + layout ---- */
+// F7 — two classic fields in one row whose columns COLLAPSE to the same Freedom column (col0/span6 and
+// col6/span6 both → column 1) must not overlap: the second relocates to a free row + a layout-collision flag.
+const f7 = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "TC", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "A", parentName: "TC", propertyName: "items", bindTo: "A", layout: { column: 0, row: 0, colSpan: 6, rowSpan: 1 } }),
+  di({ name: "B", parentName: "TC", propertyName: "items", bindTo: "B", layout: { column: 6, row: 0, colSpan: 6, rowSpan: 1 } }),
+] })]));
+const f7a = f7.viewConfigDiff.find((o) => o.name === "A")?.values.layoutConfig;
+const f7b = f7.viewConfigDiff.find((o) => o.name === "B")?.values.layoutConfig;
+check("F7: two fields collapsing onto the same Freedom cell are separated (distinct col:row) + layout-collision flagged",
+  f7a && f7b && !(f7a.column === f7b.column && f7a.row === f7b.row) && f7.needsDecision.some((n) => n.kind === "layout-collision"),
+  () => ({ A: f7a, B: f7b, decisions: f7.needsDecision.map((n) => n.kind) }));
+const f7u = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "TD", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "Lf", parentName: "TD", propertyName: "items", bindTo: "Lf", layout: { column: 0, row: 0, colSpan: 12, rowSpan: 1 } }),
+  di({ name: "Rt", parentName: "TD", propertyName: "items", bindTo: "Rt", layout: { column: 12, row: 0, colSpan: 12, rowSpan: 1 } }),
+] })]));
+const f7l = f7u.viewConfigDiff.find((o) => o.name === "Lf")?.values.layoutConfig;
+const f7r = f7u.viewConfigDiff.find((o) => o.name === "Rt")?.values.layoutConfig;
+check("F7: a genuine 2-up (left col + right col, same row) still coexists on one row — not falsely relocated",
+  f7l?.column === 1 && f7r?.column === 2 && f7l?.row === f7r?.row && !f7u.needsDecision.some((n) => n.kind === "layout-collision"));
+
+// F9 — a RESOLVED tab caption shows as TEXT in the design-spec Region column, not the raw $Resources key.
+const f9 = runMigration({ entity: "X", seed: CLEAN_SEED, resources: { GeneralTabCaption: "General" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"GeneralTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.GeneralTabCaption"}},{operation:"insert",name:"Fld",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Fld"}}]};});` }] }, { baseDir: FIX });
+check("F9: a resolved tab caption renders as text in the design-spec Region (Tab · General), not the $Resources key",
+  /Tab · General/.test(f9.designSpec) && !/GeneralTabCaption/.test(f9.designSpec),
+  () => f9.designSpec.split("\n").filter((l) => /Tab ·/.test(l)));
+
+// F6 — entity + planMeta land in the plan the agent presents verbatim; a `X\n## INJECTED` value must not
+// inject a heading/row. renderPlan sanitizes every filled value + the entity heading.
+const f6plan = runMigration({ entity: "Ent\n## INJECTED HEADING", seed: CLEAN_SEED,
+  planMeta: { ...FULL_PLANMETA, scope: "s\n### fake tab\n| a | b |", whatItDoes: "does it\n## boom" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX }).plan;
+check("F6: entity/planMeta cannot inject a new Markdown heading into the plan (values collapsed to one line)",
+  !/^\s{0,3}#{1,6}\s+INJECTED/m.test(f6plan) && !/^\s{0,3}#{1,6}\s+fake tab/m.test(f6plan) && !/^\s{0,3}#{1,6}\s+boom/m.test(f6plan),
+  () => f6plan.split("\n").filter((l) => /INJECTED|fake tab|boom/.test(l)));
+
+// F8 — a --plan run missing required planMeta is INCOMPLETE: exit 2 + PLAN INCOMPLETE banner (not exit 0);
+// --spec/default (which need no planMeta) are unaffected.
+const noPmManifest = JSON.stringify({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] });
+const f8plan = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: noPmManifest, encoding: "utf8" });
+check("F8: --plan with unfilled required planMeta exits 2 with a PLAN INCOMPLETE banner (not a clean exit 0)",
+  f8plan.status === 2 && /PLAN INCOMPLETE/.test(f8plan.stderr || "") && /PLAN INCOMPLETE/.test(f8plan.stdout || ""),
+  () => ({ status: f8plan.status, stderr: (f8plan.stderr || "").slice(0, 160) }));
+const f8spec = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], { input: noPmManifest, encoding: "utf8" });
+check("F8: --spec is NOT gated on planMeta (design spec needs none) — exit 0", f8spec.status === 0 && !/PLAN INCOMPLETE/.test(f8spec.stderr || ""));
+
+// F5 — a legitimately DEEP child tree (parent → child → grandchild) maps fully (the grandchild is mapped),
+// where the old fixed depth cap cut it. Cycle termination is covered by the cyclic golden above.
+const f5grand = { schemas: [{ pkg: "GC", body: `define("GC",[],function(){return{entitySchemaName:"GC",diff:[{operation:"insert",name:"GF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"GF"}}]};});` }], seed: CLEAN_SEED, planMeta: FULL_PLANMETA };
+const f5child = { schemas: [{ pkg: "CH", body: `define("CH",[],function(){return{entitySchemaName:"CH",diff:[{operation:"insert",name:"CT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"CD",parentName:"CT",values:{itemType:2}}],details:{CD:{schemaName:"GCDetail",entitySchemaName:"GC",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }], seed: CLEAN_SEED, childPageSchemas: { GC: f5grand, GCPage: f5grand }, planMeta: FULL_PLANMETA };
+const f5 = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"PD",parentName:"PT",values:{itemType:2}}],details:{PD:{schemaName:"CHDetail",entitySchemaName:"CH",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  childPageSchemas: { CH: f5child, CHPage: f5child } }, { baseDir: FIX });
+const f5ch = f5.childPages.find((c) => c.entity === "CH");
+check("F5: a deep child tree maps fully — the child is mapped AND its own grandchild is mapped (no depth cap)",
+  f5ch && f5ch.spec && f5ch.grandChildren >= 1,
+  () => ({ childMapped: !!f5ch?.spec, grandChildren: f5ch?.grandChildren }));
 
 /* ---- Minor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
 // The design spec is presented "verbatim" and acted on. A hostile/garbled stand caption or column title

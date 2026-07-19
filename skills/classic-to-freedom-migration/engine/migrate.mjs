@@ -111,16 +111,18 @@ export function runMigration(manifest, opts = {}) {
   })).filter((c) => c.entity);
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
-  // parent page + one real sub-mapping per related list. Depth-capped (parent 0 → child 1 → grandchild 2)
-  // so a self/cyclic reference can't run away; deeper levels stay listed rows to be resolved by the agent.
-  const depth = opts.depth || 0;
+  // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
+  // be stopped — NOT depth: a legitimately deep tree (parent → child → grandchild → …) needs to map fully, so
+  // a fixed `depth >= 2` cap wrongly left the deepest levels unmapped (structure.complete=false). We track the
+  // set of schema/page keys already on the current branch and skip only a key we are ALREADY inside (cycle).
+  const visited = opts.visited instanceof Set ? opts.visited : new Set();
   const childSchemas = manifest.childPageSchemas || {};
   for (const c of childPages) {
-    if (depth >= 2) break;
     const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
     if (!key) continue;
+    if (visited.has(key)) { c.cyclic = true; continue; } // already on this branch — a cycle; stop (don't recurse forever)
     try {
-      const childRes = runMigration(childSchemas[key], { baseDir, depth: depth + 1 });
+      const childRes = runMigration(childSchemas[key], { baseDir, visited: new Set([...visited, key]) });
       c.spec = childRes.designSpec;              // the child page's Layout/Section/Logic/Confirm — the mapping
       c.mappedEntity = childRes.entity;
       c.resolvedFrom = key;
@@ -240,7 +242,15 @@ export function runMigration(manifest, opts = {}) {
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
   //   plan       = the WHOLE plan skeleton (Overview/Pages placeholders + the design spec + child pages)
-  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta };
+  // planMeta completeness — the `--plan` artifact is INCOMPLETE while any required Overview/Main-scope value is
+  // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
+  // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
+  // keys so the CLI turns an unfilled `--plan` into a non-zero exit (below), like the other incompleteness gates.
+  const pm = manifest.planMeta || {};
+  const blank = (v) => v == null || String(v).trim() === "";
+  const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
+  out.planMetaMissing = REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k]));
+  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta, planMetaMissing: out.planMetaMissing };
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);
   return out;
@@ -291,13 +301,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // (2, distinct from the exit-1 bad-input path). The plan/spec is still printed so the agent sees WHAT to fix.
   const gateBad = result.gate && result.gate.blocked;
   const structBad = result.structure && !result.structure.complete;
+  // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
+  // mode: `--spec`/default runs legitimately need no planMeta.
+  const planIncomplete = planMode && result.planMetaMissing && result.planMetaMissing.length > 0;
+  const notReady = gateBad || structBad || planIncomplete;
   const label = planMode ? "plan" : specMode ? "design spec" : "result";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }
     catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
     // do NOT say "present verbatim" on a blocked/incomplete run (L3): the file carries a ⛔ banner and is not approvable.
-    process.stdout.write(gateBad || structBad
+    process.stdout.write(notReady
       ? `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`
       : `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`);
   } else {
@@ -305,7 +319,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
+  if (planIncomplete) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (result.parseDiagnostics && result.parseDiagnostics.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
-  if (gateBad || structBad) process.exit(2);
+  if (notReady) process.exit(2);
 }

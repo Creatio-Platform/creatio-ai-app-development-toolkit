@@ -409,8 +409,8 @@ function mapFields(ctx, containers) {
   // a field with NO explicit row takes the next row not already claimed in that container. The old code kept
   // a single counter bumped on EVERY field (explicit ones too), so a container mixing explicit and auto rows
   // mis-numbered the autos — an auto field landing on an explicit field's row, or leaving gaps.
-  const autoRow = {};   // parent -> next auto row to try (1-based)
-  const usedRows = {};  // parent -> Set of rows already taken (explicit + assigned auto), so autos skip them
+  const autoRow = {};    // parent -> next auto row to try (1-based)
+  const usedCells = {};  // parent -> Set of "col:row" cells already taken (span-aware), so nothing overlaps
   const nameCount = {};
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   const resolved = payloadFields.map(f => ({ f, own: resolveOwner(f.parent, index, profileAnchors) }));
@@ -492,21 +492,33 @@ function mapFields(ctx, containers) {
       column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
       colSpan = cl.colSpan != null ? cl.colSpan : 24;
     }
-    // Row assignment (R9): an explicit classic row is authoritative (kept as-is); an auto field takes the
-    // next row not already claimed in this container, so it never collides with an explicit field or another
-    // auto field. (Two explicit fields sharing a classic row is source data we preserve, not our decision.)
-    const taken = usedRows[parent] || (usedRows[parent] = new Set());
+    // Grid-cell assignment (R9 + collision) — the target Freedom grid is coarser than the classic 24-col one,
+    // so two classic columns can collapse onto the SAME Freedom (column,row) cell (e.g. col0/span6 and
+    // col6/span6 both → column 1). Track occupied cells (span-aware) per container: an explicit classic row is
+    // authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
+    // field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
+    // coexist; only true overlaps are moved.
+    const cells = usedCells[parent] || (usedCells[parent] = new Set());
+    const spanCols = (c, span) => Array.from({ length: Math.max(1, span) }, (_, i) => c + i);
+    const cellFree = (c, span, r) => spanCols(c, span).every((cc) => !cells.has(cc + ":" + r));
+    const claimCells = (c, span, r) => spanCols(c, span).forEach((cc) => cells.add(cc + ":" + r));
     const explicitRow = cl.row != null ? cl.row + 1 : null;
     let row;
     if (explicitRow != null) {
       row = explicitRow;
+      if (!cellFree(column, colSpan, row)) {          // 24→N collapse dropped this field onto an occupied cell
+        const wanted = row;
+        while (!cellFree(column, colSpan, row)) row++;
+        needsDecision.push({ kind: "layout-collision", item: col,
+          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}) — the classic 24-col layout collapsed two fields onto one cell in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
+      }
     } else {
       let cur = autoRow[parent] || 1;
-      while (taken.has(cur)) cur++;              // skip rows an explicit (or prior auto) field already holds
+      while (!cellFree(column, colSpan, cur)) cur++;   // skip cells already taken in this column span
       row = cur;
       autoRow[parent] = cur + 1;
     }
-    taken.add(row);
+    claimCells(column, colSpan, row);
     const layoutConfig = {
       column,
       row,

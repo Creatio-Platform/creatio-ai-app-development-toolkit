@@ -3,5 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic Classic→Freedom merge engine + mapper (runtime only). Golden runners + fixtures live in the repo-root engine-tests/classic-to-freedom (outside the shipped skill)."
+  "description": "Deterministic Classic→Freedom merge engine + mapper (runtime only). Golden runners + fixtures live in the repo-root engine-tests/classic-to-freedom (outside the shipped skill).",
+  "scripts": {
+    "test": "node ../../../engine-tests/classic-to-freedom/run.mjs && node ../../../engine-tests/classic-to-freedom/run-mapper.mjs",
+    "test:verify-vendor": "node verify-vendor.mjs"
+  }
 }
