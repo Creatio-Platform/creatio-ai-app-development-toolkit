@@ -1262,12 +1262,12 @@ check("sanitize: no raw CR/LF from stand values survives inside a rendered table
   !evilSpec.split("\n").some((l) => l.startsWith("|") && /\r/.test(l)));
 
 // sanitize (expanded vectors) — bidi/zero-width (Trojan-Source), inline HTML/link, and the entity-heading path.
-const BIDI = "Vac‮yalpsid‬​hidden﻿"; // RLO override + zero-width
+const BIDI = "Vac\u202Eyalpsid\u202C\u200Bhidden\uFEFF"; // RLO override + zero-width (\u escapes: no raw bidi bytes in source — S6389)
 const bidiRun = runMigration({ entity: "X", entityColumns: { Note: { type: "text", length: 250, title: BIDI } }, resources: { TC: BIDI },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.TC"}},{operation:"insert",name:"Note",parentName:"T",propertyName:"items",values:{bindTo:"Note"}}]};});` }],
 }, { baseDir: FIX });
 check("sanitize: bidi/zero-width controls (Trojan-Source) are stripped from stand values in the spec",
-  !/[‪-‮⁦-⁩​-‏﻿]/.test(bidiRun.designSpec),
+  !/[\u202A-\u202E\u2066-\u2069\u200B-\u200F\uFEFF]/.test(bidiRun.designSpec),
   () => JSON.stringify([...bidiRun.designSpec].filter((c) => c.codePointAt(0) >= 0x2000).map((c) => c.codePointAt(0).toString(16))));
 const htmlCap = "T <img src=x onerror=alert(1)> [x](javascript:alert(1))\n## INJECT";
 const htmlRun = runMigration({ entity: "X", resources: { TC2: htmlCap }, seed: CLEAN_SEED,
