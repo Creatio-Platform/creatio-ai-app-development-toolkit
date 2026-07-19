@@ -733,6 +733,17 @@ check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeho
   /\*\*Scope:\*\* single-section ·/.test(pmRun.plan) && /\*\*Environment:\*\* workbuild103 ·/.test(pmRun.plan)
   && /Applicant1Section \(list page\) \| ListPageV3 \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
   && !/<FILL: single-section/.test(pmRun.plan) && !/<FILL: environment/.test(pmRun.plan));
+// reconcile-aware Main-scope: the default (no Freedom counterpart) is Rebuild; `freedomExists:true` flips the
+// Call to Update (reconcile) + a note pointing at the reconcile procedure (read via get-page → diff → update-page).
+check("reconcile: default Main-scope Call is Rebuild (fully-custom case, no Freedom page)",
+  / \| Rebuild \|/.test(pmRun.plan) && !/Update \(reconcile\)/.test(pmRun.plan) && !/Reconcile:/.test(pmRun.plan));
+const recRun = runMigration({ entity: "Applicant",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  planMeta: { ...FULL_PLANMETA, freedomExists: true } }, { baseDir: FIX });
+check("reconcile: planMeta.freedomExists → Main-scope Call is 'Update (reconcile)' + the get-page/reconcile note",
+  /\| Update \(reconcile\) \|/.test(recRun.plan) && !/ \| Rebuild \|/.test(recRun.plan)
+  && /Reconcile:/.test(recRun.plan) && /get-page/.test(recRun.plan) && /existing-freedom-reconcile\.md/.test(recRun.plan),
+  () => recRun.plan.split("\n").filter((l) => /Rebuild|reconcile|Reconcile/.test(l)));
 // Smell #2 — --out WRITES the artifact to a file (agent presents the file; stdout is only a confirmation).
 // Write OUTSIDE the repo tree (os.tmpdir) and clean up in a finally, so a throw before cleanup can never
 // strand a test artifact in source control (the tracked-dir path relied on a trailing rmSync that a mid-test

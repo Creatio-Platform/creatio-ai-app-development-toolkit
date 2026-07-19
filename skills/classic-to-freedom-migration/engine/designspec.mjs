@@ -366,13 +366,19 @@ export function renderPlan(result, opts = {}) {
   );
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
+  // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
+  // for this entity ALREADY exists (`planMeta.freedomExists`). Reconcile is an agent step — read the existing
+  // page with clio `get-page`, diff the engine's design onto it, apply via `update-page` (never a duplicate);
+  // see `./references/existing-freedom-reconcile.md`. Default is Rebuild (safe for the tested custom-section case).
+  const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
   P.push(
     "### Main scope",
     "| Classic | Freedom target | Call |",
     "| --- | --- | --- |",
-    `| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | Rebuild |`,
-    `| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | Rebuild |`,
+    `| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`,
+    `| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`,
   );
+  if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
