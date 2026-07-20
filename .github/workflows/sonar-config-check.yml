@@ -1,0 +1,26 @@
+name: Sonar config check
+
+# Guards .sonarcloud.properties so an exclusion glob that silently stops matching (a fixture/vendor
+# path renamed or moved) fails loudly instead of quietly re-surfacing the smells it suppresses.
+# Window-safe: globs whose base dir does not exist yet are skipped (see scripts/check-sonar-exclusions.mjs).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  exclusions:
+    name: sonar.exclusions globs match real files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '20'
+      - name: Check sonar.exclusions globs still match files
+        run: node scripts/check-sonar-exclusions.mjs
