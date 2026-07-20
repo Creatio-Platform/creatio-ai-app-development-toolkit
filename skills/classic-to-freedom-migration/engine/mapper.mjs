@@ -547,8 +547,10 @@ function mapFields(ctx, containers) {
       }
     } else {
       let cur = autoRow[parent] || 1;
-      const limit = cur + MAX_FIELDS_PER_CONTAINER;
-      while (!cap && cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
+      if (!cap) {   // past the per-container cap, skip the (bounded) relocation scan — just place at the cursor
+        const limit = cur + MAX_FIELDS_PER_CONTAINER;
+        while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
+      }
       row = cur;
       autoRow[parent] = cur + 1;
     }

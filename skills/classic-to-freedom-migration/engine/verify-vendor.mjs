@@ -14,11 +14,17 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
-// Vendor dir defaults to the one co-located with this script. An optional argv[2] override lets the goldens
-// point the SAME integrity check at a tampered fixture (negative-path coverage) without touching the real bundle.
-const VENDOR_DIR = process.argv[2] ? path.resolve(process.argv[2]) : path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
+// Vendor dir defaults to the one co-located with this script. The optional argv[2] override is a TEST-ONLY hook
+// (the negative goldens point the SAME integrity check at a tampered fixture). The CLI-controlled path is
+// VALIDATED before use: honored ONLY when it canonicalizes under the OS temp dir — otherwise ignored and the
+// real co-located vendor is used. This keeps the tests working while closing the path-traversal surface (S8707).
+const DEFAULT_VENDOR = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
+const overrideArg = process.argv[2] ? path.resolve(process.argv[2]) : null;
+const tmpRoot = path.resolve(os.tmpdir()) + path.sep;
+const VENDOR_DIR = overrideArg && overrideArg.startsWith(tmpRoot) ? overrideArg : DEFAULT_VENDOR;
 const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 
 const sha256Lf = (buf) =>
