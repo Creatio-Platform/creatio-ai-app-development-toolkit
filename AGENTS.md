@@ -94,12 +94,13 @@ Use full app generation or business-shaped feature work when the request is:
 - asking for a new feature where actors, statuses, object model, validations, or UX still need clarification
 - broad enough that the Business Plan depends on business discovery
 
-Use the theming flow when the request is about visual branding rather than business logic:
+Use the branding flow when the request is about visual branding rather than business logic:
 
 - creating or restyling a theme, or matching a brandbook or company site
 - changing the app's brand colors or fonts
+- adding or changing the app's logos, or generating a palette-matched app background
 
-Route theming requests to the `creatio-theme-orchestrator` skill, which owns the flow end to end. Theming produces no Business Plan, so Gate P and Gate R do not apply.
+Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
 
 ## Support Mode (Troubleshooting)
 

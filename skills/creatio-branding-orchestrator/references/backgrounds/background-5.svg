@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <!-- Template 5: drifting rounded blobs. Placeholder art; color slots are palette tokens. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="{{primary-10}}"/>
+      <stop offset="1" stop-color="{{primary-100}}"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <ellipse cx="480" cy="300" rx="340" ry="180" fill="{{primary-100}}" opacity="0.45"/>
+  <ellipse cx="1440" cy="520" rx="420" ry="220" fill="{{secondary-100}}" opacity="0.35"/>
+  <ellipse cx="960" cy="900" rx="520" ry="240" fill="{{primary-200}}" opacity="0.40"/>
+  <ellipse cx="300" cy="820" rx="220" ry="120" fill="{{secondary-200}}" opacity="0.30"/>
+  <ellipse cx="1700" cy="140" rx="180" ry="100" fill="{{primary-300}}" opacity="0.25"/>
+</svg>
