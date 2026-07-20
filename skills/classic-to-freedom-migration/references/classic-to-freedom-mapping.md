@@ -202,7 +202,7 @@ details" based on a single schema's body. Doing so is a discovery defect, not a 
 
 Correct discovery procedure for every Classic page/section/detail:
 1. Enumerate ALL replacing schemas for the name across packages (e.g. `list-pages` /
-   `list-schema-hierarchy` / `list-entity-client-schemas` by schema-name) and record the full package chain,
+   `list-entity-client-schemas` by schema-name) and record the full package chain,
    base → top.
 2. Read each schema's own body. If the read tool only resolves the top schema, obtain the
    lower schemas by:

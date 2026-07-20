@@ -1,6 +1,6 @@
 // engine/migrate.mjs — the CLI driver the SKILL invokes.
 //
-// Turns the raw Classic schema bodies (fetched via clio: list-schema-hierarchy → get-classic-schema-by-uid, or the
+// Turns the raw Classic schema bodies (assembled by clio get-classic-migration-bundle, or the
 // manual fallback) into one effective Classic page and a Freedom ChangeSet + needsDecision[]. This is the
 // deterministic 80% the skill used to ask the agent to do by hand (enumerate chain → merge diff/details/
 // businessRules by eye). A thin I/O wrapper over engine.mjs (mergeHierarchy) + mapper.mjs (mapToFreedom); the
@@ -21,7 +21,7 @@
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate } // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
 //   }
 // CLI: `--plan`/`--spec` print the artifact; add `--out <file>` to WRITE it (the agent presents the file, not stdout).
-// Prefer inline "body" (paste the clio get-classic-schema-by-uid output) over "file" to avoid path fragility.
+// Prefer inline "body" (get-classic-migration-bundle writes bodies inline into the manifest) over "file" to avoid path fragility.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
