@@ -89,14 +89,20 @@ instead, on an authenticated browser session (clio's `get-browser-session` provi
 logged-in page works):
 
 ```
-POST <app-url>/0/rest/ImageAPIService/upload?fileapi<timestamp>&totalFileLength=<bytes>&fileId=<new-guid>&mimeType=image%2Fsvg%2Bxml
+POST <app-url>/0/ImageAPIService/upload?fileapi<timestamp>&totalFileLength=<bytes>&fileId=<new-guid>&mimeType=image%2Fsvg%2Bxml
 Headers:
-  Content-Range: bytes 0-<bytes>/<bytes>
+  Content-Range: bytes 0-<bytes minus 1>/<bytes>
   Content-Type: image/svg+xml
   Content-Disposition: attachment; filename=<name>.svg
   BPMCSRF: <value of the BPMCSRF cookie>
 Body: the raw SVG bytes
 ```
+
+Two easy mistakes in that request:
+- No `/rest/` segment — the image API is served straight off the workspace base URL
+  (`/0/ImageAPIService/upload`), unlike the WCF `/rest/…` routes.
+- `Content-Range`'s range end is zero-indexed and inclusive, so a 123-byte file is
+  `bytes 0-122/123` (`<bytes minus 1>`), not `bytes 0-123/123`.
 
 The service creates the `SysImage` record itself with `Id` = the `fileId` you passed (generate a
 fresh GUID). Verify by fetching the serving URL above — it must return the SVG with
@@ -115,6 +121,23 @@ Apply order: upload the image (creates `SysImage`) → insert the `SysImageInTag
 `CrtBackgroundConfig` to the JSON above (ordinary text-setting update). The Appearance page then
 shows the image in the gallery as the selected item, renders it in the preview, and the shell
 uses it after a refresh.
+
+**The three steps are not atomic — verify each before starting the next, and handle a partial
+failure explicitly.** A failure after step 1 leaves an orphaned `SysImage` with no tag reference;
+a failure after step 2 leaves a tag reference but no `CrtBackgroundConfig` pointing at it. Neither
+self-heals. So:
+
+- After step 1, confirm the upload succeeded by fetching the serving URL
+  (`<app-url>/0/img/entity/hash/SysImage/Data/<imageId>`) and checking it returns the SVG with
+  `image/svg+xml`. Do not proceed on a failed or empty upload.
+- After step 2, confirm the `SysImageInTag` row was created before touching `CrtBackgroundConfig`.
+- If step 2 or step 3 fails, do not leave the environment in the inconsistent partial state. Roll
+  back by deleting what earlier steps created — delete the `SysImageInTag` row (if step 2 got that
+  far) and the uploaded `SysImage` record — so no orphaned image or dangling tag reference is left
+  behind. If a rollback delete itself fails, surface the exact partial state to the user (which
+  rows exist, which setting was or was not updated) and stop, rather than reporting success or
+  silently leaving orphaned rows.
+- Report the background as applied only once all three steps have succeeded.
 
 ## Background templates and tokens
 

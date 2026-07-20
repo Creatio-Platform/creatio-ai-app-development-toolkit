@@ -102,7 +102,7 @@ Use the branding flow when the request is about visual branding rather than busi
 
 Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
 
-Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-theme-orchestrator` only when the request is pure theming (colors, fonts, theme name) with no business-logic component; when in doubt, treat it as app work, not theming.
+Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, background) with no business-logic component; when in doubt, treat it as app work, not branding.
 
 ## Support Mode (Troubleshooting)
 

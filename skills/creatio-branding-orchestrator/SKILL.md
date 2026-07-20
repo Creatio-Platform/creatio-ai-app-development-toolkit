@@ -149,6 +149,13 @@ background will be generated or not.
   `{{primary-300}}` or `{{secondary-500}}`; fetch the real stop values from clio's palette tool
   (the full-stops preview described in the theming guidance) and replace each token with its hex.
   Never invent, adjust, or interpolate a color yourself.
+- Validate every value before it is substituted into the template. A stop value must match a
+  strict color-literal grammar — a hex color (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) or a fixed-form
+  `rgb()`/`rgba()`/`hsl()`/`hsla()` — and nothing else. Because brand colors can originate from an
+  attacker-influenceable source (a web-fetched or search-derived brand intake), a value that does
+  not match must be rejected, not substituted: do not write it into the SVG. This is
+  defense-in-depth ahead of the sanitize step, not a substitute for it — sanitizing the recolored
+  SVG must not be the only control against SVG/XML injection from scraped input.
 - Sanitize the recolored SVG the same as a logo (strip scripts, `on*` handlers, external
   references), then save it to a temporary file. It is applied during Build and apply: uploaded to
   the environment's image store, registered in the Appearance gallery, and set as the current
@@ -178,8 +185,13 @@ hard limit and returns a clear error if the name is too long, which you relay.
 - Handle changes of mind gracefully — if the user revisits an earlier choice, re-run the
   affected step through the color tool and continue; don't force a fixed script.
 - Intake, palette, logo, background, and font steps are not approval gates. The logo-extraction
-  and background questions are in-flow choices like any color choice; there is exactly one
-  confirmation before building (see below).
+  and background questions are in-flow choices like any color choice; there is one confirmation
+  before building the theme (see below). That build confirmation covers the theme, which is a
+  per-user change — it does **not** stand in for the environment-wide apply gate below.
+- Logo and background writes are environment-wide (they change the look for every user, including
+  pre-login surfaces), so they get their own explicit confirmation, distinct from the per-user
+  theme build. Do not fold them into the theme's single pre-build confirmation. See the
+  environment-wide apply gate in Build and apply.
 - Out of scope — advanced design tokens (borders, icons, states) and typography
   beyond font-family (font-weight, letter-spacing, font-size, line-height).
 
@@ -199,8 +211,15 @@ After the single final confirmation, follow clio's theming guidance to build the
 the collected inputs and create the theme on the environment. The build, the exact tool
 sequence, the license preconditions, and how a theme is applied live in that guidance.
 
-Then, when the user included them, apply the branding assets — the concrete tool mechanics live
-in clio's theming guidance and `./references/branding-assets.md`:
+Then, when the user included them, apply the branding assets. Unlike the theme (a per-user
+change), logos and the background are **environment-wide** — they change the look for every user,
+including pre-login surfaces such as the login page. So before the first apply/upload call for
+either, take a distinct, explicit confirmation separate from the theme build above: state plainly
+that this will change branding for everyone on the environment, name what will change (which logo
+slots, and/or the background), and proceed only on an explicit yes. This gate is per apply, not the
+in-flow "include logos/background?" choice collected earlier. If the user declines here, leave the
+assets unchanged and say so. The concrete tool mechanics live in clio's theming guidance and
+`./references/branding-assets.md`:
 - Logos: write each provided variant to its slots (main logo to the white-background slots, the
   white/light variant — or the main logo when there is none — to the dark top panel), then set
   `HideSplashScreenLogoImage` to `true`. Skipped logos mean none of this happens.
