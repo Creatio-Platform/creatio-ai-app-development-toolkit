@@ -100,6 +100,45 @@ Keep an engine-matched standard feature AS its shape unless you confirm on-stand
 that feature's infrastructure. Build the native component up front — never build a generic list first and
 "switch" it later.
 
+### Build recipes for the components agents get wrong (verified on-stand)
+
+**Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes, and
+printables are marked "⚠ ADD only if present" precisely because the schema alone doesn't say. Run each query
+at plan time and act on the result; never build "faithful to the classic body" while a `⚠` on-stand check is
+still pending — the classic body having no dashboard/button does NOT mean the section has no case/process.
+
+**DCM case → does the object have one?** `SysSchema` WHERE `ManagerName = 'DcmSchemaManager'` (the case-schema
+manager). Match the case to the entity by its caption + the object's own stage column (`Stage`); active +
+previous versions can share a caption (`Recruiting_v11` active, `Recruiting_v1`) — take the active one. A hit
+⇒ the object IS case-driven, add BOTH components below, EVEN IF the classic page tracked stage only via a
+`Stage` lookup + a history detail. ⚠ Do NOT filter by `ManagerName = 'CaseSchemaManager'` — wrong name,
+0 rows, false "no case" (this is exactly the miss that dropped the stage bar on a real Applicant migration).
+
+**Case-stage progress bar** — `crt.EntityStageProgressBar` (`entityName`, `recordId: $Id`, `value: $PDS_<stage>`,
+`saveOnChange: true`). Place it **INSIDE `MainHeader`** (the header `crt.FlexContainer`, so it sits directly
+under the section header) — NOT as a bare child of `Main` between `MainHeader` and the content. If it hangs in
+a loading spinner, wire the page-level DCM handlers (`crt.EntityStageProgressBarLoadDataRequest`, `stageChanged`,
+`setAllowedStages`).
+
+**Next steps** — a **tab in the card toggle panel, beside the Feed and Attachments tabs**, built EXACTLY like
+them (read a working page such as an Account page for the reference shape): the tab `caption` via
+`#ResourceString(<Key>)#` **not** `$Resources.Strings.*` (the toggle-panel caption won't render otherwise); set
+the tab `icon`+`iconPosition`; put the header — a `crt.Label` "Next steps" (headline-3) + a `crt.Button` "+"
+(menu: Create task / Create email) — in the tab's **`tools`** slot, and the `crt.NextSteps` widget in `items`
+(a GridContainer). Header in `items` instead of `tools` = a tab you can't drop into and a hidden caption. Each
+step renders as icon + title + button (the widget's own item shape — do not hand-author steps).
+
+**Run process (record vs list) — read the BINDING, then place accordingly.** `ProcessInModules` filtered by
+the section's `SysModule/Id` says WHICH module the process is bound to. If it is bound to the section's
+**list/registry** module (the common case), the launch belongs on the **List page**, NOT the form. Do NOT add
+a standalone button: add it as a **menu item in the template's existing `Actions` button** (`ActionButton` in
+ListPageV3) — one Actions button, the process launch is one of its menu items. Label the item with the
+process **display Caption** (from `VwSysProcess`), never its technical code. Launch via
+`crt.RunBusinessProcessRequest` — for a list-bound process: `processRunType: ForTheSelectedRecords`,
+`dataSourceName: PDS`, `recordIdProcessParameterName: <the Guid record parameter from the process signature,
+e.g. Applicant1>` (get it via the process signature). A form-bound process instead becomes a record-page
+action on the form. None connected ⇒ drop the button entirely.
+
 ## Data And Binding Mapping
 
 | Classic UI Pattern | Freedom UI Analog |

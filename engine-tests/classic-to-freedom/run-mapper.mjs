@@ -680,6 +680,11 @@ const plRun = runMigration({ entity: "X", schemas: [{ pkg: "P", body:
 check("#8c: process-launch → RunProcess card action + process-launch decision naming the process",
   plRun.changeSet.cardActions.includes("RunProcess")
   && plRun.changeSet.needsDecision.some(n => n.kind === "process-launch" && /RecruitingSecurityCheckProcess/.test(n.item)));
+check("#8c: the process-launch decision tells to READ THE BINDING and place a list-bound process as a MENU ITEM in the Actions button, labelled by Caption not code",
+  plRun.changeSet.needsDecision.some(n => n.kind === "process-launch"
+    && /READ ITS BINDING/.test(n.reason) && /Actions button/.test(n.reason)
+    && /MENU ITEM/i.test(n.reason) && /Caption/.test(n.reason) && /never its technical code/.test(n.reason)),
+  () => plRun.changeSet.needsDecision.find(n => n.kind === "process-launch")?.reason);
 // card-action DISPOSITION — standard toolbar buttons are not all migratable: ViewOptions is not migrated,
 // Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
 const caCs = runMigration({ entity: "X",
@@ -856,6 +861,10 @@ check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema Manag
 check("#8 DCM: design spec places Next steps as a new tab and flags both as ADD (not template context)",
   /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| ⚠ ADD — not in the default Freedom template/.test(dcmCs.designSpec));
+check("#8 DCM: the notes carry the correct PLACEMENT — progress bar inside MainHeader; Next steps a tab beside Feed/Attachments via the tools slot",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /INSIDE `MainHeader`/.test(w.note || ""))
+  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "")),
+  () => dcmCs.changeSet.widgets.map((w) => w.widget));
 // Recommendations is an inherited base-template container (empty by default, runtime-filled). It is classified
 // `chrome` and HIDDEN from the plan (kept in chromeWidgets for inspection) — not via a hardcoded per-run "ignore".
 const recoCs = runMigration({ entity: "X",

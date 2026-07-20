@@ -160,9 +160,9 @@ const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add.";
-const DCM_PROGRESS_NOTE = "Case-stage progress bar — NOT in the default Freedom form template; ADD it to the page top when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
-const DCM_NEXTSTEPS_NOTE = "Next steps — NOT in the default Freedom form template; ADD it as a NEW tab in the tab container, next to the Feed tab, when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
+const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add. A case can exist even if the classic page tracked stage only via a Stage lookup + history detail.";
+const DCM_PROGRESS_NOTE = "Case-stage progress bar (crt.EntityStageProgressBar) — NOT in the default Freedom form template; ADD it when the object has a configured DCM case. PLACE IT INSIDE `MainHeader` (the header FlexContainer, so it sits under the section header) — not as a bare child of `Main`. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
+const DCM_NEXTSTEPS_NOTE = "Next steps (crt.NextSteps) — NOT in the default Freedom form template; ADD it as a TAB in the card toggle panel BESIDE the Feed and Attachments tabs when the object has a configured DCM case. Build the tab like Feed/Attachments: caption via `#ResourceString(Key)#` (NOT $Resources.Strings.*), set icon+iconPosition, put the header (Label + '+' menu button) in the tab's `tools` slot and the widget in `items`. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
 const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top" };
 const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed" };
 const WIDGET_BY_MODULE = {
@@ -728,7 +728,7 @@ function mapCardActions(eff) {
     if (!cardActions.includes("RunProcess")) cardActions.push("RunProcess");
     const processNote = eff.processNames?.length ? ` (${eff.processNames.join(", ")})` : "";
     needsDecision.push({ kind: "process-launch", item: eff.processNames?.length ? eff.processNames.join(", ") : "RunProcess",
-      reason: `the classic page launches a business process imperatively${processNote} — map it to a Freedom "Run process" card action / handler (ProcessModuleUtilities → run-process request); confirm the process schema name` });
+      reason: `the classic page launches a business process imperatively${processNote} — READ ITS BINDING first: ProcessInModules by the section's SysModule/Id tells whether the process is bound to the section's LIST/registry module or the form. List-bound (common) ⇒ add it as a MENU ITEM in the template's existing Actions button (ActionButton) on the LIST page — one Actions button, launch = one menu item — NOT a standalone button on the form. Label the item with the process DISPLAY Caption (VwSysProcess), never its technical code. Launch via crt.RunBusinessProcessRequest (list: processRunType ForTheSelectedRecords, dataSourceName PDS, recordIdProcessParameterName = the Guid record param from the process signature). None connected ⇒ drop the button` });
   }
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",
