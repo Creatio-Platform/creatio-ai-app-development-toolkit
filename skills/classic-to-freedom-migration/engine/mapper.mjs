@@ -160,8 +160,9 @@ const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-const DCM_PROGRESS_NOTE = "Case-stage progress bar — NOT in the default Freedom form template; ADD it to the page top when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author stages). No case on the object ⇒ nothing to add.";
-const DCM_NEXTSTEPS_NOTE = "Next steps — NOT in the default Freedom form template; ADD it as a NEW tab in the tab container, next to the Feed tab, when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author steps). No case on the object ⇒ nothing to add.";
+const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add.";
+const DCM_PROGRESS_NOTE = "Case-stage progress bar — NOT in the default Freedom form template; ADD it to the page top when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
+const DCM_NEXTSTEPS_NOTE = "Next steps — NOT in the default Freedom form template; ADD it as a NEW tab in the tab container, next to the Feed tab, when the object has a configured DCM case. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
 const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top" };
 const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed" };
 const WIDGET_BY_MODULE = {
