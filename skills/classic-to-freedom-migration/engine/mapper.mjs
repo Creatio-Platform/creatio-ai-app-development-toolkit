@@ -1,7 +1,7 @@
 // Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
-import { VIEW_ITEM_TYPE, CONTENT_TYPE } from "./engine.mjs";
+import { VIEW_ITEM_TYPE, CONTENT_TYPE, resourceKey } from "./engine.mjs";
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -190,7 +190,7 @@ export function mapToFreedom(eff, opts = {}) {
   const resources = opts.resources || {};
   const resolveText = (raw) => {
     if (!raw) return null;
-    const key = String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "");
+    const key = resourceKey(raw);
     return resources[key] ?? resources[raw] ?? null;
   };
   // Produce a Freedom caption VALUE from a classic caption reference: the resolved literal text if the
@@ -203,7 +203,7 @@ export function mapToFreedom(eff, opts = {}) {
   // synthesized `<name>Caption`. `resolved` = the text is known (no manual decision needed).
   const resourceStrings = {}; // resource key -> default-language text: the map the agent registers at build
   const captionKey = (raw, fallbackName) => raw
-    ? String(raw).replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "")
+    ? resourceKey(raw)
     : (fallbackName || "") + "Caption";
   const caption = (raw, fallbackName) => {
     const key = captionKey(raw, fallbackName);
@@ -423,6 +423,16 @@ function mapFields(ctx, containers) {
   const autoRow = {};    // parent -> next auto row to try (1-based)
   const usedCells = {};  // parent -> Set of "col:row" cells already taken (span-aware), so nothing overlaps
   const nameCount = {};
+  // Cell-occupancy helpers hoisted OUT of the field loop (were re-created per field). `cells` is passed in so
+  // they stay pure. A per-container placement cap bounds the relocation scan on hostile input (thousands of
+  // insert-ops all colliding would otherwise be O(n²)) — the analog of the AST depth-cap; excess is flagged.
+  const MAX_FIELDS_PER_CONTAINER = 500;
+  const span = (start, n) => Array.from({ length: Math.max(1, n) }, (_, i) => start + i);
+  const cellKeys = (c, cs, r, rs) => span(c, cs).flatMap((cc) => span(r, rs).map((rr) => cc + ":" + rr));
+  const cellFree = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).every((k) => !cells.has(k));
+  const claimCells = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) => cells.add(k));
+  const placedCount = {};       // parent -> fields placed so far (bounds the relocation search)
+  const truncatedContainers = new Set();
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -518,27 +528,30 @@ function mapFields(ctx, containers) {
     // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
     // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
-    const span = (start, n) => Array.from({ length: Math.max(1, n) }, (_, i) => start + i);
-    const cellKeys = (c, cs, r, rs) => span(c, cs).flatMap((cc) => span(r, rs).map((rr) => cc + ":" + rr));
-    const cellFree = (c, cs, r, rs) => cellKeys(c, cs, r, rs).every((k) => !cells.has(k));
-    const claimCells = (c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) => cells.add(k));
+    const cap = (placedCount[parent] = (placedCount[parent] || 0) + 1) > MAX_FIELDS_PER_CONTAINER; // relocation scan bound
+    if (cap && !truncatedContainers.has(parent)) {
+      truncatedContainers.add(parent);
+      needsDecision.push({ kind: "layout-truncated", item: parent,
+        reason: `container '${parent}' holds more than ${MAX_FIELDS_PER_CONTAINER} fields — collision relocation is bounded past this point (rows may be approximate). This is far beyond any real page; confirm the input is not malformed.` });
+    }
     const explicitRow = cl.row != null ? cl.row + 1 : null;
     let row;
     if (explicitRow != null) {
       row = explicitRow;
-      if (!cellFree(column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
-        const wanted = row;
-        while (!cellFree(column, colSpan, row, rowSpan)) row++;
+      if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
+        const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
+        while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
         needsDecision.push({ kind: "layout-collision", item: col,
           reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${rowSpan > 1 ? `, spans ${rowSpan} rows` : ""}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
       }
     } else {
       let cur = autoRow[parent] || 1;
-      while (!cellFree(column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
+      const limit = cur + MAX_FIELDS_PER_CONTAINER;
+      while (!cap && cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
       row = cur;
       autoRow[parent] = cur + 1;
     }
-    claimCells(column, colSpan, row, rowSpan);
+    claimCells(cells, column, colSpan, row, rowSpan);
     const layoutConfig = {
       column,
       row,

@@ -92,6 +92,11 @@ const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
 // two files never drift on a raw itemType/contentType literal (an off-by-value waiting to happen).
 export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE; // ViewItemType: GridLayout 0 · Detail 2 · ControlGroup 15
 export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a column rendered via a picker)
+// Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
+// and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
+// LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
+// stored as `Foo` was looked up as `Foo#bar` and the raw key leaked into the plan.
+export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.Strings\./, "").replace(/#.*$/, "");
 // Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
 // not blow the call stack (DoS). `path.length` is the current nesting depth — bail to null + a diagnostic
 // well before any real stack limit. Real page schemas nest only a handful of levels; 500 is unreachable by

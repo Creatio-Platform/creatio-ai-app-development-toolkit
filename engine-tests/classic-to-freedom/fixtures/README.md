@@ -1,23 +1,24 @@
 # Fixtures — golden Classic schema bodies
 
-Детерміновані golden-входи для offline-тестів merge-рушія та mapper'а (без стенду). Кожен файл — власне
-тіло одного шару (`define(...)`), не merged.
+Deterministic golden inputs for the offline merge-engine and mapper tests (no stand). Each file is the
+own body of a single layer (`define(...)`), not merged.
 
-Провенанс (важливо):
+Provenance (important):
 
-- `supportunitemployee/` — **синтетичні**, написані вручну. Компактні тіла `SupportUnitEmployeePage`
-  (сутність `SupportUnit`): base `SupportCalendar_base.js` (8 профільних полів, 3 таби, 3 деталі, 4
-  правила, метод, дві base-tab merge-и) + override `SupportService.js` (один аналітичний віджет-модуль).
-  Раніше тут лежали verbatim стенд-експорти з дампами модулів/`recordId`; їх замінено синтетикою.
-- `contract/` — **реальні client-schema шари** сторінки `ContractPageV2` (сутність `Contract`) з продукту
-  Creatio: це власні конфігураційні метадані Creatio, узяті з **цього ж публічного MIT-ліцензованого репо
-  тулкіта**, і включають **справжні тіла методів** (`getActions`, `onEntityInitialized`,
-  `getUpdateDetailOnSavedConfig` тощо — напр. `CoreContracts.js` ~902 рядки). 9 шарів у справжньому порядку
-  залежностей (F1) — найцінніший еталон мержу (типізовані правила, tombstone-и, orphan-групи). Це метадані
-  СТОРІНКИ стандартного об'єкта (client-schema), **не** дані записів/клієнтів. Два шари свідомо
-  засанітизовано, щоб прибрати Sonar-дублювання: `WorkSalesBase.js` → порожній non-asserted шар;
-  `WorkContractsProcess.js` → обрізаний до ~6 asserted-оп-ів. Решта шарів (зокрема `CoreContracts.js`)
-  **навмисно лишені з реальними тілами** — саме цю точність golden і покликаний захищати.
-- Базовий seed `_base/BaseModulePageV2_skeleton.js` — синтетичний мінімальний скелет parent-template.
+- `supportunitemployee/` — **synthetic**, hand-written. Compact bodies for `SupportUnitEmployeePage`
+  (entity `SupportUnit`): base `SupportCalendar_base.js` (8 profile fields, 3 tabs, 3 details, 4 rules,
+  a method, two base-tab merges) + override `SupportService.js` (one analytics widget module). This
+  directory used to hold verbatim stand exports with module dumps / `recordId`s; those were replaced
+  with synthetic bodies.
+- `contract/` — **real client-schema layers** of the `ContractPageV2` page (entity `Contract`) from the
+  Creatio product: these are Creatio's own configuration metadata, taken from **this same public,
+  MIT-licensed toolkit repo**, and include **real method bodies** (`getActions`, `onEntityInitialized`,
+  `getUpdateDetailOnSavedConfig`, etc. — e.g. `CoreContracts.js` is ~902 lines). 9 layers in true
+  dependency order (F1) — the most valuable merge golden (typed rules, tombstones, orphan groups). This
+  is PAGE metadata for a standard object (client-schema), **not** record/customer data. Two layers were
+  deliberately sanitized to remove Sonar duplication: `WorkSalesBase.js` → an empty, non-asserted layer;
+  `WorkContractsProcess.js` → trimmed to ~6 asserted ops. The remaining layers (notably `CoreContracts.js`)
+  are **intentionally kept with real bodies** — that fidelity is exactly what this golden is meant to guard.
+- The base seed `_base/BaseModulePageV2_skeleton.js` is a synthetic minimal parent-template skeleton.
 
-`employeescore/` видалено — жоден раннер його не вантажив.
+`employeescore/` was removed — no runner loaded it.

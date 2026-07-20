@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -1354,6 +1354,26 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
   procSpec.includes(String.raw`Ev\|il`) && !procSpec.includes("Ev|il"),
   () => procSpec.split("\n").find((l) => /Section process/.test(l)));
 
+// Major (this round) — a HANDLER method name with a pipe/backtick must be escaped at the Logic sink in BOTH
+// the method column AND the folded-helper "extra" AND the derived trigger column (no raw pipe breaks the table).
+const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
+  { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
+const logicLine = logicSpec.split("\n").find((l) => /onFo/.test(l)) || "";
+check("Major(logic-sink): a piped handler/helper name is escaped in the method, helper, AND trigger cells (no raw table pipe)",
+  logicLine.includes(String.raw`onFo\|oChanged`) && logicLine.includes(String.raw`setFo\|oInfo`)
+  && logicLine.includes(String.raw`Fo\|o changes`) && !/[^\\]\|o changes/.test(logicLine),
+  () => JSON.stringify(logicLine));
+
+// Minor 1 — ONE canonical resourceKey shared by mapper (store) + designspec (lookup): strips $/prefix/#anchor
+// uniformly, so a `Resources.Strings.Foo#en-US` caption resolves instead of leaking the raw key.
+check("Minor1: resourceKey strips $-sigil, Resources.Strings prefix, and #culture anchor uniformly",
+  resourceKey("$Resources.Strings.Foo#en-US") === "Foo" && resourceKey("Resources.Strings.Bar") === "Bar" && resourceKey("Baz") === "Baz");
+const anchorTabCs = runMigration({ entity: "X", seed: CLEAN_SEED, resources: { AnchTab: "General" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"AnchTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.AnchTab#en-US"}},{operation:"insert",name:"F",parentName:"AnchTab",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("Minor1: a #anchor caption resolves to its text in the design spec (Tab · General), never the raw key",
+  /Tab · General/.test(anchorTabCs.designSpec) && !/AnchTab/.test(anchorTabCs.designSpec),
+  () => anchorTabCs.designSpec.split("\n").filter((l) => /Tab ·|AnchTab/.test(l)));
+
 // Minor 5 — a bare-line planMeta value (whatItDoes) that STARTS with a Markdown block marker must not render
 // as a real heading in the verbatim plan (esc collapses newlines but not a leading `##`; escBareLine does).
 const widPlan = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: { ...FULL_PLANMETA, whatItDoes: "## Boom is not a heading" },
@@ -1407,8 +1427,9 @@ const m4span = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
 ] })]));
 const mtTall = m4span.viewConfigDiff.find((o) => o.name === "Tall")?.values.layoutConfig;
 const mtNxt = m4span.viewConfigDiff.find((o) => o.name === "Nxt")?.values.layoutConfig;
-check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap) + flagged",
-  mtTall && mtNxt && !(mtNxt.column === mtTall.column && mtNxt.row >= mtTall.row && mtNxt.row < mtTall.row + mtTall.rowSpan)
+check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap) + flagged; layoutConfig.rowSpan carries the classic value",
+  mtTall && mtNxt && mtTall.rowSpan === 2 && mtNxt.rowSpan === 1   // the classic rowSpan is preserved on the Freedom field
+  && !(mtNxt.column === mtTall.column && mtNxt.row >= mtTall.row && mtNxt.row < mtTall.row + mtTall.rowSpan)
   && m4span.needsDecision.some((n) => n.kind === "layout-collision"),
   () => ({ Tall: mtTall, Nxt: mtNxt }));
 

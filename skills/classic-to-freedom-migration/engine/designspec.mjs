@@ -16,6 +16,7 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
+import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -49,7 +50,7 @@ function regionResolver(viewConfigDiff, resources = {}) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
   // Major 4 — a caption is a `$Resources.Strings.<key>` binding; show its human text from the resource map
   // (the plan stays readable) — fall back to the key when the text is not resolved.
-  const capText = (raw) => { const k = String(raw).replace(/^\$?Resources\.Strings\./, ""); return resources[k] ?? k; };
+  const capText = (raw) => { const k = resourceKey(raw); return resources[k] ?? k; }; // same key normalization the mapper used to STORE the string (incl. #anchor strip)
   const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
   return (parentName) => {
     let p = parentName, hops = 0, first = null;
@@ -285,8 +286,8 @@ export function renderDesignSpec(result, opts = {}) {
   for (const h of stubs) {
     if (helperBase(h.sourceMethod)) continue; // shown folded into its trigger row
     const b = triggerBase(h.sourceMethod);
-    const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].join(", ")})` : "";
-    logic.push([esc(h.sourceMethod), triggerOf(h.sourceMethod), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"]);
+    const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].map(esc).join(", ")})` : ""; // esc each helper name at the sink — a method name from an untrusted body could carry a pipe/backtick (Major)
+    logic.push([esc(h.sourceMethod), esc(triggerOf(h.sourceMethod)), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"]);
   }
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
