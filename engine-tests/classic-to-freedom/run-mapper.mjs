@@ -870,10 +870,10 @@ check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema Manag
 check("#8 DCM: design spec places Next steps as a new tab and flags both as ADD (not template context)",
   /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| ⚠ ADD — not in the default Freedom template/.test(dcmCs.designSpec));
-check("#8 DCM: the notes carry the correct PLACEMENT — progress bar inside MainHeader; Next steps a tab beside Feed/Attachments via the tools slot",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /INSIDE `MainHeader`/.test(w.note || ""))
-  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "")),
-  () => dcmCs.changeSet.widgets.map((w) => w.widget));
+check("#8 DCM: the notes carry the correct PLACEMENT — progress bar in MainContainer (not MainHeader); Next steps a tab beside Feed/Attachments (tools slot, flag-icon)",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /in `MainContainer`/.test(w.note || "") && /NOT in `MainHeader`/.test(w.note || ""))
+  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "") && /flag-icon/.test(w.note || "")),
+  () => dcmCs.changeSet.widgets.map((w) => w.note));
 // Recommendations is an inherited base-template container (empty by default, runtime-filled). It is classified
 // `chrome` and HIDDEN from the plan (kept in chromeWidgets for inspection) — not via a hardcoded per-run "ignore".
 const recoCs = runMigration({ entity: "X",

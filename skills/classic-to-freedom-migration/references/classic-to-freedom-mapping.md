@@ -122,18 +122,19 @@ previous versions can share a caption (`Recruiting_v11` active, `Recruiting_v1`)
 0 rows, false "no case" (this is exactly the miss that dropped the stage bar on a real Applicant migration).
 
 **Case-stage progress bar** — `crt.EntityStageProgressBar` (`entityName`, `recordId: $Id`, `value: $PDS_<stage>`,
-`saveOnChange: true`). Place it **INSIDE `MainHeader`** (the header `crt.FlexContainer`, so it sits directly
-under the section header) — NOT as a bare child of `Main` between `MainHeader` and the content. If it hangs in
-a loading spinner, wire the page-level DCM handlers (`crt.EntityStageProgressBarLoadDataRequest`, `stageChanged`,
-`setAllowedStages`).
+`saveOnChange: true`). Place it in **`MainContainer`** (the content container BELOW the header) at the **top of
+the content** (first child, above the tabs) — NOT in `MainHeader`, and NOT as a bare child of `Main`. If it hangs
+in a loading spinner, wire the page-level DCM handlers (`crt.EntityStageProgressBarLoadDataRequest`,
+`stageChanged`, `setAllowedStages`).
 
 **Next steps** — a **tab in the card toggle panel, beside the Feed and Attachments tabs**, built EXACTLY like
 them (read a working page such as an Account page for the reference shape): the tab `caption` via
 `#ResourceString(<Key>)#` **not** `$Resources.Strings.*` (the toggle-panel caption won't render otherwise); set
-the tab `icon`+`iconPosition`; put the header — a `crt.Label` "Next steps" (headline-3) + a `crt.Button` "+"
-(menu: Create task / Create email) — in the tab's **`tools`** slot, and the `crt.NextSteps` widget in `items`
-(a GridContainer). Header in `items` instead of `tools` = a tab you can't drop into and a hidden caption. Each
-step renders as icon + title + button (the widget's own item shape — do not hand-author steps).
+the tab `icon` to **`flag-icon`** (+ `iconPosition`) — do not guess an icon name (an invented `next-steps-icon`
+renders empty); put the header — a `crt.Label` "Next steps" (headline-3) + a `crt.Button` "+" (menu: Create task
+/ Create email) — in the tab's **`tools`** slot, and the `crt.NextSteps` widget in `items` (a GridContainer).
+Header in `items` instead of `tools` = a tab you can't drop into and a hidden caption. Each step renders as
+icon + title + button (the widget's own item shape — do not hand-author steps).
 
 **Run process (record vs list) — read the BINDING, then place accordingly.** `ProcessInModules` filtered by
 the section's `SysModule/Id` says WHICH module the process is bound to. If it is bound to the section's
@@ -150,9 +151,12 @@ action on the form. None connected ⇒ drop the button entirely.
 left area groups fields into more than one island, the plan lists them — each as a `Side profile › <island>`
 region and in the `[profile-island]` confirm item (e.g. `ContactContainer` + `InternalRequestContainer`).
 Build **each island as its own `crt.GridContainer` under `SideAreaProfileContainer`** (single-column grid),
-preserving the split. Merging several islands into one container is a **silent plan deviation** — if a
-single card is genuinely better, propose it, don't apply it unannounced. (A single island stays flat, no
-wrapper — that is the one case with no separate container.)
+preserving the split. **Any island container you ADD must match the styling of the one the template already
+provides** — copy its `color`/`backgroundColor`, `padding`, `borderRadius` (and other card settings) from the
+template's profile island so the added container looks identical, not a bare/differently-styled box. Merging
+several islands into one container is a **silent plan deviation** — if a single card is genuinely better,
+propose it, don't apply it unannounced. (A single island stays flat, no wrapper — that is the one case with no
+separate container.)
 
 ## Data And Binding Mapping
 
