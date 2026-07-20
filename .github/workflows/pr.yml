@@ -22,7 +22,8 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         # --only-binary :all: → wheels only, so no source-dist setup scripts run (S8541); pinned version (S8544).
-        run: pip install --only-binary :all: pytest==8.3.4
+        # Quoted: the unquoted `:all: ` (colon-space) makes YAML parse this as a nested mapping → workflow startup_failure.
+        run: "pip install --only-binary :all: pytest==8.3.4"
       - name: Run tests
         run: pytest tests/
 
