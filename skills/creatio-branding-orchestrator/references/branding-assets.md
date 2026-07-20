@@ -32,9 +32,11 @@ Related settings:
 
 - SVG with a transparent background is the recommended format; common raster formats (PNG, JPG,
   WebP) also work. The slots render whatever the Binary setting holds.
-- SVGs extracted from external sites must be sanitized before upload — no `<script>` elements,
-  no `on*` event-handler attributes, no references to external resources — because the platform
-  serves them from the app's own origin. User-provided files are used as-is.
+- Every SVG is sanitized before upload, whatever its source — no `<script>` elements, no `on*`
+  event-handler attributes, no references to external resources — because the platform serves
+  them from the app's own origin. This applies equally to files the user provides, logos
+  extracted from a site, and the recolored background; nothing is uploaded as-is. After
+  sanitizing, confirm the file still renders the same image.
 - clio refuses files larger than 10 MB.
 - Uploads honor the environment's file-security policy (`FileSecurityMode`,
   `FileExtensionsAllowList` / `FileExtensionsDenyList`, `AllowFilesWithUnknownType`). A refused
@@ -78,7 +80,9 @@ an SVG background is `image/svg+xml`). The shell serves it from
 `CrtBackgroundConfig` may not appear in the sys-settings catalog listing — read and write it by
 code directly.
 
-**Uploading the image (validated path).** The `Data` column is a binary stream: writing it
+**Uploading the image (validated path).** Sanitize the recolored SVG before upload, the same as
+any logo (see Logo constraints) — the background is served from the app's own origin too. The
+`Data` column is a binary stream: writing it
 through OData JSON (create or update) does not work — the row is created but the stream stays
 empty — and DataService blob updates fail server-side. Upload through the platform's image API
 instead, on an authenticated browser session (clio's `get-browser-session` provides one; any

@@ -111,9 +111,10 @@ lives in `./references/branding-assets.md`.
   ask for confirmation before extracting. On agreement, try to get an SVG logo with a transparent
   background: the main logo and, when it exists, its white/light variant. At least the main logo
   must come out of this path; if extraction fails, fall through to asking for files.
-- Sanitize any SVG taken from the web before it is uploaded: strip scripts, event-handler
-  attributes, and references to external resources, and check the cleaned file still renders the
-  same logo. Files the user provides directly are used as-is.
+- Sanitize every SVG before it is uploaded, whatever its source — files the user provides as
+  well as logos taken from the web: strip scripts, event-handler attributes, and references to
+  external resources, then check the cleaned file still renders the same logo. Nothing is
+  uploaded as-is.
 - Otherwise ask the user to provide the files. SVG is recommended (raster formats also work); if
   possible two variants — one for white backgrounds and one for the dark top panel. At least one
   file must be provided for logos to be included.
@@ -148,7 +149,8 @@ background will be generated or not.
   `{{primary-300}}` or `{{secondary-500}}`; fetch the real stop values from clio's palette tool
   (the full-stops preview described in the theming guidance) and replace each token with its hex.
   Never invent, adjust, or interpolate a color yourself.
-- Save the recolored SVG to a temporary file. It is applied during Build and apply: uploaded to
+- Sanitize the recolored SVG the same as a logo (strip scripts, `on*` handlers, external
+  references), then save it to a temporary file. It is applied during Build and apply: uploaded to
   the environment's image store, registered in the Appearance gallery, and set as the current
   background. The exact tool sequence lives in clio's theming guidance and
   `./references/branding-assets.md`.
