@@ -84,7 +84,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 
 | Classic thing | Engine signal | Freedom target | Do NOT |
 | --- | --- | --- | --- |
-| Approvals / Visa | `standardFeatures` `uiShape: "component"` | `crt.ApprovalList` (native — brings its own approve/reject actions, needs no child edit page) | rebuild as a plain list/DataGrid. A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
+| Approvals / Visa | `standardFeatures` `uiShape: "component"` | **TWO components (both from `get-component-info`) — add BOTH:** the approval **module/widget** as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). See the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
 | Attachments / Feed | `standardFeatures` `uiShape: "component"` | the native Attachments / Feed component | rebuild as a generic list. |
 | Activities / Emails | `standardFeatures` `uiShape: "list"` | a **filtered related list** — a DataGrid of the child records (Activity/Task, Email) filtered to the master. This IS their native form, not a downgrade. | turn them into a `crt.Timeline` or an email-client component. |
 | Timeline | `widgets` (only when the classic page has an actual Timeline) | `crt.Timeline` | invent a Timeline for Activities/Emails — those are lists (row above). |
@@ -101,6 +101,13 @@ that feature's infrastructure. Build the native component up front — never bui
 "switch" it later.
 
 ### Build recipes for the components agents get wrong (verified on-stand)
+
+**Approvals = TWO components, not one.** `get-component-info` for the approval feature returns **two** parts and
+the page needs **both**: (1) the approval **module/widget** — add it as its **own separate container ABOVE the
+profile island** (top of the left/side area), and (2) the approval **list** (`crt.ApprovalList`, which brings its
+own approve/reject actions). Agents typically add only the list — that is incomplete; the module above the island
+is what shows the current approval state/actions. Read `get-component-info` for the exact component types + their
+required config before building, and add both.
 
 **Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes, and
 printables are marked "⚠ ADD only if present" precisely because the schema alone doesn't say. Run each query
