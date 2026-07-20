@@ -21,7 +21,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install pytest
+        # --only-binary :all: → wheels only, so no source-dist setup scripts run (S8541); pinned version (S8544).
+        run: pip install --only-binary :all: pytest==8.3.4
       - name: Run tests
         run: pytest tests/
 
