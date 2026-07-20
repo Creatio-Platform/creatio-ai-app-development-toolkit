@@ -139,6 +139,14 @@ process **display Caption** (from `VwSysProcess`), never its technical code. Lau
 e.g. Applicant1>` (get it via the process signature). A form-bound process instead becomes a record-page
 action on the form. None connected ⇒ drop the button entirely.
 
+**Profile islands — build EVERY one the plan shows; do not collapse "for simplicity".** When the classic
+left area groups fields into more than one island, the plan lists them — each as a `Side profile › <island>`
+region and in the `[profile-island]` confirm item (e.g. `ContactContainer` + `InternalRequestContainer`).
+Build **each island as its own `crt.GridContainer` under `SideAreaProfileContainer`** (single-column grid),
+preserving the split. Merging several islands into one container is a **silent plan deviation** — if a
+single card is genuinely better, propose it, don't apply it unannounced. (A single island stays flat, no
+wrapper — that is the one case with no separate container.)
+
 ## Data And Binding Mapping
 
 | Classic UI Pattern | Freedom UI Analog |

@@ -446,6 +446,10 @@ check("#9b: each island built as a crt.GridContainer under SideAreaProfileContai
 check("#9b: multi-island surfaced as ONE profile-island decision naming both islands",
   lmcs.needsDecision.some(n => n.kind === "profile-island"
     && /ContactContainer/.test(n.item) && /InternalRequestContainer/.test(n.item)));
+check("#9b: the profile-island decision says build EACH island + do NOT merge 'for simplicity' (the silent plan deviation)",
+  lmcs.needsDecision.some(n => n.kind === "profile-island"
+    && /build EACH/.test(n.reason) && /for simplicity/.test(n.reason) && /silent plan deviation/.test(n.reason)),
+  () => lmcs.needsDecision.find(n => n.kind === "profile-island")?.reason);
 // a SINGLE island must NOT be split (no redundant wrapper, no nag) — fields stay flat in the profile.
 const oneIsland = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "ContactContainer", parentName: "LeftModulesContainer", itemType: 0 }),

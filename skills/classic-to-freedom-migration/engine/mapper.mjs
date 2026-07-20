@@ -614,7 +614,7 @@ function mapFields(ctx, containers) {
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
   // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
   if (splitIslands) needsDecision.push({ kind: "profile-island", item: [...distinctProfileIslands].join(", "),
-    reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — each is rebuilt as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Confirm the Freedom left area supports stacked containers; if it must be one profile card, merge them.` });
+    reason: `classic left profile area has ${distinctProfileIslands.size} distinct islands (${[...distinctProfileIslands].join(", ")}) — build EACH as its own crt.GridContainer in the side profile, preserving the classic split (NOT flattened). Do NOT merge them into one container "for simplicity" — that is a silent plan deviation. Merge ONLY if the Freedom left area genuinely cannot stack containers, and say so.` });
   // #5/#13 (fields) — if NO field label resolved to a real title, the spec shows column CODES. Nudge the
   // agent to pass get-entity-schema-properties column titles so labels read like the classic page, not raw codes.
   if (payloadFields.length && fieldsWithTitle === 0) needsDecision.push({ kind: "field-labels", item: "(all fields)",
