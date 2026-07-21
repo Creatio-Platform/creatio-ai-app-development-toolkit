@@ -36,6 +36,7 @@ Use these values for CAADT product telemetry when calling clio telemetry tools:
 ## Core Rules
 
 - Pages are separate for web and mobile: before any page edit, read `../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
+- **Lookup/enum values are package data, never a runtime write.** Seed them inline via `sync-schemas`'s `seed-rows` when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside that batch — both are DB-first and install immediately, no compile step involved. Never seed lookup values through runtime OData/DataService calls or raw SQL: those bypass the platform, so the row lands in the table but the value doesn't surface as real package data. Details: `../context/essentials.md`, "Data Binding And Schema Inspection".
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../AGENTS.md`.
 - Follow `../context/product-telemetry.md` for CAADT product telemetry; use the installed Analytics Context values when calling clio telemetry tools.
 - Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.

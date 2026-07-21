@@ -62,7 +62,8 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
 - `create-data-binding-db` persists bindings in DB and installs data immediately
 - `upsert-data-binding-row-db` updates rows only in an already existing binding
-- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
+- Lookup/enum values are package data: seed them inline via `sync-schemas`'s `seed-rows` when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside the batch — both install immediately and neither needs a compile step
+- Never seed lookup values through runtime OData/DataService calls or raw SQL — those bypass the platform, so the row lands in the table but does not surface as real package data
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules
