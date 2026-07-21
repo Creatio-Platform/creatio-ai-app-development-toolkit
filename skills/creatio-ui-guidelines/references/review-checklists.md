@@ -55,7 +55,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] ExpansionPanels are full width and stacked vertically — none placed side by side, in two columns, or with a partial `colSpan`.
 - [ ] Analytic widgets are at the top (top of profile island or first in the tab; a dedicated Analytics tab if many); the profile island holds only small (XS/S) metrics, with icons, not large charts.
 - [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
-- [ ] When editing an existing page, new components match the styles already there (panel style, `labelPosition`, spacing/padding/radius, widget size, column count).
+- [ ] **Style parity — verified with tools, not eyeballed.** For EVERY component you added: open a shipped reference page on the same template, run `get-component-info` on that component type, and diff the concrete props against the native one — container `color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` (never a raw `title`), `labelPosition`, widget size, column count. A screenshot/metadata glance is NOT this check. New/empty page → copy these conventions from a shipped page on the same template. (`toggleType`, `title`-instead-of-`caption`, and island card settings are the props runs most often get wrong here.)
 - [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even.
 
 ### Fields and data entry
