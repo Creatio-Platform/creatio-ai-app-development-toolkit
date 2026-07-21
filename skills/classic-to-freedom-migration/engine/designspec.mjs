@@ -371,6 +371,14 @@ export function renderPlan(result, opts = {}) {
   if (planMetaMissing.length) {
     P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   }
+  // on-stand SIGNALS gate — the ⚠ conditional checks (DCM case / connected processes / printables) must be
+  // RESOLVED before approval, not deferred to build. Unresolved → the plan is INCOMPLETE (finding: recurring
+  // "check later" miss). The agent runs the existing queries and records manifest.signals.
+  const signals = opts.signals || {};
+  const signalsMissing = opts.signalsMissing || [];
+  if (signalsMissing.length) {
+    P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`ProcessInModules\` by the section \`SysModule\` (names via \`VwSysProcess\`); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
+  }
   P.push(
     "### Overview",
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
@@ -384,6 +392,17 @@ export function renderPlan(result, opts = {}) {
     escBareLine(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>")), // bare line → also escape a leading block marker (finding 5)
     "",
   );
+  // On-stand signals — the resolved DCM/process/printable answers (or an ⚠ if unresolved). This is the RESULT
+  // of the checks the SKILL mandates at plan time; rendering them here makes each a tracked plan item (built or
+  // deliberately N/A), not a "check later" the build silently drops.
+  const sigLine = (k, label) => {
+    const s = signals[k];
+    if (!s || s.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
+    if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
+    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
+    return `- **${label}:** present${list ? ` — ${list}` : ""} → build it`;
+  };
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page

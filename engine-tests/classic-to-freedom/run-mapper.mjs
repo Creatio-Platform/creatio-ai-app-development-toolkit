@@ -764,8 +764,11 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
+// resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
+// (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
+const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
 const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || "") && !/PLAN INCOMPLETE/.test(planRun.stdout || ""));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
@@ -795,7 +798,7 @@ const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
 try {
   fs.rmSync(outPath, { force: true });
   const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
-    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
   const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
   check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
     outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
@@ -1536,6 +1539,38 @@ check("plan: List page shows Quick filters + Section actions, Main scope lists p
   && /XICPage .*typed edit page.*Rebuild \(per-type\)/.test(docSecRun.plan)
   && /Typed entity — 2 per-type/.test(docSecRun.plan),
   () => docSecRun.plan.split("\n").filter((l) => /filter|action|typed|per-type/i.test(l)).slice(0, 8));
+
+/* ---- on-stand signals gate: DCM / connected processes / printables must be RESOLVED before the plan, not
+   deferred to build (the recurring "faithful to the classic body, check later" miss — Documents session). No
+   new tool: the agent runs the existing ESQ/odata queries and records manifest.signals; unresolved blocks. */
+const sigBase = {
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "L", formTemplate: "F" },
+};
+const sigUnresolved = runMigration({ ...sigBase });
+check("signals gate: absent manifest.signals → all three unresolved",
+  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,printables,processes",
+  () => sigUnresolved.signalsMissing);
+check("signals gate: --plan carries the ⛔ signals-incomplete banner when unresolved",
+  /PLAN INCOMPLETE — on-stand signals not resolved/.test(sigUnresolved.plan));
+const sigResolved = runMigration({ ...sigBase, signals: {
+  dcm: { resolved: true, present: true, cases: ["CaseA"] },
+  processes: { resolved: true, present: false },
+  printables: { resolved: true, present: true, items: ["Template"] },
+} });
+check("signals gate: all resolved → signalsMissing empty + resolved summary (present/none) rendered",
+  (sigResolved.signalsMissing || []).length === 0
+  && /\*\*DCM case:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("CaseA")
+  && /\*\*Connected processes:\*\* none/.test(sigResolved.plan)
+  && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template"),
+  () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables/i.test(l)));
+check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
+  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
+const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
+check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
+  sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
+  () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
