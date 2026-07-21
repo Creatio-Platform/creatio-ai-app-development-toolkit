@@ -509,6 +509,19 @@ check("ContactCommunication: the note says use the native crt.ContactCommunicati
   commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
   () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication/.test(n.reason))?.reason);
 
+/* ---- virtual-field: a bound field whose column is NOT on the entity (auto-filled companion from a lookup)
+   is flagged (build read-only + wire the handler), so it is NOT silently dropped → a lone-field island ---- */
+const vfCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
+  di({ name: "Dept",    parentName: "Header", propertyName: "items", bindTo: "Department" }),   // not an X column → auto-filled
+] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } } }); // Department NOT supplied
+check("virtual-field: a field whose column is not on the entity → virtual-field decision (build read-only + on-change handler), not dropped",
+  vfCs.needsDecision.some(n => n.kind === "virtual-field" && n.item === "Department" && /view-model attribute/i.test(n.reason) && /do NOT drop/i.test(n.reason))
+  && !vfCs.needsDecision.some(n => n.kind === "virtual-field" && n.item === "InternalRequest"),  // the real column is NOT flagged
+  () => vfCs.needsDecision.filter(n => n.kind === "virtual-field").map(n => n.item));
+check("virtual-field: NOT flagged when entityColumns is absent (no basis to judge)",
+  !mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "Dept", parentName: "Header", propertyName: "items", bindTo: "Department" })] })])).needsDecision.some(n => n.kind === "virtual-field"));
+
 /* ---- #11: an auto-generated detail name over a NON-file entity is surfaced LOUD (fetch its schema) ---- */
 const autoClient = L("Client", { entity: "X", details: {
     Auto: { schemaName: "Schema2Detail", entitySchemaName: "SomeChild", detailColumn: "P", masterColumn: "Id" } },

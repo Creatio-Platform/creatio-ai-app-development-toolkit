@@ -497,6 +497,12 @@ function mapFields(ctx, containers) {
     }
     const col = f.bindTo || f.name || "Field";
     const meta = colMeta(col);
+    // A bound field whose column is NOT among the entity's real columns (when entityColumns is supplied) is
+    // usually an AUTO-FILLED companion loaded from a selected lookup by an on<X>Change/set<X>Info handler
+    // (e.g. Department/StaffUnit from the chosen Request) — build it READ-ONLY on a view-model attribute and
+    // wire that handler; do NOT drop it, because dropping is what collapses an island to a lone field.
+    if (f.bindTo && Object.keys(cols).length && !(col in cols)) needsDecision.push({ kind: "virtual-field", item: col,
+      reason: `field '${col}' is not a real column on the entity — likely an auto-filled companion loaded from a selected lookup (an on<X>Change / set<X>Info handler). Build it as a READ-ONLY field bound to a VIEW-MODEL attribute and wire the lookup's on-change handler to load/clear it; do NOT drop it (that collapses the island to a lone field). Confirm the column if it should be a real entity field.` });
     const ctl = control(meta.type, f.contentType, meta.ref);
     if (!ctl) needsDecision.push({ kind: "field-control", item: col,
       reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });

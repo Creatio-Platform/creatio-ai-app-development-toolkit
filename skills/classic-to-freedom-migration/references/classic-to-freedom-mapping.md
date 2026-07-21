@@ -163,6 +163,17 @@ several islands into one container is a **silent plan deviation** — if a singl
 propose it, don't apply it unannounced. (A single island stays flat, no wrapper — that is the one case with no
 separate container.)
 
+**Auto-filled companion fields — build them read-only, don't drop them (this is what leaves a lone-field
+island).** A field in the plan whose column is NOT on the entity is usually **auto-filled from a selected
+lookup**: e.g. the InternalRequest island has `Request` (a lookup) plus `Department` and `Job title` that are
+loaded from the chosen Request by an `onInternalRequestChange` / `setInternalRequestInfo` handler — they are
+NOT `Applicant` columns. Build each such companion as a **read-only field bound to a VIEW-MODEL attribute**
+(not a data-source column), and wire the lookup's on-change handler to load its value from the selected record
+(and clear on deselect). Do NOT drop a planned field just because it has no real entity column — dropping the
+companions is exactly what collapses the island to a single lookup. If an island/group ends up with **one
+field**, treat it as a red flag (ui-guidelines flags the lone-field anti-pattern) and recover its
+auto-filled/companion fields before shipping.
+
 ## Data And Binding Mapping
 
 | Classic UI Pattern | Freedom UI Analog |
