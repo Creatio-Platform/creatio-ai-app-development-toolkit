@@ -136,16 +136,20 @@ renders empty); put the header — a `crt.Label` "Next steps" (headline-3) + a `
 Header in `items` instead of `tools` = a tab you can't drop into and a hidden caption. Each step renders as
 icon + title + button (the widget's own item shape — do not hand-author steps).
 
-**Run process (record vs list) — read the BINDING, then place accordingly.** `ProcessInModules` filtered by
-the section's `SysModule/Id` says WHICH module the process is bound to. If it is bound to the section's
-**list/registry** module (the common case), the launch belongs on the **List page**, NOT the form. Do NOT add
-a standalone button: add it as a **menu item in the template's existing `Actions` button** (`ActionButton` in
-ListPageV3) — one Actions button, the process launch is one of its menu items. Label the item with the
-process **display Caption** (from `VwSysProcess`), never its technical code. Launch via
-`crt.RunBusinessProcessRequest` — for a list-bound process: `processRunType: ForTheSelectedRecords`,
-`dataSourceName: PDS`, `recordIdProcessParameterName: <the Guid record parameter from the process signature,
-e.g. Applicant1>` (get it via the process signature). A form-bound process instead becomes a record-page
-action on the form. None connected ⇒ drop the button entirely.
+**Run process (record vs list) — read the BINDING, then place on the surface(s) it is connected to.**
+`ProcessInModules` filtered by the section's `SysModule/Id` says which module(s) a process is bound to. A
+process can be connected to the section's **list/registry** module, to the **record card/edit-page** module,
+or to **BOTH** — do not assume list-only or form-only; place it on **each** surface it is bound to (checking
+list-only, as the Applicant test did, is correct *only* when the binding is list-only). Never a standalone
+button; always a **menu item in the template's existing `Actions` button**, one Actions button per page, label
+= the process **display Caption** (from `VwSysProcess`), never the technical code. Launch via
+`crt.RunBusinessProcessRequest`, passing the record Id into the record parameter from the process signature
+(e.g. `Applicant1`):
+
+- **List page** → the list's `Actions` button (`ActionButton` in ListPageV3), `processRunType: ForTheSelectedRecords`, `dataSourceName: PDS` (runs for the selected row(s)).
+- **Form / record page** → the form page's OWN `Actions` button in the header action area (the header action-buttons container the template provides, e.g. `ActionButtonsContainer` in `PageWithTabsFreedomTemplate` — mirror the list-page Actions pattern, do NOT invent a new button and do NOT drop a bare button in the content). Run for the CURRENT record: pass `$Id` (`processRunType` = the current record, not `ForTheSelectedRecords`). If the template exposes no Actions menu on the form, that gap is a manual decision to raise, not a reason to place a loose button.
+
+None connected on a surface ⇒ nothing on that surface. None connected anywhere ⇒ drop the button entirely.
 
 **Profile islands — build EVERY one the plan shows; do not collapse "for simplicity".** When the classic
 left area groups fields into more than one island, the plan lists them — each as a `Side profile › <island>`

@@ -689,10 +689,12 @@ const plRun = runMigration({ entity: "X", schemas: [{ pkg: "P", body:
 check("#8c: process-launch → RunProcess card action + process-launch decision naming the process",
   plRun.changeSet.cardActions.includes("RunProcess")
   && plRun.changeSet.needsDecision.some(n => n.kind === "process-launch" && /RecruitingSecurityCheckProcess/.test(n.item)));
-check("#8c: the process-launch decision tells to READ THE BINDING and place a list-bound process as a MENU ITEM in the Actions button, labelled by Caption not code",
+check("#8c: the process-launch decision tells to READ THE BINDING and place it as a MENU ITEM in the Actions button on EACH bound surface (LIST and/or FORM), labelled by Caption not code",
   plRun.changeSet.needsDecision.some(n => n.kind === "process-launch"
-    && /READ ITS BINDING/.test(n.reason) && /Actions button/.test(n.reason)
-    && /MENU ITEM/i.test(n.reason) && /Caption/.test(n.reason) && /never its technical code/.test(n.reason)),
+    && /READ ITS BINDING/.test(n.reason) && /Actions button/.test(n.reason) && /MENU ITEM/i.test(n.reason)
+    && /Caption/.test(n.reason) && /never its technical code/.test(n.reason)
+    && /LIST/.test(n.reason) && /FORM/.test(n.reason) && /BOTH/.test(n.reason)
+    && /current record/i.test(n.reason)),
   () => plRun.changeSet.needsDecision.find(n => n.kind === "process-launch")?.reason);
 // card-action DISPOSITION — standard toolbar buttons are not all migratable: ViewOptions is not migrated,
 // Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
