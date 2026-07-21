@@ -28,20 +28,43 @@ class ScaffoldingPlaybookDocTests(unittest.TestCase):
     def test_implementation_runbook_exists(self):
         self.assertTrue(RUNBOOK.exists(), str(RUNBOOK))
 
-    def test_transient_failure_playbook_covers_the_four_step_recovery(self):
-        # AC1: check existence -> wait 60-120 s -> single same-name retry -> poll.
+    def test_transient_failure_playbook_covers_the_five_step_recovery(self):
+        # AC1: check existence first -> wait 60-120 s -> single same-name retry ->
+        # poll on in-progress -> stop and report on hard failure.
         content = read_text(RUNBOOK)
+        lowered = content.lower()
+        # Step 1 must order the existence check before any retry, not just mention the tool.
+        self.assertIn("check existence first", lowered)
         self.assertIn("list-app-sections", content)
         self.assertIn("60–120 s", content)
-        self.assertIn("in-progress", content)
-        self.assertTrue(
-            contains_all(content, ["InsertQuery failed", "Select query failed"]),
-            "playbook must trigger on both transient error strings",
-        )
+        # Poll semantics, not a bare "in-progress" occurrence.
+        self.assertIn("success-pending", lowered)
         self.assertTrue(
             contains_all(content, ["SAME name", "SAME caption"]),
             "playbook must require a single same-name/same-caption retry",
         )
+
+    def test_transient_failure_playbook_locks_the_failure_class(self):
+        # AC5: trigger on the failure *class*, not one exact string.
+        content = read_text(RUNBOOK)
+        self.assertIn("class", content.lower())
+        self.assertTrue(
+            contains_all(
+                content,
+                ["InsertQuery failed", "Select query failed", "change the caption"],
+            ),
+            "playbook must key on the whole failure class, not just two strings",
+        )
+
+    def test_playbook_locks_single_retry_and_terminal_stop_and_report(self):
+        # Heart of ENG-93376: exactly one same-name retry, then stop and report —
+        # both on a hard retry failure (step 5) and on poll-cap timeout (step 4).
+        lowered = read_text(RUNBOOK).lower()
+        self.assertIn("retry once", lowered)
+        self.assertIn("stop and report", lowered)
+        self.assertIn("do not retry a second time", lowered)
+        # Step-4 poll-timeout terminal branch must be defined, not left to improvisation.
+        self.assertIn("report the pending state", lowered)
 
     def test_playbook_forbids_caption_variation_retries(self):
         # AC2: no caption-variation / rename-loop retries.
@@ -75,6 +98,27 @@ class ScaffoldingPlaybookDocTests(unittest.TestCase):
         self.assertIn(
             "runbooks/03-app-implementation.md", installer.REQUIRED_REFERENCE_PATHS
         )
+
+    def test_static_surfaces_register_the_runbook(self):
+        # AC6: the runbook must stay wired into every toolkit surface, not only the
+        # installer-rendered output. Dropping the reference from any of these must fail.
+        path_referencing = [
+            "skills/creatio-app-orchestrator/SKILL.md",
+            "rules/creatio-app-orchestrator.mdc",
+            "context/INDEX.md",
+            "context/essentials.md",
+            "AGENTS.md",
+        ]
+        for rel in path_referencing:
+            content = read_text(ROOT / rel)
+            self.assertIn(
+                "runbooks/03-app-implementation.md",
+                content,
+                f"{rel} must reference the implementation runbook",
+            )
+        # README wires the runbook in descriptively rather than by path.
+        readme = read_text(ROOT / "README.md")
+        self.assertIn("transient section-creation failure playbook", readme)
 
 
 if __name__ == "__main__":

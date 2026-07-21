@@ -80,7 +80,9 @@ When `create-app-section` fails with an error of this class:
 4. **Treat `in-progress` as success-pending.** If the retry returns an `in-progress` result, poll
    `list-app-sections` (roughly every 30 s) until the section appears, up to an overall cap of about
    5 minutes. A section can take ~90–100 s to materialize; an occasional failed poll is tolerable —
-   keep polling, do not escalate it into a retry storm.
+   keep polling, do not escalate it into a retry storm. If the cap elapses and the section still has
+   not appeared, **stop and report the pending state** to the developer; do not create the section
+   again and do not retry.
 5. **If the single same-name retry still fails outright** (a hard failure, not `in-progress`),
    **stop and report** the exact error to the developer. Do not retry a second time, do not vary the
    input, and do not compile.
@@ -105,7 +107,7 @@ proceed — the "same-name retry" rule does not apply to real validation failure
 | Error | Action |
 |-------|--------|
 | `create-app-section` transient failure (`InsertQuery failed` / `Select query failed` / "change the caption" / newer equivalent) | Run the transient section-creation failure playbook above: check existence → wait 60–120 s → single same-name retry → poll `list-app-sections` on `in-progress`. Never vary the caption; never speculatively compile. |
-| `create-app-section` returns `in-progress` | Success-pending. Poll `list-app-sections` (~30 s cadence, ~5 min cap) until the section appears. |
+| `create-app-section` returns `in-progress` | Success-pending. Poll `list-app-sections` (~30 s cadence, ~5 min cap) until the section appears. If the cap elapses without the section appearing, stop and report the pending state to the developer; do not re-create or retry. |
 | Concrete input validation error | Fix the input once per the diagnostic; do not run the transient playbook. |
 | Single same-name retry fails outright | Stop and report the exact error to the developer. No further automatic retries, no caption changes, no compile. |
 
