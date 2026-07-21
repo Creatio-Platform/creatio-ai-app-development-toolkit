@@ -209,6 +209,8 @@ Validate narrowest-reliable-first, then broaden: page schema validation → repo
 
 Report what passed, what could not run, and what stays risky (missing runtime, repository, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
 
+**End every task with a Plan-vs-Done table (mandatory) — this is how swallowed parts become visible.** One row per PLAN item — each Main-scope page, each Layout field/island/tab/group, each detail / standard feature (Approvals, Attachments, Activities, Communication options…), each ⚠ Confirm item, each business rule, and each action (Run process, Print) — with **Status** (`Done` / `Partial` / `Not done` / `Deferred`) and a one-line **reason/evidence**. Anything not `Done` needs its reason. Present it in chat at the end and mirror it in `worklog.md`. Do NOT summarise "all done" in prose — the table is the report, so a dropped field/feature/handler shows as a `Not done`/`Partial` row instead of vanishing silently.
+
 **Clean up (step 4.2 inputs).** Once a page/section is `VALIDATED`, delete its temporary input directory (the manifest + fetched Classic bodies) — it is stand-sourced customer data with no further use. The versioned outputs (`plan.md`, `worklog.md`, the built Freedom artifacts) stay.
 
 ## References

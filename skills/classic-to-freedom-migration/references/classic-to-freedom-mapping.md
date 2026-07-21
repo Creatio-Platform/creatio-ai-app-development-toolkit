@@ -44,6 +44,7 @@ Start with the page template, then map child controls. Do not choose a Freedom f
 | `BaseModulePageV2` edit page with tabs/details/files/notes | `PageWithTabsFreedomTemplate` or an existing form page. | Default choice for Classic cards with tabbed detail areas. |
 | Classic card with important side/profile area and right panel behavior | `PageWithRightAreaAndTabsFreedomTemplate` or existing right-area form page. | Use when the side/right area is functional, not merely decorative. |
 | Classic card organized around top header/status/stage region | `PageWithTopAreaAndTabsFreedomTemplate` or template with top area. | Use when top-area fields or process/status controls are central to the workflow. |
+| Card whose object HAS a DCM case (needs a case-stage progress bar) | **`PageWithTabsAndProgressBarTemplate`** — it SHIPS the progress bar in the right place. | **Prefer this over hand-adding `crt.EntityStageProgressBar`.** Pick it at plan time when the DCM check finds a case; after `create-page` the new page is bound to the template's demo object, so **re-bind it to your entity** (set the page's entity/data source to the target object). Hand-adding the bar into `MainContainer` is the FALLBACK for when you are already on a no-bar template or the page already exists. |
 | Simple edit page without tabs or details | `PageWithAreaFreedomTemplate` or `BlankPageTemplate` if no standard form region is needed. | Prefer a standard form template unless the Classic page is truly custom. |
 | Mini page | `BaseMiniPageTemplate`, modal, side panel, or a manual UX decision. | Record whether mini-page behavior is create/edit/preview/quick action. |
 | Classic detail based on `BaseGridDetailV2` or configuration grid | Freedom related list/detail data source with `crt.DataGrid`, existing detail component, or custom handler-backed list. | Preserve add/edit/delete restrictions, inline edit behavior, filters, and parent-column binding. |
@@ -122,11 +123,15 @@ previous versions can share a caption (`Recruiting_v11` active, `Recruiting_v1`)
 `Stage` lookup + a history detail. ⚠ Do NOT filter by `ManagerName = 'CaseSchemaManager'` — wrong name,
 0 rows, false "no case" (this is exactly the miss that dropped the stage bar on a real Applicant migration).
 
-**Case-stage progress bar** — `crt.EntityStageProgressBar` (`entityName`, `recordId: $Id`, `value: $PDS_<stage>`,
-`saveOnChange: true`). Place it in **`MainContainer`** (the content container BELOW the header) at the **top of
-the content** (first child, above the tabs) — NOT in `MainHeader`, and NOT as a bare child of `Main`. If it hangs
-in a loading spinner, wire the page-level DCM handlers (`crt.EntityStageProgressBarLoadDataRequest`,
-`stageChanged`, `setAllowedStages`).
+**Case-stage progress bar** — when the DCM check finds a case, the BEST route is to build the form page from
+**`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar already placed) instead of hand-adding the
+widget — decide this at plan time (`planMeta.formTemplate`). After `create-page`, that new page is bound to the
+template's demo object, so **re-bind it to your entity** (point the page's entity / data source at the target
+object) before building the rest. FALLBACK (already on a no-bar template, or the page exists): hand-add
+`crt.EntityStageProgressBar` (`entityName`, `recordId: $Id`, `value: $PDS_<stage>`, `saveOnChange: true`) in
+**`MainContainer`** (the content container BELOW the header) at the **top of the content** (first child, above
+the tabs) — NOT in `MainHeader`, and NOT as a bare child of `Main`. If it hangs in a loading spinner, wire the
+page-level DCM handlers (`crt.EntityStageProgressBarLoadDataRequest`, `stageChanged`, `setAllowedStages`).
 
 **Next steps** — a **tab in the card toggle panel, beside the Feed and Attachments tabs**, built EXACTLY like
 them (read a working page such as an Account page for the reference shape): the tab `caption` via
