@@ -37,7 +37,7 @@ HTML or a rendered artifact.
 - Size: <F> fields · <D> details/features · <R> rules · <A> actions
 
 ### List page
-- **Add record:** via mini page `<MiniPage>` / full edit page
+- **Add record:** via mini page `<MiniPage>` (folded under `### Add mini-page mapping`) / full edit page — verified / ⚠ NOT verified (resolve from `list-entity-client-schemas` `miniPageSchema`; the engine never assumes "none")
 - **List columns:** <col> · <col> · …
 - **Quick filters:** `<FilterName>` (<column>, <TYPE>) · … — rebuild as the Freedom list-page filter / quick-filter controls (from the section's `initFixedFiltersConfig`; omitted when the section defines none)
 - **Section actions:** `<action>` · … — migrate as Freedom list-page actions

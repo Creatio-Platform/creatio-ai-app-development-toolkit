@@ -608,11 +608,30 @@ check("section: design spec has a List page block (before the form page) naming 
 const noSec = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
-check("section: no add-record mini page → 'full edit page' + list columns flagged data-driven",
+check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + list columns flagged data-driven",
+  (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: false,
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
+    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /profile data/.test(r.designSpec) && r.structure.complete === true; })());
+// A section with NO mini-page answer supplied → the engine must NOT assume "none"; it FLAGS it (structure incomplete).
+check("section: UNVERIFIED add-record mini page → structure INCOMPLETE + 'NOT verified' (no false 'none')",
   (() => { const r = runMigration({ entity: "Applicant",
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
-    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /profile data/.test(r.designSpec); })());
+    return r.structure.complete === false && r.structure.issues.some((i) => /mini page NOT verified/.test(i)) && /NOT verified/.test(r.designSpec); })());
+// A named mini page FOLDED via manifest.miniPageSchemas → its full layout is embedded + structure complete.
+check("mini-page FOLD: manifest.addRecordMiniPage + miniPageSchemas → mini-page spec embedded + structure complete",
+  (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: { schema: "ApplicantMiniPage" },
+    miniPageSchemas: { ApplicantMiniPage: { schemas: [{ pkg: "P", body: `define("ApplicantMiniPage",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"QF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"QuickName"}}]};});` }], seed: CLEAN_SEED } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+    section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
+    return r.structure.complete === true && /### Add mini-page mapping/.test(r.plan) && /#### Mini page: ApplicantMiniPage/.test(r.plan) && r.plan.includes("QuickName") && /via mini page/.test(r.designSpec); })());
+// A named mini page NOT folded (no miniPageSchemas) → structure INCOMPLETE (must fold or record false).
+check("mini-page GATE: a named mini page without miniPageSchemas → structure INCOMPLETE ('NOT folded')",
+  (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: { schema: "ApplicantMiniPage" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+    section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
+    return r.structure.complete === false && r.structure.issues.some((i) => /NOT folded/.test(i)); })());
 
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
 const skelSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
@@ -1536,6 +1555,7 @@ const docSecRun = runMigration({
   section: [{ pkg: "S", body: docSecBody }],
   typedPages: [{ schema: "XICPage", type: "Incoming document" }, { schema: "XOCPage", type: "Outgoing document" }],
   typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField") },
+  addRecordMiniPage: false, // verified on-stand: no add mini page (keeps this fixture structure-complete)
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
 check("section analysis: quick filters + section actions reach the section object (union across layers)",

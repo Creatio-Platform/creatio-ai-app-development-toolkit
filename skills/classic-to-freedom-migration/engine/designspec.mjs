@@ -214,13 +214,15 @@ export function renderDesignSpec(result, opts = {}) {
   // form page, so the detailed expansions follow that same order: list page → form page → child pages. ----
   if (section) {
     L.push("### List page");
-    const ar = section.addRecordMiniPage;
-    const miniPageDesc = ar
-      ? `via mini page \`${esc(ar)}\` — migrate it as a Freedom mini page / quick-add`
-      : "full edit page (no add-record mini page detected)";
-    const addRecordDesc = ar === true
-      ? "⚠ via a mini page (name unresolved) — confirm and migrate it as a Freedom mini page / quick-add"
-      : miniPageDesc;
+    // Add-record mini page — resolved from list-entity-client-schemas (result.miniPage), NOT assumed from the
+    // section body (which registered none even when a per-type mini page existed → a false "no mini page").
+    const mp = result.miniPage;
+    let addRecordDesc;
+    if (mp && mp.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
+    else if (mp && (mp.unfolded || mp.specError || mp.cyclic)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
+    else if (result.miniPageNone) addRecordDesc = "full edit page — verified on-stand: no add-record mini page";
+    else if (!result.miniPageVerified) addRecordDesc = "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
+    else addRecordDesc = "full edit page (no add-record mini page)";
     const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns";
     L.push(
       `- **Add record:** ${addRecordDesc}`,
@@ -461,6 +463,14 @@ export function renderPlan(result, opts = {}) {
       }
       P.push("");
     }
+  }
+  // Add mini-page mapping — the FULL layout of the section's quick-add mini page (folded from
+  // manifest.miniPageSchemas). Rendered when resolved; an unfolded/unverified one is flagged in List page + gate.
+  if (result.miniPage && (result.miniPage.spec || result.miniPage.specError)) {
+    P.push("### Add mini-page mapping", "", `#### Mini page: ${esc(result.miniPage.schema)}`);
+    if (result.miniPage.spec) P.push("", demoteHeadings(result.miniPage.spec, 2));
+    else P.push(`> ⚠ mini-page bundle supplied but failed to parse: ${esc(result.miniPage.specError)} — fix and re-run.`);
+    P.push("");
   }
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot

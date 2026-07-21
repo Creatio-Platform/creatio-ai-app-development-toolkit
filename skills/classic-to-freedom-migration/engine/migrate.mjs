@@ -223,6 +223,36 @@ export function runMigration(manifest, opts = {}) {
       t.structIncomplete = !!(tRes.structure && !tRes.structure.complete);
     } catch (e) { t.specError = e.message; t.resolved = false; }
   }
+  // ADD-RECORD MINI PAGE — the section's quick-add form. Its registration lives at the module/edit-page level
+  // (SysModuleEdit miniPageSchema + miniPageModes containing "add"), NOT always in the section body, so the
+  // section-body extractor alone can FALSELY report "none". Authoritative source: list-entity-client-schemas
+  // (miniPageSchema), supplied as manifest.addRecordMiniPage ({schema}|false). Fold it like a typed/child page
+  // via manifest.miniPageSchemas so the plan carries its FULL layout. Only meaningful when there is a section.
+  const miniPageSchemas = manifest.miniPageSchemas || {};
+  const secMpName = sectionSchemas.map((l) => l.addRecordMiniPage).find((v) => typeof v === "string");
+  const secMpExists = !!secMpName || sectionSchemas.some((l) => l.addRecordMiniPage === true);
+  const mpDecl = manifest.addRecordMiniPage; // {schema}|"name"|false|undefined
+  const mpName = mpDecl === false ? null
+    : (typeof mpDecl === "string" && mpDecl) ? mpDecl
+    : (mpDecl && typeof mpDecl === "object" && mpDecl.schema) ? mpDecl.schema
+    : (secMpName || null);
+  const miniPageVerified = mpDecl !== undefined || secMpExists; // explicit {schema}/false, or the section body names one
+  let miniPage = null;
+  if (mpName) {
+    miniPage = { schema: mpName, type: (mpDecl && typeof mpDecl === "object" && mpDecl.type) || null };
+    const mkey = [miniPage.schema, miniPage.schema + "MiniPage"].find((k) => k && miniPageSchemas[k]);
+    if (mkey && visited.has(mkey)) { miniPage.cyclic = true; }
+    else if (mkey) {
+      try {
+        const mRes = runMigration(miniPageSchemas[mkey], { baseDir, visited: new Set([...visited, mkey]) });
+        miniPage.spec = mRes.designSpec;
+        miniPage.blocked = !!mRes.gate?.blocked;
+        miniPage.reasons = mRes.gate?.reasons || [];
+        miniPage.structIncomplete = !!(mRes.structure && !mRes.structure.complete);
+      } catch (e) { miniPage.specError = e.message; }
+    } else { miniPage.unfolded = true; }
+  }
+  const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
@@ -277,6 +307,9 @@ export function runMigration(manifest, opts = {}) {
     if (blockedTyped.length) {
       reasons.push(`typed page(s) failed their own gate: ${blockedTyped.map((t) => `${t.schema} [${(t.reasons || []).join("; ").slice(0, 90)}]`).join(" | ")} — fix each typed form before the parent plan is approvable`);
     }
+    if (miniPage?.blocked) {
+      reasons.push(`add mini page '${miniPage.schema}' failed its own gate: ${(miniPage.reasons || []).join("; ").slice(0, 90)} — fix it before the parent plan is approvable`);
+    }
     return { blocked: reasons.length > 0, reasons };
   })();
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
@@ -305,6 +338,19 @@ export function runMigration(manifest, opts = {}) {
       if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
       if (t.resolved === "fold") { if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`); continue; }
       issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
+    }
+    // add-record mini page (a section/list concern — only gated when this migration has a section). It must be
+    // RESOLVED: folded (bundle in manifest.miniPageSchemas), or verified-none (manifest.addRecordMiniPage:false).
+    // Not asserting absence from the section body alone — that FALSELY reported "none" when the mini page was
+    // registered per edit-page (list-entity-client-schemas.miniPageSchema).
+    if (section) {
+      if (miniPage) {
+        if (miniPage.specError) issues.push(`add mini page '${miniPage.schema}': supplied bundle failed to parse (${miniPage.specError}) — fix and re-run`);
+        else if (miniPage.unfolded) issues.push(`add mini page '${miniPage.schema}': NOT folded — assemble its bundle (\`get-classic-migration-bundle --schema-name ${miniPage.schema}\`) into manifest.miniPageSchemas so the engine folds its layout here (or record manifest.addRecordMiniPage:false if there is genuinely none)`);
+        else if (miniPage.structIncomplete) issues.push(`add mini page '${miniPage.schema}': its OWN structure is incomplete — resolve and re-run`);
+      } else if (!miniPageVerified) {
+        issues.push(`add-record mini page NOT verified — check \`list-entity-client-schemas\` (a per-type edit page with \`miniPageSchema\` + \`miniPageModes\` containing "add") and record manifest.addRecordMiniPage: { "schema": "<MiniPage>" } to fold it, or false if there is none. Do NOT assume "no mini page" — it is registered at the module/edit-page level, not always in the section body.`);
+      }
     }
     return { complete: issues.length === 0, issues };
   })();
@@ -341,6 +387,9 @@ export function runMigration(manifest, opts = {}) {
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
     childPages,      // custom-detail child entities whose edit page is a recursive sub-migration
     typedPages,      // per-type Classic edit-page family (typed entity) — first-class scope + precedence trap
+    miniPage,        // add-record mini page (quick-add form) folded from manifest.miniPageSchemas, or null
+    miniPageVerified,// whether the mini page presence/absence was actually resolved (vs assumed)
+    miniPageNone,    // agent verified on-stand there is NO add mini page (manifest.addRecordMiniPage:false)
   };
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
