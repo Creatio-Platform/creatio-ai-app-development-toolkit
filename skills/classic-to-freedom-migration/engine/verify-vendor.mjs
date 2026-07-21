@@ -5,9 +5,16 @@
 // the one executable component standing between a hostile stand input and the engine. A vendored bundle
 // gets no automatic security patching AND no automatic tamper detection: a swapped or silently-drifted
 // parser would execute unnoticed. This script pins each vendored file to a known-good SHA-256 recorded
-// in vendor/provenance.json and FAILS (exit 1) on any mismatch, so CI blocks a build whose parser does
-// not match its declared upstream provenance. Zero dependencies (node:crypto/fs/path) — runs anywhere the
-// engine does, on Linux (LF) and Windows (CRLF) alike.
+// in vendor/provenance.json and FAILS (exit 1) on any mismatch. Zero dependencies (node:crypto/fs/path) —
+// runs anywhere the engine does, on Linux (LF) and Windows (CRLF) alike.
+//
+// THREAT MODEL (be honest about what this does and does NOT prove). The pin lives in the SAME repo/commit as
+// the file it pins, so this is tamper-EVIDENCE within the repo, not authenticity against upstream npm: it
+// catches an ACCIDENTAL swap/drift (a rebuild picked up a different acorn, a botched edit) and a change to the
+// file WITHOUT a matching provenance bump — but NOT a determined attacker who edits both the file and the pin
+// in one commit. To also assert authenticity, a CI step must independently fetch `acorn@<pinned version>` from
+// npm and compare its LF-normalized hash to provenance.json (not done here — this script only checks the repo
+// against its own recorded pin). The provenance version field records which upstream release the pin claims.
 //
 // The pin is over LF-NORMALIZED bytes so it equals the upstream npm artifact's hash and is immune to
 // line-ending churn between platforms/checkouts — a CRLF checkout verifies identically to an LF one.

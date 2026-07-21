@@ -190,7 +190,11 @@ export function runMigration(manifest, opts = {}) {
       c.spec = childRes.designSpec;              // the child page's Layout/Section/Logic/Confirm — the mapping
       c.mappedEntity = childRes.entity;
       c.resolvedFrom = key;
-      c.grandChildren = (childRes.childPages || []).length;
+      // carry the child's OWN resolved child pages up so renderPlan can EMBED grandchildren recursively,
+      // instead of only counting them and telling the agent to map them by hand (the engine writes the FULL
+      // tree). Each entry already carries its .spec (or an unresolved marker) from the recursion above.
+      c.childPages = childRes.childPages || [];
+      c.grandChildren = c.childPages.length;
       // Major 3: a nested child's spec is a VALID mapping only if the child cleared its OWN gates. Carry the
       // child's verdict up so a blocked/incomplete child can't be embedded into a green parent plan at exit 0.
       c.childBlocked = !!childRes.gate?.blocked;

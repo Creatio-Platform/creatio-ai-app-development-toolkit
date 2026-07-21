@@ -530,6 +530,11 @@ function mapFields(ctx, containers) {
       column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
       colSpan = cl.colSpan != null ? cl.colSpan : 24;
     }
+    // Clamp the span to the grid's right edge: a field at column C can span at most (gridCols - C + 1) columns.
+    // Without this a full-width classic field landing in Freedom column 2 (or an over-wide header span) would
+    // claim a phantom column and overflow the container. column is already 1-based and ≤ gridCols here.
+    column = Math.min(Math.max(1, column), gridCols);
+    colSpan = Math.max(1, Math.min(colSpan, gridCols - column + 1));
     // Grid-cell assignment (R9 + collision) — the target Freedom grid is coarser than the classic 24-col one,
     // so two classic columns can collapse onto the SAME Freedom (column,row) cell (e.g. col0/span6 and
     // col6/span6 both → column 1). Track occupied cells (span-aware) per container: an explicit classic row is

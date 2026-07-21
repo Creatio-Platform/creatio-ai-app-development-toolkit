@@ -1367,6 +1367,13 @@ check("vendor-integrity: verify-vendor.mjs passes on the checked-in acorn bundle
 const prov = JSON.parse(fs.readFileSync(path.join(ENGINE_DIR, "vendor", "provenance.json"), "utf8"));
 check("vendor-integrity: provenance.json pins acorn with a 64-hex SHA-256 (the gate has something to enforce)",
   prov.files?.["acorn.mjs"]?.package === "acorn" && /^[0-9a-f]{64}$/.test(prov.files["acorn.mjs"].sha256 || ""));
+// The ONLY acorn import allowed is the pinned vendor bundle (`./vendor/acorn.mjs`). A BARE specifier
+// (`from "acorn"`) would make Node resolve node_modules — an UNPINNED parser that silently bypasses this
+// integrity gate. Scan every engine source and fail on any non-vendor acorn import (regression guard).
+const engineSrcs = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs")).map((f) => path.join(ENGINE_DIR, f));
+const bareAcorn = engineSrcs.filter((f) => /\bfrom\s+["']acorn["']/.test(fs.readFileSync(f, "utf8")));
+check("vendor-integrity: no engine source imports acorn by BARE specifier (only ./vendor/acorn.mjs is allowed — else the pin is bypassed)",
+  bareAcorn.length === 0, () => bareAcorn.map((f) => path.basename(f)));
 // NEGATIVE paths — the gate's whole point is FAILING on a tampered/absent bundle. verify-vendor.mjs takes an
 // optional vendor-dir arg so we can point it at a temp fixture without touching the real bundle. Cover every
 // exit-1 branch (mismatch / missing file / empty manifest / unreadable manifest) — a green-only test proves nothing.
@@ -1571,6 +1578,54 @@ const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs")
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
+
+/* ---- review batch: colSpan clamp · rowSpan auto-row occupancy · multi-span collision · grandchild embedding ---- */
+// #2 colSpan clamp — a full-width classic field landing in Freedom column 2 must NOT span a phantom column 3.
+const clampCs = mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [
+  di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "RightWide", parentName: "T", propertyName: "items", bindTo: "RightWide", layout: { column: 12, row: 0, colSpan: 24 } }),
+] })]));
+const rw = clampCs.viewConfigDiff.find((o) => o.name === "RightWide")?.values.layoutConfig;
+check("#2 colSpan clamp: a col-2 field never spans past the 2-col grid (column+colSpan-1 ≤ gridCols, no phantom col 3)",
+  rw && rw.column + rw.colSpan - 1 <= 2, () => rw);
+
+// #1 rowSpan AUTO-row occupancy — a rowSpan-2 field then an AUTO (no explicit row) field in the SAME column:
+// the auto field must land BELOW the spanned rows. This is the reviewer's exact "next auto field" scenario
+// (the existing rowSpan golden used explicit rows); it locks the auto-cursor path as row-span-aware.
+const arCs = mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [
+  di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "Tall", parentName: "T", propertyName: "items", bindTo: "Tall", layout: { column: 0, row: 0, colSpan: 12, rowSpan: 2 } }),
+  di({ name: "Auto", parentName: "T", propertyName: "items", bindTo: "Auto", layout: { column: 0, colSpan: 12 } }),
+] })]));
+const arT = arCs.viewConfigDiff.find((o) => o.name === "Tall")?.values.layoutConfig;
+const arA = arCs.viewConfigDiff.find((o) => o.name === "Auto")?.values.layoutConfig;
+check("#1 rowSpan auto-row occupancy: an auto field after a rowSpan-2 field in the same column drops below it (no overlap)",
+  arT && arA && arA.column === arT.column && arA.row >= arT.row + arT.rowSpan,
+  () => ({ Tall: arT, Auto: arA }));
+
+// #3 multi-span horizontal collision — two full-width (span-2) fields on the SAME explicit row collide; the
+// second relocates and a layout-collision is flagged (a span-2 vs span-2 overlap the earlier goldens lacked).
+const msCs = mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [
+  di({ name: "T", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "W1", parentName: "T", propertyName: "items", bindTo: "W1", layout: { column: 0, row: 0, colSpan: 24 } }),
+  di({ name: "W2", parentName: "T", propertyName: "items", bindTo: "W2", layout: { column: 0, row: 0, colSpan: 24 } }),
+] })]));
+const ms1 = msCs.viewConfigDiff.find((o) => o.name === "W1")?.values.layoutConfig;
+const ms2 = msCs.viewConfigDiff.find((o) => o.name === "W2")?.values.layoutConfig;
+check("#3 multi-span collision: two span-2 fields on the same row don't overlap (2nd relocated) + flagged",
+  ms1 && ms2 && ms2.colSpan === 2 && ms2.row !== ms1.row
+  && msCs.needsDecision.some((n) => n.kind === "layout-collision"),
+  () => ({ W1: ms1, W2: ms2 }));
+
+// #8 grandchild embedding — a 2-level child tree EMBEDS the grandchild's spec nested (not a "map by hand" note).
+const gcMani = { schemas: [{ pkg: "GC", body: `define("GC",[],function(){return{entitySchemaName:"GC",diff:[{operation:"insert",name:"GF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"GF"}}]};});` }], seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS };
+const chMani = { schemas: [{ pkg: "CH", body: `define("CH",[],function(){return{entitySchemaName:"CH",diff:[{operation:"insert",name:"CT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"CD",parentName:"CT",values:{itemType:2}}],details:{CD:{schemaName:"GCDetail",entitySchemaName:"GC",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }], seed: CLEAN_SEED, childPageSchemas: { GC: gcMani, GCPage: gcMani }, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS };
+const gcTop = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"PD",parentName:"PT",values:{itemType:2}}],details:{PD:{schemaName:"CHDetail",entitySchemaName:"CH",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  childPageSchemas: { CH: chMani, CHPage: chMani } });
+check("#8 grandchild embedding: the plan nests BOTH the child and the grandchild spec recursively (##### Child page: GC)",
+  /#### Child page: CH/.test(gcTop.plan) && /##### Child page: GC/.test(gcTop.plan),
+  () => gcTop.plan.split("\n").filter((l) => /Child page:/.test(l)));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

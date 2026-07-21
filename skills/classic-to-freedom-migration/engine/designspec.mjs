@@ -39,7 +39,7 @@ const esc = (s) => strip(s)
 // A value rendered on its OWN line (not after an inline label) must ALSO not START with a Markdown block
 // marker — `#` `>` `-` `+` `*` or `N.` — else e.g. "## Boom" becomes a real heading. Escapes the leading
 // marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
-const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+-]|\d+\.)/, "$1\\$2");
+const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, "$1\\$2");
 const isField = (o) => !!o?.values?.control;
 const DASH = "—";
 
@@ -81,7 +81,7 @@ const triggerOf = (m) => {
 };
 // demote a nested design spec's Markdown headings two levels (## → ####, ### → #####, capped at ######)
 // so a child page's spec reads as a subsection under the parent plan's `#### Child page:` heading.
-const demoteHeadings = (md) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + 2)) + " ");
+const demoteHeadings = (md, shift = 2) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + Math.max(0, shift))) + " ");
 
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -451,13 +451,17 @@ export function renderPlan(result, opts = {}) {
   // that keeps the mapping a REQUIRED, visible deliverable rather than a table row the agent treats as done.
   if (childs.length) {
     P.push("### Child page mappings", "");
-    for (const c of childs) {
+    // Recursive: embed each child's spec AND its own resolved children (grandchildren, …) nested one heading
+    // level deeper. The engine writes the FULL tree — it does not stop at depth 1 and tell the agent to map
+    // the rest by hand (that contradicted "the engine writes the whole plan"). An unresolved node at any depth
+    // still renders its ⚠/FILL slot, so nothing is silently dropped. `lvl` = the `Child page:` heading level.
+    const renderChild = (c, lvl) => {
+      const h = "#".repeat(Math.min(6, lvl));
       const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
-      P.push(`#### Child page: ${head}`);
+      P.push(`${h} Child page: ${head}`);
       if (c.spec) {
-        if (c.grandChildren) P.push(`> ${c.grandChildren} nested child page(s) of its own — map those recursively too (step 7).`);
-        // nest the child's ## / ### headings two levels under this ####
-        P.push("", demoteHeadings(c.spec));
+        P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
+        for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
       } else if (c.specError) {
         P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
       } else if (typeof c.editPage === "string" && c.editPage) {
@@ -474,7 +478,8 @@ export function renderPlan(result, opts = {}) {
         P.push(`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`**: if a \`*Page\` exists, add it to \`childPageSchemas\` and re-run; if none exists, record \`"editPage": false\` on this detail and re-run. "out of scope" is never a valid self-declared skip.`);
       }
       P.push("");
-    }
+    };
+    for (const c of childs) renderChild(c, 4);
   }
   P.push("> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
   return P.join("\n");
