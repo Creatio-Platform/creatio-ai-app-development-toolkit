@@ -202,6 +202,27 @@ export function runMigration(manifest, opts = {}) {
       c.childStructIncomplete = !!(childRes.structure && !childRes.structure.complete);
     } catch (e) { c.specError = e.message; }     // malformed child manifest ⇒ note it, keep the listed row
   }
+  // TYPED-PAGE RECURSION — a typed entity's per-type edit pages are FORM deliverables, not a "map at build"
+  // promise. Fold each like a child page (its own bundle supplied via manifest.typedPageSchemas, keyed by the
+  // typed page schema name) so the plan carries a FULL per-type design spec. `bindOnly:true` on the typedPages
+  // entry is the ONLY escape (layout identical to the base → a type-specific binding, no separate form). An
+  // unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below — the gate blocks it.
+  const typedSchemas = manifest.typedPageSchemas || {};
+  for (const t of typedPages) {
+    if (t.bindOnly === true) { t.resolved = "bind"; continue; }
+    const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
+    if (!tkey) { t.resolved = false; continue; }
+    if (visited.has(tkey)) { t.cyclic = true; t.resolved = "fold"; continue; }
+    try {
+      const tRes = runMigration(typedSchemas[tkey], { baseDir, visited: new Set([...visited, tkey]) });
+      t.spec = tRes.designSpec;
+      t.mappedEntity = tRes.entity;
+      t.resolved = "fold";
+      t.blocked = !!tRes.gate?.blocked;
+      t.reasons = tRes.gate?.reasons || [];
+      t.structIncomplete = !!(tRes.structure && !tRes.structure.complete);
+    } catch (e) { t.specError = e.message; t.resolved = false; }
+  }
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
@@ -252,6 +273,10 @@ export function runMigration(manifest, opts = {}) {
       const blockedList = blockedChildren.map((c) => `${c.resolvedFrom || c.editPage} [${(c.childReasons || []).join("; ").slice(0, 90)}]`).join(" | ");
       reasons.push(`nested child page(s) failed their own gate: ${blockedList} — a blocked child's spec is not a valid mapping; fix the child before the parent plan is approvable`);
     }
+    const blockedTyped = typedPages.filter((t) => t.blocked);
+    if (blockedTyped.length) {
+      reasons.push(`typed page(s) failed their own gate: ${blockedTyped.map((t) => `${t.schema} [${(t.reasons || []).join("; ").slice(0, 90)}]`).join(" | ")} — fix each typed form before the parent plan is approvable`);
+    }
     return { blocked: reasons.length > 0, reasons };
   })();
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
@@ -272,6 +297,15 @@ export function runMigration(manifest, opts = {}) {
     // Major 3: a mapped child whose OWN structure is incomplete, a real-but-unmapped edit page, or an
     // unverified child each contribute a structure issue (recursive aggregation) — see childPageIssue.
     for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
+    // typed pages: each must be RESOLVED before the plan — folded (its bundle supplied) or explicitly bindOnly.
+    // An unresolved typed form (or one whose own structure is incomplete) blocks, exactly like a child page —
+    // this is what stops the "per-type field mapping done at build" deferral.
+    for (const t of typedPages) {
+      if (t.resolved === "bind") continue;
+      if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
+      if (t.resolved === "fold") { if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`); continue; }
+      issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
+    }
     return { complete: issues.length === 0, issues };
   })();
   const out = {

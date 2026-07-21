@@ -410,20 +410,17 @@ export function renderPlan(result, opts = {}) {
   // page with clio `get-page`, diff the engine's design onto it, apply via `update-page` (never a duplicate);
   // see `./references/existing-freedom-reconcile.md`. Default is Rebuild (safe for the tested custom-section case).
   const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
-  P.push(
-    "### Main scope",
-    "| Classic | Freedom target | Call |",
-    "| --- | --- | --- |",
-    `| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`,
-    `| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`,
-  );
-  // typed-entity page family — each per-type Classic edit page is its OWN scope row (they were collapsed to a
-  // single form). Source: manifest.typedPages (from list-entity-client-schemas). Followed by a precedence ⚠.
+  // A TYPED entity has NO single form deliverable — every record opens a per-type page, so the per-type forms
+  // (rows below) ARE the deliverables and the base `<entity> form page` is only their shared parent/seed (not
+  // a separate form). A non-typed entity keeps its one form-page row.
   const typed = result.typedPages || [];
+  const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
+  if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
-    const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed edit page)`;
-    P.push(`| ${cls} | ${fill(t.freedom, "per-type Freedom form / type-specific binding")} | Rebuild (per-type) |`);
+    const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed form)`;
+    scopeRows.push(`| ${cls} | ${t.bindOnly ? "bind shared form by Type" : "per-type Freedom form"} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
   }
+  P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
@@ -444,8 +441,27 @@ export function renderPlan(result, opts = {}) {
   }
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
-  if (typed.length) P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). Plan a per-type form (rebuild or type-specific binding) for EACH — not one form for all types. Source these from \`list-entity-client-schemas\` and supply via \`manifest.typedPages\`.`);
+  if (typed.length) P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
+  if (typed.length) P.push("", `> The form spec immediately below is the **base \`${esc(entity)}\` layout** — the SHARED parent every per-type form inherits. It is NOT a separate deliverable; the actual forms to build are the per-type ones under **Typed page mappings**.`);
   P.push("", renderDesignSpec(result, { ...opts, embedded: true }), "");
+  // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
+  // A typed entity's real form deliverables. Unresolved (no bundle, not bindOnly) → a ⚠ the structure gate blocks on.
+  if (typed.length) {
+    P.push("### Typed page mappings", "");
+    for (const t of typed) {
+      P.push(`#### Typed form: ${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""}`);
+      if (t.bindOnly) {
+        P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the shared Freedom form for this Type (by the Type column).`);
+      } else if (t.spec) {
+        P.push("", demoteHeadings(t.spec, 2));
+      } else if (t.specError) {
+        P.push(`> ⚠ typed-page bundle supplied but failed to parse: ${esc(t.specError)} — fix the bundle and re-run.`);
+      } else {
+        P.push(`> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-migration-bundle --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`);
+      }
+      P.push("");
+    }
+  }
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot
   // that keeps the mapping a REQUIRED, visible deliverable rather than a table row the agent treats as done.

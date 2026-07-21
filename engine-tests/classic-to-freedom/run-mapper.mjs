@@ -1528,24 +1528,51 @@ check("section actions: standard getButtonMenuItem/\"Click\".bindTo shape is cau
   docSecParsed.sectionActions.includes("createRegistry") && !docSecParsed.sectionActions.includes("callParent"),
   () => docSecParsed.sectionActions);
 
+const docPlanMeta = { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "ListPageV3Template", formTemplate: "PageWithTabsFreedomTemplate" };
+const typedBundle = (nm, field) => ({ schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});` }], seed: CLEAN_SEED });
 const docSecRun = runMigration({
   entity: "X",
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
   section: [{ pkg: "S", body: docSecBody }],
   typedPages: [{ schema: "XICPage", type: "Incoming document" }, { schema: "XOCPage", type: "Outgoing document" }],
-  planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "ListPageV3Template", formTemplate: "PageWithTabsFreedomTemplate" },
+  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField") },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
 check("section analysis: quick filters + section actions reach the section object (union across layers)",
   (docSecRun.section.quickFilters || []).length === 2 && (docSecRun.section.sectionActions || []).includes("createRegistry"));
 check("typed-page: manifest.typedPages surfaced on the result + a typed-page decision in the ⚠ worklist",
   (docSecRun.typedPages || []).length === 2
   && docSecRun.changeSet.needsDecision.some((n) => n.kind === "typed-page" && /precedence/i.test(n.reason)));
-check("plan: List page shows Quick filters + Section actions, Main scope lists per-type pages + a precedence ⚠",
+check("plan: List page shows Quick filters + Section actions, Main scope lists per-type FORMS (no base form row) + precedence ⚠",
   /Quick filters:/.test(docSecRun.plan) && /PeriodFilter/.test(docSecRun.plan)
   && /Section actions:/.test(docSecRun.plan) && /createRegistry/.test(docSecRun.plan)
-  && /XICPage .*typed edit page.*Rebuild \(per-type\)/.test(docSecRun.plan)
+  && /XICPage .*typed form.*Rebuild \(per-type\)/.test(docSecRun.plan)
+  && !/\| X form page \|/.test(docSecRun.plan)   // base form is NOT a separate deliverable for a typed entity
   && /Typed entity — 2 per-type/.test(docSecRun.plan),
-  () => docSecRun.plan.split("\n").filter((l) => /filter|action|typed|per-type/i.test(l)).slice(0, 8));
+  () => docSecRun.plan.split("\n").filter((l) => /filter|action|typed|per-type|form page/i.test(l)).slice(0, 10));
+check("typed-page FOLD: supplied typedPageSchemas → each per-type form's FULL spec is embedded + structure complete",
+  docSecRun.structure.complete === true
+  && /### Typed page mappings/.test(docSecRun.plan)
+  && /#### Typed form: XICPage/.test(docSecRun.plan) && docSecRun.plan.includes("SenderField")
+  && /#### Typed form: XOCPage/.test(docSecRun.plan) && docSecRun.plan.includes("RecipientField"),
+  () => docSecRun.plan.split("\n").filter((l) => /Typed form|SenderField|RecipientField|Typed page mappings/.test(l)));
+// GATE — an unresolved typed page (no bundle, not bindOnly) is STRUCTURE INCOMPLETE: this is what stops the
+// "per-type field mapping done at build" deferral that shipped only 1 of 4 typed pages.
+const docTypedUnresolved = runMigration({
+  entity: "X", schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  typedPages: [{ schema: "XICPage", type: "Incoming" }], planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("typed-page GATE: an unresolved typed page (no bundle, not bindOnly) → structure INCOMPLETE + ⚠ in the plan",
+  docTypedUnresolved.structure.complete === false
+  && docTypedUnresolved.structure.issues.some((i) => /typed page 'XICPage'.*NOT resolved/.test(i))
+  && /NOT resolved — this typed form has no design spec/.test(docTypedUnresolved.plan),
+  () => docTypedUnresolved.structure.issues);
+const docTypedBind = runMigration({
+  entity: "X", schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  typedPages: [{ schema: "XICPage", type: "Incoming", bindOnly: true }], planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("typed-page bindOnly: an identical-to-base typed page is RESOLVED (structure complete) + rendered Bind-only",
+  docTypedBind.structure.complete === true && /Bind-only/.test(docTypedBind.plan));
 
 /* ---- on-stand signals gate: DCM / connected processes / printables must be RESOLVED before the plan, not
    deferred to build (the recurring "faithful to the classic body, check later" miss — Documents session). No
