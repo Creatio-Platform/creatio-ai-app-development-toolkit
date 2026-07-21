@@ -134,6 +134,11 @@ const FEATURE_CATALOG = {
     note: "Activities = a plain FILTERED RELATED LIST of Activity/Task records (a DataGrid filtered by the master FK) — NOT a Timeline and NOT an aggregate activity feed. Build it as a related list, exactly like any other child list." },
   EmailDetailV2: { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list",
     note: "Emails = a plain FILTERED RELATED LIST of Email records (a DataGrid filtered by the master) — NOT a Timeline and NOT the email-client component. Build it as a related list." },
+  // Means-of-communication ("Средства связи контакта" / ContactCommunication) is the NATIVE Communication-options
+  // component, NOT a generic list. A real agent downgraded it to a plain Expanded-list because the composite
+  // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
+  ContactCommunicationDetail: { feature: "Communication options", freedom: "Freedom Communication-options component (crt.ContactCommunication)", uiShape: "component",
+    note: "means of communication = the NATIVE Communication-options component (crt.ContactCommunication) — read get-component-info for its contract/wiring; it may require the CrtCustomer360App package. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid." },
 };
 // Match a classic detail schema to a standard feature by exact name OR entity-prefixed suffix — e.g.
 // `ApplicantEmailDetailV2` → `EmailDetailV2`, `ApplicantVisaDetail` → (no)…: prefixed variants of the
@@ -663,16 +668,17 @@ function mapDetails(ctx, containers, profileRegion) {
     // as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
     let feat = matchFeature(d.schemaName), featByEntity = false;
     if (!feat && (dentity || "").endsWith("File")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
+    if (!feat && dentity === "ContactCommunication") { feat = FEATURE_CATALOG.ContactCommunicationDetail; featByEntity = true; }
     if (feat) {
       // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
       standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
       const featWhat = featByEntity
-        ? `detail over the file-storage entity '${dentity}' (classic schema '${d.schemaName}') is the`
+        ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the`
         : `classic '${d.schemaName}' is the`;
       const featProvided = feat.templateProvided
         ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
         : "; confirm the exact Freedom component + wiring";
-      const featInferred = featByEntity ? " — inferred from the entity name; confirm this is Attachments and not a business detail" : "";
+      const featInferred = featByEntity ? ` — inferred from the entity name; confirm this is ${feat.feature} and not a business detail` : "";
       const featNote = feat.note ? ` — ${feat.note}` : "";
       needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
         reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
@@ -730,7 +736,7 @@ function mapCardActions(eff) {
     if (!cardActions.includes("RunProcess")) cardActions.push("RunProcess");
     const processNote = eff.processNames?.length ? ` (${eff.processNames.join(", ")})` : "";
     needsDecision.push({ kind: "process-launch", item: eff.processNames?.length ? eff.processNames.join(", ") : "RunProcess",
-      reason: `the classic page launches a business process imperatively${processNote} — READ ITS BINDING first: ProcessInModules by the section's SysModule/Id tells which module(s) it is bound to — the LIST/registry module, the record CARD/form module, or BOTH. Place it as a MENU ITEM in the template's existing Actions button on EACH surface it is bound to (do NOT assume list-only or form-only; never a standalone button): LIST → the list Actions button (ActionButton in ListPageV3), processRunType ForTheSelectedRecords + dataSourceName PDS; FORM → the form page's OWN Actions button in the header action area (the template's ActionButtonsContainer), run for the CURRENT record ($Id). Label the item with the process DISPLAY Caption (VwSysProcess), never its technical code. Launch via crt.RunBusinessProcessRequest, passing the record Id into the record param from the process signature. None connected on a surface ⇒ nothing there; none anywhere ⇒ drop the button` });
+      reason: `the classic page launches a business process imperatively${processNote} — READ ITS BINDING first: ProcessInModules by the section's SysModule/Id tells which module(s) it is bound to — the LIST/registry module, the record CARD/form module, or BOTH. Place it as a MENU ITEM in the template's existing Actions button on EACH surface it is bound to (do NOT assume list-only or form-only; never a standalone button): LIST → the list Actions button (ActionButton in ListPageV3), processRunType ForTheSelectedRecords + dataSourceName PDS; FORM → the form page's OWN Actions button in the header action area (the template's ActionButtonsContainer), placed at the END of that container next to the CloseButton (last position), run for the CURRENT record ($Id). Label the item with the process DISPLAY Caption (VwSysProcess), never its technical code. Launch via crt.RunBusinessProcessRequest, passing the record Id into the record param from the process signature. None connected on a surface ⇒ nothing there; none anywhere ⇒ drop the button` });
   }
   const hasGetActions = (eff.methods || []).some(m => m.name === "getActions" && !m.fromTemplate);
   if (cardActions.length || hasGetActions) needsDecision.push({ kind: "card-action", item: "ACTIONS",

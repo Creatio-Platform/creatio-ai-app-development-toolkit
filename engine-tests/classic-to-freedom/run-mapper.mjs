@@ -495,6 +495,20 @@ check("#11: *File-entity detail → Attachments feature (templateProvided, infer
 check("#11: entity-inferred Attachments carries a 'confirm / inferred' note",
   filecs.needsDecision.some(n => n.kind === "standard-feature" && /inferred from the entity/.test(n.reason)));
 
+/* ---- ContactCommunication → the native Communication-options component (NOT a plain grid), inferred by entity ---- */
+const commClient = L("Client", { entity: "X", details: {
+    Comm: { schemaName: "Schema9Detail", entitySchemaName: "ContactCommunication", detailColumn: "Contact", masterColumn: "Id" } },
+  diff: [di({ name: "Tc", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tc" }),
+         di({ name: "Comm", parentName: "Tc", propertyName: "items", itemType: 2 })] });
+const commcs = mapToFreedom(mergeHierarchy([commClient]));
+check("ContactCommunication: detail over the ContactCommunication entity → Communication-options standard feature (component), NOT a generic detail/list",
+  commcs.standardFeatures.some(s => s.feature === "Communication options" && s.uiShape === "component" && s.inferredFromEntity)
+  && !commcs.details.some(d => d.entity === "ContactCommunication"),
+  () => ({ features: commcs.standardFeatures.map(s => s.feature), details: commcs.details.map(d => d.entity) }));
+check("ContactCommunication: the note says use the native crt.ContactCommunication component + do NOT downgrade to a plain grid (package gap = a decision, not a silent fallback)",
+  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
+  () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication/.test(n.reason))?.reason);
+
 /* ---- #11: an auto-generated detail name over a NON-file entity is surfaced LOUD (fetch its schema) ---- */
 const autoClient = L("Client", { entity: "X", details: {
     Auto: { schemaName: "Schema2Detail", entitySchemaName: "SomeChild", detailColumn: "P", masterColumn: "Id" } },
@@ -694,7 +708,7 @@ check("#8c: the process-launch decision tells to READ THE BINDING and place it a
     && /READ ITS BINDING/.test(n.reason) && /Actions button/.test(n.reason) && /MENU ITEM/i.test(n.reason)
     && /Caption/.test(n.reason) && /never its technical code/.test(n.reason)
     && /LIST/.test(n.reason) && /FORM/.test(n.reason) && /BOTH/.test(n.reason)
-    && /current record/i.test(n.reason)),
+    && /current record/i.test(n.reason) && /END of that container/.test(n.reason) && /CloseButton/.test(n.reason)),
   () => plRun.changeSet.needsDecision.find(n => n.kind === "process-launch")?.reason);
 // card-action DISPOSITION — standard toolbar buttons are not all migratable: ViewOptions is not migrated,
 // Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
