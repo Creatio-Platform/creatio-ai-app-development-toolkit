@@ -65,9 +65,14 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
       const body = extractFnBody(src, "getSectionActions");
       if (!body) return [];
       return [...new Set([
+        // classic STANDARD shape: actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "handler"} }))
+        // — the Click handler IS the action identity. Also the direct "Click": "handler" form. This is what the
+        // old Tag/navigate-only patterns missed (e.g. `createRegistry`), so real section actions were dropped.
+        ...[...body.matchAll(/"Click"\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
+        // alternative/older shapes: menu-item handler Tags and navigate/run hints
         ...[...body.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
         ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
-      ])];
+      ])].filter((n) => n !== "callParent");
     })(),
     // section grid columns IF the schema hardcodes them (getGridDataColumns / initColumnsConfig). Most
     // sections keep columns in PROFILE DATA, not the schema → this is usually empty and the mapper flags
@@ -76,6 +81,22 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
       const body = extractFnBody(src, "getGridDataColumns") || extractFnBody(src, "initColumnsConfig") || "";
       if (!body) return [];
       return [...new Set([...body.matchAll(/(?:"?(?:path|bindTo)"?)\s*:\s*["']([A-Za-z][\w.]*)["']/g)].map(mt => mt[1]))];
+    })(),
+    // section QUICK FILTERS — the classic fixed-filter bar (period / owner / …) declared in
+    // initFixedFiltersConfig / getFixedFiltersConfig as a `filters: [{ name, columnName, dataValueType }]`
+    // list. Each entry = { name, column, type }. In Freedom these are the list-page filter/quick-filter
+    // controls, so they MUST reach the plan — they were being dropped entirely (the whole registry filter
+    // bar vanished). A dynamic/column-less filter still surfaces by name (column null).
+    quickFilters: (() => {
+      const body = extractFnBody(src, "initFixedFiltersConfig") || extractFnBody(src, "getFixedFiltersConfig");
+      if (!body) return [];
+      const out = [], re = /name\s*:\s*["']([^"']+)["']([\s\S]{0,400}?)columnName\s*:\s*["']([^"']+)["']/g;
+      let mt;
+      while ((mt = re.exec(body))) {
+        const dvt = /dataValueType\s*:\s*(?:Terrasoft\.)?DataValueType\.(\w+)/.exec(mt[2]);
+        out.push({ name: mt[1], column: mt[3], type: dvt ? dvt[1] : null });
+      }
+      return out;
     })(),
   };
 }

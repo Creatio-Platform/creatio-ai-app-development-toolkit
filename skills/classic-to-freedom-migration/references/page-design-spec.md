@@ -39,6 +39,7 @@ HTML or a rendered artifact.
 ### List page
 - **Add record:** via mini page `<MiniPage>` / full edit page
 - **List columns:** <col> · <col> · …
+- **Quick filters:** `<FilterName>` (<column>, <TYPE>) · … — rebuild as the Freedom list-page filter / quick-filter controls (from the section's `initFixedFiltersConfig`; omitted when the section defines none)
 - **Section actions:** `<action>` · … — migrate as Freedom list-page actions
 
 ### <entity> form page

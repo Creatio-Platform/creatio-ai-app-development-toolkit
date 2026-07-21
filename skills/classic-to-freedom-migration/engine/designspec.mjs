@@ -226,6 +226,12 @@ export function renderDesignSpec(result, opts = {}) {
       `- **Add record:** ${addRecordDesc}`,
       `- **List columns:** ${listCols}`,
     );
+    if ((section.quickFilters || []).length) {
+      const f = section.quickFilters
+        .map((q) => `\`${esc(q.name)}\`${q.column ? ` (${esc(q.column)}${q.type ? `, ${esc(q.type)}` : ""})` : ""}`)
+        .join(" · ");
+      L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
+    }
     if ((section.sectionActions || []).length) {
       const acts = section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ");
       L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`);
@@ -392,6 +398,13 @@ export function renderPlan(result, opts = {}) {
     `| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`,
     `| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`,
   );
+  // typed-entity page family — each per-type Classic edit page is its OWN scope row (they were collapsed to a
+  // single form). Source: manifest.typedPages (from list-entity-client-schemas). Followed by a precedence ⚠.
+  const typed = result.typedPages || [];
+  for (const t of typed) {
+    const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed edit page)`;
+    P.push(`| ${cls} | ${fill(t.freedom, "per-type Freedom form / type-specific binding")} | Rebuild (per-type) |`);
+  }
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
@@ -412,6 +425,7 @@ export function renderPlan(result, opts = {}) {
   }
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
+  if (typed.length) P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). Plan a per-type form (rebuild or type-specific binding) for EACH — not one form for all types. Source these from \`list-entity-client-schemas\` and supply via \`manifest.typedPages\`.`);
   P.push("", renderDesignSpec(result, { ...opts, embedded: true }), "");
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot

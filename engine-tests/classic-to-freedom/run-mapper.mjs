@@ -1490,5 +1490,52 @@ check("Major7: a seed with a token method but NO getActions is still looksSkelet
   m7.seedQuality.looksSkeletal === true && m7.seedQuality.hasGetActions === false && m7.warnings.some((w) => w.name === "skeletal-seed"),
   () => m7.seedQuality);
 
+/* ---- Documents-session regressions: section quick filters, custom section actions, typed-page family ----
+   All three were dropped on the real Documents migration: the section body carried them but the engine either
+   had no extractor (quick filters), an extractor too narrow to match the standard shape (section actions), or
+   no plan concept at all (typed pages). Fixtures mirror the real DocumentSectionV2 / list-entity-client-schemas. */
+const docSecBody = `define("XSection", [], function() { return { entitySchemaName: "X", methods: {
+  initFixedFiltersConfig: function() {
+    var fixedFilterConfig = { entitySchema: this.entitySchema, filters: [
+      { name: "PeriodFilter", caption: this.get("Resources.Strings.PeriodFilterCaption"), dataValueType: Terrasoft.DataValueType.DATE, columnName: "Date", startDate: {}, dueDate: {} },
+      { name: "Owner", caption: this.get("Resources.Strings.OwnerFilterCaption"), dataValueType: Terrasoft.DataValueType.LOOKUP, filter: BaseFiltersGenerateModule.OwnerFilter, columnName: "Owner" }
+    ] };
+    this.set("FixedFilterConfig", fixedFilterConfig);
+  },
+  getSectionActions: function() {
+    var actionMenuItems = this.callParent(arguments);
+    actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "createRegistry"}, "Caption": {"bindTo": "Resources.Strings.CreateRegistryActionCaption"}, "Enabled": {"bindTo": "isCreateRegistryEnabled"}, "Visible": true }));
+    return actionMenuItems;
+  }
+} }; });`;
+const docSecParsed = parseSchema(docSecBody, "XSection");
+check("section quick filters: initFixedFiltersConfig → each filter's {name, column, type} extracted",
+  docSecParsed.quickFilters.length === 2
+  && docSecParsed.quickFilters.some((f) => f.name === "PeriodFilter" && f.column === "Date" && f.type === "DATE")
+  && docSecParsed.quickFilters.some((f) => f.name === "Owner" && f.column === "Owner" && f.type === "LOOKUP"),
+  () => docSecParsed.quickFilters);
+check("section actions: standard getButtonMenuItem/\"Click\".bindTo shape is caught (createRegistry), callParent excluded",
+  docSecParsed.sectionActions.includes("createRegistry") && !docSecParsed.sectionActions.includes("callParent"),
+  () => docSecParsed.sectionActions);
+
+const docSecRun = runMigration({
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [{ schema: "XICPage", type: "Incoming document" }, { schema: "XOCPage", type: "Outgoing document" }],
+  planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "ListPageV3Template", formTemplate: "PageWithTabsFreedomTemplate" },
+});
+check("section analysis: quick filters + section actions reach the section object (union across layers)",
+  (docSecRun.section.quickFilters || []).length === 2 && (docSecRun.section.sectionActions || []).includes("createRegistry"));
+check("typed-page: manifest.typedPages surfaced on the result + a typed-page decision in the ⚠ worklist",
+  (docSecRun.typedPages || []).length === 2
+  && docSecRun.changeSet.needsDecision.some((n) => n.kind === "typed-page" && /precedence/i.test(n.reason)));
+check("plan: List page shows Quick filters + Section actions, Main scope lists per-type pages + a precedence ⚠",
+  /Quick filters:/.test(docSecRun.plan) && /PeriodFilter/.test(docSecRun.plan)
+  && /Section actions:/.test(docSecRun.plan) && /createRegistry/.test(docSecRun.plan)
+  && /XICPage .*typed edit page.*Rebuild \(per-type\)/.test(docSecRun.plan)
+  && /Typed entity — 2 per-type/.test(docSecRun.plan),
+  () => docSecRun.plan.split("\n").filter((l) => /filter|action|typed|per-type/i.test(l)).slice(0, 8));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

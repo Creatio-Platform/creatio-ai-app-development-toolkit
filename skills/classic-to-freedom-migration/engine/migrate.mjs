@@ -136,9 +136,33 @@ export function runMigration(manifest, opts = {}) {
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
     listColumns: [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
+    quickFilters: (() => {
+      const seen = new Set(), out = [];
+      for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
+        if (f && f.name && !seen.has(f.name)) { seen.add(f.name); out.push(f); }
+      }
+      return out;
+    })(),
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
   } : null;
+  // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
+  // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
+  // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
+  // as `manifest.typedPages` (array of names or {schema,type,template,kind}). They are first-class SCOPE and a
+  // build TRAP: each Type routes to its OWN Classic page, which takes precedence over a general Freedom
+  // RelatedPage binding — so they were collapsed to one form and never listed. Surface them as a decision so
+  // they land in the ⚠ Confirm worklist + the Plan-vs-Done table (not just prose), and in the Main-scope table.
+  const typedPages = (manifest.typedPages || [])
+    .map((t) => (typeof t === "string" ? { schema: t } : (t && typeof t === "object" ? t : null)))
+    .filter((t) => t && t.schema);
+  if (typedPages.length) {
+    changeSet.needsDecision.push({
+      kind: "typed-page",
+      item: typedPages.map((t) => t.schema).join(", "),
+      reason: `Typed entity: ${typedPages.length} per-type Classic edit page(s). Each record Type routes to its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding (so "+ New" / open-record open Classic unless overridden). Bind — or rebuild — a Freedom form PER Type (by the Type column), not one form for all types; verify per-type routing on-stand after binding.`,
+    });
+  }
   // child pages (recursion): each CUSTOM detail's related list opens the child entity's edit form on
   // add/edit — a separate migration. Enumerate them so the plan is a tree (parent + one sub-plan each).
   const childPages = (changeSet.details || []).map((d) => ({
@@ -276,8 +300,9 @@ export function runMigration(manifest, opts = {}) {
     },
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
-    section,         // section-schema analysis (list page): add-record mini page, section actions, columns
+    section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
     childPages,      // custom-detail child entities whose edit page is a recursive sub-migration
+    typedPages,      // per-type Classic edit-page family (typed entity) — first-class scope + precedence trap
   };
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
