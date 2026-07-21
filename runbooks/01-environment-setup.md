@@ -13,9 +13,17 @@ Configure clio CLI and establish connection to the target Creatio runtime for th
 
 Read `AGENTS.md` for the Context Files Reference. For local clio CLI invocations used during environment bootstrap, read `context/clio-cli-reference.md`.
 
+## clio MCP Availability Preflight (fail fast)
+
+- Before the first clio operation, run a clio MCP **availability preflight**: confirm native clio MCP tools are surfaced to this host (e.g. `get-tool-contract` resolves and the resident-tool index is reachable). Run it once, up front.
+- If clio MCP is **unavailable** — the server did not launch, no native clio tools were surfaced, or a registered environment is **unresponsive** — STOP and return a **prerequisites blocker** instead of degrading to a slower path. The blocker lists what the developer fixes once, up front: install .NET, install clio (`dotnet tool install clio -g`), and register the environment (`clio reg-web-app`).
+- Do NOT self-bootstrap when clio MCP is unavailable: **do not install** or download the .NET SDK, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. Report the missing prerequisites and let the developer fix them.
+- Treat a registered-but-unresponsive server as unavailable: run at most one confirmation probe, then show the blocker. Do not retry indefinitely, and do not reach for the Python wrapper to work around a dead server.
+- The full contract is in `AGENTS.md`, "clio MCP availability preflight". The prerequisite checks in Step 1 below are the fail-fast messages this preflight surfaces.
+
 ## MCP Transport And Single clio Context
 
-- Resident tools (`get-tool-contract` index: `resident=true`) are called natively when the host coding agent exposes clio MCP as native tool-calls; every other tool is invoked via `clio-run <command>` regardless of transport. Use `runtime/scripts/mcp_client.py` only as the stdio fallback on hosts without native MCP. Do not reverse-engineer the wrapper's CLI contract when native calls are available (see `AGENTS.md`, "clio MCP transport preference").
+- Resident tools (`get-tool-contract` index: `resident=true`) are called natively when the host coding agent exposes clio MCP as native tool-calls; every other tool is invoked via `clio-run <command>` regardless of transport. `runtime/scripts/mcp_client.py` is an **explicit opt-in escape hatch** for hosts with no native MCP transport — not the default fallback and never the automatic response to an unavailable clio MCP server; run it only after the developer explicitly opts in. Do not reverse-engineer the wrapper's CLI contract when native calls are available (see `AGENTS.md`, "clio MCP transport preference").
 - Both transports must resolve the same `clio` binary (PATH / `CLIO_CMD`) so they share one config and one registered-environments list. Confirm this single context before resolving the environment: an environment registered through one transport must be visible to the other. If a native call reports `environment not found` while the wrapper resolves the same environment (or vice versa), stop and reconcile the clio resolution before continuing — do not register a duplicate environment to work around a split-brain.
 
 ## Support Mode
@@ -65,6 +73,8 @@ User-facing blocker message:
 - ask only for the minimum environment correction needed to continue
 
 ### 1. Verify prerequisites
+
+These checks are fail-fast: when a prerequisite is missing, report it and stop. **Do not self-bootstrap** — do not install or download the .NET SDK, do not run `dotnet tool install clio -g` for the developer, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. Surface the prerequisite and wait for the developer to fix it.
 
 **Step 1a — Check .NET SDK:**
 ```bash
@@ -205,7 +215,7 @@ This information stays in the conversation context — Agent 2 reads the environ
 
 ### 7. DataForge availability check
 
-Run the DataForge status check against the resolved environment. `dataforge-status` is a resident tool (`get-tool-contract` index: `resident=true`), so call it natively when the host exposes native MCP; use the stdio wrapper below only as the fallback (see "MCP Transport And Single clio Context" above):
+Run the DataForge status check against the resolved environment. `dataforge-status` is a resident tool (`get-tool-contract` index: `resident=true`), so call it natively when the host exposes native MCP; use the stdio wrapper below only as the explicit opt-in escape hatch (see "MCP Transport And Single clio Context" above):
 
 ```bash
 python3 runtime/scripts/mcp_client.py dataforge-status --args-file ./dataforge-status.args.json --timeout 30
@@ -251,6 +261,7 @@ Report the resolved writable package context in the conversation so Agent 2 and 
 
 ## Completion Criteria
 
+✅ clio MCP availability preflight passed — native clio tools are surfaced before the first clio operation; otherwise the run stopped with a prerequisites blocker (install .NET, install clio, `reg-web-app`) and did not self-bootstrap  
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ Single clio context confirmed — native MCP and the stdio wrapper resolve the same clio config and the same registered environment  
 ✅ Resolved environment name, URL, and runtime are reported in the conversation  

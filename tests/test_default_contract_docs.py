@@ -117,6 +117,25 @@ DEFAULT_APP_CREATION_DOCS = [
     ROOT / "AGENTS.md",
 ]
 
+# ENG-92985: run a clio MCP availability preflight before the first clio operation
+# and fail fast with a prerequisites blocker when clio MCP is unavailable — never
+# self-bootstrap the environment or silently degrade to the Python wrapper.
+CLIO_MCP_PREFLIGHT_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "runbooks/01-environment-setup.md",
+]
+
+# ENG-92985: the mcp_client.py wrapper is an explicit opt-in escape hatch, not the
+# default degraded path. Every transport-aware doc must frame it that way.
+OPT_IN_ESCAPE_HATCH_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "context/essentials.md",
+    ROOT / "context/INDEX.md",
+]
+
 
 def read_text(path):
     return path.read_text(encoding="utf-8")
@@ -461,6 +480,36 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("askuserquestion", content, str(path))
             # ENG-91558 (review RC-4): the "ambiguous" carve-out bounds the rule
             self.assertIn("ambiguous", content, str(path))
+
+    def test_docs_require_clio_mcp_availability_preflight_and_fail_fast(self):
+        # ENG-92985: before the first clio operation, run an availability preflight;
+        # when clio MCP is unavailable, stop with a prerequisites blocker (install
+        # .NET, install clio, reg-web-app) and do NOT self-bootstrap the environment.
+        for path in CLIO_MCP_PREFLIGHT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("availability preflight", content, str(path))
+            self.assertIn("prerequisites blocker", content, str(path))
+            # blocker enumerates the three developer-owned prerequisites
+            self.assertIn(".net", content, str(path))
+            self.assertIn("reg-web-app", content, str(path))
+            # AC4: no self-bootstrapping when clio MCP is unavailable
+            self.assertIn("do not install", content, str(path))
+            self.assertIn("executionpolicy", content, str(path))
+            self.assertIn("silently register", content, str(path))
+            # AC6: registered-but-unresponsive is treated as unavailable, no
+            # indefinite retry
+            self.assertIn("unresponsive", content, str(path))
+            self.assertIn("retry indefinitely", content, str(path))
+
+    def test_docs_frame_mcp_client_as_opt_in_escape_hatch(self):
+        # ENG-92985 (AC5/AC7): the Python client is an explicit opt-in escape hatch,
+        # not the default degraded path. Keep the ENG-91276 native/fallback framing
+        # while removing any "silent fallback" legitimization.
+        for path in OPT_IN_ESCAPE_HATCH_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("explicit opt-in", content, str(path))
+            self.assertIn("escape hatch", content, str(path))
+            self.assertIn("mcp_client.py", content, str(path))
 
 
 if __name__ == "__main__":

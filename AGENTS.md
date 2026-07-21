@@ -315,10 +315,22 @@ Tool surface preference (clio MCP vs CLI):
 - After any MCP or environment failure has been resolved, return to MCP-first on the next call — do not stay on CLI fallback by default.
 - Do not parse CLI text output as a substitute for an MCP tool that returns the same data as structured fields. If parsing CLI output is required, that is a signal to switch back to the MCP equivalent.
 
+clio MCP availability preflight (fail fast on missing prerequisites):
+
+- Before the first clio operation of a task, run a clio MCP **availability preflight**: confirm that native clio MCP tools are actually surfaced to this host — for example that `get-tool-contract` resolves and the resident-tool index is reachable. Run it once, up front; do not discover a missing server mid-run.
+- **clio MCP available** — native clio tools are surfaced: proceed with native tool-calls for resident tools and `clio-run` for long-tail tools, and do not touch `runtime/scripts/mcp_client.py`. Existing app/schema/page flows are unaffected by this preflight.
+- **clio MCP unavailable** — the MCP server did not launch, or no native clio tools were surfaced: STOP and return a clear **prerequisites blocker** instead of silently degrading to a slower path. The blocker lists the prerequisites the developer fixes once, up front:
+  - install .NET (the SDK/runtime clio requires),
+  - install clio (`dotnet tool install clio -g`),
+  - register the target environment (`clio reg-web-app`).
+- When clio MCP is unavailable, do NOT self-bootstrap the environment: **do not install** or download the .NET SDK, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. These are developer-owned prerequisite fixes, not automatic agent actions. (The URL-based auto-register in `Workflow Routing` applies only once clio MCP is available and a clio operation is running; it is not a license to register environments while the server is down.)
+- **Registered but unresponsive** — if an environment is registered but clio MCP does not respond (server crash, hang, transport error), treat it as unavailable: run at most one confirmation probe, then show the prerequisites blocker. Do not retry indefinitely, and do not reach for the Python wrapper to work around a dead server.
+- `runtime/scripts/mcp_client.py` is an **explicit opt-in escape hatch**, not the default degraded path. Offer it, and run it, only after the developer explicitly opts in on a host that has no native MCP transport — never as the automatic response to an unavailable clio MCP server.
+
 clio MCP transport preference (native tool-calls vs stdio wrapper):
 
 - Resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>`. Never wrap a resident tool in `clio-run`. (Canonical rule, mirrored verbatim from clio MCP's `core-rules` guidance.)
-- When the host coding agent exposes clio MCP as native tool-calls, invoke resident tools directly. Treat `runtime/scripts/mcp_client.py` as the stdio fallback for hosts that do not expose native MCP — not as the default transport. Neither transport makes a long-tail (non-resident) tool callable by its own name: reach it through `clio-run` regardless of which transport is active.
+- When the host coding agent exposes clio MCP as native tool-calls, invoke resident tools directly. `runtime/scripts/mcp_client.py` is an **explicit opt-in escape hatch** for hosts with no native MCP transport (see "clio MCP availability preflight" above) — never the automatic/default fallback and never the response to an unavailable server. Neither transport makes a long-tail (non-resident) tool callable by its own name: reach it through `clio-run` regardless of which transport is active.
 - Do not spend a turn reading the wrapper's `--help` or source to reverse-engineer its CLI contract when native tool-calls are available. Resolve tool arguments from `get-tool-contract`, never from the wrapper's argument-parsing behavior.
 - Single clio context: both transports — the native host MCP started from `.mcp.json` and the `mcp_client.py` stdio wrapper — must resolve the same `clio` binary through PATH / `CLIO_CMD`, so they share one clio config and one registered-environments list. Before the first environment resolution, confirm this single context; never let a native call report `environment not found` while the wrapper resolves the same environment (split-brain). If the two transports disagree on a known environment, stop and reconcile the clio resolution before continuing.
 
