@@ -37,7 +37,7 @@ const toRegex = (glob) => {
   for (let i = 0; i < glob.length; i++) {
     if (glob[i] === "*" && glob[i + 1] === "*") { re += "(?:.*)"; i++; if (glob[i + 1] === "/") i++; }
     else if (glob[i] === "*") re += "[^/]*";
-    else re += glob[i].replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    else re += glob[i].replace(/[.+?^${}()|[\]\\]/g, String.raw`\$&`);
   }
   return new RegExp("^" + re + "$");
 };

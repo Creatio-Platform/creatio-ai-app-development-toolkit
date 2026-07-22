@@ -1132,8 +1132,9 @@ check("RV9: parseSchema marks propertyName:'tabs' as isTab (parse layer exercise
 // RV15 — drive every control() type branch via entityColumns (the rich Contract fixture passes none).
 const ctlCols = { D: { type: "date" }, DT: { type: "datetime" }, I: { type: "integer" }, DEC: { type: "decimal" }, MON: { type: "money" }, T: { type: "text", length: 100 }, RICH: { type: "richtext" }, LK: { type: "Lookup", ref: "Contact" } };
 const ctlNames = ["D", "DT", "I", "DEC", "MON", "T", "RICH", "LK"];
+const ctlDiff = ctlNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const ctlCs = runMigration({ entity: "X", entityColumns: ctlCols,
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ctlNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ctlDiff}]};});` }] }, { baseDir: FIX });
 const cf = (n) => ctlCs.changeSet.viewConfigDiff.find((o) => o.name === n);
 check("RV15: control() type branches — date/datetime→DateTimePicker, int/decimal/money→NumberInput, text/richtext→Input, lookup→ComboBox",
   cf("D")?.values.type === "crt.DateTimePicker" && cf("DT")?.values.type === "crt.DateTimePicker"
@@ -1202,8 +1203,9 @@ check("L5: section processLaunch + processNames captured from an executeProcess 
 // map. A genuinely unknown code (44=URL) still falls to a loud field-control decision.
 const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "44" } };
 const rdNames = ["DT8", "ST", "MT", "LT", "XT", "UNK"];
+const rdDiff = rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const rdCs = runMigration({ entity: "X", entityColumns: rdCols,
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${rdDiff}]};});` }] }, { baseDir: FIX });
 const rf = (n) => rdCs.changeSet.viewConfigDiff.find((o) => o.name === n);
 check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Short/Medium text→Input; Long/MaxSize→Input (Long text label)",
   rf("DT8")?.values.type === "crt.DateTimePicker" && rf("DT8")?.values.typeLabel === "Date"

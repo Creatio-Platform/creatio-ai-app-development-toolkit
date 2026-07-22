@@ -21,7 +21,7 @@ if (!existsSync(prov)) {
 
 const files = JSON.parse(readFileSync(prov, "utf8")).files || {};
 const pins = [...new Map(
-  Object.values(files).filter((p) => p && p.package && p.version).map((p) => [`${p.package}@${p.version}`, p]),
+  Object.values(files).filter((p) => p?.package && p?.version).map((p) => [`${p.package}@${p.version}`, p]),
 ).values()];
 if (!pins.length) {
   console.log("audit-vendored-acorn: provenance.json pins no package@version; skip.");

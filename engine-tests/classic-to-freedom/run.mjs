@@ -23,13 +23,16 @@ function report(title, eff) {
   console.log(`tabs (${eff.tabs.length}): ${eff.tabs.map(t => t.name).join(", ")}`);
   const detailItems = eff.items.filter(i => i.itemType === 2); // derived from the layout tree
   console.log(`detailItems (${detailItems.length}): ${detailItems.map(d => d.name).join(", ")}`);
-  console.log(`details (${eff.details.length}): ${eff.details.map(d => `${d.key}→${d.schemaName || "?"}[${d.entitySchemaName || "?"}]`).join(", ")}`);
+  const detailsStr = eff.details.map(d => `${d.key}→${d.schemaName || "?"}[${d.entitySchemaName || "?"}]`).join(", ");
+  console.log(`details (${eff.details.length}): ${detailsStr}`);
   console.log(`rules (${eff.rules.length}):`);
   for (const r of eff.rules) console.log(`   ${r.attr} · ${r.ruleType}${r.property ? "/" + r.property : ""} · ${r.system} · from ${r.provenance.join(">")}`);
-  console.log(`removed (${eff.removed.length}): ${eff.removed.map(r => `${r.name}(by ${r.removedBy})`).join(", ")}`);
+  const removedStr = eff.removed.map(r => `${r.name}(by ${r.removedBy})`).join(", ");
+  console.log(`removed (${eff.removed.length}): ${removedStr}`);
   console.log(`methods (${eff.methods.length}): ${eff.methods.map(m => m.name).join(", ")}`);
   console.log(`unresolvedParents (${eff.unresolvedParents.length}) [F2 seed list]: ${eff.unresolvedParents.join(", ") || "—"}`);
-  console.log(`warnings (${eff.warnings.length}): ${eff.warnings.map(w => `${w.op}:${w.name}@${w.schema}`).join(", ") || "—"}`);
+  const warningsStr = eff.warnings.map(w => `${w.op}:${w.name}@${w.schema}`).join(", ") || "—";
+  console.log(`warnings (${eff.warnings.length}): ${warningsStr}`);
 }
 
 let pass = 0, fail = 0;
@@ -110,7 +113,7 @@ check("F2: Contract entity survives seed (seed has no entitySchemaName)", coSeed
 check("F1: unseeded SupportUnit warns on merge-onto-absent ESNTab",
   su.warnings.some(w => w.op === "merge" && w.name === "ESNTab" && w.schema === "SupportCalendar"));
 check("F1: unseeded Contract raises merge-onto-absent warnings (base tabs/buttons)",
-  co.warnings.length > 0 && co.warnings.some(w => w.op === "merge" && (w.name === "ESNTab" || w.name === "PrintButton")));
+  co.warnings.some(w => w.op === "merge" && (w.name === "ESNTab" || w.name === "PrintButton")));
 
 /* ---- F1: move/remove-onto-absent branches (synthetic schemas pin the drop + tombstone outcomes) ---- */
 const synth = (pkg, ops) => makeSchema(pkg, { entity: "X", diff: ops }); // shared shape (see _testkit.mjs)

@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_VENDOR = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
 const overrideArg = process.argv[2] ? path.resolve(process.argv[2]) : null;
 const tmpRoot = path.resolve(os.tmpdir()) + path.sep;
-const VENDOR_DIR = overrideArg && overrideArg.startsWith(tmpRoot) ? overrideArg : DEFAULT_VENDOR;
+const VENDOR_DIR = overrideArg?.startsWith(tmpRoot) ? overrideArg : DEFAULT_VENDOR;
 const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 
 const sha256Lf = (buf) =>

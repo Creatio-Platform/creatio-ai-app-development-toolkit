@@ -562,8 +562,9 @@ function mapFields(ctx, containers) {
       if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
         const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
         while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
+        const spanNote = rowSpan > 1 ? `, spans ${rowSpan} rows` : "";
         needsDecision.push({ kind: "layout-collision", item: col,
-          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${rowSpan > 1 ? `, spans ${rowSpan} rows` : ""}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
+          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${spanNote}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
       }
     } else {
       let cur = autoRow[parent] || 1;
@@ -708,15 +709,17 @@ function mapDetails(ctx, containers, profileRegion) {
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
-    // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
-    // OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
-    needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
-      reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
-    // a related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
-    // page, if the classic detail used one) is a SEPARATE migration, not covered by migrating this master
-    // page. Surface it so it isn't silently skipped.
-    needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
-      reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
+    // Two SEPARATE-migration flags, surfaced together so neither is silently skipped:
+    //  • editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
+    //    OWN config/schema, so leave it unresolved rather than hardcoding an "add" toolbar; and
+    //  • the related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
+    //    page, if the classic detail used one) is a SEPARATE migration.
+    needsDecision.push(
+      { kind: "detail-editability", item: d.schemaName || d.key,
+        reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` },
+      { kind: "detail-editpage", item: dentity || d.schemaName || d.key,
+        reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` },
+    );
     // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
     // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
     const resolvedDcap = d.caption ? resolveText(d.caption) : null;

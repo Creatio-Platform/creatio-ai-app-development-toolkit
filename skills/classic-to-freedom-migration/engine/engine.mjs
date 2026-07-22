@@ -125,7 +125,7 @@ export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a colum
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
 // stored as `Foo` was looked up as `Foo#bar` and the raw key leaked into the plan.
-export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.Strings\./, "").replace(/#.*$/, "");
+export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.Strings\./, "").replace(/#.*/, "");
 // Depth cap for the static evaluator: the body is UNTRUSTED, so a pathologically deep-nested literal must
 // not blow the call stack (DoS). `path.length` is the current nesting depth — bail to null + a diagnostic
 // well before any real stack limit. Real page schemas nest only a handful of levels; 500 is unreachable by
@@ -175,11 +175,12 @@ function resolveMemberValue(node, scope) {
   // If the base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
   // `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
   let guard = 0;
-  while (cur && cur.type === "Identifier" && scope.has(cur.name) && scope.get(cur.name).kind === "memberAlias" && guard++ < 20) {
+  while (cur?.type === "Identifier" && scope.has(cur.name) && scope.get(cur.name).kind === "memberAlias" && guard++ < 20) {
     let a = scope.get(cur.name).node, seg = [];
-    while (a && a.type === "MemberExpression") {
+    while (a?.type === "MemberExpression") {
       if (a.computed) return null;
-      const nm = a.property.type === "Identifier" ? a.property.name : (a.property.type === "Literal" ? String(a.property.value) : null);
+      const litNm = a.property.type === "Literal" ? String(a.property.value) : null;
+      const nm = a.property.type === "Identifier" ? a.property.name : litNm;
       if (nm == null) return null;
       seg.unshift(nm); a = a.object;
     }
@@ -188,7 +189,7 @@ function resolveMemberValue(node, scope) {
   let tag;
   if (cur?.type === "ThisExpression") tag = "this";
   else if (cur?.type === "Identifier") {
-    if (scope.has(cur.name)) { const k = scope.get(cur.name).kind; tag = k === "brm" ? "brm" : k === "terrasoft" ? "terrasoft" : "proxy"; } // param shadows global; the AMD `terrasoft` dep param resolves like the global
+    if (scope.has(cur.name)) { const k = scope.get(cur.name).kind; tag = { brm: "brm", terrasoft: "terrasoft" }[k] || "proxy"; } // param shadows global; the AMD `terrasoft` dep param resolves like the global
     else if (cur.name === "Terrasoft") tag = "terrasoft";
     else tag = "proxy";
   } else return null;
@@ -204,7 +205,7 @@ function resolveMemberValue(node, scope) {
 
 // The root identifier a member chain reads off (`cfg.items[0].x` → "cfg"), or null if the base isn't a plain
 // identifier. Used to tell an unresolved LOCAL-object member access (flag it) from a framework-enum miss (fine).
-function memberBase(node) { let cur = node; while (cur?.type === "MemberExpression") cur = cur.object; return cur?.type === "Identifier" ? cur.name : null; }
+function memberBase(node) { let cur = node; while (cur?.type === "MemberExpression") { cur = cur.object; } return cur?.type === "Identifier" ? cur.name : null; }
 
 function makeAstEvaluator(scope, diagnostics, src) {
   const snippet = (n) => { try { return src.slice(n.start, Math.min(n.end, n.start + 60)).replace(/\s+/g, " "); } catch { return "?"; } };
@@ -298,10 +299,10 @@ function buildAstScope(factory, amdDeps, src) {
     // `Terrasoft`) must resolve its `.ViewItemType`/`.ContentType` enums exactly like the bare global — the real
     // fixtures ALWAYS receive Terrasoft as a define() param, so treating it as an opaque proxy dropped every
     // enum access (`Terrasoft.ViewItemType.CONTROL_GROUP` → null → group degraded to a plain container).
-    if (p.type === "Identifier") scope.set(p.name,
-      amdDeps[i] === "BusinessRuleModule" ? { kind: "brm" }
-      : amdDeps[i] === "terrasoft" ? { kind: "terrasoft" }
-      : { kind: "proxy" });
+    if (p.type === "Identifier") {
+      const kind = { BusinessRuleModule: "brm", terrasoft: "terrasoft" }[amdDeps[i]] || "proxy";
+      scope.set(p.name, { kind });
+    }
   });
   // Top-level consts/vars in the factory body so BOTH `var x = "Foo"; return { name: x }` and
   // `var d = [ … ]; return { diff: d }` resolve. The AST parser (which replaced the vm) lost the array/object
@@ -370,7 +371,7 @@ export function parseSchema(src, pkg) {
     }
     return { ...buildSchemaResult(pkg, src, null, captured, amdDeps), astDiagnostics };
   } catch (e) {
-    const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e && e.message || e);
+    const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e?.message || e);
     return { ...buildSchemaResult(pkg, src, "static evaluation failed: " + why, {}, amdDeps), astDiagnostics };
   }
 }
@@ -422,7 +423,7 @@ function extractFnBody(src, name) {
       }
       if (c === '"' || c === "'" || c === "`") {           // string literal → skip to the matching quote
         j++;
-        while (j < src.length && src[j] !== c) { if (src[j] === "\\") j++; j++; }
+        while (j < src.length && src[j] !== c) { if (src[j] === "\\") { j++; } j++; }
         j++; continue;
       }
       if (c === "{") depth++;
@@ -445,10 +446,10 @@ function fixedFilterObjects(body) {
   let i = m.index + m[0].length, bracket = 1, brace = 0, start = -1;
   while (i < body.length && bracket > 0) {
     const c = body[i];
-    if (c === '"' || c === "'" || c === "`") { const q = c; i++; while (i < body.length && body[i] !== q) i += body[i] === "\\" ? 2 : 1; i++; continue; }
+    if (c === '"' || c === "'" || c === "`") { const q = c; i++; while (i < body.length && body[i] !== q) { i += body[i] === "\\" ? 2 : 1; } i++; continue; }
     if (c === "[") bracket++;
     else if (c === "]") bracket--;
-    else if (c === "{") { if (brace === 0) start = i; brace++; }
+    else if (c === "{") { if (brace === 0) { start = i; } brace++; }
     else if (c === "}") { if (--brace === 0 && start >= 0) { objs.push(body.slice(start, i + 1)); start = -1; } }
     i++;
   }

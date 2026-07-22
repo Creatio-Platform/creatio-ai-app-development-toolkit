@@ -35,11 +35,11 @@ const esc = (s) => strip(s)
   .replaceAll("`", "ˋ")
   .replaceAll("|", String.raw`\|`)
   .replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-  .replaceAll("](", "]\\(");
+  .replaceAll("](", String.raw`]\(`);
 // A value rendered on its OWN line (not after an inline label) must ALSO not START with a Markdown block
 // marker — `#` `>` `-` `+` `*` or `N.` — else e.g. "## Boom" becomes a real heading. Escapes the leading
 // marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
-const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, "$1\\$2");
+const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, String.raw`$1\$2`);
 const isField = (o) => !!o?.values?.control;
 const DASH = "—";
 
@@ -218,7 +218,7 @@ export function renderDesignSpec(result, opts = {}) {
     // section body (which registered none even when a per-type mini page existed → a false "no mini page").
     const mp = result.miniPage;
     let addRecordDesc;
-    if (mp && mp.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
+    if (mp?.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
     else if (mp && (mp.unfolded || mp.specError || mp.cyclic)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
     else if (result.miniPageNone) addRecordDesc = "full edit page — verified on-stand: no add-record mini page";
     else if (!result.miniPageVerified) addRecordDesc = "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
@@ -230,7 +230,11 @@ export function renderDesignSpec(result, opts = {}) {
     );
     if ((section.quickFilters || []).length) {
       const f = section.quickFilters
-        .map((q) => `\`${esc(q.name)}\`${q.column ? ` (${esc(q.column)}${q.type ? `, ${esc(q.type)}` : ""})` : ""}`)
+        .map((q) => {
+          const typePart = q.type ? `, ${esc(q.type)}` : "";
+          const colPart = q.column ? ` (${esc(q.column)}${typePart})` : "";
+          return `\`${esc(q.name)}\`${colPart}`;
+        })
         .join(" · ");
       L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
     }
@@ -410,8 +414,9 @@ export function renderPlan(result, opts = {}) {
     const s = signals[k];
     if (!s || s.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
-    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
-    return `- **${label}:** present${list ? ` — ${list}` : ""} → build it`;
+    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
+    const presentNote = list ? ` — ${list}` : "";
+    return `- **${label}:** present${presentNote} → build it`;
   };
   P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
@@ -428,7 +433,8 @@ export function renderPlan(result, opts = {}) {
   const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
   if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
-    const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed form)`;
+    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    const cls = `${esc(t.schema)}${typeNote} (typed form)`;
     scopeRows.push(`| ${cls} | ${t.bindOnly ? "bind shared form by Type" : "per-type Freedom form"} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
   }
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
@@ -460,7 +466,8 @@ export function renderPlan(result, opts = {}) {
   if (typed.length) {
     P.push("### Typed page mappings", "");
     for (const t of typed) {
-      P.push(`#### Typed form: ${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""}`);
+      const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+      P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
       if (t.bindOnly) {
         P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the shared Freedom form for this Type (by the Type column).`);
       } else if (t.spec) {

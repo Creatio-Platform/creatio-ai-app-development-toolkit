@@ -51,7 +51,7 @@ function childPageIssue(c) {
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
   const bodyOf = (e) => {
-    if (e && e.body != null) return String(e.body);
+    if (e?.body != null) return String(e.body);
     // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
     // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
     if (!e || typeof e.file !== "string" || !e.file)
@@ -87,7 +87,7 @@ export function runMigration(manifest, opts = {}) {
     const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
     detailSchemas[name] = {
       entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
-      columns: [...new Set((p.diff || []).filter((d) => d && d.bindTo).map((d) => d.bindTo))],
+      columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
       title: eObj.title || null, // human detail title (from its resources)
       // editPage: explicit manifest value WINS — a string names the child edit page; `false` = the agent verified
       // on-stand that NO Classic *Page exists. Else the name from getEditPageName; else null = unverified.
@@ -163,7 +163,7 @@ export function runMigration(manifest, opts = {}) {
     quickFilters: (() => {
       const seen = new Set(), out = [];
       for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
-        if (f && f.name && !seen.has(f.name)) { seen.add(f.name); out.push(f); }
+        if (f?.name && !seen.has(f.name)) { seen.add(f.name); out.push(f); }
       }
       return out;
     })(),
@@ -178,8 +178,11 @@ export function runMigration(manifest, opts = {}) {
   // RelatedPage binding — so they were collapsed to one form and never listed. Surface them as a decision so
   // they land in the ⚠ Confirm worklist + the Plan-vs-Done table (not just prose), and in the Main-scope table.
   const typedPages = (manifest.typedPages || [])
-    .map((t) => (typeof t === "string" ? { schema: t } : (t && typeof t === "object" ? t : null)))
-    .filter((t) => t && t.schema);
+    .map((t) => {
+      if (typeof t === "string") return { schema: t };
+      return (t && typeof t === "object") ? t : null;
+    })
+    .filter((t) => t?.schema);
   if (typedPages.length) {
     changeSet.needsDecision.push({
       kind: "typed-page",
@@ -256,10 +259,11 @@ export function runMigration(manifest, opts = {}) {
   const secMpName = sectionSchemas.map((l) => l.addRecordMiniPage).find((v) => typeof v === "string");
   const secMpExists = !!secMpName || sectionSchemas.some((l) => l.addRecordMiniPage === true);
   const mpDecl = manifest.addRecordMiniPage; // {schema}|"name"|false|undefined
-  const mpName = mpDecl === false ? null
-    : (typeof mpDecl === "string" && mpDecl) ? mpDecl
-    : (mpDecl && typeof mpDecl === "object" && mpDecl.schema) ? mpDecl.schema
-    : (secMpName || null);
+  let mpName;
+  if (mpDecl === false) mpName = null;
+  else if (typeof mpDecl === "string" && mpDecl) mpName = mpDecl;
+  else if (mpDecl && typeof mpDecl === "object" && mpDecl.schema) mpName = mpDecl.schema;
+  else mpName = secMpName || null;
   const miniPageVerified = mpDecl !== undefined || secMpExists; // explicit {schema}/false, or the section body names one
   let miniPage = null;
   if (mpName) {
@@ -330,7 +334,8 @@ export function runMigration(manifest, opts = {}) {
     }
     const blockedTyped = typedPages.filter((t) => t.blocked);
     if (blockedTyped.length) {
-      reasons.push(`typed page(s) failed their own gate: ${blockedTyped.map((t) => `${t.schema} [${(t.reasons || []).join("; ").slice(0, 90)}]`).join(" | ")} — fix each typed form before the parent plan is approvable`);
+      const blockedTypedList = blockedTyped.map((t) => `${t.schema} [${(t.reasons || []).join("; ").slice(0, 90)}]`).join(" | ");
+      reasons.push(`typed page(s) failed their own gate: ${blockedTypedList} — fix each typed form before the parent plan is approvable`);
     }
     if (miniPage?.blocked) {
       reasons.push(`add mini page '${miniPage.schema}' failed its own gate: ${(miniPage.reasons || []).join("; ").slice(0, 90)} — fix it before the parent plan is approvable`);
@@ -361,8 +366,12 @@ export function runMigration(manifest, opts = {}) {
     for (const t of typedPages) {
       if (t.resolved === "bind") continue;
       if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
-      if (t.resolved === "fold") { if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`); continue; }
-      issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
+      if (t.resolved === "fold") {
+        if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`);
+        continue;
+      }
+      const typeNote = t.type ? ` (type "${t.type}")` : "";
+      issues.push(`typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
     }
     // add-record mini page (a section/list concern — only gated when this migration has a section). It must be
     // RESOLVED: folded (bundle in manifest.miniPageSchemas), or verified-none (manifest.addRecordMiniPage:false).
