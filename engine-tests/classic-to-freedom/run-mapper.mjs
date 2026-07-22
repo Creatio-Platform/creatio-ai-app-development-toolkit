@@ -1873,6 +1873,71 @@ check("mini-page order: '### Add mini-page mapping' comes right after '### List 
   && mpOrder.plan.indexOf("### Add mini-page mapping") < mpOrder.plan.indexOf("### X form page"),
   () => mpOrder.plan.split("\n").filter((l) => /^### /.test(l)));
 
+/* ---- session review (Applicant): three defects ---- */
+// #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned
+// sectionLayerCount:0 because it derives the section name from the entity, not the page prefix — clio PR #937).
+// A section migration (mini page present) still renders the List page block, flagging the un-gathered section.
+const noSecMp = runMigration({
+  entity: "X", seed: CLEAN_SEED, // NO section chain supplied
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  addRecordMiniPage: { schema: "XMiniPage" },
+  miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XMiniPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MF"}}]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("List page (section not gathered): the block still renders (not silently dropped) with a ⚠ 'Section schema not gathered', before the Add mini-page mapping",
+  noSecMp.plan.indexOf("### List page") >= 0
+  && /Section schema not gathered/.test(noSecMp.plan)
+  && noSecMp.plan.indexOf("### List page") < noSecMp.plan.indexOf("### Add mini-page mapping"),
+  () => noSecMp.plan.split("\n").filter((l) => /^### |Section schema not gathered/.test(l)));
+check("List page (section not gathered): list-columns/quick-filters lines are NOT fabricated when there is no section fold",
+  !/\*\*List columns:\*\*/.test(noSecMp.plan.slice(noSecMp.plan.indexOf("### List page"), noSecMp.plan.indexOf("### Add mini-page mapping"))));
+
+// #2 — a NON-typed entity with a DCM case present must steer the form template to the progress-bar template
+// (the steer used to be typed-only, so a non-typed DCM page silently kept whatever plain template was chosen).
+const ntDcm = runMigration({
+  entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  planMeta: { ...docPlanMeta, formTemplate: "FormPageTemplate" }, // a plain, non-progress-bar template
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+});
+check("non-typed DCM: the plan recommends PageWithTabsAndProgressBarTemplate AND flags the non-progress-bar template chosen",
+  /\*\*Template — DCM case present:\*\*/.test(ntDcm.plan)
+  && /PageWithTabsAndProgressBarTemplate/.test(ntDcm.plan)
+  && /`FormPageTemplate` has no progress bar/.test(ntDcm.plan),
+  () => ntDcm.plan.split("\n").filter((l) => /Template — DCM|ProgressBar|no progress bar/.test(l)));
+const ntDcmOk = runMigration({
+  entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsAndProgressBarTemplate" },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+});
+check("non-typed DCM: no template-mismatch ⚠ when a progress-bar template is already chosen",
+  /\*\*Template — DCM case present:\*\*/.test(ntDcmOk.plan) && !/has no progress bar/.test(ntDcmOk.plan));
+const ntNoDcm = runMigration({
+  entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  planMeta: { ...docPlanMeta, formTemplate: "FormPageTemplate" }, signals: FULL_SIGNALS, // dcm present:false
+});
+check("non-typed, no DCM: the 'Template — DCM case present' note is NOT emitted",
+  !/Template — DCM case present/.test(ntNoDcm.plan));
+
+// #3 — two profile islands with NO caption must resolve to DISTINCT 'Side profile › <island>' regions in the
+// Layout table (they are separate crt.GridContainers); they used to collapse into one flat 'Side profile'.
+const islCs = { viewConfigDiff: [
+  { name: "ContactContainer", parentName: "SideAreaProfileContainer", values: { type: "crt.GridContainer" } },
+  { name: "InternalRequestContainer", parentName: "SideAreaProfileContainer", values: { type: "crt.GridContainer" } },
+  { name: "CF", parentName: "ContactContainer", values: { control: "Contact" } },
+  { name: "RF", parentName: "InternalRequestContainer", values: { control: "Request" } },
+] };
+const islSpec = renderDesignSpec({ entity: "X", changeSet: islCs });
+check("profile islands (uncaptioned): each island's fields resolve to a DISTINCT 'Side profile › <island>' region (not one flat 'Side profile')",
+  /\| Side profile › Contact \|/.test(islSpec) && /\| Side profile › InternalRequest \|/.test(islSpec),
+  () => islSpec.split("\n").filter((l) => /Side profile/.test(l)));
+// a field DIRECTLY under the profile (no island wrapper) still reads as flat 'Side profile' (no bogus suffix).
+const flatCs = { viewConfigDiff: [{ name: "DF", parentName: "SideAreaProfileContainer", values: { control: "Direct" } }] };
+check("profile (no island wrapper): a field directly under the profile stays flat 'Side profile'",
+  /\| Side profile \| /.test(renderDesignSpec({ entity: "X", changeSet: flatCs })));
+
 /* ---- detail ADD/EDIT mechanism detection — a detail is NOT a plain related list when it adds via a LOOKUP,
    calls a backend SERVICE, or is an INLINE-EDITABLE grid. Detect from the detail body + surface so the Freedom
    rebuild reproduces the real add flow (custom handler + lookup + service/port), not a naive add-new grid. */

@@ -52,19 +52,30 @@ function regionResolver(viewConfigDiff, resources = {}) {
   // (the plan stays readable) — fall back to the key when the text is not resolved.
   const capText = (raw) => { const k = resourceKey(raw); return resources[k] ?? k; }; // same key normalization the mapper used to STORE the string (incl. #anchor strip)
   const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
+  // a profile island container often has NO caption (it is a visual grouping, e.g. `ContactContainer`) but is
+  // a DISTINCT `crt.GridContainer` — keep the islands apart in the Region by falling back to its own name
+  // (minus the `Container` suffix) when no captioned group is found, so the 2 islands don't collapse to one flat
+  // "Side profile" (which dropped the island distinction from the Layout table).
+  const islandLabel = (name) => esc(String(name).replace(/Container$/, ""));
   return (parentName) => {
     // `group` = the nearest CAPTIONED ancestor container (a real field group like "Sender" / "Additional
     // delivery info") between the field and its tab/profile. Surfacing it keeps the Region column showing the
     // GROUP, not just the flat tab — grouping was being lost (fields read as one flat list under the tab).
-    let p = parentName, hops = 0, group = null;
+    // `prev` tracks the container we came FROM (the child of the profile/tab we resolve into) so an uncaptioned
+    // island still resolves to its own container identity.
+    let p = parentName, hops = 0, group = null, prev = null;
     while (p && hops++ < 64) {
-      if (p === "SideAreaProfileContainer") return group ? `Side profile › ${group}` : "Side profile";
+      if (p === "SideAreaProfileContainer") {
+        const island = group || (prev ? islandLabel(prev) : null);
+        return island ? `Side profile › ${island}` : "Side profile";
+      }
       if (p === "HeaderContainer") return "Header";
       if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
       const o = byName.get(p);
       if (!o) return esc(p);
       if (o.values?.type === "crt.Tab") return group ? `Tab · ${label(o)} › ${group}` : `Tab · ${label(o)}`;
       if (group == null && o.values?.caption) group = label(o); // nearest captioned group wins (skip plain layout grids)
+      prev = p;
       p = o.parentName;
     }
     return esc(parentName);
@@ -234,8 +245,17 @@ export function renderDesignSpec(result, opts = {}) {
   // form page, so the detailed expansions follow that same order: list page → form page → child pages. ----
   // `formOnly` skips this List-page block (renderPlan renders the List page via a separate listPageOnly call
   // so the add-mini-page mapping can sit RIGHT AFTER it, then renders the form via formOnly).
-  if (section && !opts.formOnly) {
+  // This is a SECTION migration when the section chain was folded, OR a mini page / section schema is named even
+  // though the chain wasn't gathered (e.g. the bundle returned `sectionLayerCount: 0` because it derives the
+  // section name from the entity, not the page prefix — clio PR #937). In that gathered-nothing case the List
+  // page block must still render (with a ⚠) rather than silently vanish — a section migration ALWAYS has a list
+  // page, and dropping the whole block hides that the columns/filters/actions were never analyzed.
+  const isSectionMigration = section || result.miniPage || opts.planMeta?.sectionSchema;
+  if (isSectionMigration && !opts.formOnly) {
     L.push("### List page");
+    if (!section) {
+      L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **list columns / quick filters / section actions were NOT analyzed**. `get-classic-migration-bundle` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
+    }
     // Add-record mini page — resolved from list-entity-client-schemas (result.miniPage), NOT assumed from the
     // section body (which registered none even when a per-type mini page existed → a false "no mini page").
     const mp = result.miniPage;
@@ -245,22 +265,24 @@ export function renderDesignSpec(result, opts = {}) {
     else if (result.miniPageNone) addRecordDesc = "full edit page — verified on-stand: no add-record mini page";
     else if (!result.miniPageVerified) addRecordDesc = "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
     else addRecordDesc = "full edit page (no add-record mini page)";
-    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns";
-    L.push(
-      `- **Add record:** ${addRecordDesc}`,
-      `- **List columns:** ${listCols}`,
-    );
-    if ((section.quickFilters || []).length) {
-      const f = section.quickFilters
-        .map((q) => `\`${esc(q.name)}\`${q.column ? ` (${esc(q.column)}${q.type ? `, ${esc(q.type)}` : ""})` : ""}`)
-        .join(" · ");
-      L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
+    L.push(`- **Add record:** ${addRecordDesc}`);
+    // list columns / filters / actions come from the section fold — only render them when the section was gathered
+    // (guarded so an empty section doesn't throw and doesn't print a misleading "no filters").
+    if (section) {
+      const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns";
+      L.push(`- **List columns:** ${listCols}`);
+      if ((section.quickFilters || []).length) {
+        const f = section.quickFilters
+          .map((q) => `\`${esc(q.name)}\`${q.column ? ` (${esc(q.column)}${q.type ? `, ${esc(q.type)}` : ""})` : ""}`)
+          .join(" · ");
+        L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
+      }
+      if ((section.sectionActions || []).length) {
+        const acts = section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ");
+        L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`);
+      }
+      if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
     }
-    if ((section.sectionActions || []).length) {
-      const acts = section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ");
-      L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`);
-    }
-    if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
     L.push("");
   }
 
@@ -491,10 +513,18 @@ export function renderPlan(result, opts = {}) {
   }
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
+  // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
+  // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
+  // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
+  // is the FALLBACK. This steer applies to BOTH typed and NON-typed pages (it used to be typed-only, so a
+  // non-typed DCM page silently kept whatever plain form template the agent picked).
+  const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  const usesProgressBar = formTpl && /ProgressBar/i.test(formTpl);
   if (typed.length) {
     P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
-    const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
     P.push(`> **Template:** build every per-type form on ${formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template"}${dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : ""}. The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`);
+  } else if (dcmPresent) {
+    P.push(`> **Template — DCM case present:** the form page must ship a stage **progress bar**. Build it on **\`PageWithTabsAndProgressBarTemplate\`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity; hand-adding \`crt.EntityStageProgressBar\` into a plain template's MainContainer is the FALLBACK.${formTpl && !usesProgressBar ? ` ⚠ The selected form template \`${esc(formTpl)}\` has no progress bar — reconsider it against the DCM case (or plan the MainContainer fallback explicitly).` : ""}`);
   }
   // LIST PAGE — always rendered list-page-only, so the Add mini-page mapping can sit RIGHT AFTER it (the mini
   // page is the list's quick-add). The form spec (non-typed) / per-type mappings (typed) come afterwards.
