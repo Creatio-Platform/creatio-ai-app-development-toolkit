@@ -50,7 +50,18 @@ function childPageIssue(c) {
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
-  const bodyOf = (e) => (e.body != null ? String(e.body) : fs.readFileSync(path.resolve(baseDir, e.file), "utf8"));
+  const bodyOf = (e) => {
+    if (e && e.body != null) return String(e.body);
+    // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
+    // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
+    if (!e || typeof e.file !== "string" || !e.file)
+      throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
+    const base = path.resolve(baseDir);
+    const resolved = path.resolve(base, e.file);
+    if (resolved !== base && !resolved.startsWith(base + path.sep))
+      throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
+    return fs.readFileSync(resolved, "utf8");
+  };
   const parse = (list) => (Array.isArray(list) ? list : []).map((e) => parseSchema(bodyOf(e), e.pkg));
   const schemas = parse(manifest.schemas);
   const seedTemplate = parse(manifest.seed);

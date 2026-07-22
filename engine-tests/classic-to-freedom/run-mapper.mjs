@@ -1560,6 +1560,40 @@ check("E3: dynamic-property is labeled by the real field name ('BB'), not a desy
   && !e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && /^diff\[/.test(n.item)),
   () => e3.changeSet.needsDecision.filter((n) => n.kind === "dynamic-property").map((n) => n.item));
 
+/* ---- T3: cover needsDecision kinds the mapper emits but no golden asserted — a regression that stops emitting
+   one (or renames it) would otherwise pass silently: duplicate-binding, visibility-rule, layout-truncated,
+   detail-placement. ---- */
+const dvBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[`
+  + `{operation:"insert",name:"F1",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Amt"}},`
+  + `{operation:"insert",name:"F2",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Amt"}},`
+  + `{operation:"insert",name:"F3",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Vis",visible:{bindTo:"IsShown"}}}]};});`;
+const dv = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: dvBody }] }, { baseDir: FIX });
+check("T3: two classic items on one column → duplicate-binding decision",
+  dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding" && n.item === "Amt"));
+check("T3: a field with a bound (dynamic) 'visible' → visibility-rule decision",
+  dv.changeSet.needsDecision.some((n) => n.kind === "visibility-rule" && n.item === "Vis"));
+// layout-truncated — a container past the MAX_FIELDS_PER_CONTAINER relocation bound (500); generated, not hand-typed.
+let ltFields = "";
+for (let i = 0; i < 502; i++) ltFields += `{operation:"insert",name:"C${i}",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"C${i}"}},`;
+const lt = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ltFields.slice(0, -1)}]};});` }] }, { baseDir: FIX });
+check("T3: a container past the field-count bound → layout-truncated decision (DoS relocation guard)",
+  lt.changeSet.needsDecision.some((n) => n.kind === "layout-truncated"));
+// detail-placement — a detail whose owning tab cannot be resolved (declared in `details`, never placed in a tab).
+const dpCs = mapToFreedom(mergeHierarchy([L("P", { entity: "X",
+  diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })],
+  details: { LooseDetail: { schemaName: "LooseDetail", entitySchemaName: "LooseE" } } })]));
+check("T3: a detail with no resolvable tab → detail-placement decision",
+  dpCs.needsDecision.some((n) => n.kind === "detail-placement" && n.item === "LooseDetail"),
+  () => dpCs.needsDecision.map((n) => `${n.kind}:${n.item}`));
+
+/* ---- E5/T5: a schema entry with neither `body` nor a string `file` gives a CLEAR error (not a cryptic
+   path.resolve(undefined) TypeError), and a `file` that escapes the manifest base dir is rejected (no traversal). ---- */
+const threw = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+check("E5: an entry with neither 'body' nor 'file' throws a clear, named error",
+  /neither an inline 'body' nor a string 'file'/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P" }] }, { baseDir: FIX })) || ""));
+check("E5: a schema 'file' escaping the manifest base dir is rejected (path traversal)",
+  /escapes the manifest base directory/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P", file: "../../../etc/passwd" }] }, { baseDir: FIX })) || ""));
+
 // Major 4 — field ORDER drives row assignment (not Map order); rowSpan occupancy prevents vertical overlap.
 const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "TO", parentName: "Tabs", propertyName: "tabs", isTab: true }),

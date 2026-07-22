@@ -101,7 +101,7 @@ recruitment-stage logic, communications, activities/emails, and an approvals (vi
 ### Main scope
 | Classic | Freedom target | Call |
 | --- | --- | --- |
-| Applicant1Section (list page) | ListPageV3 list page | Rebuild |
+| Applicant1Section (list page) | ListPageV3Template list page | Rebuild |
 | Applicant1Page (form page) | PageWithTabsFreedomTemplate (form) | Rebuild |
 ```
 

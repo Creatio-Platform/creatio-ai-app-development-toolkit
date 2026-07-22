@@ -20,7 +20,7 @@ Match the user's language inside the documents.
 
 | Scope | Required documents |
 | --- | --- |
-| Single section / page / detail / mini page | `plan.md` (with an embedded status checklist) and `worklog.md`. |
+| Single section / page / detail / mini page | `plan.md` and `worklog.md`. (Status is tracked in `worklog.md` / the Plan-vs-Done table — never inside `plan.md`, which is frozen after approval.) |
 | Whole package / application | Full set: `README.md`, `discovery.md`, `plan.md`, `roadmap.md`, `decisions.md`, `worklog.md`. |
 
 Never skip `worklog.md`: it is the persisted memory of what actually happened.
