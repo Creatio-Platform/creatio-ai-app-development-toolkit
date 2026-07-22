@@ -31,6 +31,8 @@ The tools used in this flow:
 - `get-mobile-page-conversion-guide` — **advisory only**: detects the source page type and returns a
   conversion guide. It builds NO body and writes NOTHING to Creatio or disk.
 - `list-page-templates` (schema-type `mobile`), `create-page`, `update-page`, `validate-page` — persistence.
+  Thread `create-page`'s returned `schemaUId` into `update-page` as `target-schema-uid` (see step 7) so the
+  body lands in the created schema instead of a replacing schema in the design package.
 - `create-page-business-rule` — recreate the converted page-level business rules
   (`guide.pageBusinessRules.convertedRules[].rule`) on the mobile page. Only after Gate M.
 - `get-component-info` (schema-type `mobile`) — full mobile component contract when the guide's
@@ -42,9 +44,9 @@ The tools used in this flow:
   probes this state into `guide.sectionRegistration`; use `odata-read` for anything it did not cover.)
 - `odata-update` / `odata-create` — section/workplace registration WRITES (set
   `SysModule.MobileSectionSchemaUId`; add `SysModuleInWorkplace`; create `SysWorkplace`). Only after Gate S.
-- `register-related-page` — for FORM pages: registers the converted mobile form page as the entity's
-  default mobile edit page (`schema-type=mobile`, `is-default=true` → `MobileRelatedPage` add-on; also
-  supports `schema-type=web` and `is-default=false`). Only after Gate S.
+- `create-related-page-addon` — for FORM pages: registers the converted mobile form page as the entity's
+  default mobile edit page (`schema-type=mobile` with a single `is-default` page → `MobileRelatedPage`
+  add-on). The same tool configures the WEB `RelatedPage` add-on (its default, `schema-type=web`). Only after Gate S.
 
 Read `get-guidance` with name `freedom-page-web-to-mobile-conversion` before acting on the guide. This
 is the SAME one-time load the SKILL Load order and Flow step 1 name — its content does not change
@@ -93,6 +95,15 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      `<Entity>_MobileFormPage` / `<Entity>_MobileListPage` (no prefix in the plan — clio applies the
      environment SchemaNamePrefix). The mobile template provides the Scaffold root — never add a
      second Scaffold.
+   - **Capture the `schemaUId` from the `create-page` result and pass it as `target-schema-uid` on EVERY
+     subsequent `update-page` call** (body, `resources`, adaptive diffs — and re-use it for `get-page`).
+     This is REQUIRED: without it, when the chosen package is not the app's design package, `update-page`
+     resolves the design package and writes the body as a REPLACING schema there — leaving the just-created
+     mobile schema EMPTY. The Creatio Mobile app loads that empty schema and crashes, and you end up with two
+     same-named schemas. `create-page` returns `willCreateReplacingInDesignPackage: true` + `designPackageUId`
+     when this split would happen — but pass `target-schema-uid` unconditionally so the body always lands in
+     the one schema `create-page` made. (If the page already exists, get its UId via `list-pages`/`get-page`
+     and pass it the same way.)
    - Build the mobile body yourself (plain JSON: `viewConfigDiff` / `viewModelConfigDiff` /
      `modelConfigDiff`) by iterating `guide.elementMap` — one entry per source element with an explicit
      `operation`. Do NOT re-derive placement from `containerMap` + `componentSuggestions`:
@@ -145,7 +156,7 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        from `guide.modelConfigDiff`. Related/lookup columns keep their `type`; own columns resolve
        automatically and are not declared. Reference only OOTB mobile converters (definitive list forthcoming —
        flag any custom converter for manual review).
-     Apply with `update-page`.
+     Apply with `update-page` (with `target-schema-uid=<create-page schemaUId>`, per the create-page step).
    - Run `validate-page` and resolve findings before treating the page as done. Property fidelity is owned by
      the prebuilt `elementMap[].mobileValues` (paste them verbatim and you keep every mobile-supported
      property); `validate-page` is the backstop — it flags (as errors that `update-page` blocks) an insert
@@ -167,10 +178,10 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      `SysModuleInWorkplace` `{ SysModuleId, SysWorkplaceId, Position }`; to create a new mobile
      workplace first `odata-create` `SysWorkplace` `{ Name, SysApplicationClientTypeId: <Mobile>, Position }`.
    - **Default mobile EDIT page (form pages):** register the converted mobile form page as the object's
-     default mobile card with `register-related-page` (`environment-name`, `package-name`,
-     `entity-schema-name`, `page-schema-name`, `schema-type=mobile`, `is-default=true`). It writes the
-     `MobileRelatedPage` add-on into the page's package (must be editable). Idempotent — re-running
-     points the default at the given page.
+     default mobile card with `create-related-page-addon` (`environment-name`, `package-name`,
+     `entity-schema-name`, `schema-type=mobile`, and `pages` = a single entry
+     `{ page-schema-name, is-default: true }`). It writes the `MobileRelatedPage` add-on into the package
+     (must be editable) and REPLACES the object's mobile related-page configuration with that default page.
 7c. **Recreate page-level business rules** — only after Gate M, and only if
    `guide.pageBusinessRules.convertedRules` is non-empty. The guide already applied the conversion
    logic (page rules carry only element actions — hide / show / make-editable / read-only / required /
@@ -240,7 +251,7 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
 - **Section registration intent** (from `guide.sectionRegistration`) — whether the page is a section
   and whether it would be made available in mobile, and in which workplace (existing mobile one, a new
   one, or skip); for a FORM page, whether to register it as the entity's default mobile edit page
-  (via `register-related-page`). The actual decisions are taken at **Gate S**. If
+  (via `create-related-page-addon` with `schema-type=mobile`). The actual decisions are taken at **Gate S**. If
   `sectionRegistration.probeOk` is false, say the environment could not be queried and registration
   must be verified manually.
 - **Adaptive layout (per-screen)** — when `guide.adaptiveLayout` is present, state it in plain words:
@@ -252,7 +263,7 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests: supported ones are baked
   into `mobileValues` (`guide.requestConversions`); components whose request the mobile app does not support are
   DROPPED (elementMap `drop`) — list the removed action components. Plus mobile manifest /
-  wizard registration. (The default mobile edit page is now automated via `register-related-page`.)
+  wizard registration. (The default mobile edit page is now automated via `create-related-page-addon` with `schema-type=mobile`.)
 
 Keep it skimmable. **On request (View details / Adjust)** — only if the developer asks to see more or
 to change something — surface the technical detail: the full component mapping table, the proposed
@@ -270,7 +281,7 @@ After `validate-page`, deliver a report:
   flagged for manual review.
 - **Section registration outcome:** whether `SysModule.MobileSectionSchemaUId` was set (and on which
   section), which workplace the section was added to (or a new one created), whether the default mobile
-  edit page was registered (`MobileRelatedPage` via `register-related-page`) for a form page, or
+  edit page was registered (`MobileRelatedPage` via `create-related-page-addon`) for a form page, or
   that registration was skipped/declined.
 - **Page-level business rules:** which `convertedRules` were recreated on the mobile page
   (`create-page-business-rule`) and which `droppedRules` did not convert.

@@ -1,6 +1,6 @@
 ---
 name: creatio-mobile-page-conversion
-description: Convert a Creatio Freedom UI WEB page into a Freedom UI MOBILE page for the Creatio Mobile app. Apply proactively — even if not explicitly selected and even if the user does not say "convert" — whenever the user wants an existing web page made available on mobile: convert/port a web page to mobile, build a mobile list or form page from an existing web page, or register a converted page as a mobile section/workplace. This skill drives the GATED conversion flow (get-mobile-page-conversion-guide → plain-language plan → Gate M approval → build the mobile body → Gate S section registration) so that nothing is written to Creatio until the developer approves. Keywords: convert to mobile, web to mobile, page to mobile, mobile page, mobile list page, mobile form page, Freedom UI mobile, MobileFormPage, MobileListPage, register mobile section, mobile workplace, get-mobile-page-conversion-guide, Leads_ListPage to mobile.
+description: 'Convert a Creatio Freedom UI WEB page into a Freedom UI MOBILE page for the Creatio Mobile app. Apply proactively — even if not explicitly selected and even if the user does not say "convert" — whenever the user wants an existing web page made available on mobile: convert/port a web page to mobile, build a mobile list or form page from an existing web page, or register a converted page as a mobile section/workplace. This skill drives the GATED conversion flow (get-mobile-page-conversion-guide → plain-language plan → Gate M approval → build the mobile body → Gate S section registration) so that nothing is written to Creatio until the developer approves. Keywords: convert to mobile, web to mobile, page to mobile, mobile page, mobile list page, mobile form page, Freedom UI mobile, MobileFormPage, MobileListPage, register mobile section, mobile workplace, get-mobile-page-conversion-guide, Leads_ListPage to mobile.'
 ---
 
 # Creatio mobile page conversion
@@ -27,8 +27,9 @@ The Web→Mobile converter is an **experimental clio feature, off by default**. 
 surface — the `get-mobile-page-conversion-guide` tool and the `get-guidance` article
 `freedom-page-web-to-mobile-conversion` — is gated behind the feature flag **`mobile-page-converter`**
 and is **not registered** until that flag is enabled. (The general page tools `create-page` /
-`update-page` / `validate-page` and the universal `register-related-page` are always available and are
-NOT gated — but on their own they are not enough to run this flow correctly.)
+`update-page` / `validate-page` and `create-related-page-addon` (web `RelatedPage` + mobile
+`MobileRelatedPage` via `schema-type=mobile`) are always available and are NOT gated — but on their own
+they are not enough to run this flow correctly.)
 
 Before the Load order below, verify the converter is available: list the server tools (or call
 `get-tool-contract`) and check for `get-mobile-page-conversion-guide`.
@@ -65,6 +66,11 @@ Before the Load order below, verify the converter is available: list the server 
    mobile page are the same page-authoring tool calls the toolkit's Core Rules gate behind
    `creatio-ui-guidelines` — the mechanical `mobileValues` paste does not exempt them.
 5. Resolve every clio MCP tool contract through `get-tool-contract`; do not hardcode payloads.
+6. **One-schema rule:** capture the `schemaUId` returned by `create-page` and pass it as
+   `target-schema-uid` on every subsequent `update-page`. Otherwise, when the chosen package is not the
+   app's design package, `update-page` writes a replacing schema in the design package and leaves the
+   created mobile schema empty — the Mobile app then loads the empty schema and crashes. Details in the
+   playbook's Flow step 7.
 
 ## Gates are MANDATORY — this is the point of this skill
 
@@ -75,7 +81,7 @@ request collapse this into a single unattended pass. The invariants:
 - **Gate M** — before ANY write (`create-page` / `update-page` / `validate-page` /
   `create-page-business-rule`).
 - **Gate S** — before ANY section/workplace registration (`odata-update` / `odata-create` /
-  `register-related-page`).
+  `create-related-page-addon` with `schema-type=mobile`).
 - **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
   and END THE TURN without writing — never self-approve.
 
