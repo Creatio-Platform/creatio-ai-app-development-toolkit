@@ -229,6 +229,31 @@ check("return object still extracted (entity = Evil)", evil.entitySchemaName ===
 check("diff field extracted without executing (Amount)", evil.diff.length === 1 && evil.diff[0].bindTo === "Amount");
 check("enum resolved statically (itemType GRID_LAYOUT = 0)", evil.diff[0].itemType === 0);
 
+/* ---- enum idioms: `this.Terrasoft.*` AND the `terrasoft` define-param resolve like the bare global ---- */
+// The real ViewModel bodies ALWAYS receive Terrasoft as a define() param and reference enums via BOTH `this.Terrasoft.…`
+// and the bare param — treating the param as an opaque proxy dropped every enum access, silently degrading a
+// captioned group (CONTROL_GROUP=15) to a plain container. Pin both forms + the ContentType.LOOKUP(5) path.
+console.log("\n===== enum idioms: this.Terrasoft / terrasoft-param / ContentType =====");
+const enumSrc = [
+  'define("Enum", ["terrasoft"], function(Terrasoft) {',
+  '  return { entitySchemaName: "Enum", diff: [',
+  '    { operation: "insert", name: "gThis", values: { itemType: this.Terrasoft.ViewItemType.CONTROL_GROUP } },',
+  '    { operation: "insert", name: "gParam", values: { itemType: Terrasoft.ViewItemType.CONTROL_GROUP } },',
+  '    { operation: "insert", name: "gGrid", values: { itemType: this.Terrasoft.ViewItemType.GRID_LAYOUT } },',
+  '    { operation: "insert", name: "fLookThis", values: { bindTo: "Acc", contentType: this.Terrasoft.ContentType.LOOKUP } },',
+  '    { operation: "insert", name: "fLookParam", values: { bindTo: "Own", contentType: Terrasoft.ContentType.LOOKUP } },',
+  '    { operation: "insert", name: "fEnum", values: { bindTo: "St", contentType: this.Terrasoft.ContentType.ENUM } } ] };',
+  '});',
+].join("\n");
+const en = parseSchema(enumSrc, "Enum");
+const byName = Object.fromEntries(en.diff.map((d) => [d.name, d]));
+check("this.Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 (was null → degraded to plain container)", byName.gThis.itemType === 15);
+check("bare terrasoft-param Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 (param no longer an opaque proxy)", byName.gParam.itemType === 15);
+check("this.Terrasoft.ViewItemType.GRID_LAYOUT resolves to 0", byName.gGrid.itemType === 0);
+check("this.Terrasoft.ContentType.LOOKUP resolves to 5 (lookup control hint)", byName.fLookThis.contentType === 5);
+check("bare terrasoft-param Terrasoft.ContentType.LOOKUP resolves to 5", byName.fLookParam.contentType === 5);
+check("ContentType.ENUM stays null (hint-only; not pinned to a guessed number that could mis-equal LOOKUP=5)", byName.fEnum.contentType === null);
+
 /* ---- extractFnBody: a brace inside a string/comment must not truncate the method scan (review #1) ---- */
 console.log("\n===== extractFnBody string safety + move-order fidelity =====");
 const braceBody = 'define("X", [], function() { return { entitySchemaName: "X", diff: [], getActions: function() { var s = "a } b { c"; return [ { "Tag": "runEscalation", "Click": "navigateToEscalation" } ]; } }; });';

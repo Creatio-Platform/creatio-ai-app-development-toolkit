@@ -132,15 +132,23 @@ const AST_FN = Symbol("fn"); // placeholder for function values (methods/attribu
 // (an opaque value → further access is null). TAG_ENUMS[state] marks a TERMINAL state whose next key indexes a
 // concrete enum table (→ the resolved number, or null when the key is unknown).
 const TAG_TRANSITIONS = {
-  this: { BusinessRuleModule: "brm" },
+  // `this.Terrasoft.*` is the DOMINANT enum idiom in real ViewModel bodies (a schema references the framework
+  // namespace off `this`, not only the bare `Terrasoft` global) — route it into the `terrasoft` state so it
+  // resolves identically to the bare form. Without this, `this.Terrasoft.ViewItemType.CONTROL_GROUP` collapsed
+  // to null and a captioned group silently degraded to a plain container (clean-but-wrong page).
+  this: { BusinessRuleModule: "brm", Terrasoft: "terrasoft" },
   brm: { enums: "brm.enums" },
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
-  terrasoft: { ViewItemType: "t:vit", controls: "terrasoft.controls", core: "terrasoft.core" },
+  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", controls: "terrasoft.controls", core: "terrasoft.core" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
-  "terrasoft.core.enums": { ViewItemType: "t:vit" },
+  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct" },
 };
-const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY };
+// "t:ct" indexes ContentType. Only LOOKUP (5) drives behavior (the mapper renders it via a picker); every other
+// ContentType key is a display hint the mapper does not switch on, so it intentionally stays null (unknown-key →
+// null, exactly as before) rather than being pinned to a guessed numeric — resolving LOOKUP is the fix, and no
+// other value can silently equal 5 and mis-flag a scalar as a lookup.
+const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY, "t:ct": CONTENT_TYPE };
 
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
@@ -172,7 +180,7 @@ function resolveMemberValue(node, scope) {
   let tag;
   if (cur?.type === "ThisExpression") tag = "this";
   else if (cur?.type === "Identifier") {
-    if (scope.has(cur.name)) tag = scope.get(cur.name).kind === "brm" ? "brm" : "proxy"; // param shadows global
+    if (scope.has(cur.name)) { const k = scope.get(cur.name).kind; tag = k === "brm" ? "brm" : k === "terrasoft" ? "terrasoft" : "proxy"; } // param shadows global; the AMD `terrasoft` dep param resolves like the global
     else if (cur.name === "Terrasoft") tag = "terrasoft";
     else tag = "proxy";
   } else return null;
@@ -264,7 +272,14 @@ function findDefineCall(ast) {
 function buildAstScope(factory, amdDeps, src) {
   const scope = new Map();
   (factory.params || []).forEach((p, i) => {
-    if (p.type === "Identifier") scope.set(p.name, amdDeps[i] === "BusinessRuleModule" ? { kind: "brm" } : { kind: "proxy" });
+    // Bind the AMD dependency to a resolver STATE, not just a proxy: the `terrasoft` dep (param usually named
+    // `Terrasoft`) must resolve its `.ViewItemType`/`.ContentType` enums exactly like the bare global — the real
+    // fixtures ALWAYS receive Terrasoft as a define() param, so treating it as an opaque proxy dropped every
+    // enum access (`Terrasoft.ViewItemType.CONTROL_GROUP` → null → group degraded to a plain container).
+    if (p.type === "Identifier") scope.set(p.name,
+      amdDeps[i] === "BusinessRuleModule" ? { kind: "brm" }
+      : amdDeps[i] === "terrasoft" ? { kind: "terrasoft" }
+      : { kind: "proxy" });
   });
   // Top-level consts/vars in the factory body so BOTH `var x = "Foo"; return { name: x }` and
   // `var d = [ … ]; return { diff: d }` resolve. The AST parser (which replaced the vm) lost the array/object

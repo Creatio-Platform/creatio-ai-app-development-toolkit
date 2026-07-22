@@ -317,7 +317,16 @@ export function renderDesignSpec(result, opts = {}) {
   // NOT re-listed here — that duplication is exactly the noise the plan structure was meant to remove.
   const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${strip(d.reason)}`);
+  // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
+  // (container/field names, captions, bound hints — e.g. `container '${parent}' holds …`), all attacker-chosen
+  // on a hostile stand. `strip` alone collapses newlines but leaves `<`/`>`/backtick/`](` live, so a container
+  // named `<img onerror=…>` or `[x](javascript:…)` would inject into the plan the agent presents verbatim.
+  // `esc` also neutralizes those. Whole-string `esc` (rather than escaping each stand token at its mapper sink)
+  // is deliberate: it is omission-proof — no interpolated token can be missed — and the engine-authored parts of
+  // every `reason:` are plain prose (audited: none contain `<`/`>`/backtick/`|`/`](` as literal output), so `esc`
+  // has nothing engine-authored to mangle. Keep new reasons that way (put any code identifier or angle-bracketed
+  // token in `item`, which is likewise `esc`d) so this stays true.
+  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
   // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;

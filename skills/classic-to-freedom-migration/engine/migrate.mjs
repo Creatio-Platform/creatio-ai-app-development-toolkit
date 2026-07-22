@@ -102,19 +102,30 @@ export function runMigration(manifest, opts = {}) {
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
   });
   const parseErrors = [
-    ...[...schemas, ...seedTemplate, ...sectionSchemas].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
+    ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
     // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
     // page silently resolve to null while the plan stays green. Its error was captured per-detail above.
     ...Object.entries(detailSchemas).filter(([, d]) => d.error).map(([name, d]) => ({ pkg: `detail:${name}`, error: d.error })),
   ];
+  // Section schemas are NOT part of the effective page — `mergeHierarchy` never receives them; only their
+  // regex-derived list-page signals (addRecordMiniPage / sectionActions / listColumns / processLaunch) are used,
+  // and those are extracted from the source text independently of AST parse success. So a section body that
+  // fails to parse (or builds its `diff` via a dynamic construct) must NOT hard-block the form-page plan — that
+  // was a spurious gate BLOCK with a misleading "effective page may be INCOMPLETE" reason about a diff the page
+  // never consumes. Keep section parse errors/diagnostics as ADVISORY (surfaced, not gating).
+  const sectionParseErrors = sectionSchemas.filter((l) => l.error).map((l) => ({ pkg: l.pkg, role: "section", error: l.error }));
   // fail-loud parse diagnostics: constructs the AST parser could not statically resolve (dynamic call /
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
   const parseDiagnostics = [
-    ...[...schemas, ...seedTemplate, ...sectionSchemas].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
+    ...[...schemas, ...seedTemplate].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
     // Major 4 — detail-schema diagnostics join the pool tagged `detail:<name>`; a structural one (an unresolved
     // detail `diff`) then blocks the gate just like a main-schema one, instead of silently emptying its columns.
     ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
+    // Section diagnostics are tagged `role:"section"` and are EXCLUDED from the structural gate below (their
+    // `diff` is never merged) — advisory only, so they surface without hard-blocking a valid form-page plan.
+    ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),
+    ...sectionParseErrors.map((e) => ({ pkg: e.pkg, role: "section", path: "", kind: `section parse error: ${e.error}` })),
   ];
   // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
   // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
@@ -292,7 +303,8 @@ export function runMigration(manifest, opts = {}) {
       if (seg[2] === "values") return IDENTITY_FIELDS.has(seg[3]);  // `diff.<n>.values.<field>`: identity → block; caption/tip/hint/visible → advisory
       return IDENTITY_FIELDS.has(seg[2]);
     };
-    const structDiag = parseDiagnostics.filter((d) => isStructural(d.path));
+    // role:"section" diagnostics never gate — the section `diff` is not part of the effective page (see above).
+    const structDiag = parseDiagnostics.filter((d) => d.role !== "section" && isStructural(d.path));
     if (structDiag.length) {
       const structFields = [...new Set(structDiag.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
       reasons.push(`parse could not statically resolve structural field(s): ${structFields} — the effective page may be INCOMPLETE (diff/details built via an unresolved variable or call). Fix the body/seed so it resolves; do NOT build from a possibly-empty page`);

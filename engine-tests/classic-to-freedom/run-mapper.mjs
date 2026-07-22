@@ -210,6 +210,23 @@ check("C5: field routes into the GROUP's grid (nesting preserved, not flattened 
 check("C5: synthesized group caption flagged (group-caption)",
   c5cs.needsDecision.some(n => n.kind === "group-caption" && n.item === "Grp1"));
 
+/* ---- #4: a CONTROL_GROUP declared via `this.Terrasoft.ViewItemType.*` (the dominant real-body idiom, and the
+   bare `terrasoft` define-param form) must resolve to 15 end-to-end, so ensureGroup builds a crt.ExpansionPanel.
+   Before the fix the enum collapsed to null and the group silently degraded to a plain crt.GridContainer. The
+   existing C5 golden above uses a NUMERIC itemType (via makeOp), so it never exercised the resolver — this one
+   parses a real body so a regression in the `this.Terrasoft`/param transition is caught. ---- */
+const symGrpBody = 'define("Client",["terrasoft"],function(Terrasoft){return{entitySchemaName:"X",diff:[' +
+  '{operation:"insert",name:"MyTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP,isTab:true}},' +
+  '{operation:"insert",name:"Grp1",parentName:"MyTab",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP}},' +
+  '{operation:"insert",name:"GF1",parentName:"Grp1",propertyName:"items",values:{bindTo:"ColA"}},' +
+  '{operation:"insert",name:"GF2",parentName:"Grp1",propertyName:"items",values:{bindTo:"ColB"}}]};});';
+const symGrpCs = mapToFreedom(mergeHierarchy([parseSchema(symGrpBody, "Client")]));
+check("#4: a `this.Terrasoft.ViewItemType.CONTROL_GROUP` group builds as crt.ExpansionPanel (not a degraded plain container)",
+  symGrpCs.viewConfigDiff.some(o => o.name === "Grp1" && o.values?.type === "crt.ExpansionPanel"),
+  () => JSON.stringify(symGrpCs.viewConfigDiff.map(o => ({ name: o.name, type: o.values?.type }))));
+check("#4: fields nest inside the resolved group's grid (grouping preserved, not flattened to the tab)",
+  symGrpCs.viewConfigDiff.some(o => o.name === "ColA" && o.parentName === "Grp1Grid"));
+
 /* ---- C4: a rule targeting a field not inserted in the ChangeSet is flagged (dangling) ---- */
 const c4seed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }),
   di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" })] });
@@ -632,6 +649,28 @@ check("mini-page GATE: a named mini page without miniPageSchemas → structure I
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
     return r.structure.complete === false && r.structure.issues.some((i) => /NOT folded/.test(i)); })());
+
+/* ---- #6: a SECTION body whose `diff` is built via a dynamic construct must NOT hard-block the form-page plan.
+   The section `diff` is never merged into the effective page (only its regex-derived list signals are used), so
+   a section structural diagnostic gating the whole plan is a spurious BLOCK with a misleading reason. It is now
+   ADVISORY (role:"section"), excluded from the gate — while the SAME construct in a MAIN schema still blocks. ---- */
+const secDyn = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  section: [{ pkg: "XSec", body: `define("XSection",[],function(){return{entitySchemaName:"X",diff:buildDiff()};});` }] }, { baseDir: FIX });
+check("#6: a section with a dynamically-built diff does NOT block the gate (section diff is not part of the effective page)",
+  secDyn.gate.blocked === false, () => JSON.stringify(secDyn.gate.reasons));
+check("#6: the section diagnostic is still surfaced as advisory (role:\"section\"), not dropped",
+  (secDyn.parseDiagnostics || []).some((d) => d.role === "section" && d.path === "diff"));
+check("#6: the SAME dynamic diff in a MAIN schema STILL blocks (structural gate intact for the effective page)",
+  runMigration({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:buildDiff()};});` }] }, { baseDir: FIX }).gate.blocked === true);
+// a section body that fails to PARSE outright is likewise advisory (its list signals come from regex on source).
+const secBad = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  section: [{ pkg: "XSec", body: `define("XSection",[],function(){ this is not valid js @@@ ` }] }, { baseDir: FIX });
+check("#6: a section body that fails to parse is advisory (role:\"section\"), never a blocking parseError",
+  secBad.gate.reasons.every((r) => !/parseErrors/.test(r)) && secBad.parseErrors.every((e) => !/section/i.test(e.pkg || ""))
+  && (secBad.parseDiagnostics || []).some((d) => d.role === "section" && /section parse error/.test(d.kind || "")));
 
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
 const skelSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
@@ -1367,6 +1406,27 @@ const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMet
 check("sanitize: entity with \\n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)",
   !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.designSpec) && !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.plan),
   () => (entRun.designSpec + "\n" + entRun.plan).split("\n").filter((l) => /OWNED/.test(l)));
+
+// #5 — stand-derived tokens reach `needsDecision.reason` too (container/field names, captions, bound hints),
+// which the design spec renders verbatim in the ⚠ Confirm list. That sink used `strip` (kills newlines but
+// leaves `<`/`>`/backtick/`](` live), so a hostile bindTo/container name could inject an HTML tag or Markdown
+// link into the plan the agent acts on. It is now `esc`d like `item`. Drive it via a virtual-field reason
+// (a bindTo with no matching entity column embeds the raw bindTo in the reason).
+const reasonPayload = "<img src=x onerror=alert(1)> ](javascript:alert(1))";
+const reasonRun = runMigration({ entity: "X", seed: CLEAN_SEED, entityColumns: { Real: { type: "Text" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"V",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:${JSON.stringify(reasonPayload)}}}]};});` }],
+}, { baseDir: FIX });
+const confirmLines = reasonRun.designSpec.split("\n").filter((l) => /virtual-field/.test(l));
+check("#5: a virtual-field reason IS emitted embedding the stand-derived bindTo (path exercised)",
+  reasonRun.changeSet.needsDecision.some((n) => n.kind === "virtual-field") && confirmLines.length > 0);
+check("#5: the injected HTML tag + Markdown link inside the reason are NEUTRALIZED in the ⚠ Confirm list (no live <img>/link)",
+  confirmLines.length > 0 && confirmLines.every((l) => !/<img/.test(l) && !/\]\(javascript/.test(l))
+  && /&lt;img/.test(reasonRun.designSpec) && /\]\\\(javascript/.test(reasonRun.designSpec),
+  () => confirmLines);
+// guard: `esc` (not `strip`) on reason must NOT mangle engine-authored prose — the reason still reads normally.
+check("#5: engine-authored reason prose is preserved (no stray HTML entities from esc over plain text)",
+  reasonRun.changeSet.needsDecision.some((n) => n.kind === "virtual-field" && /is not a real column on the entity/.test(n.reason))
+  && !/&lt;X&gt;/.test(reasonRun.designSpec));
 
 // determinism (#11) — the same manifest must produce byte-identical output on repeat runs (no dependence on
 // Map/object iteration nondeterminism). Compare full JSON of two independent runs of a rich manifest.
