@@ -90,11 +90,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     quickFilters: (() => {
       const body = extractFnBody(src, "initFixedFiltersConfig") || extractFnBody(src, "getFixedFiltersConfig");
       if (!body) return [];
-      const out = [], re = /name\s*:\s*["']([^"']+)["']([\s\S]{0,400}?)columnName\s*:\s*["']([^"']+)["']/g;
-      let mt;
-      while ((mt = re.exec(body))) {
-        const dvt = /dataValueType\s*:\s*(?:Terrasoft\.)?DataValueType\.(\w+)/.exec(mt[2]);
-        out.push({ name: mt[1], column: mt[3], type: dvt ? dvt[1] : null });
+      // Extract each filter object as a UNIT (brace-matched), then read name/columnName/dataValueType
+      // INDEPENDENTLY within it. The old single regex demanded `name` THEN `columnName` in order within 400
+      // chars, which (a) dropped a column-less filter and stole its `name` into the next entry's gap, and (b)
+      // failed on `{ columnName, name }` order. Per-entry parsing makes it order-independent and yields
+      // column:null for a column-less filter (the documented contract) instead of borrowing a neighbour's name.
+      const out = [];
+      for (const obj of fixedFilterObjects(body)) {
+        const name = /name\s*:\s*["']([^"']+)["']/.exec(obj);
+        if (!name) continue;
+        const col = /columnName\s*:\s*["']([^"']+)["']/.exec(obj);
+        // accept the dominant `this.Terrasoft.DataValueType.*`, the bare `Terrasoft.*`, and unqualified forms.
+        const dvt = /dataValueType\s*:\s*(?:this\.)?(?:Terrasoft\.)?DataValueType\.(\w+)/.exec(obj);
+        out.push({ name: name[1], column: col ? col[1] : null, type: dvt ? dvt[1] : null });
       }
       return out;
     })(),
@@ -424,6 +432,27 @@ function extractFnBody(src, name) {
     return src.slice(open + 1); // unbalanced source — return the remainder defensively
   }
   return "";
+}
+
+// The source text of each top-level entry object inside the first `filters: [ … ]` array of `body` (a
+// fixed-filters method body). Entry boundaries are tracked by BRACE depth (so a nested `caption:{…}` /
+// `startDate:{}` doesn't split an entry) and the array end by BRACKET depth; strings are skipped so a brace
+// inside a literal is never counted. Lets quickFilters read each filter's fields independently (order-safe).
+function fixedFilterObjects(body) {
+  const m = /filters\s*:\s*\[/.exec(body);
+  if (!m) return [];
+  const objs = [];
+  let i = m.index + m[0].length, bracket = 1, brace = 0, start = -1;
+  while (i < body.length && bracket > 0) {
+    const c = body[i];
+    if (c === '"' || c === "'" || c === "`") { const q = c; i++; while (i < body.length && body[i] !== q) i += body[i] === "\\" ? 2 : 1; i++; continue; }
+    if (c === "[") bracket++;
+    else if (c === "]") bracket--;
+    else if (c === "{") { if (brace === 0) start = i; brace++; }
+    else if (c === "}") { if (--brace === 0 && start >= 0) { objs.push(body.slice(start, i + 1)); start = -1; } }
+    i++;
+  }
+  return objs;
 }
 
 const isNum = (v) => typeof v === "number";

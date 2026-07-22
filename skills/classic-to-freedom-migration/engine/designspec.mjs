@@ -86,7 +86,7 @@ const demoteHeadings = (md, shift = 2) => String(md).replace(/^(#{2,6}) /gm, (_m
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const section = result.section || null;
-  const entity = strip(result.entity || "?"); // stand-derived → collapse to one line so it can't inject a heading (finding 6)
+  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize `<`/`>`/backtick/`](` so a hostile entitySchemaName can't inject into the title headings it feeds
   const vcd = cs.viewConfigDiff || [];
   const regionOf = regionResolver(vcd, cs.resources || {}); // pass the resource map so a resolved tab caption shows its text, not the $Resources key
   const tabRegion = (tab) => regionOf(tab);
@@ -349,7 +349,7 @@ export function renderDesignSpec(result, opts = {}) {
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
-  const entity = strip(result.entity || "?"); // stand-derived → one line (finding 6): can't inject a heading/row
+  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
   const fields = (cs.viewConfigDiff || []).filter(isField);
   const childs = result.childPages || [];
   // planMeta (manifest.planMeta) supplies the few AGENT decisions so the engine can render a COMPLETE plan and
@@ -361,7 +361,7 @@ export function renderPlan(result, opts = {}) {
   // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
   const P = [];
-  P.push(`## ${strip(entity)} — Classic → Freedom UI`, "");
+  P.push(`## ${entity} — Classic → Freedom UI`, ""); // entity already esc'd above (esc ⊇ strip)
   // ⛔ HARD GATE banner at the VERY TOP of the plan (RV1/RV2) — first thing the agent (and the user it pastes
   // to) sees, above Overview. A blocked plan is NOT an approvable plan: fix the signals and re-run `--plan`.
   const gate = result.gate || { blocked: false, reasons: [] };

@@ -1406,6 +1406,14 @@ const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMet
 check("sanitize: entity with \\n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)",
   !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.designSpec) && !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.plan),
   () => (entRun.designSpec + "\n" + entRun.plan).split("\n").filter((l) => /OWNED/.test(l)));
+// entity is `esc`d (not `strip`-only): an inline HTML tag / Markdown link in the entitySchemaName must be
+// neutralized in the title headings it feeds (spec `## … — Design spec`, `### … form page`; plan `## … —`).
+const entHtml = runMigration({ entity: "<img src=x onerror=alert(1)> ](javascript:alert(1))", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("sanitize: an entity with an inline HTML tag / Markdown link is neutralized in the spec AND plan headings (not just newline-safe)",
+  !/<img/.test(entHtml.designSpec) && !/<img/.test(entHtml.plan) && /&lt;img/.test(entHtml.designSpec)
+  && !/\]\(javascript/.test(entHtml.designSpec) && !/\]\(javascript/.test(entHtml.plan),
+  () => (entHtml.designSpec + "\n" + entHtml.plan).split("\n").filter((l) => /img|javascript/.test(l)));
 
 // #5 — stand-derived tokens reach `needsDecision.reason` too (container/field names, captions, bound hints),
 // which the design spec renders verbatim in the ⚠ Confirm list. That sink used `strip` (kills newlines but
@@ -1648,6 +1656,19 @@ check("section quick filters: initFixedFiltersConfig → each filter's {name, co
   && docSecParsed.quickFilters.some((f) => f.name === "PeriodFilter" && f.column === "Date" && f.type === "DATE")
   && docSecParsed.quickFilters.some((f) => f.name === "Owner" && f.column === "Owner" && f.type === "LOOKUP"),
   () => docSecParsed.quickFilters);
+// per-entry extraction (not a single ordered name→columnName regex): a column-less filter yields column:null
+// WITHOUT stealing the next entry's name, reversed `{columnName, name}` order still pairs, and the dominant
+// `this.Terrasoft.DataValueType.*` idiom resolves the type.
+const qfMk = (filters) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{initFixedFiltersConfig:function(){var c={entitySchema:this.entitySchema,filters:[${filters}]};this.set("F",c);}}};});`;
+const qfEdge = parseSchema(qfMk(
+  `{name:"Period",caption:this.get("X"),dataValueType:this.Terrasoft.DataValueType.DATE,startDate:{},dueDate:{}},`
+  + `{columnName:"Owner",dataValueType:Terrasoft.DataValueType.LOOKUP,name:"Owner"}`), "XSection").quickFilters;
+check("section quick filters: a column-less filter yields column:null and does NOT steal the next entry's name",
+  qfEdge.length === 2 && qfEdge[0].name === "Period" && qfEdge[0].column === null && qfEdge[0].type === "DATE",
+  () => qfEdge);
+check("section quick filters: reversed `{columnName, name}` order still pairs (order-independent per-entry parse)",
+  qfEdge.some((f) => f.name === "Owner" && f.column === "Owner" && f.type === "LOOKUP"),
+  () => qfEdge);
 check("section actions: standard getButtonMenuItem/\"Click\".bindTo shape is caught (createRegistry), callParent excluded",
   docSecParsed.sectionActions.includes("createRegistry") && !docSecParsed.sectionActions.includes("callParent"),
   () => docSecParsed.sectionActions);
