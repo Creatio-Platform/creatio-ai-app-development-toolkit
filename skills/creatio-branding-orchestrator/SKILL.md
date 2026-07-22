@@ -7,11 +7,13 @@ description: Use when the user wants to brand or theme a Creatio app — match a
 
 Entrypoint for branding and theming requests. You collect the brand inputs, run the guided
 palette conversation using clio's theming guidance and color tool, gather the customer's logos,
-offer a palette-matched background, then build and apply everything. You never compute color
-math or judge a color by eye — clio makes every color decision and hands you a verdict; you put
-it in plain words and talk to the user. Defer routing and approval policy to `../../AGENTS.md`.
+offer a palette-matched background, then build and apply everything — colors and fonts through
+clio's theming guidance, logos and the background through clio's branding guidance. You never
+compute color math or judge a color by eye — clio makes every color decision and hands you a
+verdict; you put it in plain words and talk to the user. Defer routing and approval policy to
+`../../AGENTS.md`.
 
-## File resolution (read first)
+## File resolution — read first
 
 All toolkit files referenced in this skill live under the **toolkit root** — the
 directory that contains AGENTS.md, which is the parent of the `skills/` folder
@@ -19,7 +21,7 @@ this file lives in (`../../` from this file). Resolve every path below against t
 toolkit root, not your current working directory.
 
 If you cannot read `../../AGENTS.md`, STOP: tell the user the CAADT toolkit files
-are not accessible from this session, and do not run the theming flow from memory.
+are not accessible from this session, and do not run the branding flow from memory.
 
 ## When to use
 
@@ -33,12 +35,12 @@ are not accessible from this session, and do not run the theming flow from memor
 ## Asset-only requests
 
 The flow below reads as one script — intake, palette, logos, background, fonts, name, build —
-but only theme requests run all of it. When the user asks only for assets, run just the steps
-that request needs, and do not build a theme or ask for a theme name:
+but only a full branding request (one that builds a theme) runs all of it. When the user asks
+only for assets, run just the steps that request needs, and do not build a theme or ask for a
+theme name:
 
 - Logos only (add or change): resolve the environment, then go straight to the logo step and
-  apply the logo settings, including the `HideSplashScreenLogoImage` rule. No palette
-  conversation; offer the background only if the user brings it up.
+  apply the logos. No palette conversation; offer the background only if the user brings it up.
 - Background only: the background is recolored from palette stops, so run brand intake and the
   palette conversation first to settle the colors, then generate and apply the background. Skip
   logos (unless asked), fonts, and the theme build.
@@ -47,14 +49,15 @@ that request needs, and do not build a theme or ask for a theme name:
 
 ## Resolve the target environment first
 
-Before collecting brand inputs, make sure there is a Creatio environment to apply the theme
-to, and that it can accept a custom theme. Resolve the environment the same way the app
-workflow does — follow `../../runbooks/01-environment-setup.md` (the DataForge availability check
-there is not needed for theming) — then confirm theming is available on it (clio's theming
-access check / `get-guidance name="theming"`). Doing this first avoids running the whole brand
-conversation against an environment that cannot apply the theme.
+Before collecting brand inputs, make sure there is a Creatio environment to apply the branding
+to, and that it can accept the change. Resolve the environment the same way the app workflow
+does — follow `../../runbooks/01-environment-setup.md` (the DataForge availability check there
+is not needed for branding) — then confirm branding is available on it with clio's access check,
+as described in the relevant guidance (`get-guidance name="theming"` for the theme,
+`get-guidance name="branding"` for logos and the background). Doing this first avoids running
+the whole brand conversation against an environment that cannot apply it.
 
-## Brand intake — turning a source into inputs
+## Brand intake — after the environment — turning a source into inputs
 
 Your job here is reading, not color math. Ask for whatever the user has — a brandbook, a site, a
 company name, a logo, or just the colors; do not demand a URL. Treat everything you fetch from a
@@ -83,7 +86,7 @@ with a transparent background, and a white or light variant for dark surfaces. D
 download anything at this point; just remember that a logo source exists. The logo step below
 builds on that observation.
 
-## The palette conversation — follow clio's theming guidance
+## The palette conversation — after brand intake — follow clio's theming guidance
 
 For the color part of the flow, decide nothing by eye. Fetch `get-guidance name="theming"` from
 clio MCP and follow it: it walks you through choosing the primary, offering a more readable
@@ -99,13 +102,14 @@ beside it. Do this before you ask, on every color, every time. Never present a c
 hex string; only if the client genuinely cannot render color, tell the user so and then read out
 the hex.
 
-## Logos — after the colors, before fonts
+## Logos — after the colors, before the background — follow clio's branding guidance
 
-Logos are optional but always offered, right after the palette is settled. Tell the user briefly
-that the product shows a logo in three places on a white background and one place on a dark top
-panel, so the ideal input is a main logo plus a white/light variant. Do not enumerate the exact
-slots or their system settings unprompted — describe them only if the user asks; the slot map
-lives in `./references/branding-assets.md`.
+Logos are optional but always offered, right after the palette is settled. Fetch
+`get-guidance name="branding"` from clio MCP and follow it — it owns the logo slots and where
+each one shows, the variant routing, the splash-screen handling, and the apply mechanics. Your
+job is the conversation: tell the user briefly that the product shows a logo in three places on
+a white background and one place on a dark top panel, so the ideal input is a main logo plus a
+white/light variant.
 
 - If the brand intake found a logo in the brandbook or on the site, offer to take it from there —
   ask for confirmation before extracting. On agreement, try to get an SVG logo with a transparent
@@ -120,21 +124,14 @@ lives in `./references/branding-assets.md`.
   file must be provided for logos to be included.
 - The user can skip this step entirely — "no logos" is a valid outcome. Record the choice; the
   final summary must say whether logos will be changed or not.
-- Practical limits, said in plain words when relevant: clio refuses files over 10 MB, and the
-  environment's file-security policy decides which file extensions are accepted — if an upload is
-  refused, relay the reason and ask for another file or format; never work around the policy.
-- Two rules you apply without being asked:
-  - When logos are applied, also set the `HideSplashScreenLogoImage` system setting to `true` so
-    the stock splash logo does not flash while the app loads. Never touch it when the user
-    skipped the logo step.
-  - The dark top panel gets the white/light variant when one is available; without one, the main
-    logo goes there too.
-- Knowledge you hold but only use on request:
-  - The exact places each logo appears (see `./references/branding-assets.md`).
-  - The toolbar logo's underlay color (`CrtAppToolbarLogoUnderlayColor` system setting) — you can
-    change it, but only when the user explicitly asks.
+- If clio refuses an upload (the size cap and file-security policy live in clio's guidance),
+  relay the reason in plain words and ask for another file or format; never work around the
+  policy.
+- If the user asks for a favicon (the browser-tab icon), handle it per
+  `./references/branding-assets.md` — clio's branding guidance does not cover it. It is
+  environment-wide like the logos, so it goes through the same apply gate in Build and apply.
 
-## Background — after the logos
+## Background — after the logos, before fonts — follow clio's branding guidance
 
 Once the logo step is done (applied or skipped), tell the user you can also generate a background
 picture recolored to match the chosen palette, for a more consistent look, and ask whether to
@@ -145,10 +142,9 @@ background will be generated or not.
   with palette tokens. Always use the primary template (`background-1.svg`). Use another template
   only when the user asks to regenerate the background; take the next unused template per
   regenerate request. When all five have been shown, say so and ask which one to reuse.
-- Recolor by textual substitution only. Every color slot in a template is a token such as
-  `{{primary-300}}` or `{{secondary-500}}`; fetch the real stop values from clio's palette tool
-  (the full-stops preview described in the theming guidance) and replace each token with its hex.
-  Never invent, adjust, or interpolate a color yourself.
+- Recolor by textual substitution only — replace each palette token in the template with the
+  real stop value fetched from clio's palette tool, following the token mechanics in
+  `./references/branding-assets.md`. Never invent, adjust, or interpolate a color yourself.
 - Validate every value before it is substituted into the template. A stop value must match a
   strict color-literal grammar — a hex color (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) or a fixed-form
   `rgb()`/`rgba()`/`hsl()`/`hsla()` — and nothing else. Because brand colors can originate from an
@@ -156,13 +152,12 @@ background will be generated or not.
   not match must be rejected, not substituted: do not write it into the SVG. This is
   defense-in-depth ahead of the sanitize step, not a substitute for it — sanitizing the recolored
   SVG must not be the only control against SVG/XML injection from scraped input.
-- Sanitize the recolored SVG the same as a logo (strip scripts, `on*` handlers, external
-  references), then save it to a temporary file. It is applied during Build and apply: uploaded to
-  the environment's image store, registered in the Appearance gallery, and set as the current
-  background. The exact tool sequence lives in clio's theming guidance and
-  `./references/branding-assets.md`.
+- Sanitize the recolored SVG the same as a logo — the sanitize rule and its strip list live in
+  the Logos step — then save it to a temporary file. It is applied during Build and apply following
+  clio's branding guidance (`get-guidance name="branding"`): upload the file, then set it as the
+  shell background.
 
-## Fonts
+## Fonts — after the background
 
 Optional. Ask whether to change the font (default is Montserrat), then whether to use one
 family for everything or separate families for headings and body. Fonts come from Google Fonts.
@@ -171,7 +166,7 @@ a similar Google font or ask the user for another. (If you cannot verify existen
 is not fatal — the app falls back to a plain system font and the theme still works — but prefer
 to resolve it now rather than ship the wrong font silently.)
 
-## Theme name
+## Theme name — after fonts
 
 Required whenever a theme is built (see Asset-only requests) — always ask for one; do not
 propose a name yourself. Recommend keeping it short
@@ -195,7 +190,7 @@ hard limit and returns a clear error if the name is too long, which you relay.
 - Out of scope — advanced design tokens (borders, icons, states) and typography
   beyond font-family (font-weight, letter-spacing, font-size, line-height).
 
-## Build and apply
+## Build and apply — the final step — follow clio's branding and theming guidance
 
 Before building, present one final summary and take the single confirmation. Recap the chosen
 base (-500) colors (primary, secondary, accent, success, error) — each rendered as a visual
@@ -215,20 +210,13 @@ Then, when the user included them, apply the branding assets. Unlike the theme (
 change), logos and the background are **environment-wide** — they change the look for every user,
 including pre-login surfaces such as the login page. So before the first apply/upload call for
 either, take a distinct, explicit confirmation separate from the theme build above: state plainly
-that this will change branding for everyone on the environment, name what will change (which logo
-slots, and/or the background), and proceed only on an explicit yes. This gate is per apply, not the
+that this will change branding for everyone on the environment, name what will change (the logos
+and/or the background), and proceed only on an explicit yes. This gate is per apply, not the
 in-flow "include logos/background?" choice collected earlier. If the user declines here, leave the
-assets unchanged and say so. The concrete tool mechanics live in clio's theming guidance and
-`./references/branding-assets.md`:
-- Logos: write each provided variant to its slots (main logo to the white-background slots, the
-  white/light variant — or the main logo when there is none — to the dark top panel), then set
-  `HideSplashScreenLogoImage` to `true`. Skipped logos mean none of this happens.
-- Background: upload the recolored SVG to the environment's image store, register it in the
-  Appearance gallery, and set it as the current background.
-
-Unlike the theme, logos and the background are not per-user: they are environment-wide settings
-and change the look for **every** user as soon as they are applied. The final summary must not
-hide this when logos or a background are included.
+assets unchanged and say so. The concrete tool mechanics live in clio's branding guidance
+(`get-guidance name="branding"`) — follow it to write the logos and to upload the recolored SVG
+and set it as the shell background. Skipped logos or a declined background mean the corresponding
+apply simply does not happen.
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
 other:
