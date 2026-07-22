@@ -94,6 +94,15 @@ Use full app generation or business-shaped feature work when the request is:
 - asking for a new feature where actors, statuses, object model, validations, or UX still need clarification
 - broad enough that the Business Plan depends on business discovery
 
+Use the theming flow when the request is about visual branding rather than business logic:
+
+- creating or restyling a theme, or matching a brandbook or company site
+- changing the app's brand colors or fonts
+
+Route theming requests to the `creatio-theme-orchestrator` skill, which owns the flow end to end. Theming produces no Business Plan, so Gate P and Gate R do not apply.
+
+Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-theme-orchestrator` only when the request is pure theming (colors, fonts, theme name) with no business-logic component; when in doubt, treat it as app work, not theming.
+
 ## Support Mode (Troubleshooting)
 
 Support mode is a policy overlay for end-user troubleshooting and session traceability.
