@@ -1586,6 +1586,20 @@ for (let i = 0; i < 502; i++) ltFields += `{operation:"insert",name:"C${i}",pare
 const lt = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ltFields.slice(0, -1)}]};});` }] }, { baseDir: FIX });
 check("T3: a container past the field-count bound → layout-truncated decision (DoS relocation guard)",
   lt.changeSet.needsDecision.some((n) => n.kind === "layout-truncated"));
+// hostile-input hardening: an unclamped `layout.rowSpan` (e.g. 1e9) fed a span-aware occupancy walk
+// (Array.from({length: rowSpan})) → OOM / RangeError. rowSpan is now clamped like colSpan, so a crafted body
+// completes cleanly (no throw, no hang) instead of crashing the CLI — preserving the "does NOT throw" contract.
+const rsHostile = (() => {
+  const t0 = Date.now();
+  try {
+    const r = runMigration({ entity: "X", seed: CLEAN_SEED,
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F",layout:{column:0,row:0,colSpan:1,rowSpan:1000000000}}}]};});` }] }, { baseDir: FIX });
+    return { ok: true, fields: r.changeSet.viewConfigDiff.length, ms: Date.now() - t0 };
+  } catch (e) { return { ok: false, err: e.message }; }
+})();
+check("hostile input: a huge layout.rowSpan is clamped (no OOM/throw) and the field still maps",
+  rsHostile.ok === true && rsHostile.fields >= 1 && rsHostile.ms < 5000,
+  () => rsHostile);
 // detail-placement — a detail whose owning tab cannot be resolved (declared in `details`, never placed in a tab).
 const dpCs = mapToFreedom(mergeHierarchy([L("P", { entity: "X",
   diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })],

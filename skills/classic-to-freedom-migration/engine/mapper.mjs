@@ -541,7 +541,11 @@ function mapFields(ctx, containers) {
     // authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
     // field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
     // coexist; only true overlaps are moved.
-    const rowSpan = cl.rowSpan != null ? cl.rowSpan : 1;
+    // Clamp rowSpan the same way colSpan is clamped above: it flows into a span-aware 2-D occupancy walk
+    // (`Array.from({length: rowSpan})`), so an unclamped hostile `layout:{rowSpan:1e9}` would OOM / RangeError
+    // the CLI — defeating this file's own hostile-input hardening and the "runMigration does NOT throw" contract.
+    // Real rowSpans are 1–3; bound to [1, MAX_FIELDS_PER_CONTAINER] so malformed input degrades cleanly.
+    const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
     // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
     // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
