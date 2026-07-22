@@ -24,7 +24,8 @@ are not accessible from this session, and do not produce a plan from memory.
 3. Read `../../context/INDEX.md` to choose the smallest relevant reference set.
 4. For environment setup, read `../../runbooks/01-environment-setup.md`.
 5. For requirements gathering, read `../../runbooks/02-requirements-gathering.md`.
-6. For executable helper behavior: resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>` regardless of transport. Use `../../runtime/scripts/mcp_client.py` as the stdio fallback when the host has no native MCP, plus `../../runtime/scripts/workflow_validators.py`.
+6. For post-Gate-R implementation and scaffolding (including the transient section-creation failure playbook), read `../../runbooks/03-app-implementation.md`.
+7. For executable helper behavior: resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>` regardless of transport. Use `../../runtime/scripts/mcp_client.py` as the stdio fallback when the host has no native MCP, plus `../../runtime/scripts/workflow_validators.py`.
 
 ## Analytics Context
 
