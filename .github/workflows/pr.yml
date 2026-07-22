@@ -38,6 +38,21 @@ jobs:
       - name: Check manifest sync
         run: node scripts/bump-version.js --check
 
+  vendor-upstream:
+    name: Vendored parser authenticity (upstream npm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '20'
+      # supply-chain AUTHENTICITY anchor (the other half of verify-vendor.mjs): independently fetch the pinned
+      # acorn from the npm registry, verify the tarball against the registry's own dist.integrity, and confirm
+      # the vendored file's SHA-256 equals what npm publishes — so a pin bumped WITHOUT re-vendoring is caught
+      # in the PR, not just tamper-evidenced against a same-commit pin.
+      - name: Anchor vendored parser to upstream npm
+        run: node skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs
+
   engine-goldens:
     name: Classic→Freedom engine goldens (${{ matrix.os }})
     strategy:

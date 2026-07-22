@@ -76,7 +76,7 @@ export function runMigration(manifest, opts = {}) {
     const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
     detailSchemas[name] = {
       entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
-      columns: [...new Set((p.diff || []).filter((d) => d.bindTo).map((d) => d.bindTo))],
+      columns: [...new Set((p.diff || []).filter((d) => d && d.bindTo).map((d) => d.bindTo))],
       title: eObj.title || null, // human detail title (from its resources)
       // editPage: explicit manifest value WINS — a string names the child edit page; `false` = the agent verified
       // on-stand that NO Classic *Page exists. Else the name from getEditPageName; else null = unverified.
@@ -136,7 +136,9 @@ export function runMigration(manifest, opts = {}) {
     for (const d of (s.astDiagnostics || [])) {
       const m = /^diff\.(\d+)\.values\.(\w+)$/.exec(d.path || "");
       if (!m || !MAPPING_PROPS.has(m[2])) continue;
-      const el = (s.diff || [])[+m[1]];
+      // match by the ORIGINAL AST index (carried as `astIndex`), not array position: normalizeDiff drops
+      // null/nameless ops, so positional indexing drifted and mislabeled the decision (E3).
+      const el = (s.diff || []).find((o) => o.astIndex === +m[1]);
       const item = el?.name || el?.bindTo || `diff[${m[1]}]`;
       changeSet.needsDecision.push({ kind: "dynamic-property", item,
         reason: `'${item}' has a dynamic '${m[2]}' (${d.kind}) the parser could not resolve statically — the ChangeSet shows the DEFAULT (e.g. visible:true). Wire the real Freedom behavior (business rule / binding) instead of shipping the static default.` });

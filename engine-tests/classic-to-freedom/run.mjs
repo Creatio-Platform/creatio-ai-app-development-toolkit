@@ -254,6 +254,59 @@ check("this.Terrasoft.ContentType.LOOKUP resolves to 5 (lookup control hint)", b
 check("bare terrasoft-param Terrasoft.ContentType.LOOKUP resolves to 5", byName.fLookParam.contentType === 5);
 check("ContentType.ENUM stays null (hint-only; not pinned to a guessed number that could mis-equal LOOKUP=5)", byName.fEnum.contentType === null);
 
+/* ---- T1: every AST-evaluator branch has a golden — this is the security-critical component that replaced the
+   vm, and none of Unary/Binary/Conditional/Template/Spread/computed-key/New was pinned. A refactor could silently
+   break ternary/spread resolution (exactly what let the E1 spread bug ship). ---- */
+console.log("\n===== AST evaluator: value branches + fail-loud diagnostics =====");
+const evalSrc = [
+  'define("Ev", [], function() { return { entitySchemaName: "Ev", diff: [',
+  '  { operation:"insert", name:"n1", values:{ bindTo:"b1", order: 2 + 3 } },',        // BinaryExpression (static)
+  '  { operation:"insert", name:"n2", values:{ bindTo:"b2", order: -7 } },',           // UnaryExpression
+  '  { operation:"insert", name:"n3", values:{ bindTo:"b3", itemType: true ? 15 : 0 } },', // ConditionalExpression (static)
+  '  { operation:"insert", name:"n4", values:{ bindTo:"b4", caption: `Cap` } },',      // TemplateLiteral (no expression)
+  '  { operation:"insert", name:"n5", values:{ bindTo:"b5", order: dyn + 1 } },',      // dynamic Binary -> flag
+  '  { operation:"insert", name:"n6", values:{ bindTo:"b6", itemType: cond ? 1 : 2 } },', // dynamic Conditional -> flag
+  '  { operation:"insert", name:"n7", values:{ bindTo:"b7", caption: `x${y}` } },',    // dynamic Template -> flag
+  '  { operation:"insert", name:"n8", values:{ bindTo:"b8", generator: new Foo() } },',// NewExpression -> flag
+  '  { operation:"insert", name:"n9", values:{ bindTo:"b9", ["dyn"+"K"]: 1 } },',      // computed-key -> flag
+  '  { operation:"insert", name:"nA", values:{ bindTo:"bA", ...spreadMe } }',          // spread-in-object -> flag
+  '] }; });',
+].join("\n");
+const ev = parseSchema(evalSrc, "Ev");
+const bn = Object.fromEntries(ev.diff.map(d => [d.name, d]));
+const kinds = new Set(ev.astDiagnostics.map(d => d.kind));
+check("evaluator BinaryExpression (static): order 2+3 -> 5", bn.n1?.order === 5);
+check("evaluator UnaryExpression: order -7", bn.n2?.order === -7);
+check("evaluator ConditionalExpression (static): itemType true?15:0 -> 15", bn.n3?.itemType === 15);
+check("evaluator TemplateLiteral (no expr): caption `Cap` -> 'Cap'", bn.n4?.caption === "Cap");
+check("evaluator dynamic Binary -> flagged + null", kinds.has("dynamic-binary") && bn.n5?.order === null);
+check("evaluator dynamic Conditional -> flagged + null", kinds.has("dynamic-conditional") && bn.n6?.itemType === null);
+check("evaluator dynamic Template -> flagged + null", kinds.has("dynamic-template") && bn.n7?.caption === null);
+check("evaluator NewExpression -> flagged + null", kinds.has("dynamic-new") && bn.n8?.generator === null);
+check("evaluator computed-key -> flagged (property skipped, op survives)", kinds.has("computed-key") && !!bn.n9);
+check("evaluator spread-in-object -> flagged (op survives)", kinds.has("spread-in-object") && !!bn.nA);
+
+/* ---- E1: a null element in an array (spread residue / sparse hole) must NOT crash — it flags + drops the slot,
+   and it never throws out of parseSchema/mergeHierarchy (the documented pure contract). ---- */
+console.log("\n===== E1: null array elements don't crash (spread / sparse / conditions) =====");
+const spreadArr = 'define("S1",[],function(){var base=[{operation:"insert",name:"z",values:{bindTo:"z"}}];return{entitySchemaName:"S1",diff:[...base,{operation:"insert",name:"keep",values:{bindTo:"keep"}}]};});';
+const sp = parseSchema(spreadArr, "S1");
+check("E1: diff spread -> flagged (spread-in-array), no crash, survivor kept",
+  sp.error === null && sp.astDiagnostics.some(d => d.kind === "spread-in-array") && sp.diff.length === 1 && sp.diff[0].name === "keep");
+const sparseArr = 'define("S2",[],function(){return{entitySchemaName:"S2",diff:[,{operation:"insert",name:"keep",values:{bindTo:"keep"}}]};});';
+const sh = parseSchema(sparseArr, "S2");
+check("E1: diff sparse hole -> flagged (sparse-hole), no crash, survivor kept",
+  sh.error === null && sh.astDiagnostics.some(d => d.kind === "sparse-hole") && sh.diff.length === 1 && sh.diff[0].name === "keep");
+const condNull = parseSchema('define("C",["BusinessRuleModule"],function(BusinessRuleModule){return{entitySchemaName:"C",diff:[{operation:"insert",name:"F",values:{bindTo:"F"}}],rules:{F:{R:{ruleType:0,property:1,conditions:[,{leftExpression:{}}]}}}};});', "C");
+check("E1: a null rule-condition does NOT throw out of mergeHierarchy (pure contract preserved)",
+  (() => { try { mergeHierarchy([condNull]); return true; } catch { return false; } })());
+
+/* ---- E2: a member access on a LOCAL object/array alias at a structural key resolves to null but is FLAGGED
+   (fail-loud) instead of silently producing an empty page that passes the gate green. ---- */
+const e2p = parseSchema('define("E2",[],function(){var cfg={items:[{operation:"insert",name:"a",values:{bindTo:"a"}}]};return{entitySchemaName:"E2",diff:cfg.items};});', "E2");
+check("E2: member access on a local-object alias is FLAGGED (member-on-local-object), not silent null",
+  e2p.astDiagnostics.some(d => d.kind === "member-on-local-object") && e2p.diff.length === 0);
+
 /* ---- extractFnBody: a brace inside a string/comment must not truncate the method scan (review #1) ---- */
 console.log("\n===== extractFnBody string safety + move-order fidelity =====");
 const braceBody = 'define("X", [], function() { return { entitySchemaName: "X", diff: [], getActions: function() { var s = "a } b { c"; return [ { "Tag": "runEscalation", "Click": "navigateToEscalation" } ]; } }; });';

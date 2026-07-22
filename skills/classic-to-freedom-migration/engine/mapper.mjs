@@ -894,7 +894,7 @@ function mapImages(eff) {
     // *-suffixed names (CompanyLogo/UserAvatar), while still excluding structural containers/tabs/details.
     if (i.templateOwned) continue;
     const genImg = i.generator && /image/i.test(i.generator);
-    const nameImg = !i.bindTo && i.itemType !== 2 && i.itemType !== 15 && !i.isTab
+    const nameImg = !i.bindTo && i.itemType !== VIEW_ITEM_TYPE.DETAIL && i.itemType !== VIEW_ITEM_TYPE.CONTROL_GROUP && !i.isTab
       && (/^(?:Photo|Image|Logo|Avatar|Thumbnail|Picture)\d*$/i.test(i.name) || /(?:Photo|Logo|Avatar|Thumbnail|Picture)$/.test(i.name));
     if (!genImg && !nameImg) continue;
     accountedFor.push(i.name);

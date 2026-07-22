@@ -194,6 +194,10 @@ function resolveMemberValue(node, scope) {
   return null; // ended on a resolver, not a concrete value
 }
 
+// The root identifier a member chain reads off (`cfg.items[0].x` → "cfg"), or null if the base isn't a plain
+// identifier. Used to tell an unresolved LOCAL-object member access (flag it) from a framework-enum miss (fine).
+function memberBase(node) { let cur = node; while (cur?.type === "MemberExpression") cur = cur.object; return cur?.type === "Identifier" ? cur.name : null; }
+
 function makeAstEvaluator(scope, diagnostics, src) {
   const snippet = (n) => { try { return src.slice(n.start, Math.min(n.end, n.start + 60)).replace(/\s+/g, " "); } catch { return "?"; } };
   const flag = (kind, node, path) => diagnostics.push({ kind, path: path.join("."), snippet: snippet(node) });
@@ -217,11 +221,21 @@ function makeAstEvaluator(scope, diagnostics, src) {
       }
       case "ArrayExpression":
         return node.elements.map((el, i) => {
-          if (!el) return null;
+          // A sparse hole (`[ , {…}]`) previously returned null with NO diagnostic, then crashed downstream when
+          // normalizeDiff read `.index` off it. Flag it (structural if it sits on `diff`/`details`) so the gate
+          // blocks with a real reason instead of a raw TypeError, and the null slot is skipped by consumers.
+          if (!el) { flag("sparse-hole", node, [...path, i]); return null; }
           if (el.type === "SpreadElement") { flag("spread-in-array", el, path); return null; }
           return evalNode(el, [...path, i]);
         });
-      case "MemberExpression": return resolveMemberValue(node, scope);
+      case "MemberExpression": {
+        const v = resolveMemberValue(node, scope);
+        // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
+        // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
+        // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
+        if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
+        return v;
+      }
       case "FunctionExpression":
       case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
       case "Identifier":
@@ -419,8 +433,15 @@ function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? 
 
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
-  return diff.map((op) => {
-    const v = op?.values && typeof op.values === "object" ? op.values : {};
+  return diff.map((op, i) => {
+    // A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
+    // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
+    // null-safe filter at the end drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried on
+    // every surviving op so the dynamic-property reporter (migrate.mjs) can match a `diff.<i>.values.*`
+    // diagnostic to its element by that index instead of by array position — which drifts once any op is
+    // dropped here (null slot or nameless "?"), the label-desync the reporter otherwise hit.
+    if (op == null || typeof op !== "object") return null;
+    const v = op.values && typeof op.values === "object" ? op.values : {};
     // caption resource key: `caption.bindTo`, else a bare string, else null.
     const captionStr = isStr(v.caption) ? v.caption : null;
     const caption = v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : captionStr;
@@ -460,8 +481,9 @@ function normalizeDiff(diff) {
       hint,
       generator: isStr(v.generator) ? v.generator : null,
       visible,
+      astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
     };
-  }).filter(op => op.name !== "?");
+  }).filter(op => op && op.name !== "?");
 }
 
 function normalizeLayout(l) {
@@ -501,8 +523,11 @@ const PROP = { 0: "Visible", 1: "Enabled", 2: "Required", 3: "Readonly" };
 // so the mapper can emit COMPLETE business rules (not just an action + prose note).
 function sanitizeConditions(conds) {
   if (!Array.isArray(conds)) return [];
-  return conds.map(c => {
-    const l = c?.leftExpression || {}, r = c?.rightExpression || {};
+  // Drop null/non-object entries (a sparse hole or unresolved spread inside a rule's `conditions`). Without this,
+  // `c.comparisonType` below threw an UNCAUGHT TypeError here in mergeHierarchy — breaking the documented
+  // `runMigration ... does NOT throw` contract (a hostile/malformed body would crash the CLI with a raw stack).
+  return conds.filter((c) => c && typeof c === "object").map(c => {
+    const l = c.leftExpression || {}, r = c.rightExpression || {};
     return {
       comparison: typeof c.comparisonType === "number" ? c.comparisonType : null,
       left: { attribute: isStr(l.attribute) ? l.attribute : null, path: isStr(l.attributePath) ? l.attributePath : null },
@@ -563,6 +588,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   for (const { L, seed } of tagged) {
     // diff replay
     for (const op of L.diff) {
+      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
       const cur = items.get(op.name);
       if (op.operation === "insert") {
         items.set(op.name, makeItem(op, seed, L.pkg));

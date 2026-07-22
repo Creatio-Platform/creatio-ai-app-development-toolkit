@@ -20,9 +20,12 @@ of hand-pasting stdout (its Overview/Main-scope values come from `manifest.planM
 
 **Exit codes & gates.** Bad input (missing/invalid manifest, unreadable schema `file`) → exit **1**. Otherwise
 the run computes two gates — `gate.blocked` (correctness: parse errors / unresolved parents / merge warnings /
-skeletal seed) and `structure.complete` (input completeness: unresolved detail / child-page schemas). If either
-is bad the CLI prints a `⛔` banner to stderr and exits **2** (the artifact is still written/printed, with the
-banner at the top, so you see *what* to fix). Exit **0** = both gates clear = an approvable plan.
+skeletal seed) and `structure.complete` (input completeness: unresolved detail / child-page schemas) — plus, in
+`--plan` mode only, a third **plan-completeness** check: required `manifest.planMeta` still `<FILL: …>`
+(`planMetaMissing`) or unresolved on-stand `signals` (`signalsMissing`). If any of these is bad the CLI prints a
+`⛔` banner to stderr and exits **2** (the artifact is still written/printed, with the banner at the top, so you
+see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan. (`--spec`/default runs need no
+`planMeta`, so the third check applies only to `--plan`.)
 
 ## Files
 

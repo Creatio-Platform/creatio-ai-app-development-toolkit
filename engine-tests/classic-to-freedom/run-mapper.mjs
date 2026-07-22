@@ -1549,6 +1549,17 @@ check("Major3: a dynamic 'visible' (call) surfaces as a dynamic-property decisio
   m3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "F") && /dynamic 'visible'/.test(m3.designSpec),
   () => m3.changeSet.needsDecision.map((n) => n.kind));
 
+// E3 — the dynamic-property reporter must name the RIGHT field even when an earlier diff op is dropped by
+// normalization. Here a nameless op (filtered out) precedes the field with the dynamic 'visible', so the AST
+// index (2) no longer equals the array position (1); matching by `astIndex` keeps the label correct ("BB"),
+// whereas the old positional `s.diff[2]` returned undefined and degraded to "diff[2]".
+const e3 = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",parentName:"Header",propertyName:"items",values:{bindTo:"noname"}},{operation:"insert",name:"BB",parentName:"Header",propertyName:"items",values:{bindTo:"BB",visible:computeVis()}}]};});` }] }, { baseDir: FIX });
+check("E3: dynamic-property is labeled by the real field name ('BB'), not a desynced 'diff[N]', after an op is dropped",
+  e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "BB")
+  && !e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && /^diff\[/.test(n.item)),
+  () => e3.changeSet.needsDecision.filter((n) => n.kind === "dynamic-property").map((n) => n.item));
+
 // Major 4 — field ORDER drives row assignment (not Map order); rowSpan occupancy prevents vertical overlap.
 const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "TO", parentName: "Tabs", propertyName: "tabs", isTab: true }),
