@@ -1898,6 +1898,18 @@ check("detail add-mechanism: each raised as a decision + rendered in the plan (c
   dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
   && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
   () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+// ENG-93929 EMISSION: an editable-grid detail is emitted as an EDITABLE list (not a read-only Expanded list),
+// carrying the editable columns + the concept-level enable directive (`features.editable.enable`, resolved via
+// get-component-info at build). A lookup+service detail WITHOUT an editable grid stays a read-only list.
+check("editable-grid emission: editable-grid detail → composite 'Editable list' + editable columns + features.editable.enable directive",
+  clDetail?.composite === "Editable list"
+  && (clDetail.editable?.columns || []).join(",") === "Correspondence,Quantity,Comment"
+  && /features\.editable\.enable/.test(clDetail.editable?.enableVia || ""),
+  () => ({ composite: clDetail?.composite, editable: clDetail?.editable }));
+check("editable-grid emission: the plan Layout renders 'Editable list' + the features.editable.enable directive (not read-only)",
+  /\| Editable list \|/.test(dmRun.plan) && /INLINE-EDITABLE/.test(dmRun.plan) && /features\.editable\.enable/.test(dmRun.plan));
+check("editable-grid emission: a lookup+service detail with NO editable grid stays a read-only Expanded list",
+  regDetail?.composite === "Expanded list" && !regDetail?.editable);
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

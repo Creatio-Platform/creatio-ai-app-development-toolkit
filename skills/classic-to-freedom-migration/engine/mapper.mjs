@@ -723,10 +723,22 @@ function mapDetails(ctx, containers, profileRegion) {
     const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
     if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
       reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
+    // EDITABLE-GRID detail (ENG-93929): the classic detail edits rows INLINE (`ConfigurationGridGenerator` —
+    // detected as addMode.editableGrid). Emit it as an EDITABLE list, not a read-only Expanded list, so the
+    // inline-edit behaviour is not lost. Concept-level only: the Freedom target is `crt.DataGrid` with
+    // `features.editable.enable: true` — but the concrete property key is RESOLVED via get-component-info at
+    // build (version-scoped), so we carry the intent + editable columns, not a hard-coded crt key.
+    const am = dinfo?.addMode;
+    const editable = am?.editableGrid
+      ? { columns: (am.editableColumns && am.editableColumns.length) ? am.editableColumns : null,
+          enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
+          addVia: am.lookup ? "add existing via lookup" : null }
+      : null;
     details.push({
-      composite: "Expanded list", entity: dentity, detailSchema: d.schemaName,
+      composite: editable ? "Editable list" : "Expanded list", entity: dentity, detailSchema: d.schemaName,
       caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
       columns: dinfo?.columns?.length ? dinfo.columns : null, // #11(ii) — the related-list columns, when the detail schema was supplied
+      editable, // ENG-93929 — non-null ⇒ build an inline-editable list (features.editable.enable), carrying these editable columns
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",

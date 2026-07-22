@@ -161,8 +161,14 @@ export function renderDesignSpec(result, opts = {}) {
   for (const d of cs.details || []) {
     const depNote = d.dependency ? ` · by ${esc(d.dependency.attributePath)}` : " · ⚠ FK";
     const src = `${esc(d.entity || "?")}${depNote}`;
-    const add = d.columns?.length ? `cols: ${d.columns.map(esc).join(" · ")}` : DASH;
-    rows.push({ region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), "Related list", src, DASH, add] });
+    // ENG-93929 — an editable-grid detail renders as an EDITABLE list: flag the enable directive + which
+    // columns are inline-editable, so the build reproduces the inline edit instead of a read-only list.
+    const cols = d.columns?.length ? `cols: ${d.columns.map(esc).join(" · ")}` : "";
+    const editNote = d.editable
+      ? `⚠ INLINE-EDITABLE (${esc(d.editable.enableVia)})${(d.editable.columns || []).length ? ` — editable: ${d.editable.columns.map(esc).join(" · ")}` : ""}`
+      : "";
+    const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
+    rows.push({ region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] });
   }
   for (const s of cs.standardFeatures || []) {
     const isList = s.uiShape === "list";
