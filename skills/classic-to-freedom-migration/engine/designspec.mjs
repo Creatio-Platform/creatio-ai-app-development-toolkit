@@ -242,6 +242,13 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("");
   }
 
+  // TYPED entity: the base fold is NOT a deliverable — it only supplies the List page (section concerns) and
+  // shared context. Its own form Layout/Logic/Confirm must NOT render (it's empty/misleading: 0 rules etc.,
+  // while the real fields+rules live on the per-type forms). Stop here; the per-type forms render under
+  // `### Typed page mappings` in renderPlan. (Only the top-level base render passes listPageOnly; the typed
+  // folds themselves render their FULL spec.)
+  if (opts.listPageOnly) return L.join("\n");
+
   // ---- Form page — its Layout / Logic / Confirm nested under one page heading (the Main-scope form row) ----
   L.push(
     `### ${entity} form page`,
@@ -390,13 +397,20 @@ export function renderPlan(result, opts = {}) {
   if (signalsMissing.length) {
     P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`ProcessInModules\` by the section \`SysModule\` (names via \`VwSysProcess\`); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   }
+  // A TYPED entity has NO single form deliverable — each per-type page is its own form (fields/rules/details
+  // live THERE, in the mappings below). The base fold's counts (often 8 fields · 0 rules) describe only the
+  // shared parent, so reporting them as "Size" mis-describes the job. Summarize by typed-form count instead.
+  const typed = result.typedPages || [];
+  const sizeLine = typed.length
+    ? `- **Size:** ${typed.length} typed form${typed.length === 1 ? "" : "s"} (per-type fields, rules and details are in **Typed page mappings** below) · ${(cs.details || []).length + (cs.standardFeatures || []).length} shared details/features · ${(cs.cardActions || []).length} actions`
+    : `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`;
   P.push(
     "### Overview",
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
     `**Environment:** ${fill(pm.environment, "<FILL: environment name>")} ·`,
     `**Package:** ${fill(pm.package, "<FILL: owning package(s) + lock state → target package>")}`,
     "",
-    `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`,
+    sizeLine,
     `- **Approach:** ${fill(pm.approach, "<FILL: one sentence — parallel rebuild / reconcile / switch-over; NOT the package/scope>")}`,
     "",
     "### What it does",
@@ -423,8 +437,7 @@ export function renderPlan(result, opts = {}) {
   const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
   // A TYPED entity has NO single form deliverable — every record opens a per-type page, so the per-type forms
   // (rows below) ARE the deliverables and the base `<entity> form page` is only their shared parent/seed (not
-  // a separate form). A non-typed entity keeps its one form-page row.
-  const typed = result.typedPages || [];
+  // a separate form). A non-typed entity keeps its one form-page row. (`typed` computed above for the Size line.)
   const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
   if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
@@ -453,8 +466,10 @@ export function renderPlan(result, opts = {}) {
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   if (typed.length) P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
-  if (typed.length) P.push("", `> The form spec immediately below is the **base \`${esc(entity)}\` layout** — the SHARED parent every per-type form inherits. It is NOT a separate deliverable; the actual forms to build are the per-type ones under **Typed page mappings**.`);
-  P.push("", renderDesignSpec(result, { ...opts, embedded: true }), "");
+  if (typed.length) P.push("", `> Below: the shared **List page** (from the base section), then the per-type **form** specs under **Typed page mappings**. The base \`${esc(entity)}\` form layout is intentionally NOT shown — it is only the shared parent/seed, not a deliverable; each per-type form carries its own fields, rules and details.`);
+  // For a typed entity the base fold contributes ONLY the List page (listPageOnly) — its form Layout/Logic/
+  // Confirm is empty/misleading (0 rules, base layout) and would read as an unwanted "general mapping".
+  P.push("", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: typed.length > 0 }), "");
   // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
   // A typed entity's real form deliverables. Unresolved (no bundle, not bindOnly) → a ⚠ the structure gate blocks on.
   if (typed.length) {

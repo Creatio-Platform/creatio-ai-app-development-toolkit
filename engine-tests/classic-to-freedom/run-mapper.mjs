@@ -1681,6 +1681,26 @@ check("typed-page FOLD: supplied typedPageSchemas → each per-type form's FULL 
   && /#### Typed form: XICPage/.test(docSecRun.plan) && docSecRun.plan.includes("SenderField")
   && /#### Typed form: XOCPage/.test(docSecRun.plan) && docSecRun.plan.includes("RecipientField"),
   () => docSecRun.plan.split("\n").filter((l) => /Typed form|SenderField|RecipientField|Typed page mappings/.test(l)));
+const docFirstSize = docSecRun.plan.split("\n").find((l) => /\*\*Size:\*\*/.test(l)) || "";
+check("typed-page: base form spec SUPPRESSED (no general mapping) — only List page from the base + Overview Size counts typed forms (not base fields/0-rules)",
+  !/^### X form page/m.test(docSecRun.plan)  // no top-level base/general form mapping for a typed entity (### heading)
+  && /^### List page/m.test(docSecRun.plan)   // List page still rendered from the base section
+  && /2 typed forms/.test(docFirstSize)       // the Overview (FIRST) Size line describes the typed forms…
+  && !/\d+ fields ·/.test(docFirstSize),      // …NOT the base-derived "N fields · … · 0 rules" line
+  () => docFirstSize);
+// a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
+// (base pageBusinessRules can be 0 while each typed form has several; the plan must show them per type).
+const docRuleRun = runMigration({
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  typedPages: [{ schema: "XICPage", type: "Incoming" }],
+  typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XICPage",[],function(){return{entitySchemaName:"X",businessRules:{DeliveryType:{r1:{ruleType:0,property:0}}},diff:[{operation:"insert",name:"DeliveryType",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"DeliveryType"}}]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("typed-page: a typed fold's OWN business rule surfaces in its per-type mapping (rules read per typed page, not dropped)",
+  /#### Typed form: XICPage/.test(docRuleRun.plan)
+  && docRuleRun.plan.slice(docRuleRun.plan.indexOf("Typed page mappings")).includes("DeliveryType"),
+  () => docRuleRun.plan.split("\n").filter((l) => /Typed form|DeliveryType|Logic/.test(l)));
 // GATE — an unresolved typed page (no bundle, not bindOnly) is STRUCTURE INCOMPLETE: this is what stops the
 // "per-type field mapping done at build" deferral that shipped only 1 of 4 typed pages.
 const docTypedUnresolved = runMigration({
