@@ -1873,5 +1873,31 @@ check("mini-page order: '### Add mini-page mapping' comes right after '### List 
   && mpOrder.plan.indexOf("### Add mini-page mapping") < mpOrder.plan.indexOf("### X form page"),
   () => mpOrder.plan.split("\n").filter((l) => /^### /.test(l)));
 
+/* ---- detail ADD/EDIT mechanism detection — a detail is NOT a plain related list when it adds via a LOOKUP,
+   calls a backend SERVICE, or is an INLINE-EDITABLE grid. Detect from the detail body + surface so the Freedom
+   rebuild reproduces the real add flow (custom handler + lookup + service/port), not a naive add-new grid. */
+const dmLookupGrid = `define("CLinkDetail",[],function(){return{entitySchemaName:"CLink",mixins:{ConfigurationGridUtilities:"Terrasoft.ConfigurationGridUtilities"},methods:{openCardByMode:function(){this.addFromLookup(cfg);},addFromLookup:function(c){this.openLookup(this.getLookupConfig(c),function(){},this);},getCellControlsConfig:function(col){var enabledColumNames=["Correspondence","Quantity","Comment"];col.enabled=enabledColumNames.indexOf(col.name)>-1;return col;}}};});`;
+const dmService = `define("RegDetail",[],function(){return{entitySchemaName:"Reg",methods:{openCardByMode:function(){this.openLookup(this.getLookupConfig("Document"),this.onResp,this);},addToRegistry:function(ids){var config={"serviceName":"DocumentRegistryService","methodName":"AddCorrespondencesToRegistry","data":{}};this.callService(config,function(){});}}};});`;
+const dmRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"D2",parentName:"T",values:{itemType:2}}],details:{D1:{schemaName:"CLinkDetail",entitySchemaName:"CLink",filter:{detailColumn:"X",masterColumn:"Id"}},D2:{schemaName:"RegDetail",entitySchemaName:"Reg",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  detailSchemas: { CLinkDetail: { body: dmLookupGrid, editPage: false }, RegDetail: { body: dmService, editPage: false } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+const clDetail = dmRun.changeSet.details.find((d) => d.detailSchema === "CLinkDetail");
+const regDetail = dmRun.changeSet.details.find((d) => d.detailSchema === "RegDetail");
+check("detail add-mechanism: lookup + INLINE-EDITABLE grid detected (with the editable columns)",
+  clDetail?.addMode?.lookup === true && clDetail?.addMode?.editableGrid === true
+  && (clDetail.addMode.editableColumns || []).join(",") === "Correspondence,Quantity,Comment",
+  () => clDetail?.addMode);
+check("detail add-mechanism: lookup + backend SERVICE (name + method) detected",
+  regDetail?.addMode?.lookup === true && regDetail?.addMode?.service === "DocumentRegistryService"
+  && regDetail?.addMode?.method === "AddCorrespondencesToRegistry",
+  () => regDetail?.addMode);
+check("detail add-mechanism: each raised as a decision + rendered in the plan (custom Freedom add handler; verify service)",
+  dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
+  && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
+  () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

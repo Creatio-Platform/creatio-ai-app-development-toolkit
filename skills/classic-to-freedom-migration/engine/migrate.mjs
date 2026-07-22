@@ -85,6 +85,21 @@ export function runMigration(manifest, opts = {}) {
     const eObj = (e && typeof e === "object") ? e : {};
     const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
     const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
+    // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing),
+    // call a backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the
+    // Freedom rebuild must reproduce (a request handler that opens the lookup then creates links / calls the
+    // service — NOT a default add-new), so DETECT them from the body's methods and surface them (below), instead
+    // of the plan guessing "plain related list". Text-scan (method bodies are imperative — not statically eval'd).
+    const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
+    const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
+    const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b/.test(body);
+    const editableGrid = /\bConfigurationGrid\b|ConfigurationGridUtilities|getEditableGridRowViewModelClassName|getCellControlsConfig/.test(body);
+    const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
+    const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
+    const openCardOverridden = /openCardByMode\s*:/.test(body);
+    const addMode = (lookup || svcM || editableGrid || openCardOverridden)
+      ? { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null, openCardOverridden }
+      : null;
     detailSchemas[name] = {
       entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
       columns: [...new Set((p.diff || []).filter((d) => d && d.bindTo).map((d) => d.bindTo))],
@@ -98,6 +113,7 @@ export function runMigration(manifest, opts = {}) {
       // the add-record-hidden heuristic? Hiding Add stops NEW records, not editing EXISTING ones, so the heuristic
       // alone must NOT waive a child page — only a verified false does (Major).
       editableVerified: ("editable" in eObj),
+      addMode, // custom add/edit mechanism (lookup / service / inline-editable grid), or null for a plain list
       error: p.error || null,
       // Major 4 — a detail body's AST diagnostics must reach the gate too: a detail whose `diff` is built by
       // an unresolved call parses WITHOUT an error but yields columns:null. Keeping them here lets the gate
@@ -112,6 +128,21 @@ export function runMigration(manifest, opts = {}) {
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
   });
+  // Attach each detail's ADD/EDIT MECHANISM to the mapped detail and raise it as a decision, so the Freedom
+  // rebuild reproduces the real add flow instead of shipping a plain related list. (renderPlan shows d.addMode
+  // next to the detail — in the Shared section for a typed entity — and this decision lands in ⚠ Confirm.)
+  for (const d of (changeSet.details || [])) {
+    const am = detailSchemas[d.detailSchema]?.addMode;
+    if (!am) continue;
+    d.addMode = am;
+    const parts = [];
+    if (am.lookup) parts.push("ADDS via a lookup (pick existing record(s))");
+    if (am.service) parts.push(`calls service \`${am.service}${am.method ? "." + am.method : ""}\` to link/insert`);
+    if (am.editableGrid) parts.push(`is an INLINE-EDITABLE grid${am.editableColumns.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : ""}`);
+    if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
+    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: d.caption || d.detailSchema || d.entity,
+      reason: `Detail '${d.caption || d.detailSchema || d.entity}' is NOT a plain related list — it ${parts.join("; ")}. Reproduce this on Freedom with a CUSTOM add request-handler (open the lookup, then create the link records / call the service) — not a default add-new. If it calls a service, VERIFY that service is deployed on-stand (else port its logic to a process/service). If inline-editable, confirm the Freedom list supports inline edit for those columns via get-component-info.` });
+  }
   const parseErrors = [
     ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
     // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child

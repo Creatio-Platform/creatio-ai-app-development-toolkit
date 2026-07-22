@@ -85,6 +85,17 @@ const triggerOf = (m) => {
 // demote a nested design spec's Markdown headings two levels (## → ####, ### → #####, capped at ######)
 // so a child page's spec reads as a subsection under the parent plan's `#### Child page:` heading.
 const demoteHeadings = (md, shift = 2) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + Math.max(0, shift))) + " ");
+// A detail's custom ADD/EDIT mechanism (from migrate.mjs detection) → a short ⚠ suffix so the rebuild reproduces
+// the real add flow (lookup / service / inline grid) rather than a plain related list.
+const addModeText = (am) => {
+  if (!am) return "";
+  const p = [];
+  if (am.lookup) p.push("add via lookup (pick existing)");
+  if (am.service) p.push(`service \`${esc(am.service)}${am.method ? "." + esc(am.method) : ""}\``);
+  if (am.editableGrid) p.push(`inline-editable${(am.editableColumns || []).length ? ` (${am.editableColumns.map(esc).join("/")})` : ""}`);
+  if (!p.length && am.openCardOverridden) p.push("custom add flow");
+  return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
+};
 
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -501,7 +512,7 @@ export function renderPlan(result, opts = {}) {
       P.push("### Shared across all typed forms (inherited from the base form)", "",
         `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`);
       for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
-      for (const d of shDetails) P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${d.entity ? ` (${esc(d.entity)})` : ""}`);
+      for (const d of shDetails) P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${d.entity ? ` (${esc(d.entity)})` : ""}${addModeText(d.addMode)}`);
       P.push("");
     }
     // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
