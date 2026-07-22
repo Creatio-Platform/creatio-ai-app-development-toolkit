@@ -39,6 +39,7 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
 - `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
 - `icon-background` for `create-app-section` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the same 16 palette colors listed under MCP Application Creation above.
+- Create sections sequentially, one at a time. On a transient `create-app-section` failure (DB-write contention), follow the transient section-creation failure playbook in `runbooks/03-app-implementation.md` — check `list-app-sections` for the existing section, wait, then retry once with the same name. Never vary the caption to probe the error and never run `compile-creatio` speculatively during scaffolding.
 
 **Entity Schema Sync (DB-first)**
 - Prefer `sync-schemas` for grouped entity work
