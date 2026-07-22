@@ -85,6 +85,7 @@ Jump to the section you need:
 - Use **Plain** buttons freely for secondary or neutral actions.
 - If there are many rare actions, use a button with menu or an actions menu instead of a row of many buttons.
 - **Use a split button for one primary action that has close variants.** When an action has a main form plus a few variants (Save / Save and new / Save and close), use a split button — the primary action on the button, its variants in the attached dropdown — instead of separate buttons or a plain menu. It still counts as the single primary for the context.
+- **To print reports, add the dedicated Print button — don't hand-build a report button or menu.** Creatio's standard **Print** action builds its own dropdown from the reports/printables registered for the page's object and keeps that menu in sync as reports are added. Add that button rather than a custom button or a hand-assembled report list, which would duplicate the platform behavior and drift out of date. Resolve it via `get-component-info` (it is a built-in action, not a plain button).
 - Buttons in one group must have consistent height and alignment.
 - Use an unambiguous icon that matches the action. Add tooltip/accessibility text for icon buttons.
 - **Add icons where they aid recognition** — on buttons and menu items, and especially for a set of related actions or several filters: pick distinct, fitting icons (from the Freedom UI icon library) so the UI is scannable and varied, not a row of identical or icon-less items. Keep icon style consistent across the page.

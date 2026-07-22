@@ -105,6 +105,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
 - [ ] Record-level actions acting on a profile/summary island's record sit in that island's footer (flex), not the page header.
 - [ ] Primary actions with close variants use a split button; it still counts as the single primary per context.
+- [ ] Report printing uses the dedicated Print button (auto-builds its reports menu), not a custom button/menu.
 - [ ] A semantic-green primary is used only for launch/activate actions, with the meaning in the label; no ad-hoc button colors.
 - [ ] An operation needing a focused set of parameters gathers them in a modal (only the needed fields, required marked, instructions above) — not a full page.
 
