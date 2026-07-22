@@ -115,6 +115,8 @@ white/light variant.
   ask for confirmation before extracting. On agreement, try to get an SVG logo with a transparent
   background: the main logo and, when it exists, its white/light variant. At least the main logo
   must come out of this path; if extraction fails, fall through to asking for files.
+- For the dark top panel, when the brand offers several variants, pick the white one (or a
+  white-filled one). If none exists, use the main logo and warn about low contrast.
 - Sanitize every SVG before it is uploaded, whatever its source — files the user provides as
   well as logos taken from the web: strip scripts, event-handler attributes, and references to
   external resources, then check the cleaned file still renders the same logo. Nothing is
