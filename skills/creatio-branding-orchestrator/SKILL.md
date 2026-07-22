@@ -102,7 +102,7 @@ beside it. Do this before you ask, on every color, every time. Never present a c
 hex string; only if the client genuinely cannot render color, tell the user so and then read out
 the hex.
 
-## Logos — after the colors, before the background — follow clio's branding guidance
+## Logos — after the palette conversation — follow clio's branding guidance
 
 Logos are optional but always offered, right after the palette is settled. Fetch
 `get-guidance name="branding"` from clio MCP and follow it — it owns the logo slots and where
@@ -127,11 +127,11 @@ white/light variant.
 - If clio refuses an upload (the size cap and file-security policy live in clio's guidance),
   relay the reason in plain words and ask for another file or format; never work around the
   policy.
-- If the user asks for a favicon (the browser-tab icon), handle it per
-  `./references/branding-assets.md` — clio's branding guidance does not cover it. It is
+- If the user asks for a favicon (the browser-tab icon), clio's branding guidance covers it
+  alongside the logos — follow it, and sanitize an SVG favicon the same as a logo. It is
   environment-wide like the logos, so it goes through the same apply gate in Build and apply.
 
-## Background — after the logos, before fonts — follow clio's branding guidance
+## Background — after the logos — follow clio's branding guidance
 
 Once the logo step is done (applied or skipped), tell the user you can also generate a background
 picture recolored to match the chosen palette, for a more consistent look, and ask whether to
