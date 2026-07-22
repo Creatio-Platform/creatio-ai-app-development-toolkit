@@ -245,6 +245,11 @@ export function runMigration(manifest, opts = {}) {
       t.blocked = !!tRes.gate?.blocked;
       t.reasons = tRes.gate?.reasons || [];
       t.structIncomplete = !!(tRes.structure && !tRes.structure.complete);
+      // "tables filled" signals for the completeness gate (below): the per-type Layout must have real fields,
+      // and if the typed body DECLARES business rules they must have MAPPED into the Logic table (not dropped).
+      t.fieldCount = (tRes.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+      t.ruleCount = (tRes.changeSet?.pageBusinessRules || []).length + (tRes.changeSet?.entityBusinessRules || []).length; // rules that MAPPED into the Logic table (page + entity)
+      t.ruleSources = tRes.changeSet?.ruleSourceCount || 0; // rule DEFINITIONS considered; sources>0 & mapped==0 ⇒ all rules dropped (unread)
     } catch (e) { t.specError = e.message; t.resolved = false; }
   }
   // ADD-RECORD MINI PAGE — the section's quick-add form. Its registration lives at the module/edit-page level
@@ -361,7 +366,16 @@ export function runMigration(manifest, opts = {}) {
     for (const t of typedPages) {
       if (t.resolved === "bind") continue;
       if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
-      if (t.resolved === "fold") { if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`); continue; }
+      if (t.resolved === "fold") {
+        if (t.structIncomplete) { issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`); continue; }
+        // "tables filled" gate — the per-type mapping must actually carry content before the plan proceeds:
+        //  (1) a NON-EMPTY Layout (a folded form with 0 fields is a degenerate/empty table — bad bundle/seed);
+        //  (2) if the typed body DECLARES business rules, they must have MAPPED into the Logic table (a page
+        //      whose rules exist but produced 0 mapped rules = an unread/dropped Logic table).
+        if (!t.fieldCount) issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: folded to an EMPTY Layout (0 fields) — the per-type mapping table is not filled. Check its bundle/seed (a real edit page always has fields); do not proceed on an empty form spec.`);
+        else if (t.ruleSources > 0 && !t.ruleCount) issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: its body DECLARES ${t.ruleSources} business-rule source(s) but NONE mapped into the Logic table — the rules were not read. Fix the rule extraction / confirm the shape before proceeding (do not build with an empty Logic table when rules exist).`);
+        continue;
+      }
       issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
     }
     // add-record mini page (a section/list concern — only gated when this migration has a section). It must be

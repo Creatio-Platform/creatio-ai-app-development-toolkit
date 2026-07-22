@@ -313,6 +313,7 @@ export function mapToFreedom(eff, opts = {}) {
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, needsDecision,
+    ruleSourceCount: payloadRules.length, // # of declarative page/entity rule DEFINITIONS considered (before mapping) — lets a caller detect "rules existed but none mapped into Logic"
     // Major 4 — resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
     resources: resourceStrings,

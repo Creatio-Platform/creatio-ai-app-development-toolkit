@@ -1701,6 +1701,37 @@ check("typed-page: a typed fold's OWN business rule surfaces in its per-type map
   /#### Typed form: XICPage/.test(docRuleRun.plan)
   && docRuleRun.plan.slice(docRuleRun.plan.indexOf("Typed page mappings")).includes("DeliveryType"),
   () => docRuleRun.plan.split("\n").filter((l) => /Typed form|DeliveryType|Logic/.test(l)));
+check("typed-page tables-filled: a typed fold with real fields+rules is RESOLVED (no false-block on a filled mapping)",
+  docRuleRun.structure.complete === true, () => docRuleRun.structure.issues);
+// tables-filled GATE (1) — a typed page that folds to an EMPTY Layout (0 fields) is NOT a filled mapping → block.
+const docTypedEmpty = runMigration({
+  entity: "X", schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  typedPages: [{ schema: "XICPage", type: "Incoming" }],
+  typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XICPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("typed-page tables-filled GATE(1): a typed fold with an EMPTY Layout (0 fields) → structure INCOMPLETE",
+  docTypedEmpty.structure.complete === false
+  && docTypedEmpty.structure.issues.some((i) => /typed page 'XICPage'.*EMPTY Layout/.test(i)),
+  () => docTypedEmpty.structure.issues);
+// tables-filled GATE (2) — a typed body that DECLARES business rules but maps NONE (empty Logic) → block.
+const docTypedRulesDropped = runMigration({
+  entity: "X", schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  typedPages: [{ schema: "XICPage", type: "Incoming" }],
+  typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XICPage",[],function(){return{entitySchemaName:"X",rules:{F:{r:{ruleType:0,property:99}}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("typed-page tables-filled GATE(2): a typed body with rule sources but 0 mapped rules (empty Logic) → structure INCOMPLETE",
+  docTypedRulesDropped.structure.complete === false
+  && docTypedRulesDropped.structure.issues.some((i) => /typed page 'XICPage'.*none mapped into the Logic/i.test(i)),
+  () => docTypedRulesDropped.structure.issues);
+// GATE(3) invariant — Overview Size, Main-scope typed rows and Typed-page mappings all come from ONE source,
+// so they cannot diverge: N(Main-scope "typed form" rows) == N("#### Typed form:" mappings) == Size "N typed forms".
+const mainScopeTyped = (docSecRun.plan.match(/\(typed form\) \|/g) || []).length;
+const typedMappings = (docSecRun.plan.match(/#### Typed form:/g) || []).length;
+check("typed-page GATE(3): Overview/Main-scope match the mappings below — #Main-scope typed rows == #mappings == Size count == typedPages",
+  mainScopeTyped === 2 && typedMappings === 2 && /2 typed forms/.test(docFirstSize) && (docSecRun.typedPages || []).length === 2,
+  () => ({ mainScopeTyped, typedMappings, size: docFirstSize }));
 // GATE — an unresolved typed page (no bundle, not bindOnly) is STRUCTURE INCOMPLETE: this is what stops the
 // "per-type field mapping done at build" deferral that shipped only 1 of 4 typed pages.
 const docTypedUnresolved = runMigration({
