@@ -35,6 +35,7 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 | Gate P | `AGENTS.md` | — | UX contract, routing, Gate P, global invariants |
 | Agent 1 | `runbooks/01-environment-setup.md`, `context/essentials.md` | `docs://mcp/guides/agent-execution` | environment setup, local runtime rules, DataForge availability check |
 | Agent 2 | `runbooks/02-requirements-gathering.md`, `context/business-checklist.md`, `context/model-discovery-evidence.md` | — | BA discovery, pre-analysis, Gate R approval, Technical Implementation Handoff |
+| Agent 3 | `runbooks/03-app-implementation.md`, `context/essentials.md` | `docs://mcp/guides/app-modeling` | post-Gate-R scaffolding, transient section-creation failure playbook, entity/page/data modeling |
 | Support run | `AGENTS.md` (Support Mode sections) | `docs://mcp/guides/support-mode` | diagnostic-first behavior, severity routing, fail-fast evidence |
 
 Reading rules:

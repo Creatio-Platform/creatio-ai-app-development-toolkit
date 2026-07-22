@@ -24,7 +24,8 @@ are not accessible from this session, and do not produce a plan from memory.
 3. Read `../../context/INDEX.md` to choose the smallest relevant reference set.
 4. For environment setup, read `../../runbooks/01-environment-setup.md`.
 5. For requirements gathering, read `../../runbooks/02-requirements-gathering.md`.
-6. For executable helper behavior: resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>` regardless of transport. Use `../../runtime/scripts/mcp_client.py` as the stdio fallback when the host has no native MCP, plus `../../runtime/scripts/workflow_validators.py`.
+6. For post-Gate-R implementation and scaffolding (including the transient section-creation failure playbook), read `../../runbooks/03-app-implementation.md`.
+7. For executable helper behavior: resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>` regardless of transport. Use `../../runtime/scripts/mcp_client.py` as the stdio fallback when the host has no native MCP, plus `../../runtime/scripts/workflow_validators.py`.
 
 ## Analytics Context
 
@@ -36,6 +37,7 @@ Use these values for CAADT product telemetry when calling clio telemetry tools:
 ## Core Rules
 
 - Pages are separate for web and mobile: before any page edit, read `../../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.
+- **Lookup/enum values are package data, never a runtime write.** Seed them inline via `sync-schemas`'s row-seeding parameter (name resolved via `get-tool-contract`) when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside that batch — both are DB-first and install immediately, no compile step involved. Never seed lookup values through runtime OData/DataService calls or raw SQL: those bypass the platform, so the row lands in the table but the value doesn't surface as real package data. Details: `../../context/essentials.md`, "Data Binding And Schema Inspection".
 - **UI/UX is mandatory, not optional.** Whenever the workflow creates or edits Freedom UI pages (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring page bodies and apply its rules (layout/containers, component choice, lookups, fields, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components).
 - **Schema naming is mandatory, not optional.** Whenever the workflow creates or names data-model elements (`create-entity-schema`, `update-entity-schema`, `create-lookup`, and the objects/columns implied by `create-app`/`create-app-section`), you MUST invoke the **`creatio-schema-naming`** skill **before** choosing object, title, column, field, lookup, Guid/UId, or relation-object names, and apply its rules together with `../../context/naming-conventions.md`. Do not invent names from memory — inconsistent or non-conventional names are hard to correct after the schema is published.
 - Keep the visible planning artifact in the BA-style Business Plan format defined by `../../AGENTS.md`.

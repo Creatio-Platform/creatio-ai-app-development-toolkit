@@ -44,6 +44,8 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] No container (group / tab / profile island) holds a single lone field; each holds a logically related set (≥2–3 fields).
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
+- [ ] Every related (1:M child) business object surfaced as a `Related list <name>` in §6 of the plan is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
+- [ ] Each related list has a **working** add affordance. Default: a quick-add **mini page** wired to "+ Add" plus the full record page for editing; **inline / editable-grid add** only for simple line-item lists or when explicitly requested. For a section-less child the add/edit pages are registered so "+ Add" resolves. No related list is read-only, and no add button is wired to an unregistered page.
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
 - [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty.
