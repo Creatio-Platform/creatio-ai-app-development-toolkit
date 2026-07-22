@@ -53,15 +53,18 @@ function regionResolver(viewConfigDiff, resources = {}) {
   const capText = (raw) => { const k = resourceKey(raw); return resources[k] ?? k; }; // same key normalization the mapper used to STORE the string (incl. #anchor strip)
   const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
   return (parentName) => {
-    let p = parentName, hops = 0, first = null;
+    // `group` = the nearest CAPTIONED ancestor container (a real field group like "Sender" / "Additional
+    // delivery info") between the field and its tab/profile. Surfacing it keeps the Region column showing the
+    // GROUP, not just the flat tab — grouping was being lost (fields read as one flat list under the tab).
+    let p = parentName, hops = 0, group = null;
     while (p && hops++ < 64) {
-      if (p === "SideAreaProfileContainer") return first ? `Side profile › ${first}` : "Side profile";
+      if (p === "SideAreaProfileContainer") return group ? `Side profile › ${group}` : "Side profile";
       if (p === "HeaderContainer") return "Header";
       if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
       const o = byName.get(p);
       if (!o) return esc(p);
-      if (o.values?.type === "crt.Tab") return `Tab · ${label(o)}`;
-      if (!first) first = label(o);
+      if (o.values?.type === "crt.Tab") return group ? `Tab · ${label(o)} › ${group}` : `Tab · ${label(o)}`;
+      if (group == null && o.values?.caption) group = label(o); // nearest captioned group wins (skip plain layout grids)
       p = o.parentName;
     }
     return esc(parentName);
@@ -212,7 +215,9 @@ export function renderDesignSpec(result, opts = {}) {
 
   // ---- List page (section concerns) comes FIRST — the Main-scope table lists the list page before the
   // form page, so the detailed expansions follow that same order: list page → form page → child pages. ----
-  if (section) {
+  // `formOnly` skips this List-page block (renderPlan renders the List page via a separate listPageOnly call
+  // so the add-mini-page mapping can sit RIGHT AFTER it, then renders the form via formOnly).
+  if (section && !opts.formOnly) {
     L.push("### List page");
     // Add-record mini page — resolved from list-entity-client-schemas (result.miniPage), NOT assumed from the
     // section body (which registered none even when a per-type mini page existed → a false "no mini page").
@@ -438,11 +443,15 @@ export function renderPlan(result, opts = {}) {
   // A TYPED entity has NO single form deliverable — every record opens a per-type page, so the per-type forms
   // (rows below) ARE the deliverables and the base `<entity> form page` is only their shared parent/seed (not
   // a separate form). A non-typed entity keeps its one form-page row. (`typed` computed above for the Size line.)
+  // The Freedom form template every per-type form uses (from planMeta.formTemplate / manifest.template). Shown
+  // on each typed row so the template mandate is not lost (it used to live only on the suppressed base row).
+  const formTpl = pm.formTemplate || opts.template || null;
   const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
   if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
     const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed form)`;
-    scopeRows.push(`| ${cls} | ${t.bindOnly ? "bind shared form by Type" : "per-type Freedom form"} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
+    const tgt = t.bindOnly ? "bind shared form by Type" : (formTpl ? esc(formTpl) : "<FILL: Freedom form template>");
+    scopeRows.push(`| ${cls} | ${tgt} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
   }
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
@@ -465,14 +474,37 @@ export function renderPlan(result, opts = {}) {
   }
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
-  if (typed.length) P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
-  if (typed.length) P.push("", `> Below: the shared **List page** (from the base section), then the per-type **form** specs under **Typed page mappings**. The base \`${esc(entity)}\` form layout is intentionally NOT shown — it is only the shared parent/seed, not a deliverable; each per-type form carries its own fields, rules and details.`);
-  // For a typed entity the base fold contributes ONLY the List page (listPageOnly) — its form Layout/Logic/
-  // Confirm is empty/misleading (0 rules, base layout) and would read as an unwanted "general mapping".
-  P.push("", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: typed.length > 0 }), "");
-  // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
-  // A typed entity's real form deliverables. Unresolved (no bundle, not bindOnly) → a ⚠ the structure gate blocks on.
   if (typed.length) {
+    P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
+    const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+    P.push(`> **Template:** build every per-type form on ${formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template"}${dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : ""}. The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`);
+  }
+  // LIST PAGE — always rendered list-page-only, so the Add mini-page mapping can sit RIGHT AFTER it (the mini
+  // page is the list's quick-add). The form spec (non-typed) / per-type mappings (typed) come afterwards.
+  P.push("", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "");
+  // ADD MINI-PAGE MAPPING — immediately after the List page block (its natural place: the list's quick-add).
+  if (result.miniPage && (result.miniPage.spec || result.miniPage.specError)) {
+    P.push("### Add mini-page mapping", "", `#### Mini page: ${esc(result.miniPage.schema)}`);
+    if (result.miniPage.spec) P.push("", demoteHeadings(result.miniPage.spec, 2));
+    else P.push(`> ⚠ mini-page bundle supplied but failed to parse: ${esc(result.miniPage.specError)} — fix and re-run.`);
+    P.push("");
+  }
+  if (!typed.length) {
+    // NON-TYPED — the single form spec (Layout/Logic/Confirm); the List page was already rendered above.
+    P.push("", renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), "");
+  } else {
+    // SHARED across all typed forms — the base fold's details/features are inherited by EVERY per-type form
+    // (the History tab's lists, Approvals, Attachments, Connections, change log, …). List them ONCE here — NOT
+    // per type and NOT as a base field mapping. Each per-type section below adds only that type's OWN content.
+    const shFeatures = cs.standardFeatures || [], shDetails = cs.details || [];
+    if (shFeatures.length || shDetails.length) {
+      P.push("### Shared across all typed forms (inherited from the base form)", "",
+        `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`);
+      for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
+      for (const d of shDetails) P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${d.entity ? ` (${esc(d.entity)})` : ""}`);
+      P.push("");
+    }
+    // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
     P.push("### Typed page mappings", "");
     for (const t of typed) {
       P.push(`#### Typed form: ${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""}`);
@@ -487,14 +519,6 @@ export function renderPlan(result, opts = {}) {
       }
       P.push("");
     }
-  }
-  // Add mini-page mapping — the FULL layout of the section's quick-add mini page (folded from
-  // manifest.miniPageSchemas). Rendered when resolved; an unfolded/unverified one is flagged in List page + gate.
-  if (result.miniPage && (result.miniPage.spec || result.miniPage.specError)) {
-    P.push("### Add mini-page mapping", "", `#### Mini page: ${esc(result.miniPage.schema)}`);
-    if (result.miniPage.spec) P.push("", demoteHeadings(result.miniPage.spec, 2));
-    else P.push(`> ⚠ mini-page bundle supplied but failed to parse: ${esc(result.miniPage.specError)} — fix and re-run.`);
-    P.push("");
   }
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot

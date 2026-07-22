@@ -1830,5 +1830,48 @@ check("#8 grandchild embedding: the plan nests BOTH the child and the grandchild
   /#### Child page: CH/.test(gcTop.plan) && /##### Child page: GC/.test(gcTop.plan),
   () => gcTop.plan.split("\n").filter((l) => /Child page:/.test(l)));
 
+/* ---- typed-form plan completeness (session review): template on rows + DCM progress-bar note + field GROUPS
+   in Layout + a Shared section (inherited details/features) + mini-page mapping right after the List page ---- */
+const cmbBase = `define("XPage",[],function(){return{entitySchemaName:"X",diff:[],details:{FD:{schemaName:"FileDetailV2",entitySchemaName:"File"}}};});`; // base carries a SHARED feature (Attachments)
+const cmbTyped = `define("XICPage",[],function(){return{entitySchemaName:"X",diff:[
+  {operation:"insert",name:"GT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.GenInfoCaption"}},
+  {operation:"insert",name:"SenderGroup",parentName:"GT",values:{itemType:15,caption:"Resources.Strings.SenderCaption"}},
+  {operation:"insert",name:"Acc",parentName:"SenderGroup",propertyName:"items",values:{bindTo:"Acc"}}
+]};});`;
+const cmb = runMigration({
+  entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: cmbBase }], section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [{ schema: "XICPage", type: "Incoming" }],
+  typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: cmbTyped }] } },
+  planMeta: { ...docPlanMeta, formTemplate: "PageWithTabsFreedomTemplate" },
+  signals: { dcm: { resolved: true, present: true, cases: ["C"] }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+});
+check("typed template: Main-scope typed row names the form template (not a generic 'per-type Freedom form')",
+  /XICPage[^\n|]*\| PageWithTabsFreedomTemplate \| Rebuild \(per-type\) \|/.test(cmb.plan),
+  () => cmb.plan.split("\n").filter((l) => /typed form\) \|/.test(l)));
+check("typed template: DCM present → note recommends PageWithTabsAndProgressBarTemplate (progress bar + top island) + re-bind",
+  /\*\*Template:\*\*/.test(cmb.plan) && /PageWithTabsAndProgressBarTemplate/.test(cmb.plan) && /RE-BIND/i.test(cmb.plan));
+check("typed groups: field GROUPS surface in the per-type Layout Region (Tab · … › Group), not flattened to the tab",
+  /Tab · [^\n|]*›[^\n|]*\| Acc \|/.test(cmb.plan),
+  () => cmb.plan.split("\n").filter((l) => /›/.test(l)).slice(0, 4));
+check("typed shared section: inherited base details/features are listed ONCE under 'Shared across all typed forms'",
+  /### Shared across all typed forms/.test(cmb.plan) && /Attachments/.test(cmb.plan.slice(cmb.plan.indexOf("### Shared across all typed forms"), cmb.plan.indexOf("### Typed page mappings"))),
+  () => cmb.plan.split("\n").filter((l) => /Shared across|standard feature|related list/.test(l)).slice(0, 6));
+check("plan order (typed): List page → Shared → Typed page mappings",
+  cmb.plan.indexOf("### List page") < cmb.plan.indexOf("### Shared across all typed forms")
+  && cmb.plan.indexOf("### Shared across all typed forms") < cmb.plan.indexOf("### Typed page mappings"));
+// mini-page mapping sits RIGHT AFTER the List page block (before the form spec) — non-typed with a folded mini page.
+const mpOrder = runMigration({
+  entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  addRecordMiniPage: { schema: "XMiniPage" },
+  miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XMiniPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MF"}}]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("mini-page order: '### Add mini-page mapping' comes right after '### List page' and before the form spec",
+  mpOrder.plan.indexOf("### List page") >= 0
+  && mpOrder.plan.indexOf("### List page") < mpOrder.plan.indexOf("### Add mini-page mapping")
+  && mpOrder.plan.indexOf("### Add mini-page mapping") < mpOrder.plan.indexOf("### X form page"),
+  () => mpOrder.plan.split("\n").filter((l) => /^### /.test(l)));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
