@@ -154,8 +154,8 @@ background will be generated or not.
   SVG must not be the only control against SVG/XML injection from scraped input.
 - Sanitize the recolored SVG the same as a logo — the sanitize rule and its strip list live in
   the Logos step — then save it to a temporary file. It is applied during Build and apply following
-  clio's branding guidance (`get-guidance name="branding"`): upload the file, then set it as the
-  shell background.
+  clio's branding guidance (`get-guidance name="branding"`), which sets the file as the shell
+  background.
 
 ## Fonts — after the background
 
@@ -214,9 +214,9 @@ that this will change branding for everyone on the environment, name what will c
 and/or the background), and proceed only on an explicit yes. This gate is per apply, not the
 in-flow "include logos/background?" choice collected earlier. If the user declines here, leave the
 assets unchanged and say so. The concrete tool mechanics live in clio's branding guidance
-(`get-guidance name="branding"`) — follow it to write the logos and to upload the recolored SVG
-and set it as the shell background. Skipped logos or a declined background mean the corresponding
-apply simply does not happen.
+(`get-guidance name="branding"`) — follow it to write the logos and to set the recolored SVG as
+the shell background. Skipped logos or a declined background mean the corresponding apply simply
+does not happen.
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
 other:
