@@ -696,9 +696,12 @@ export function renderPlan(result, opts = {}) {
     // Child pages
     grp("Child pages", childs.map((c) => `${esc(c.entity)} — separate page?`));
     // Quality gates — ALWAYS present (a page migration always produces a page to review). The Freedom
-    // UI-guidelines pass: apply `creatio-ui-guidelines` WHILE designing the page; if it was not used during the
-    // build, run it as a REVIEW pass at the end and FIX the findings (it is not optional).
-    grp("Quality gates", ["UI guidelines (`creatio-ui-guidelines`) applied to the page design — if NOT used while building, run it as a REVIEW pass and FIX the findings (style parity with the reference page: colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels)"]);
+    // PAGE-DESIGN guideline: the `creatio-ui-guidelines` skill — how to CREATE/lay out a Freedom page. This is
+    // NOT the clio build `get-guidance` contracts (page-modification / field-contract / related-list …), which
+    // the agent already reads to write the schema — it is the UI/UX design guideline, and it is the one that gets
+    // skipped. Apply it WHILE designing the page; if it was not used during the build, run it as a REVIEW pass at
+    // the end and FIX the findings.
+    grp("Quality gates", ["Freedom **page-design** guidelines — the `creatio-ui-guidelines` skill (how to create/lay out a Freedom page: component choice, colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels) applied WHILE designing the page; if NOT, run it as a REVIEW pass and FIX the findings (style parity with the reference page). NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema"]);
 
     if (n > 0) {
       P.push("", "### ✅ Plan-vs-Done checklist", "",
