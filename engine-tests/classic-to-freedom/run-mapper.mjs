@@ -1894,6 +1894,28 @@ check("mini-page order: '### Add mini-page mapping' comes right after '### List 
   && mpOrder.plan.indexOf("### Add mini-page mapping") < mpOrder.plan.indexOf("### X form page"),
   () => mpOrder.plan.split("\n").filter((l) => /^### /.test(l)));
 
+/* ---- Plan-vs-Done checklist skeleton (complete-by-construction control table) — one row per deliverable /
+   handler / ⚠ Confirm item, so the agent can't silently drop the mini page + the Logic/handlers section from
+   the final control table (the reported miss). ---- */
+const ckRun = runMigration({
+  entity: "X", seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }],
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",businessRules:{R1:{a:{ruleType:0,property:2,logical:0,conditions:[]}},R2:{a:{ruleType:0,property:2,logical:0,conditions:[]}}},methods:{init:function(){},onSaved:function(){},onContactChange:function(){}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"F",parentName:"T",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  addRecordMiniPage: { schema: "XMiniPage" },
+  miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XMiniPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MF"}}]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+const ck = ckRun.plan.slice(ckRun.plan.indexOf("### ✅ Plan-vs-Done checklist"));
+check("Plan-vs-Done checklist: emitted, with a Pages row for the MINI PAGE (a built page can't be left off the control table)",
+  /### ✅ Plan-vs-Done checklist/.test(ckRun.plan) && /Mini page `XMiniPage`/.test(ck),
+  () => ckRun.plan.split("\n").filter((l) => /Plan-vs-Done|Mini page/.test(l)));
+check("Plan-vs-Done checklist: ONE row per handler (init/onSaved/onContactChange) — not folded into loose prose",
+  /Handler — `init`/.test(ck) && /Handler — `onSaved`/.test(ck) && /Handler — `onContactChange`/.test(ck),
+  () => ck.split("\n").filter((l) => /Handler —/.test(l)));
+check("Plan-vs-Done checklist: business rules FOLDED to a count row (not one row each)",
+  /Business rules × \d+/.test(ck) && !/\| \d+ \| Business rule \|/.test(ck));
+check("Plan-vs-Done checklist: every row carries a ☐ pending status + an Evidence cell for the agent to fill",
+  /\| ☐ pending \| — \|/.test(ck) && /\| # \| Deliverable \| Status \| Evidence \|/.test(ck));
+
 /* ---- session review (Applicant): three defects ---- */
 // #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned
 // sectionLayerCount:0 because it derives the section name from the entity, not the page prefix — clio PR #937).
