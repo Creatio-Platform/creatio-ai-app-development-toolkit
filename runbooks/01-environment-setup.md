@@ -15,11 +15,14 @@ Read `AGENTS.md` for the Context Files Reference. For local clio CLI invocations
 
 ## clio MCP Availability Preflight (fail fast)
 
-- Before the first clio operation, run a clio MCP **availability preflight**: confirm native clio MCP tools are surfaced to this host (e.g. `get-tool-contract` resolves and the resident-tool index is reachable). Run it once, up front.
-- If clio MCP is **unavailable** — the server did not launch, no native clio tools were surfaced, or a registered environment is **unresponsive** — STOP and return a **prerequisites blocker** instead of degrading to a slower path. The blocker lists what the developer fixes once, up front: install .NET, install clio (`dotnet tool install clio -g`), and register the environment (`clio reg-web-app`).
-- Do NOT self-bootstrap when clio MCP is unavailable: **do not install** or download the .NET SDK, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. Report the missing prerequisites and let the developer fix them.
-- Treat a registered-but-unresponsive server as unavailable: run at most one confirmation probe, then show the blocker. Do not retry indefinitely, and do not reach for the Python wrapper to work around a dead server.
-- The full contract is in `AGENTS.md`, "clio MCP availability preflight". The prerequisite checks in Step 1 below are the fail-fast messages this preflight surfaces.
+- Before the first clio operation, run a clio MCP **availability preflight** — once, up front. It has three states, and the STOP decision is a **deterministic gate**, not a judgement call:
+  - **State A — native clio MCP tools are surfaced to this host** (e.g. `get-tool-contract` is a resident tool-call): proceed. No script needed — this is host-observable.
+  - **No native tools surfaced** — this is **not automatically a blocker**; do not guess and do not self-bootstrap. Run the gate script `runtime/scripts/clio_mcp_preflight.py` and act on its exit code + sentinel:
+    - **State B — `usable` (exit 0, `PREFLIGHT: clio-mcp-usable`)**: clio is healthy. On a host with no native MCP transport the stdio wrapper is the sanctioned path — explicit developer opt-in only. clio is not the blocker.
+    - **State C — `blocked` (exit 3, `BLOCKER: clio-mcp-unavailable`)**: clio could not be resolved, or its MCP server did not respond. STOP and return the gate's **prerequisites blocker** verbatim instead of degrading to a slower path. The blocker lists what the developer fixes once, up front: install .NET, install clio (`dotnet tool install clio -g`) — or add an existing install to PATH / set `CLIO_CMD` — and register the environment (`clio reg-web-app`).
+- On State C do NOT self-bootstrap: **do not install** or download the .NET SDK, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. Report the missing prerequisites and let the developer fix them.
+- A registered-but-**unresponsive** server is State C: the gate is ONE bounded probe (default 20s), then the blocker. Do not retry indefinitely, and do not reach for the Python wrapper to work around a dead server.
+- The full contract is in `AGENTS.md`, "clio MCP availability preflight". The prerequisite checks in Step 1 below are the fail-fast messages `clio_mcp_preflight.py` surfaces.
 
 ## MCP Transport And Single clio Context
 
@@ -261,7 +264,7 @@ Report the resolved writable package context in the conversation so Agent 2 and 
 
 ## Completion Criteria
 
-✅ clio MCP availability preflight passed — native clio tools are surfaced before the first clio operation; otherwise the run stopped with a prerequisites blocker (install .NET, install clio, `reg-web-app`) and did not self-bootstrap  
+✅ clio MCP availability preflight passed — native clio tools are surfaced (State A), or the `clio_mcp_preflight.py` gate returned `usable` (State B) and the wrapper was used only on explicit opt-in; otherwise the gate returned `blocked` (State C) and the run stopped with a prerequisites blocker (install .NET, install clio, `reg-web-app`) and did not self-bootstrap  
 ✅ `clio healthcheck -e <env_name>` passes  
 ✅ Single clio context confirmed — native MCP and the stdio wrapper resolve the same clio config and the same registered environment  
 ✅ Resolved environment name, URL, and runtime are reported in the conversation  

@@ -501,6 +501,30 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("unresponsive", content, str(path))
             self.assertIn("retry indefinitely", content, str(path))
 
+    def test_docs_mandate_deterministic_preflight_gate_script(self):
+        # ENG-92985 (elevation): the STOP decision is a deterministic gate, not prose
+        # the agent can reason past. Every contract doc must name the gate script and
+        # the three-state verdict (usable / blocked) with its sentinels.
+        for path in CLIO_MCP_PREFLIGHT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("clio_mcp_preflight.py", content, str(path))
+            self.assertIn("deterministic gate", content, str(path))
+            self.assertIn("clio-mcp-usable", content, str(path))
+            self.assertIn("clio-mcp-unavailable", content, str(path))
+            self.assertIn("state b", content, str(path))
+            self.assertIn("state c", content, str(path))
+            # "no native tools surfaced" is explicitly NOT auto-blocking (challenge C5)
+            self.assertIn("not automatically a blocker", content, str(path))
+
+    def test_docs_define_precise_wrapper_opt_in_signal(self):
+        # ENG-92985 (elevation, challenge C2): a generic approval is not opt-in; the
+        # escape hatch is unlocked only by an explicit developer instruction, and the
+        # contract-level doc (AGENTS.md) must say so.
+        content = read_text(ROOT / "AGENTS.md").lower()
+        self.assertIn("opt-in signal", content)
+        self.assertIn("not** opt-in", content)
+        self.assertIn("approved command prefix", content)
+
     def test_docs_frame_mcp_client_as_opt_in_escape_hatch(self):
         # ENG-92985 (AC5/AC7): the Python client is an explicit opt-in escape hatch,
         # not the default degraded path. Keep the ENG-91276 native/fallback framing
