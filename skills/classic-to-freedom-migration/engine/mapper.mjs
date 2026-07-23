@@ -262,7 +262,7 @@ export function mapToFreedom(eff, opts = {}) {
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
   const ctx = { eff, cols, resources, resolveText, caption, detailSchemas, columnTitles, colMeta, labelFor,
-    index, profileAnchors, payloadFields, payloadDetails };
+    index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
   const F = mapFields(ctx, containers);
@@ -585,7 +585,10 @@ function mapFields(ctx, containers) {
     const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
     let vis = f.visible !== false;
     if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
-    if (f.visible === "dynamic") needsDecision.push({ kind: "visibility-rule", item: col,
+    // On a MINI PAGE every add-mode field is dynamically shown/hidden BY THE ADD-MODE MECHANISM (not a business
+    // rule) — flagging each as a visibility-rule was pure noise (7 identical ⚠ on a quick-add form). Skip it for
+    // mini pages; on a real form a dynamic-visibility field IS a rule worth confirming.
+    if (f.visible === "dynamic" && !ctx.isMiniPage) needsDecision.push({ kind: "visibility-rule", item: col,
       reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
     if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
       reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
@@ -827,11 +830,11 @@ function mapUnmappedDrop(eff, accountedFor) {
   const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
   const dropped = new Set();
   for (const i of (eff.items || [])) {
-    // RV7 — a template-owned item is normally layout context (skip), EXCEPT a `…Button` outside the known
-    // action set: it is neither emitted as a card action nor otherwise accounted, so without this it vanished
-    // with zero warning (unlike an identically-named CUSTOM button, which was already flagged).
-    const isButton = i.name.endsWith("Button");
-    if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
+    // A template-owned item is layout/chrome the Freedom template already provides — skip it, INCLUDING its
+    // standard buttons (SaveEdit/CancelEdit/CloseMiniPage/QueueItem…). Flagging those as "unmapped" was pure
+    // noise on every page (the template ships them) — only a CUSTOM (non-template) button with no mapping is a
+    // real gap worth surfacing.
+    if (i.templateOwned || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
     if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
     if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
     dropped.add(i.name);
@@ -843,14 +846,10 @@ function mapUnmappedDrop(eff, accountedFor) {
     const isBtn = i.name.endsWith("Button");
     const captionNote = i.caption ? ` (caption ${i.caption})` : "";
     const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
-    let reason;
-    if (!isBtn) {
-      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
-    } else if (i.templateOwned) {
-      reason = `standard/template button '${i.name}' is not in the recognized action set and got no card-action mapping — confirm the Freedom template already provides it, else wire it as a Freedom card action (RV7)`;
-    } else {
-      reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
-    }
+    // Only CUSTOM (non-template) items reach here now — template-owned buttons are skipped above.
+    const reason = isBtn
+      ? `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`
+      : `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
     needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
   }
   return { needsDecision };

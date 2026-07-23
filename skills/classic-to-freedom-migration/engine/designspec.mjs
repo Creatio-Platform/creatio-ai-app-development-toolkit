@@ -51,6 +51,7 @@ function regionResolver(viewConfigDiff, resources = {}) {
   // Major 4 — a caption is a `$Resources.Strings.<key>` binding; show its human text from the resource map
   // (the plan stays readable) — fall back to the key when the text is not resolved.
   const capText = (raw) => { const k = resourceKey(raw); return resources[k] ?? k; }; // same key normalization the mapper used to STORE the string (incl. #anchor strip)
+  const capResolved = (raw) => resources[resourceKey(raw)] != null; // did the caption resolve to REAL text (vs the raw key)?
   const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
   // a profile island container often has NO caption (it is a visual grouping, e.g. `ContactContainer`) but is
   // a DISTINCT `crt.GridContainer` — keep the islands apart in the Region by falling back to its own name
@@ -74,7 +75,13 @@ function regionResolver(viewConfigDiff, resources = {}) {
       const o = byName.get(p);
       if (!o) return esc(p);
       if (o.values?.type === "crt.Tab") return group ? `Tab · ${label(o)} › ${group}` : `Tab · ${label(o)}`;
-      if (group == null && o.values?.caption) group = label(o); // nearest captioned group wins (skip plain layout grids)
+      // nearest captioned group wins — show it when the caption RESOLVES to real text OR is still a human-readable
+      // key; drop only an auto-generated NOISE key (a hex-hash run, e.g. `Tab67ea6463TabLabelGroupc1bf3d46GroupCaption`),
+      // which is the ugly leak the Region should not carry (still surfaced as a [group-caption] ⚠ to resolve).
+      if (group == null && o.values?.caption) {
+        const t = capText(o.values.caption);
+        if (capResolved(o.values.caption) || !/[0-9a-f]{6}/i.test(t)) group = esc(t);
+      }
       prev = p;
       p = o.parentName;
     }
@@ -621,95 +628,99 @@ export function renderPlan(result, opts = {}) {
     };
     for (const c of childs) renderChild(c, 4);
   }
-  // ---- ✅ Plan-vs-Done checklist (complete-by-construction control table) ----
-  // DERIVED from the plan above: one row per deliverable / handler / ⚠ Confirm item, so the agent fills Status +
-  // Evidence and structurally CANNOT silently drop a row. This closes the recurring miss where a built mini page
-  // and the whole Logic/handlers section were left off the final control table (present only in loose prose, so
-  // an un-migrated handler like init/onSaved went unnoticed). Grouped at tab/region granularity for the form
-  // (islands/field-groups collapse to their tab); business rules folded to a count; handlers + ⚠ Confirm items
-  // stay one row each (that is exactly where the silent drops happened).
-  {
-    const CK = [];
-    let n = 0;
-    const grp = (title, items) => {
-      if (!items.length) return;
-      CK.push("", `**${title}**`, "", "| # | Deliverable | Status | Evidence |", "| --- | --- | --- | --- |");
-      for (const it of items) CK.push(`| ${++n} | ${it} | ☐ pending | — |`);
-    };
-    // Pages — every page this migration creates (the mini page is a page, not a footnote)
-    const pages = [`List page → ${fill(pm.listTemplate, "<FILL: list template>")}`];
-    if (!typed.length) pages.push(`Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`);
-    for (const t of typed) pages.push(`Typed form \`${esc(t.schema)}\`${t.type ? ` — type "${esc(t.type)}"` : ""}${t.bindOnly ? " (bind by Type)" : ""}`);
-    if (result.miniPage?.schema) pages.push(`Mini page \`${esc(result.miniPage.schema)}\``);
-    grp("Pages", pages);
-    // List page contents
-    const section = result.section || null;
-    const listItems = [];
-    if (pm.sectionSchema || section || result.miniPage) {
-      listItems.push("List columns");
-      if ((section?.quickFilters || []).length) listItems.push(`Quick filters (${section.quickFilters.length})`);
-      if ((section?.sectionActions || []).length) listItems.push(`Section actions (${section.sectionActions.length})`);
-    }
-    grp("List page", listItems);
-    // Form — Layout, grouped at TOP-LEVEL tab/region (islands + field-groups collapse to their tab)
-    const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
-    const top = (r) => { const s = String(r).split(" › ")[0]; return s === "Header / top" ? "Header" : s; };
-    const order = [];
-    const byRegion = new Map();
-    const add = (region, label) => {
-      const k = top(region);
-      if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, items: [] }); order.push(k); }
-      const e = byRegion.get(k);
-      if (label) e.items.push(label); else e.fields++;
-    };
-    for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
-    for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-    for (const s of cs.standardFeatures || []) add(s.tab ? regionOf(s.tab) : "⚠ unplaced", esc(s.feature || s.caption || "feature"));
-    for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
-    const layoutItems = order.map((k) => {
-      const e = byRegion.get(k);
-      const parts = [];
-      if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
-      parts.push(...e.items);
-      return `${k} — ${parts.join(" · ")}`;
-    });
-    grp("Form — Layout (by tab/region)", layoutItems);
-    // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case)
-    const logicItems = [];
-    const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
-    if (ruleN) logicItems.push(`Business rules × ${ruleN}`);
-    for (const h of cs.handlerStubs || []) logicItems.push(`Handler — \`${esc(h.sourceMethod)}\``);
-    grp("Form — Logic", logicItems);
-    // Card actions — Process/Print each their own row; native view controls folded into one
-    const acts = cs.cardActions || [];
-    const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => `Card action — ${esc(a.replace(/Button$/, ""))}`);
-    const natives = acts.filter((a) => !/process|print/i.test(a));
-    if (natives.length) actItems.push(`Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`);
-    grp("Card actions", actItems);
-    // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere; keep-removals collapsed)
-    const SHOWN_ELSEWHERE_CK = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
-    const ndAll = (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind));
-    const keepRm = ndAll.filter((nn) => nn.kind === "removal" && nn.keep);
-    const confItems = ndAll.filter((nn) => !(nn.kind === "removal" && nn.keep)).map((d) => `[${esc(d.kind)}] ${esc(d.item)}`);
-    if (keepRm.length) confItems.push(`[removals ×${keepRm.length}] client-layer re-layout — KEEP all`);
-    grp("⚠ Confirm worklist", confItems);
-    // Child pages
-    grp("Child pages", childs.map((c) => `${esc(c.entity)} — separate page?`));
-    // Quality gates — ALWAYS present (a page migration always produces a page to review). The Freedom
-    // PAGE-DESIGN guideline: the `creatio-ui-guidelines` skill — how to CREATE/lay out a Freedom page. This is
-    // NOT the clio build `get-guidance` contracts (page-modification / field-contract / related-list …), which
-    // the agent already reads to write the schema — it is the UI/UX design guideline, and it is the one that gets
-    // skipped. Apply it WHILE designing the page; if it was not used during the build, run it as a REVIEW pass at
-    // the end and FIX the findings.
-    grp("Quality gates", ["Freedom **page-design** guidelines — the `creatio-ui-guidelines` skill (how to create/lay out a Freedom page: component choice, colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels) applied WHILE designing the page; if NOT, run it as a REVIEW pass and FIX the findings (style parity with the reference page). NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema"]);
-
-    if (n > 0) {
-      P.push("", "### ✅ Plan-vs-Done checklist", "",
-        "> One row per deliverable / handler / ⚠ Confirm item, generated from the plan above. Fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) and **Evidence** (schema saved · render checked · on-stand query) for EVERY row. A row left `☐ pending` = not verified = the migration is NOT complete. **Do not delete rows.**");
-      P.push(...CK);
-      P.push("");
-    }
-  }
-  P.push("> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings · Plan-vs-Done checklist).");
+  // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
+  // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
+  // presented AFTER implementation. See renderChecklist below.
+  P.push("> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
   return P.join("\n");
+}
+
+// The Plan-vs-Done checklist — a complete-by-construction control table DERIVED from the plan (one row per
+// deliverable / handler / ⚠ Confirm item), so nothing is silently dropped from the final report. It is NOT part
+// of `--plan` (that is the pre-build approval artifact); the agent produces this at the END via `--checklist`,
+// AFTER implementing, and fills Status + Evidence per row. Grouped at tab/region granularity for the form
+// (islands/field-groups collapse to their tab); business rules folded to a count; handlers + ⚠ Confirm items
+// stay one row each (that is exactly where the silent drops happened).
+export function renderChecklist(result, opts = {}) {
+  const cs = result.changeSet || {};
+  const pm = opts.planMeta || {};
+  const typed = result.typedPages || [];
+  const childs = result.childPages || [];
+  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
+  const CK = [];
+  let n = 0;
+  const grp = (title, items) => {
+    if (!items.length) return;
+    CK.push("", `**${title}**`, "", "| # | Deliverable | Status | Evidence |", "| --- | --- | --- | --- |");
+    for (const it of items) CK.push(`| ${++n} | ${it} | ☐ pending | — |`);
+  };
+  // Pages — every page this migration creates (the mini page is a page, not a footnote)
+  const pages = [`List page → ${fill(pm.listTemplate, "<FILL: list template>")}`];
+  if (!typed.length) pages.push(`Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`);
+  for (const t of typed) pages.push(`Typed form \`${esc(t.schema)}\`${t.type ? ` — type "${esc(t.type)}"` : ""}${t.bindOnly ? " (bind by Type)" : ""}`);
+  if (result.miniPage?.schema) pages.push(`Mini page \`${esc(result.miniPage.schema)}\``);
+  grp("Pages", pages);
+  // List page contents
+  const section = result.section || null;
+  const listItems = [];
+  if (pm.sectionSchema || section || result.miniPage) {
+    listItems.push("List columns");
+    if ((section?.quickFilters || []).length) listItems.push(`Quick filters (${section.quickFilters.length})`);
+    if ((section?.sectionActions || []).length) listItems.push(`Section actions (${section.sectionActions.length})`);
+  }
+  grp("List page", listItems);
+  // Form — Layout, grouped at TOP-LEVEL tab/region (islands + field-groups collapse to their tab)
+  const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
+  const top = (r) => { const s = String(r).split(" › ")[0]; return s === "Header / top" ? "Header" : s; };
+  const order = [];
+  const byRegion = new Map();
+  const add = (region, label) => {
+    const k = top(region);
+    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, items: [] }); order.push(k); }
+    const e = byRegion.get(k);
+    if (label) e.items.push(label); else e.fields++;
+  };
+  for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
+  for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
+  for (const s of cs.standardFeatures || []) add(s.tab ? regionOf(s.tab) : "⚠ unplaced", esc(s.feature || s.caption || "feature"));
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
+  const layoutItems = order.map((k) => {
+    const e = byRegion.get(k);
+    const parts = [];
+    if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
+    parts.push(...e.items);
+    return `${k} — ${parts.join(" · ")}`;
+  });
+  grp("Form — Layout (by tab/region)", layoutItems);
+  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case)
+  const logicItems = [];
+  const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
+  if (ruleN) logicItems.push(`Business rules × ${ruleN}`);
+  for (const h of cs.handlerStubs || []) logicItems.push(`Handler — \`${esc(h.sourceMethod)}\``);
+  grp("Form — Logic", logicItems);
+  // Card actions — Process/Print each their own row; native view controls folded into one
+  const acts = cs.cardActions || [];
+  const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => `Card action — ${esc(a.replace(/Button$/, ""))}`);
+  const natives = acts.filter((a) => !/process|print/i.test(a));
+  if (natives.length) actItems.push(`Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`);
+  grp("Card actions", actItems);
+  // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere; keep-removals collapsed)
+  const SHOWN_ELSEWHERE_CK = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
+  const ndAll = (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind));
+  const keepRm = ndAll.filter((nn) => nn.kind === "removal" && nn.keep);
+  const confItems = ndAll.filter((nn) => !(nn.kind === "removal" && nn.keep)).map((d) => `[${esc(d.kind)}] ${esc(d.item)}`);
+  if (keepRm.length) confItems.push(`[removals ×${keepRm.length}] client-layer re-layout — KEEP all`);
+  grp("⚠ Confirm worklist", confItems);
+  // Child pages
+  grp("Child pages", childs.map((c) => `${esc(c.entity)} — separate page?`));
+  // Quality gates — ALWAYS present (a page migration always produces a page to review). The Freedom PAGE-DESIGN
+  // guideline: the `creatio-ui-guidelines` skill — how to CREATE/lay out a Freedom page. NOT the clio build
+  // `get-guidance` contracts the agent already reads to write the schema — it is the UI/UX design guideline, the
+  // one that gets skipped. Apply it WHILE designing; if not, run it as a REVIEW pass at the end and FIX findings.
+  grp("Quality gates", ["Freedom **page-design** guidelines — the `creatio-ui-guidelines` skill (how to create/lay out a Freedom page: component choice, colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels) applied WHILE designing the page; if NOT, run it as a REVIEW pass and FIX the findings (style parity with the reference page). NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema"]);
+
+  if (n === 0) return "";
+  return ["### ✅ Plan-vs-Done checklist", "",
+    "> Present this **AFTER implementing** (not part of the approval plan). One row per deliverable / handler / ⚠ Confirm item. Fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) and **Evidence** (schema saved · render checked · on-stand query) for EVERY row. A row left `☐ pending` = not verified = the migration is NOT complete. **Do not delete rows.**",
+    ...CK].join("\n");
 }

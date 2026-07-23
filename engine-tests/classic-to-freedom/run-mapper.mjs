@@ -1121,12 +1121,13 @@ const rv6 = mapToFreedom(mergeHierarchy(
 const rv6f = rv6.viewConfigDiff.find((o) => o.name === "FldA");
 check("RV6: multi-island profile field keeps colSpan 1 (not 24), routed into its own island container",
   !!rv6f && rv6f.values.layoutConfig.colSpan === 1 && rv6f.parentName !== "SideAreaProfileContainer");
-// RV7 — a template-owned button outside KNOWN_ACTION_ITEMS is surfaced, not silently dropped.
+// RV7 (revised) — a template-owned button is template-PROVIDED chrome; flagging it as unmapped was noise on
+// every page (session review), so it is NOT surfaced. Only a CUSTOM button with no mapping is a real gap.
 const rv7 = mapToFreedom(mergeHierarchy(
   [L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
   { seedTemplate: [L("Tpl", { diff: [di({ name: "FooButton", parentName: "Header" })] })] }));
-check("RV7: a template-owned button outside the known action set is surfaced (not silently dropped)",
-  rv7.needsDecision.some((n) => n.kind === "unmapped-component" && n.item === "FooButton" && /standard\/template button/.test(n.reason)));
+check("RV7 (revised): a template-owned button is NOT flagged as unmapped-component (template provides it — noise removed)",
+  !rv7.needsDecision.some((n) => n.kind === "unmapped-component" && n.item === "FooButton"));
 // RV11 — (a) a template-owned Photo triggers NO spurious image decision; (b) a non-bare image name is caught.
 const rv11a = mapToFreedom(mergeHierarchy(
   [L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
@@ -1904,10 +1905,13 @@ const ckRun = runMigration({
   miniPageSchemas: { XMiniPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XMiniPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"MF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MF"}}]};});` }] } },
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
-const ck = ckRun.plan.slice(ckRun.plan.indexOf("### ✅ Plan-vs-Done checklist"));
-check("Plan-vs-Done checklist: emitted, with a Pages row for the MINI PAGE (a built page can't be left off the control table)",
-  /### ✅ Plan-vs-Done checklist/.test(ckRun.plan) && /Mini page `XMiniPage`/.test(ck),
-  () => ckRun.plan.split("\n").filter((l) => /Plan-vs-Done|Mini page/.test(l)));
+const ck = ckRun.checklist || "";
+check("Plan-vs-Done checklist: produced as a SEPARATE artifact (result.checklist), NOT part of the approval plan",
+  /### ✅ Plan-vs-Done checklist/.test(ck) && !/Plan-vs-Done checklist/.test(ckRun.plan) && /AFTER implementing/.test(ck),
+  () => ckRun.plan.split("\n").filter((l) => /Plan-vs-Done|checklist/i.test(l)));
+check("Plan-vs-Done checklist: has a Pages row for the MINI PAGE (a built page can't be left off the control table)",
+  /Mini page `XMiniPage`/.test(ck),
+  () => ck.split("\n").filter((l) => /Mini page/.test(l)));
 check("Plan-vs-Done checklist: ONE row per handler (init/onSaved/onContactChange) — not folded into loose prose",
   /Handler — `init`/.test(ck) && /Handler — `onSaved`/.test(ck) && /Handler — `onContactChange`/.test(ck),
   () => ck.split("\n").filter((l) => /Handler —/.test(l)));
@@ -1918,6 +1922,46 @@ check("Plan-vs-Done checklist: every row carries a ☐ pending status + an Evide
 check("Plan-vs-Done checklist: always seeds a Quality-gates row for the UI-guidelines review (apply while building; else review + fix)",
   /\*\*Quality gates\*\*/.test(ck) && /creatio-ui-guidelines/.test(ck) && /run it as a REVIEW pass and FIX/.test(ck),
   () => ck.split("\n").filter((l) => /Quality gates|guidelines/.test(l)));
+
+/* ---- session review (Applicant mini-page + noise): 3 fixes ---- */
+// #A unmapped-component — standard/template buttons (SaveEdit/CancelEdit/CloseMiniPage…) are template-PROVIDED,
+// so flagging them was noise on every page; only a CUSTOM button with no mapping is a real gap.
+const btnSeed = L("Tpl", { diff: [di({ name: "SaveEditButton" }), di({ name: "CloseMiniPageButton" })] });
+const btnMain = L("Client", { entity: "X", diff: [di({ name: "MyCustomButton" }), di({ name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } })] });
+const btnCs = mapToFreedom(mergeHierarchy([btnMain], { seedTemplate: [btnSeed] }));
+check("unmapped-component: standard/template buttons (SaveEdit/CloseMiniPage) are NOT flagged — the template provides them (noise removed)",
+  !btnCs.needsDecision.some((n) => n.kind === "unmapped-component" && /SaveEditButton|CloseMiniPageButton/.test(n.item)),
+  () => btnCs.needsDecision.filter((n) => n.kind === "unmapped-component").map((n) => n.item));
+check("unmapped-component: a CUSTOM (non-template) button with no mapping IS still flagged",
+  btnCs.needsDecision.some((n) => n.kind === "unmapped-component" && n.item === "MyCustomButton"));
+
+// #B visibility-rule — a dynamic-visibility field is a real rule on a FORM, but on a MINI PAGE it is just the
+// add-mode mechanism (7 identical ⚠ on a quick-add form was noise). Suppress it only for mini pages.
+const visMain = L("P", { entity: "X", diff: [di({ name: "F", parentName: "ProfileContainer", propertyName: "items", bindTo: "Fld", visible: "dynamic" })] });
+const visEff = mergeHierarchy([visMain]);
+check("visibility-rule: a dynamic-visibility field IS flagged on a normal form",
+  mapToFreedom(visEff).needsDecision.some((n) => n.kind === "visibility-rule" && n.item === "Fld"),
+  () => mapToFreedom(visEff).needsDecision.filter((n) => n.kind === "visibility-rule"));
+check("visibility-rule: SUPPRESSED on a mini page (add-mode visibility, not a business rule)",
+  !mapToFreedom(visEff, { isMiniPage: true }).needsDecision.some((n) => n.kind === "visibility-rule"));
+
+// #C region caption — an UNRESOLVED group caption key (e.g. Tab..TabLabelGroup..GroupCaption) must NOT leak into
+// the Region column; fall back to the plain tab. A RESOLVED caption still shows as the group.
+const capUnres = { resources: { TabCap: "Basic information" }, viewConfigDiff: [
+  { name: "GT", parentName: "Tabs", values: { type: "crt.Tab", caption: "$Resources.Strings.TabCap" } },
+  { name: "GRP", parentName: "GT", values: { caption: "$Resources.Strings.Tab67ea6463TabLabelGroupc1bf3d46GroupCaption" } },
+  { name: "FF", parentName: "GRP", values: { control: "Fld" } },
+] };
+check("region caption: an unresolved group caption key is NOT shown in the Region (falls back to the plain tab)",
+  /\| Tab · Basic information \|/.test(renderDesignSpec({ entity: "X", changeSet: capUnres })) && !/GroupCaption/.test(renderDesignSpec({ entity: "X", changeSet: capUnres })),
+  () => renderDesignSpec({ entity: "X", changeSet: capUnres }).split("\n").filter((l) => /Tab ·/.test(l)));
+const capRes = { resources: { TabCap: "Basic information", GrpCap: "Sender" }, viewConfigDiff: [
+  { name: "GT", parentName: "Tabs", values: { type: "crt.Tab", caption: "$Resources.Strings.TabCap" } },
+  { name: "GRP", parentName: "GT", values: { caption: "$Resources.Strings.GrpCap" } },
+  { name: "FF", parentName: "GRP", values: { control: "Fld" } },
+] };
+check("region caption: a RESOLVED group caption still shows as the group (Tab · … › Group)",
+  /\| Tab · Basic information › Sender \|/.test(renderDesignSpec({ entity: "X", changeSet: capRes })));
 
 /* ---- session review (Applicant): three defects ---- */
 // #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned

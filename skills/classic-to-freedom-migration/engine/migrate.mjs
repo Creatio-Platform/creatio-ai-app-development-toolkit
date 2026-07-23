@@ -20,14 +20,15 @@
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate } // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
 //   }
-// CLI: `--plan`/`--spec` print the artifact; add `--out <file>` to WRITE it (the agent presents the file, not stdout).
+// CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
+// file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
 // Prefer inline "body" (get-classic-migration-bundle writes bodies inline into the manifest) over "file" to avoid path fragility.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
-import { renderDesignSpec, renderPlan } from "./designspec.mjs";
+import { renderDesignSpec, renderPlan, renderChecklist } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -127,6 +128,7 @@ export function runMigration(manifest, opts = {}) {
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
+    isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
   });
   // Attach each detail's ADD/EDIT MECHANISM to the mapped detail and raise it as a decision, so the Freedom
   // rebuild reproduces the real add flow instead of shipping a plain related list. (renderPlan shows d.addMode
@@ -304,7 +306,7 @@ export function runMigration(manifest, opts = {}) {
     if (mkey && visited.has(mkey)) { miniPage.cyclic = true; }
     else if (mkey) {
       try {
-        const mRes = runMigration(miniPageSchemas[mkey], { baseDir, visited: new Set([...visited, mkey]) });
+        const mRes = runMigration(miniPageSchemas[mkey], { baseDir, visited: new Set([...visited, mkey]), isMiniPage: true });
         miniPage.spec = mRes.designSpec;
         miniPage.blocked = !!mRes.gate?.blocked;
         miniPage.reasons = mRes.gate?.reasons || [];
@@ -485,6 +487,7 @@ export function runMigration(manifest, opts = {}) {
   const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta, planMetaMissing: out.planMetaMissing, signals: out.signals, signalsMissing: out.signalsMissing };
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);
+  out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
 
@@ -496,6 +499,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const argv = process.argv.slice(2);
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
+  const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
   const outIdx = argv.indexOf("--out");        // --out <file>: WRITE the output to a file so the agent presents the file, not a hand-paste
   // `--out` must be followed by a real path. Without this guard a trailing `--out` silently fell back to
   // stdout (documented flag → no write), and `--out --plan` swallowed the next flag — both silent misfires.
@@ -528,6 +532,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let output;
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
+  else if (checklistMode) output = result.checklist + "\n";
   else output = JSON.stringify(result, null, 2) + "\n";
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
   // fails loudly so a blocked/incomplete run can't be mistaken for a clean one — stderr note + non-zero exit
@@ -541,6 +546,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
+  else if (checklistMode) label = "checklist";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }
