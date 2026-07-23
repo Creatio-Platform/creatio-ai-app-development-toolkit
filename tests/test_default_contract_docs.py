@@ -598,6 +598,20 @@ class DefaultContractDocsTests(unittest.TestCase):
             "not the recommended" in agents or "not recommended" in agents, "AGENTS.md",
         )
 
+    def test_docs_state_b_gives_actionable_how_to_and_reload_caveat(self):
+        # ENG-92985 (#2/#3): State B must be actionable AND honest — surface WHERE the
+        # per-host connect steps live (install-docs pointer + optional paste-ready
+        # config snippet the developer applies), and be honest that enabling native MCP
+        # usually needs a session reload (fresh context), so "retry" is a new session,
+        # not this one — recommend native at task start, name the mid-task trade-off.
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        # #2 — actionable how-to (not just "what")
+        self.assertIn("config snippet", agents)
+        self.assertIn("docs/install.md", agents)
+        # #3 — reload honesty
+        self.assertIn("session reload", agents)
+        self.assertIn("mid-task", agents)
+
 
 if __name__ == "__main__":
     unittest.main()
