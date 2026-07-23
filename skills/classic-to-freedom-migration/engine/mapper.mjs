@@ -789,10 +789,13 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditabl
   for (const m of payloadMethods)
     needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
 
-  // removals (B6) — client removals only; template-internal removes are context (F9, C3)
+  // removals (B6) — client removals only; template-internal removes are context (F9, C3).
+  // `keep` = the KEEP-by-default case (removed by a layer NOT confirmed client-editable) — almost always a base
+  // element RE-LAID-OUT by a child layer, not a genuine deletion; the renderer COLLAPSES these into one summary
+  // line so the worklist isn't flooded. `removedBy` lets the renderer name the culprit layer(s).
   for (const rm of eff.removed.filter(x => !x.fromTemplate)) {
     const clientRemoved = clientEditableSchemas.has(rm.removedBy);
-    needsDecision.push({ kind: "removal", item: rm.name,
+    needsDecision.push({ kind: "removal", item: rm.name, removedBy: rm.removedBy, keep: !clientRemoved,
       reason: clientRemoved
         ? `client schema '${rm.removedBy}' removed it — remove/hide on Freedom`
         : `removed by '${rm.removedBy}' (not confirmed client-editable) — KEEP on Freedom unless confirmed` });

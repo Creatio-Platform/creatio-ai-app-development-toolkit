@@ -197,6 +197,25 @@ check("C3: client remove of a base element surfaces as a removal decision (BaseA
 check("C3: template-internal remove (seed removed its own element) is NOT a removal decision (BaseB)",
   !c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseB"));
 
+/* ---- session review (Documents typed): KEEP-removals collapse into ONE worklist line ---- */
+// A typed entity's client layers re-lay-out many base elements as remove+re-insert; each is a KEEP-by-default
+// removal. Rendered one ⚠ row each they flooded the worklist (confusing noise). They must fold into ONE line.
+const rmSeed = L("Tpl", { diff: [di({ name: "R1", itemType: 15 }), di({ name: "R2", itemType: 15 }), di({ name: "R3", itemType: 15 })] });
+const rmClient = L("WorkCorrespondence", { entity: "X", diff: [di({ operation: "remove", name: "R1" }), di({ operation: "remove", name: "R2" }), di({ operation: "remove", name: "R3" })] });
+const rmMerge = mergeHierarchy([rmClient], { seedTemplate: [rmSeed] });
+const rmSpec = renderDesignSpec({ entity: "X", changeSet: mapToFreedom(rmMerge) });
+check("removals collapse: N KEEP-removals fold into ONE '[removals ×N]' worklist line (naming the client layer), not N noisy rows",
+  /\*\*\[removals ×3\]\*\*/.test(rmSpec)
+  && /KEEP all on Freedom/.test(rmSpec)
+  && /`WorkCorrespondence`/.test(rmSpec)
+  && !/\*\*\[removal\]\*\*/.test(rmSpec),
+  () => rmSpec.split("\n").filter((l) => /removal/i.test(l)));
+check("removals collapse: a CONFIRMED client remove (removing layer IS client-editable) stays an individual '[removal]' item — remove/hide on Freedom",
+  (() => {
+    const s = renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] }), { clientEditableSchemas: ["WorkCorrespondence"] }) });
+    return /\*\*\[removal\]\*\* R1 — [^\n]*remove\/hide on Freedom/.test(s) && !/\[removals ×/.test(s);
+  })());
+
 /* ---- C5 build-out: a classic CONTROL_GROUP inside a tab becomes a crt.ExpansionPanel (not flattened) ---- */
 const c5client = L("Client", { entity: "X", diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
@@ -941,8 +960,8 @@ check("#4 Logic: multiple filters on one attribute collapse to a single row",
 // #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — not template-provided",
-  /\| Tab · Next steps \(new\) \| Next steps \| Component \| ⚠ ADD — not in the default Freedom template \|/.test(wReg.designSpec));
+check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — a new tab, not template-provided",
+  /\| Tab · Next steps \(new\) \| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
 
 // #8 — Action Dashboard = TWO Freedom components (Case progress bar + Next steps); the default template ships
 // NEITHER, so each is flagged "ADD — not in the default template" and auto-populates from the object's case.
@@ -957,9 +976,11 @@ check("#8 DCM: each component carries the 'NOT in the default template — ADD i
 check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema ManagerName='DcmSchemaManager', NOT CaseSchemaManager (the false-negative that missed the stage bar)",
   dcmCs.changeSet.widgets.every((w) => /DcmSchemaManager/.test(w.note || "") && /NOT 'CaseSchemaManager'/.test(w.note || ""))
   && /DcmSchemaManager/.test(dcmCs.designSpec) && !/ManagerName='CaseSchemaManager'\b(?!.*wrong)/.test(dcmCs.designSpec));
-check("#8 DCM: design spec places Next steps as a new tab and flags both as ADD (not template context)",
+check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
   /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
-  && /Case progress bar \| Component \| ⚠ ADD — not in the default Freedom template/.test(dcmCs.designSpec));
+  && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
+  && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
+  () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
 check("#8 DCM: the notes carry the correct PLACEMENT — progress bar prefers PageWithTabsAndProgressBarTemplate (re-bind) with MainContainer fallback (not MainHeader); Next steps a tab beside Feed/Attachments (tools slot, flag-icon)",
   dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /PageWithTabsAndProgressBarTemplate/.test(w.note || "") && /RE-BIND/i.test(w.note || "") && /in `MainContainer`/.test(w.note || "") && /NOT in `MainHeader`/.test(w.note || ""))
   && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "") && /flag-icon/.test(w.note || "")),

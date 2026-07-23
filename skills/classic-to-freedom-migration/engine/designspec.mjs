@@ -197,7 +197,13 @@ export function renderDesignSpec(result, opts = {}) {
     // steps goes in a new tab next to Feed. Other widgets keep the base/native wording.
     const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
     let source;
-    if (w.placement) source = "⚠ ADD — not in the default Freedom template";
+    // The case progress bar is SHIPPED by `PageWithTabsAndProgressBarTemplate` (the template the plan recommends
+    // for a DCM page) — so it is template-PROVIDED + re-bound, NOT "ADD — not in the default template" (that
+    // stale wording contradicted the recommended template). Next steps IS genuinely added (a new tab). Keep the
+    // generic ADD wording for any other placed widget.
+    if (w.placement === "page-top") source = "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed) — build the form on that template + RE-BIND to the case; hand-adding to `MainContainer` is the fallback";
+    else if (w.placement === "tab-next-to-feed") source = "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
+    else if (w.placement) source = "⚠ ADD — not in the default Freedom template";
     else if (w.note) source = "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
     else if (w.base) source = "template context — provided by the Freedom template";
     else source = "native — confirm on-stand";
@@ -377,7 +383,20 @@ export function renderDesignSpec(result, opts = {}) {
   // every `reason:` are plain prose (audited: none contain `<`/`>`/backtick/`|`/`](` as literal output), so `esc`
   // has nothing engine-authored to mangle. Keep new reasons that way (put any code identifier or angle-bracketed
   // token in `item`, which is likewise `esc`d) so this stays true.
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
+  // Client-layer removals the engine advises KEEPing (removed by a layer NOT confirmed client-editable) are
+  // almost always base elements RE-LAID-OUT by a child layer, not genuine deletions — in a parallel Freedom
+  // rebuild there is nothing to remove. One ⚠ row each floods the worklist with non-actionable noise (a typed
+  // entity's client layers re-lay-out dozens). Collapse them into ONE summary line; only CONFIRMED client removes
+  // (remove/hide on Freedom) stay as individual actionable items.
+  const keepRemovals = nd.filter((n) => n.kind === "removal" && n.keep);
+  const actionable = nd.filter((n) => !(n.kind === "removal" && n.keep));
+  const confirm = actionable.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
+  if (keepRemovals.length) {
+    const bys = [...new Set(keepRemovals.map((r) => r.removedBy).filter(Boolean))].map((b) => "`" + esc(b) + "`").join(", ");
+    const names = keepRemovals.map((r) => esc(r.item));
+    const shown = names.slice(0, 12).join(" · ") + (names.length > 12 ? ` · … (+${names.length - 12} more)` : "");
+    confirm.push(`- **[removals ×${keepRemovals.length}]** base elements re-laid-out / removed by client layer(s) ${bys || "(unnamed)"} — a parallel Freedom rebuild removes nothing, so **KEEP all on Freedom** unless a specific one is a deliberate hide you can confirm on-stand: ${shown}`);
+  }
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
   // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
