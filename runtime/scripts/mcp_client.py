@@ -143,6 +143,8 @@ class PersistentMcpClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         self._next_id = 1
         self._initialized = False

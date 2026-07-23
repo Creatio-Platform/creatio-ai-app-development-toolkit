@@ -1,8 +1,15 @@
 import re
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Bind the ENG-92985 doc-token assertions to the gate script's own constants so a
+# rename in clio_mcp_preflight.py cannot pass both this suite and the behavioral suite
+# while the docs silently describe a sentinel/exit code the script no longer emits.
+sys.path.insert(0, str(ROOT / "runtime" / "scripts"))
+import clio_mcp_preflight as pf  # noqa: E402  (path set above)
 
 
 def existing(paths):
@@ -504,17 +511,30 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_docs_mandate_deterministic_preflight_gate_script(self):
         # ENG-92985 (elevation): the STOP decision is a deterministic gate, not prose
         # the agent can reason past. Every contract doc must name the gate script and
-        # the three-state verdict (usable / blocked) with its sentinels.
+        # the three-state verdict (usable / blocked) with its sentinels + exit codes.
+        # Sentinel/exit tokens are derived from the script constants (M1) so a rename
+        # is caught here instead of drifting silently.
+        usable_token = pf.SENTINEL_USABLE.split(": ", 1)[1].lower()   # clio-mcp-usable
+        blocked_token = pf.SENTINEL_BLOCKED.split(": ", 1)[1].lower()  # clio-mcp-unavailable
         for path in CLIO_MCP_PREFLIGHT_DOCS:
             content = read_text(path).lower()
             self.assertIn("clio_mcp_preflight.py", content, str(path))
             self.assertIn("deterministic gate", content, str(path))
-            self.assertIn("clio-mcp-usable", content, str(path))
-            self.assertIn("clio-mcp-unavailable", content, str(path))
+            self.assertIn(usable_token, content, str(path))
+            self.assertIn(blocked_token, content, str(path))
+            self.assertIn(f"exit {pf.EXIT_USABLE}", content, str(path))
+            self.assertIn(f"exit {pf.EXIT_BLOCKED}", content, str(path))
             self.assertIn("state b", content, str(path))
             self.assertIn("state c", content, str(path))
             # "no native tools surfaced" is explicitly NOT auto-blocking (challenge C5)
             self.assertIn("not automatically a blocker", content, str(path))
+
+    def test_docs_state_preflight_probe_timeout_matches_script(self):
+        # ENG-92985 (M1): the "default 20s" probe bound stated in the docs is bound to
+        # the script constant, so changing DEFAULT_PROBE_TIMEOUT flags the stale docs.
+        timeout_token = f"{pf.DEFAULT_PROBE_TIMEOUT}s"
+        for path in [ROOT / "AGENTS.md", ROOT / "runbooks/01-environment-setup.md"]:
+            self.assertIn(timeout_token, read_text(path), str(path))
 
     def test_docs_define_precise_wrapper_opt_in_signal(self):
         # ENG-92985 (elevation, challenge C2): a generic approval is not opt-in; the
@@ -522,7 +542,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         # contract-level doc (AGENTS.md) must say so.
         content = read_text(ROOT / "AGENTS.md").lower()
         self.assertIn("opt-in signal", content)
-        self.assertIn("not** opt-in", content)
+        # markup-tolerant: matches "not opt-in" or "not** opt-in" (bold emphasis)
+        self.assertRegex(content, r"not\*{0,2}\s*opt-in")
         self.assertIn("approved command prefix", content)
 
     def test_docs_frame_mcp_client_as_opt_in_escape_hatch(self):

@@ -22,7 +22,7 @@ Read `AGENTS.md` for the Context Files Reference. For local clio CLI invocations
     - **State C — `blocked` (exit 3, `BLOCKER: clio-mcp-unavailable`)**: clio could not be resolved, or its MCP server did not respond. STOP and return the gate's **prerequisites blocker** verbatim instead of degrading to a slower path. The blocker lists what the developer fixes once, up front: install .NET, install clio (`dotnet tool install clio -g`) — or add an existing install to PATH / set `CLIO_CMD` — and register the environment (`clio reg-web-app`).
 - On State C do NOT self-bootstrap: **do not install** or download the .NET SDK, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. Report the missing prerequisites and let the developer fix them.
 - A registered-but-**unresponsive** server is State C: the gate is ONE bounded probe (default 20s), then the blocker. Do not retry indefinitely, and do not reach for the Python wrapper to work around a dead server.
-- The full contract is in `AGENTS.md`, "clio MCP availability preflight". The prerequisite checks in Step 1 below are the fail-fast messages `clio_mcp_preflight.py` surfaces.
+- The full contract is in `AGENTS.md`, "clio MCP availability preflight". The prerequisite checks in Step 1 below cover the same prerequisites (.NET / clio / `reg-web-app`) that `clio_mcp_preflight.py` surfaces; the exact wording is not guaranteed identical.
 
 ## MCP Transport And Single clio Context
 
@@ -107,12 +107,7 @@ Then wait for confirmation and retry.
 ```bash
 clio ver  # → prints version, e.g. clio: 8.0.x.x
 ```
-Use the latest released clio:
-```bash
-dotnet tool install clio -g       # first install
-dotnet tool update clio -g        # if already installed
-```
-CAADT does not pin a specific clio version. If clio is missing a tool CAADT needs, runtime `get-tool-contract` will fail fast with an actionable error.
+clio is present — proceed. CAADT does not pin a specific clio version; if clio is missing a tool CAADT needs, runtime `get-tool-contract` fails fast with an actionable error. Do **not** self-update clio for the developer (that is the same self-bootstrap this runbook forbids above) — if a newer clio is genuinely needed, tell the developer to run `dotnet tool update clio -g` themselves.
 
 **Scenario 3 — user provided a custom clio path:**
 The developer mentioned a custom binary (e.g. `dotnet ~/path/to/clio.dll`). Set the `CLIO_CMD` env var for this session:
