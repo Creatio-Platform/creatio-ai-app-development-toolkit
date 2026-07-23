@@ -654,11 +654,18 @@ class DefaultContractDocsTests(unittest.TestCase):
         agents = read_text(ROOT / "AGENTS.md").lower()
         self.assertIn("first choice and is labelled the recommended", agents)
         self.assertIn("never list the wrapper as the first", agents)
+        # Finding 2 (self-review): selecting the labelled wrapper option IS the explicit
+        # opt-in; a generic yes outside such a choice is not — closes the offer-vs-opt-in
+        # circularity the presented choice introduces.
+        self.assertIn("counts as the developer's explicit opt-in", agents)
         for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
                      ROOT / "runbooks/01-environment-setup.md"):
             mirror = read_text(path).lower()
-            self.assertIn("first", mirror, str(path))
-            self.assertIn("recommended", mirror, str(path))
+            # Finding 1 (self-review): assert the SPECIFIC composite anchor (encodes
+            # native-listed-first) — not bare "first"/"recommended", which are satisfied
+            # by unrelated text ("before the first clio operation", "not the recommended
+            # path") and would let a wrapper-first regression pass.
+            self.assertIn("connect-native option first and marked recommended", mirror, str(path))
             self.assertIn("never lead with the wrapper", mirror, str(path))
 
 
