@@ -137,6 +137,10 @@ class PersistentMcpClient:
         if self._proc is not None and self._proc.poll() is None:
             return
         clio_cmd = _build_clio_cmd()
+        # errors="replace" keeps a malformed byte from raising mid-readline and killing
+        # the read loop; callers validate payload content (e.g. the preflight's
+        # _probe_is_healthy), so a garbled/replaced response surfaces as an unusable
+        # result and is classified accordingly rather than masquerading as a crash.
         self._proc = subprocess.Popen(
             clio_cmd,
             stdin=subprocess.PIPE,
@@ -274,6 +278,30 @@ def _get_shared_client():
         if _shared_client is None:
             _shared_client = PersistentMcpClient()
         return _shared_client
+
+
+def force_kill_shared_client():
+    """Lock-free, best-effort kill of the shared client's clio child process.
+
+    A hung probe holds ``PersistentMcpClient._lock`` inside a blocking ``readline()``,
+    so ``close()`` (which acquires the lock) would deadlock a watchdog trying to abort
+    it. This captures the current process reference ONCE into a local and kills that
+    local, so it is safe to call from a watchdog thread even while the owning thread is
+    mid-call — both terminating the same OS process is idempotent.
+
+    Callers outside this module must use this sanctioned API instead of reaching into
+    ``_shared_client._proc`` directly, so the private coupling lives in one place and a
+    future ``PersistentMcpClient`` refactor updates it here (not silently in a consumer).
+    """
+    client = _shared_client
+    proc = getattr(client, "_proc", None) if client is not None else None
+    if proc is None:
+        return
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
 
 def _is_execution_error_message(message) -> bool:
     if not isinstance(message, dict):

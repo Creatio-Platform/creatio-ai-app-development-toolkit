@@ -34,6 +34,7 @@ JSON object {state, reason, remedy, detail}. Use --json to print only the JSON.
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -69,9 +70,19 @@ DEFAULT_PROBE_TIMEOUT = 20
 # child so a hung server can NEVER reproduce the ENG-92985 hang inside the gate.
 PROBE_WATCHDOG_GRACE = 5
 
+# mcp_client's cold-start `initialize` handshake runs BEFORE the get-tool-contract call
+# and is bounded by its own `min(self._timeout, 30)` cap — independent of the probe's
+# `timeout`. The watchdog window must cover it, or a slow-but-healthy cold start (JIT,
+# AV-scanned dotnet, corporate proxy) gets force-killed and misclassified as blocked.
+_INITIALIZE_CAP_SECONDS = 30
+
 # `detail` echoes raw server/exception text into agent-visible output. Bound it so a
 # verbose or hostile server response cannot flood agent context; it is diagnostic only.
 MAX_DETAIL_CHARS = 800
+
+# Redact inline URL credentials (`//user:pass@host`) a clio error string could carry,
+# before `detail` reaches console/JSON output or any CI transcript that captures it.
+_CREDENTIALS_RE = re.compile(r"(//)[^/:@\s]+:[^/@\s]+@")
 
 _NO_SELF_BOOTSTRAP = (
     "Do NOT self-bootstrap: the agent must not install or download the .NET SDK, "
@@ -170,20 +181,27 @@ def _default_resolver():
 
 
 def _force_kill_shared_client():
-    """Terminate mcp_client's persistent clio child directly.
+    """Abort a hung probe by killing mcp_client's persistent clio child.
 
-    ``PersistentMcpClient.close()`` acquires the client lock, but a hung probe still
-    holds that lock inside its blocking read loop — so ``close()`` would deadlock the
-    watchdog. Killing the process directly makes the stuck ``readline()`` return at
-    once, letting the worker thread unwind. Best-effort and idempotent.
+    Delegates to mcp_client's sanctioned lock-free kill API rather than reaching into
+    its private ``_shared_client._proc`` — the coupling then lives in one place and a
+    future ``PersistentMcpClient`` refactor can't silently turn this into a no-op (RC-1).
+    ``close()`` can't be used here: a hung probe holds the client lock inside a blocking
+    ``readline()``, so ``close()`` would deadlock the watchdog.
     """
-    client = getattr(mcp_client, "_shared_client", None)
-    proc = getattr(client, "_proc", None) if client is not None else None
-    if proc is not None:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+    mcp_client.force_kill_shared_client()
+
+
+def _probe_watchdog_window(timeout):
+    """Hard wall-clock ceiling for the probe worker thread.
+
+    Spans mcp_client's cold-start ``initialize`` cap PLUS the get-tool-contract call's
+    own ``timeout`` PLUS grace. initialize runs first and is bounded independently of
+    ``timeout``, so a window of just ``timeout + grace`` could fire mid-initialize and
+    force-kill a slow-but-healthy cold start — a false State C (RC-2). A healthy server
+    answers well inside this window; only a truly silent/dead child reaches it.
+    """
+    return _INITIALIZE_CAP_SECONDS + timeout + PROBE_WATCHDOG_GRACE
 
 
 def _default_prober(timeout):
@@ -192,9 +210,10 @@ def _default_prober(timeout):
     mcp_client's read loop only re-checks its deadline between blocking ``readline()``
     calls and never drains the child's stderr, so a clio child that starts but stays
     silent (or floods stderr past the OS pipe buffer) could hang far past ``timeout``.
-    The probe therefore runs on a worker thread; if it overruns ``timeout`` +
-    ``PROBE_WATCHDOG_GRACE`` the watchdog force-kills the child so the gate itself can
-    never reproduce the ENG-92985 hang.
+    The probe therefore runs on a worker thread; if it overruns the watchdog window
+    (see ``_probe_watchdog_window`` — it covers the cold-start initialize cap so a slow
+    healthy start is not force-killed) the watchdog kills the child so the gate itself
+    can never reproduce the ENG-92985 hang.
     """
     box = {}
 
@@ -206,12 +225,12 @@ def _default_prober(timeout):
 
     worker = threading.Thread(target=run, name="clio-mcp-probe", daemon=True)
     worker.start()
-    worker.join(timeout + PROBE_WATCHDOG_GRACE)
+    window = _probe_watchdog_window(timeout)
+    worker.join(window)
     if worker.is_alive():
         _force_kill_shared_client()
         raise TimeoutError(
-            f"clio MCP probe exceeded {timeout + PROBE_WATCHDOG_GRACE}s "
-            "(clio started but did not respond)"
+            f"clio MCP probe exceeded {window}s (clio started but did not respond)"
         )
     if "error" in box:
         raise box["error"]
@@ -236,8 +255,14 @@ def _probe_is_healthy(probe):
 
 
 def _truncate_detail(text):
-    """Bound agent-visible diagnostic text so a verbose/hostile server can't flood context."""
-    text = text or ""
+    """Scrub inline URL credentials, then bound agent-visible diagnostic text.
+
+    A clio error string can (rarely) embed a connection URL with inline credentials
+    (`//user:pass@host`); redact those before `detail` reaches console/JSON/CI logs
+    (RC-4). Then bound the length so a verbose/hostile server response can't flood agent
+    context. `detail` is diagnostic-only and must not be treated as a machine contract.
+    """
+    text = _CREDENTIALS_RE.sub(r"\1***:***@", text or "")
     if len(text) > MAX_DETAIL_CHARS:
         return text[:MAX_DETAIL_CHARS] + "… [truncated]"
     return text

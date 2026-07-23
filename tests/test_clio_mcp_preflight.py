@@ -122,10 +122,12 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         # watchdog force-kills the child and raises within the wall-clock bound.
         blocked = threading.Event()
         killed = {"called": False}
-        orig_call, orig_grace, orig_kill = (
-            mcp_client.call_mcp_tool, pf.PROBE_WATCHDOG_GRACE, pf._force_kill_shared_client)
+        orig_call, orig_grace, orig_cap, orig_kill = (
+            mcp_client.call_mcp_tool, pf.PROBE_WATCHDOG_GRACE,
+            pf._INITIALIZE_CAP_SECONDS, pf._force_kill_shared_client)
         mcp_client.call_mcp_tool = lambda *a, **k: blocked.wait(10)  # never returns in time
         pf.PROBE_WATCHDOG_GRACE = 0
+        pf._INITIALIZE_CAP_SECONDS = 0  # shrink the window so this test is fast
         pf._force_kill_shared_client = lambda: killed.__setitem__("called", True)
         try:
             with self.assertRaises(TimeoutError):
@@ -134,6 +136,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
             blocked.set()
             mcp_client.call_mcp_tool = orig_call
             pf.PROBE_WATCHDOG_GRACE = orig_grace
+            pf._INITIALIZE_CAP_SECONDS = orig_cap
             pf._force_kill_shared_client = orig_kill
         self.assertTrue(killed["called"], "watchdog must force-kill the hung clio child")
 
@@ -226,6 +229,80 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         # argparse uses exit code 2 for usage errors; the verdict codes must not collide.
         self.assertNotIn(2, (pf.EXIT_USABLE, pf.EXIT_BLOCKED))
         self.assertNotEqual(pf.EXIT_USABLE, pf.EXIT_BLOCKED)
+
+    def test_probe_watchdog_window_covers_initialize_cap(self):
+        # RC-2 (PR #55 review): the watchdog window must span mcp_client's cold-start
+        # initialize cap PLUS the call timeout, so a slow-but-healthy cold start is never
+        # force-killed (a window of just timeout+grace could fire mid-initialize).
+        for timeout in (5, 20, 60):
+            window = pf._probe_watchdog_window(timeout)
+            self.assertGreaterEqual(
+                window, pf._INITIALIZE_CAP_SECONDS + timeout,
+                "watchdog window must cover initialize cap + call timeout",
+            )
+
+    def test_default_prober_returns_healthy_within_budget_without_killing(self):
+        # RC-2: a probe that answers inside the window resolves to the healthy result and
+        # never triggers the watchdog kill.
+        orig_call, orig_kill = mcp_client.call_mcp_tool, pf._force_kill_shared_client
+        killed = {"called": False}
+        pf._force_kill_shared_client = lambda: killed.__setitem__("called", True)
+        mcp_client.call_mcp_tool = lambda *a, **k: _HEALTHY_PROBE
+        try:
+            result = pf._default_prober(5)
+        finally:
+            mcp_client.call_mcp_tool = orig_call
+            pf._force_kill_shared_client = orig_kill
+        self.assertEqual(result, _HEALTHY_PROBE)
+        self.assertFalse(killed["called"], "a healthy in-budget probe must not be force-killed")
+
+    def test_force_kill_delegates_to_sanctioned_mcp_client_api(self):
+        # RC-1: the gate must NOT reach into mcp_client._shared_client._proc; it delegates
+        # to the sanctioned lock-free mcp_client.force_kill_shared_client().
+        orig = mcp_client.force_kill_shared_client
+        called = {"n": 0}
+        mcp_client.force_kill_shared_client = lambda: called.__setitem__("n", called["n"] + 1)
+        try:
+            pf._force_kill_shared_client()
+        finally:
+            mcp_client.force_kill_shared_client = orig
+        self.assertEqual(called["n"], 1, "gate must call the sanctioned kill API")
+
+    def test_mcp_client_force_kill_is_none_safe_and_kills_proc(self):
+        # RC-1: the sanctioned API is a no-op when no shared client exists, and otherwise
+        # captures the proc once and kills it (safe to call from a watchdog thread).
+        orig = mcp_client._shared_client
+        try:
+            mcp_client._shared_client = None
+            mcp_client.force_kill_shared_client()  # must not raise
+
+            class _FakeProc:
+                def __init__(self):
+                    self.killed = 0
+
+                def kill(self):
+                    self.killed += 1
+
+            class _FakeClient:
+                pass
+
+            fake = _FakeClient()
+            proc = _FakeProc()
+            fake._proc = proc
+            mcp_client._shared_client = fake
+            mcp_client.force_kill_shared_client()
+            self.assertEqual(proc.killed, 1, "sanctioned API must kill the captured proc")
+        finally:
+            mcp_client._shared_client = orig
+
+    def test_truncate_detail_scrubs_url_credentials(self):
+        # RC-4 (PR #55 review): inline URL credentials in a clio error string must be
+        # redacted before `detail` reaches console/JSON/CI logs.
+        scrubbed = pf._truncate_detail(
+            "cannot reach https://admin:s3cr3t@ts1-core-dev04:88/0/ServiceModel — timeout")
+        self.assertNotIn("s3cr3t", scrubbed)
+        self.assertIn("***:***@", scrubbed)
+        self.assertIn("ts1-core-dev04", scrubbed)  # host preserved; only credentials redacted
 
 
 if __name__ == "__main__":
