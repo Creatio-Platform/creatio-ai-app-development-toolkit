@@ -695,6 +695,10 @@ export function renderPlan(result, opts = {}) {
     grp("⚠ Confirm worklist", confItems);
     // Child pages
     grp("Child pages", childs.map((c) => `${esc(c.entity)} — separate page?`));
+    // Quality gates — ALWAYS present (a page migration always produces a page to review). The Freedom
+    // UI-guidelines pass: apply `creatio-ui-guidelines` WHILE designing the page; if it was not used during the
+    // build, run it as a REVIEW pass at the end and FIX the findings (it is not optional).
+    grp("Quality gates", ["UI guidelines (`creatio-ui-guidelines`) applied to the page design — if NOT used while building, run it as a REVIEW pass and FIX the findings (style parity with the reference page: colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels)"]);
 
     if (n > 0) {
       P.push("", "### ✅ Plan-vs-Done checklist", "",

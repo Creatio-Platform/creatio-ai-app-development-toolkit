@@ -1915,6 +1915,9 @@ check("Plan-vs-Done checklist: business rules FOLDED to a count row (not one row
   /Business rules × \d+/.test(ck) && !/\| \d+ \| Business rule \|/.test(ck));
 check("Plan-vs-Done checklist: every row carries a ☐ pending status + an Evidence cell for the agent to fill",
   /\| ☐ pending \| — \|/.test(ck) && /\| # \| Deliverable \| Status \| Evidence \|/.test(ck));
+check("Plan-vs-Done checklist: always seeds a Quality-gates row for the UI-guidelines review (apply while building; else review + fix)",
+  /\*\*Quality gates\*\*/.test(ck) && /creatio-ui-guidelines/.test(ck) && /run it as a REVIEW pass and FIX/.test(ck),
+  () => ck.split("\n").filter((l) => /Quality gates|guidelines/.test(l)));
 
 /* ---- session review (Applicant): three defects ---- */
 // #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned
