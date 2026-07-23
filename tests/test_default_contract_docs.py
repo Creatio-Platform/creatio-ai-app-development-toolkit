@@ -569,6 +569,16 @@ class DefaultContractDocsTests(unittest.TestCase):
                 "docs/install.md" in content or "install docs" in content,
                 f"{path}: State B must point to the install docs for per-host setup",
             )
+        # Finding 3: prefer-native is an ORDERING guarantee, not just token presence —
+        # within AGENTS.md State B, the native recommendation must precede the wrapper.
+        agents = read_text(ROOT / "AGENTS.md")
+        sb_start = agents.index("**State B")
+        sb = agents[sb_start:agents.index("**State C", sb_start)]
+        self.assertLess(
+            sb.index("connect clio as a native MCP server"),
+            sb.index("mcp_client.py"),
+            "AGENTS.md State B must recommend native MCP before mentioning the wrapper",
+        )
 
     def test_agents_preflight_section_has_no_hardcoded_per_agent_mcp_steps(self):
         # ENG-92985 (State B refinement): how you connect native MCP drifts per agent,
@@ -597,6 +607,16 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertTrue(
             "not the recommended" in agents or "not recommended" in agents, "AGENTS.md",
         )
+        # Finding 4: the compact mirrors must carry the same plain-language framing so a
+        # mirror cannot silently drop it (repo's identical-rules-across-docs ethos).
+        for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+                     ROOT / "runbooks/01-environment-setup.md"):
+            mirror = read_text(path).lower()
+            self.assertIn("slower", mirror, str(path))
+            self.assertIn("no progress", mirror, str(path))
+            self.assertTrue(
+                "not the recommended" in mirror or "not recommended" in mirror, str(path),
+            )
 
     def test_docs_state_b_gives_actionable_how_to_and_reload_caveat(self):
         # ENG-92985 (#2/#3): State B must be actionable AND honest — surface WHERE the
@@ -611,6 +631,19 @@ class DefaultContractDocsTests(unittest.TestCase):
         # #3 — reload honesty
         self.assertIn("session reload", agents)
         self.assertIn("mid-task", agents)
+        # Finding 2 (section-scoped) — the two safety invariants of this increment:
+        raw = read_text(ROOT / "AGENTS.md")
+        sb_start = raw.index("**State B")
+        sb = raw[sb_start:raw.index("**State C", sb_start)].lower()
+        # (a) snippet apply-boundary: showing is fine, APPLYING it is self-bootstrap —
+        # locks the config-editing axis of the no-self-bootstrap rule.
+        self.assertIn("config snippet", sb)
+        self.assertIn("the developer applies", sb)
+        self.assertIn("self-bootstrap", sb)
+        # (b) opt-in precedence: "mid-task" must NOT license a self-selected wrapper —
+        # the explicit-opt-in requirement is co-located in the same State B block.
+        self.assertIn("mid-task", sb)
+        self.assertIn("explicit opt-in", sb)
 
 
 if __name__ == "__main__":
