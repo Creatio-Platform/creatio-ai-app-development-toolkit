@@ -54,6 +54,7 @@ REQUIRED_REFERENCE_PATHS = (
     "context/model-discovery-evidence.md",
     "runbooks/01-environment-setup.md",
     "runbooks/02-requirements-gathering.md",
+    "runbooks/03-app-implementation.md",
     "runtime/scripts/mcp_client.py",
     "runtime/scripts/workflow_validators.py",
 )
@@ -632,8 +633,12 @@ def remove_codex_plugin_section(config_path: Path, plugin_name: str, marketplace
     _remove_toml_table_block(config_path, markers)
 
 
-def repo_file(repo_root: Path, relative_path: str) -> Path:
-    return repo_root / relative_path
+def repo_file(repo_root: Path, relative_path: str) -> str:
+    # Render forward-slash paths so the agent load order stays consistent and
+    # portable across hosts. Windows accepts forward slashes for reads, and the
+    # rest of the toolkit references paths this way, so an absolute install path
+    # like `D:/…/runbooks/03-app-implementation.md` reads the same everywhere.
+    return (repo_root / relative_path).as_posix()
 
 
 def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
@@ -665,7 +670,9 @@ def render_load_order(repo_root: Path) -> str:
         f"3. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
         f"4. For environment setup, read `{repo_file(repo_root, 'runbooks/01-environment-setup.md')}`.\n"
         f"5. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
-        f"6. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
+        f"6. For post-Gate-R implementation and scaffolding (including the transient section-creation "
+        f"failure playbook), read `{repo_file(repo_root, 'runbooks/03-app-implementation.md')}`.\n"
+        f"7. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
         f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
     )
 

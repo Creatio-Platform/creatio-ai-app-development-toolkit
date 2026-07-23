@@ -39,6 +39,7 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
 - `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
 - `icon-background` for `create-app-section` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the same 16 palette colors listed under MCP Application Creation above.
+- Create sections sequentially, one at a time. On a transient `create-app-section` failure (DB-write contention), follow the transient section-creation failure playbook in `runbooks/03-app-implementation.md` — check `list-app-sections` for the existing section, wait, then retry once with the same name. Never vary the caption to probe the error and never run `compile-creatio` speculatively during scaffolding.
 
 **Entity Schema Sync (DB-first)**
 - Prefer `sync-schemas` for grouped entity work
@@ -62,7 +63,8 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
 - `create-data-binding-db` persists bindings in DB and installs data immediately
 - `upsert-data-binding-row-db` updates rows only in an already existing binding
-- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
+- Lookup/enum values are package data: seed them inline via `sync-schemas`'s row-seeding parameter (name resolved via `get-tool-contract`) when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside the batch — both install immediately and neither needs a compile step
+- Never seed lookup values through runtime OData/DataService calls or raw SQL — those bypass the platform, so the row lands in the table but does not surface as real package data
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules
