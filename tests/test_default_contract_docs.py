@@ -556,6 +556,48 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("escape hatch", content, str(path))
             self.assertIn("mcp_client.py", content, str(path))
 
+    def test_docs_state_b_prefers_native_mcp_before_wrapper(self):
+        # ENG-92985 (State B refinement): in State B the agent must FIRST recommend
+        # connecting native clio MCP (host-agnostic) and defer the per-host how-to to
+        # the install docs — only then fall back to the wrapper. Every contract doc
+        # states the recommendation and points at the install docs.
+        for path in CLIO_MCP_PREFLIGHT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("native clio mcp", content, str(path))
+            self.assertIn("connect", content, str(path))
+            self.assertTrue(
+                "docs/install.md" in content or "install docs" in content,
+                f"{path}: State B must point to the install docs for per-host setup",
+            )
+
+    def test_agents_preflight_section_has_no_hardcoded_per_agent_mcp_steps(self):
+        # ENG-92985 (State B refinement): how you connect native MCP drifts per agent,
+        # so the behavioral contract must NOT hardcode agent-specific steps (config.toml
+        # edits, installer commands) inside the preflight section — those belong in the
+        # install docs. Scope the check to the preflight section so the unrelated
+        # installer mention elsewhere in AGENTS.md does not trip it.
+        agents = read_text(ROOT / "AGENTS.md")
+        start = agents.index("clio MCP availability preflight")
+        end = agents.index("clio MCP transport preference", start)
+        section = agents[start:end].lower()
+        self.assertNotIn("config.toml", section)
+        self.assertNotIn("installer/install.py", section)
+        # the generic recommendation + docs pointer DO live in the section
+        self.assertIn("native mcp server", section)
+        self.assertIn("docs/install.md", section)
+
+    def test_docs_frame_wrapper_fallback_in_plain_language(self):
+        # ENG-92985 (State B refinement): the wrapper fallback must be framed in plain
+        # language — slower, no progress, not recommended — never buried behind jargon
+        # like "may appear to hang".
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        self.assertIn("slower", agents)
+        self.assertIn("no progress", agents)
+        self.assertIn("frozen", agents)
+        self.assertTrue(
+            "not the recommended" in agents or "not recommended" in agents, "AGENTS.md",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
