@@ -646,5 +646,21 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("explicit opt-in", sb)
 
 
+    def test_docs_present_native_option_first_and_recommended(self):
+        # ENG-92985 (choice-presentation): when the agent asks the developer how to
+        # proceed in State B, the connect-native option must be listed FIRST and marked
+        # recommended, and the wrapper must never be the first/default choice — leading
+        # with the wrapper (even if native is offered second) violates prefer-native.
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        self.assertIn("first choice and is labelled the recommended", agents)
+        self.assertIn("never list the wrapper as the first", agents)
+        for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+                     ROOT / "runbooks/01-environment-setup.md"):
+            mirror = read_text(path).lower()
+            self.assertIn("first", mirror, str(path))
+            self.assertIn("recommended", mirror, str(path))
+            self.assertIn("never lead with the wrapper", mirror, str(path))
+
+
 if __name__ == "__main__":
     unittest.main()
