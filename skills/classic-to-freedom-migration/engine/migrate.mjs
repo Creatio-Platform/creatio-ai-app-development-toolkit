@@ -413,6 +413,20 @@ export function runMigration(manifest, opts = {}) {
       }
       issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
     }
+    // A NON-typed Rebuild form that folded to ZERO fields is a HOLLOW page — the section / its edit page did NOT
+    // resolve (wrong page schema, an under-captured layer chain — e.g. a bundle that returned layerCount:1 and
+    // missed the layer carrying the fields — or a diff built via an unresolved call). Finding the section is the
+    // FOUNDATION: a hollow form and everything derived from it (the form spec, the on-stand signals, the whole
+    // plan) are then invalid, so this is a hard BLOCK, not a soft flag — the agent must not proceed to a wrong
+    // plan. (Typed pages have their own per-type 0-field gate above; a reconcile/Update of an existing Freedom
+    // page legitimately may add no fields, so it is exempt.) TOP-LEVEL only (`visited.size===0`): nested child /
+    // typed / mini folds have their OWN 0-field handling above, and firing here would mask their specific gate.
+    if (!typedPages.length && visited.size === 0 && !(manifest.planMeta && manifest.planMeta.freedomExists)) {
+      const mainFields = (changeSet.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+      if (mainFields === 0) {
+        issues.push(`form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`);
+      }
+    }
     // add-record mini page (a section/list concern — only gated when this migration has a section). It must be
     // RESOLVED: folded (bundle in manifest.miniPageSchemas), or verified-none (manifest.addRecordMiniPage:false).
     // Not asserting absence from the section body alone — that FALSELY reported "none" when the mini page was

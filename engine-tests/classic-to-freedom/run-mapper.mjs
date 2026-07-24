@@ -659,7 +659,7 @@ check("section: UNVERIFIED add-record mini page → structure INCOMPLETE + 'NOT 
 check("mini-page FOLD: manifest.addRecordMiniPage + miniPageSchemas → mini-page spec embedded + structure complete",
   (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: { schema: "ApplicantMiniPage" },
     miniPageSchemas: { ApplicantMiniPage: { schemas: [{ pkg: "P", body: `define("ApplicantMiniPage",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"QF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"QuickName"}}]};});` }], seed: CLEAN_SEED } },
-    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
     return r.structure.complete === true && /### Add mini-page mapping/.test(r.plan) && /#### Mini page: ApplicantMiniPage/.test(r.plan) && r.plan.includes("QuickName") && /via mini page/.test(r.designSpec); })());
 // A named mini page NOT folded (no miniPageSchemas) → structure INCOMPLETE (must fold or record false).
@@ -1105,7 +1105,7 @@ check("STRUCTURE: a child with a real editPage but no childPageSchemas → struc
 // (c) detail supplied but child-page existence UNVERIFIED (no getEditPageName, not view-only) → INCOMPLETE:
 //     the agent must verify via list-pages, then map it or record editPage:false. (Problem-1 fix: never a
 //     silent "Rebuild (child)" for a child we never checked.)
-const stBody = `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});`;
+const stBody = `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}},{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});`;
 const stUnverified = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }],
   detailSchemas: { MyDetailV2: { entity: "Child" } } }, { baseDir: FIX });
 check("STRUCTURE: detail supplied but child page UNVERIFIED → structure.complete=false (must verify, not assume)",
@@ -1117,6 +1117,16 @@ const stVerifiedNone = runMigration({ entity: "X", schemas: [{ pkg: "P", body: s
 check("STRUCTURE: detail with editPage:false (verified no page) → complete=true + Main scope 'Reuse', no banner",
   stVerifiedNone.structure.complete === true && !/STRUCTURE INCOMPLETE/.test(stVerifiedNone.plan)
   && /\| Reuse \|/.test(stVerifiedNone.plan));
+// (c3) a NON-typed top-level Rebuild form that folds to 0 FIELDS is a HOLLOW page (the section / its edit page
+// didn't resolve) → hard BLOCK, not a silent 0-field plan. This is the Employee-section miss: 0 fields + details,
+// yet the agent produced a plan + fabricated signals. 0 fields blocks even WITH details (details ≠ form fields).
+const hollowForm = runMigration({ entity: "X", detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"MyDetailV2",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"D",parentName:"Tabs",values:{itemType:2}}]};});` }] }, { baseDir: FIX });
+check("STRUCTURE: a non-typed Rebuild form that folds to 0 FIELDS is BLOCKED (hollow — section/edit page didn't resolve), not a silent 0-field plan",
+  hollowForm.structure.complete === false && hollowForm.structure.issues.some((i) => /0 FIELDS/.test(i)) && /STRUCTURE INCOMPLETE/.test(hollowForm.plan),
+  () => hollowForm.structure.issues);
+check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1 field is NOT blocked (even with details)",
+  stVerifiedNone.structure.issues.every((i) => !/0 FIELDS/.test(i)));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
 // RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
