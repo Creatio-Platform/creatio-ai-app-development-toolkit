@@ -111,6 +111,19 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    - Build the mobile body yourself (plain JSON: `viewConfigDiff` / `viewModelConfigDiff` /
      `modelConfigDiff`) by iterating `guide.elementMap` — one entry per source element with an explicit
      `operation`. Do NOT re-derive placement from `containerMap` + `componentSuggestions`:
+     - **Every entry — both `merge` and `insert` — starts from `elementMap[].mobileValues`: paste it as the
+       element's `values` verbatim.** It carries the `type`, every source property the mobile component
+       supports (never drop any), and the **converted event-binding requests** (a button's `clicked`, a
+       field's `valueChange`/`updated` — supported requests kept/remapped; a component whose request the
+       mobile app does NOT support was already `drop`ped and is not among the elements you build) — do NOT
+       hand-edit these bindings. It also carries every localized string as `#ResourceString(key)#` tokens,
+       top-level AND nested (e.g. `config.title`, `text.template`): register them ALL by passing
+       `guide.resourceStrings` (a `{ key: en-US text }` map covering the whole converted body) to
+       `update-page resources` in ONE call — never register a `#ResourceString(...)#` token as the value, do
+       not hand-pick keys, and a token whose key is not registered renders blank. Then add ONLY what
+       `mobileValues` deliberately leaves out: the value binding (`control`, or `value` for lookups —
+       type-specific). `validate-page` is the backstop — it rejects an entry that drops a required property
+       (a field's caption, a lookup-path attribute's `type`) and `update-page` refuses to save.
      - `merge` → reuse the template element `mobileName`; do NOT insert it (the template already has it).
        If the mobile list template already provides the `List`/`ListItem` elements, configure them by
        merge-by-name (the row goes on the `ListItem` element: `title`/`body`) — NEVER insert a second
@@ -123,24 +136,11 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        non-tab content merges into the mobile general tab's grid (e.g. `CardContentWrapper`→`GeneralTabContainer`).
        The mobile template's **Feed and Attachments tabs must stay LAST**: insert each converted web tab BEFORE
        them (index it after the general tab) so the order is general tab → converted web tabs → Feed → Attachments.
-       **Start from
-       `elementMap[].mobileValues`: paste it as the component's `values` verbatim** — it already carries the
-       `type` and every source property the mobile component supports; never drop any of them. It also already
-       carries the **converted event-binding requests** (a button's `clicked`, a field's `valueChange`/`updated`):
-       supported requests are kept/remapped. A component whose request the mobile app does NOT support was
-       already DROPPED (its elementMap entry is `drop`, not `insert`), so it is not among the components you
-       build — do NOT hand-edit these bindings; paste `mobileValues` as-is. Then add ONLY
-       what `mobileValues` deliberately leaves out: the value binding (`control`, or `value` for lookups —
-       type-specific), and for a structural mapping (grid → `crt.List` + `crt.ListItem`) the row layout — add a
-       `crt.ListItem` into the `crt.List` `itemLayout` (title = first column, body = the rest), per the
-       `componentSuggestions` note and the `mobileContracts` example. The `mobileValues` carry every localized
-       string verbatim as `#ResourceString(key)#` tokens — a top-level caption AND nested ones (e.g.
-       `config.title`, `text.template`). Register them ALL: pass `guide.resourceStrings` (a `{ key: en-US text }`
-       map covering the whole converted body) to `update-page resources` in one call — never register a
-       `#ResourceString(...)#` token as the value, and do not hand-pick keys. A token whose key is not
-       registered renders blank. Consult `mobileContracts` / `get-component-info` only for those not-prebuilt parts. `validate-page` is
-       the backstop — it rejects an insert that drops a required property (e.g. a field's caption, or a
-       lookup-path attribute's type) and `update-page` refuses to save.
+       Beyond the shared `mobileValues` paste + value binding (above), the insert-specific extra is the row
+       layout for a structural mapping (grid → `crt.List` + `crt.ListItem`): add a `crt.ListItem` into the
+       `crt.List` `itemLayout` (title = first column, body = the rest), per the `componentSuggestions` note and
+       the `mobileContracts` example. Consult `mobileContracts` / `get-component-info` only for those
+       not-prebuilt parts.
      - `relocate-children` → do not recreate this container; its children are placed in `parentName`
        (each child entry already carries that `parentName`).
      - `drop` → skip it entirely — it is NOT inserted. Tell the user what was dropped and why. Only leaf

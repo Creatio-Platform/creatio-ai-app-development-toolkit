@@ -37,9 +37,18 @@ Before the Load order below, verify the converter is available: list the server 
 - **If present** → also confirm the paired guidance article loads before proceeding: Load order step 2
   calls `get-guidance` with name `freedom-page-web-to-mobile-conversion`. If that call falls back to
   `availableGuides` (the article is absent or was renamed) instead of returning the real conversion
-  guidance, **STOP** with the same enable message below — do NOT proceed with the tool but no guidance,
-  or you will build the body missing the paste-verbatim data-section and hard mobile rules with no
-  warning. Otherwise proceed with the Load order and the flow.
+  guidance, **STOP** — but this is a DIFFERENT failure than the flag being off, so do NOT reuse the
+  `--enable` message below (the flag is already enabled; re-running it cannot restore a missing article).
+  Tell the user verbatim:
+
+  > The `mobile-page-converter` feature is enabled, but its `freedom-page-web-to-mobile-conversion`
+  > guidance article could not be loaded (missing or renamed in this clio version). Update or reinstall
+  > clio to a version that ships this article, or check whether it was renamed (`get-guidance` with no
+  > name lists `availableGuides`). Do NOT re-run `clio experimental --name mobile-page-converter --enable`
+  > — the flag is already on and that will not restore the article.
+
+  Do NOT proceed with the tool but no guidance, or you will build the body missing the paste-verbatim
+  data-section and hard mobile rules with no warning. Otherwise proceed with the Load order and the flow.
 - **If absent** → the feature is turned off. **STOP** and tell the user verbatim:
 
   > The Web→Mobile converter is not enabled in your clio. Enable it once with:
