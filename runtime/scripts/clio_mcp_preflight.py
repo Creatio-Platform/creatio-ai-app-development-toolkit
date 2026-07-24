@@ -80,9 +80,20 @@ _INITIALIZE_CAP_SECONDS = 30
 # verbose or hostile server response cannot flood agent context; it is diagnostic only.
 MAX_DETAIL_CHARS = 800
 
-# Redact inline URL credentials (`//user:pass@host`) a clio error string could carry,
-# before `detail` reaches console/JSON output or any CI transcript that captures it.
-_CREDENTIALS_RE = re.compile(r"(//)[^/:@\s]+:[^/@\s]+@")
+# Redact secrets a clio error string could plausibly carry before `detail` reaches
+# console/JSON output or any CI transcript. clio talks to Creatio web apps and DBs, so
+# error text can include URL credentials, connection-string secrets, or auth tokens.
+# Over-redaction of diagnostic text is safe; a missed secret is not — patterns are broad.
+_REDACTIONS = (
+    # scheme://user:pass@host  ->  scheme://***:***@host
+    (re.compile(r"(//)[^/:@\s]+:[^/@\s]+@"), r"\1***:***@"),
+    # bare user:pass@host (no scheme)  ->  ***:***@host
+    (re.compile(r"(?<![\w/])[\w.\-]+:[^\s:@/]+@([\w.\-]+)"), r"***:***@\1"),
+    # connection-string credentials: Password=... / pwd=...  ->  <name>=***
+    (re.compile(r"(?i)\b(password|pwd)\s*=\s*[^;\s]+"), r"\1=***"),
+    # auth tokens / keys: access_token=... api_key=... token=... secret=...
+    (re.compile(r"(?i)\b(access[_-]?token|api[_-]?key|token|secret)\s*=\s*[^;&\s]+"), r"\1=***"),
+)
 
 _NO_SELF_BOOTSTRAP = (
     "Do NOT self-bootstrap: the agent must not install or download the .NET SDK, "
@@ -255,14 +266,17 @@ def _probe_is_healthy(probe):
 
 
 def _truncate_detail(text):
-    """Scrub inline URL credentials, then bound agent-visible diagnostic text.
+    """Redact secrets, then bound agent-visible diagnostic text.
 
-    A clio error string can (rarely) embed a connection URL with inline credentials
-    (`//user:pass@host`); redact those before `detail` reaches console/JSON/CI logs
-    (RC-4). Then bound the length so a verbose/hostile server response can't flood agent
-    context. `detail` is diagnostic-only and must not be treated as a machine contract.
+    A clio error string can carry URL credentials, connection-string secrets
+    (`Password=…;`), or auth tokens; redact all of these (see ``_REDACTIONS``) before
+    `detail` reaches console/JSON/CI logs. Then bound the length so a verbose/hostile
+    server response can't flood agent context. `detail` is diagnostic-only and must not
+    be treated as a machine contract.
     """
-    text = _CREDENTIALS_RE.sub(r"\1***:***@", text or "")
+    text = text or ""
+    for pattern, repl in _REDACTIONS:
+        text = pattern.sub(repl, text)
     if len(text) > MAX_DETAIL_CHARS:
         return text[:MAX_DETAIL_CHARS] + "… [truncated]"
     return text

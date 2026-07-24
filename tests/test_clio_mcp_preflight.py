@@ -304,6 +304,23 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertIn("***:***@", scrubbed)
         self.assertIn("ts1-core-dev04", scrubbed)  # host preserved; only credentials redacted
 
+    def test_truncate_detail_scrubs_connection_string_and_token_secrets(self):
+        # PR #55 R2-2: redaction must also cover connection-string secrets, auth tokens,
+        # and bare user:pass@host — not just scheme://user:pass@ URLs.
+        cs = pf._truncate_detail("login failed: Server=db;Password=Sup3rSecret;Trusted=false")
+        self.assertNotIn("Sup3rSecret", cs)
+        self.assertIn("Password=***", cs)
+
+        tok = pf._truncate_detail("401 (access_token=eyJhbGciExample; api_key=AKIAEXAMPLE)")
+        self.assertNotIn("eyJhbGciExample", tok)
+        self.assertNotIn("AKIAEXAMPLE", tok)
+        self.assertIn("access_token=***", tok)
+        self.assertIn("api_key=***", tok)
+
+        bare = pf._truncate_detail("dsn user:p40ss@dbhost:5432 unreachable")
+        self.assertNotIn("p40ss", bare)
+        self.assertIn("***:***@dbhost", bare)
+
 
 if __name__ == "__main__":
     unittest.main()

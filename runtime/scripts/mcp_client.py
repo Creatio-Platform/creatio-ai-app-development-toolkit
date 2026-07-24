@@ -283,11 +283,14 @@ def _get_shared_client():
 def force_kill_shared_client():
     """Lock-free, best-effort kill of the shared client's clio child process.
 
-    A hung probe holds ``PersistentMcpClient._lock`` inside a blocking ``readline()``,
-    so ``close()`` (which acquires the lock) would deadlock a watchdog trying to abort
-    it. This captures the current process reference ONCE into a local and kills that
-    local, so it is safe to call from a watchdog thread even while the owning thread is
-    mid-call — both terminating the same OS process is idempotent.
+    Intended for the watchdog-abort path: a single hung probe holds
+    ``PersistentMcpClient._lock`` inside a blocking ``readline()``, so ``close()`` (which
+    acquires the lock) would deadlock the watchdog. This captures the current process
+    reference ONCE into a local and kills that local, so it is safe to call from the
+    watchdog thread — the hung call is blocked, not re-spawning the child, and
+    terminating the same OS process twice is idempotent. It does not try to synchronize
+    with a concurrent re-spawn on a *different* call, which the watchdog path never
+    triggers.
 
     Callers outside this module must use this sanctioned API instead of reaching into
     ``_shared_client._proc`` directly, so the private coupling lives in one place and a
@@ -299,7 +302,9 @@ def force_kill_shared_client():
         return
     try:
         proc.kill()
-    except Exception:
+    except (OSError, ProcessLookupError):
+        # Benign: the process was already reaped/exited. Anything else propagates, so an
+        # unexpected kill failure is not silently indistinguishable from the no-op case.
         pass
 
 
