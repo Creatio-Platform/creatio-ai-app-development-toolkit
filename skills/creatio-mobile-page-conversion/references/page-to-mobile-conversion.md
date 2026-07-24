@@ -86,10 +86,14 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    `create-page`, `update-page`, `validate-page`, or `create-page-business-rule` until the developer
    approves.
 7. **Create or update the Freedom UI Mobile page** (only after Gate M):
-   - **Before building the body, invoke the `creatio-ui-guidelines` skill** (per the skill Load order)
-     and apply its mobile-relevant rules (component choice, lookups, fields, captions, tooltips,
-     accessibility); run its review checklist before step 8. The `mobileValues` paste is mechanical, but
-     `create-page`/`update-page` still author a Freedom UI page body, so the same UI/UX checklist applies.
+   - **Before building the body:** first call clio `get-guidance mobile-page-modification` — the
+     platform-mandated mobile authoring guidance (mobile component registry, body constraints, Scaffold
+     inheritance rules); `../../context/essentials.md` requires it before editing ANY mobile page body.
+     Then **invoke the `creatio-ui-guidelines` skill** (per the skill Load order) and apply its
+     mobile-relevant rules (component choice, lookups, fields, captions, tooltips, accessibility); run its
+     review checklist before step 8. The `mobileValues` paste is mechanical, but `create-page`/`update-page`
+     still author a Freedom UI page body, so both the `mobile-page-modification` guidance and the UI/UX
+     checklist apply.
    - Create the page from the confirmed `recommendedMobileTemplate` (confirm via `list-page-templates`
      schema-type `mobile`) with `create-page`, unless it already exists. Naming convention:
      `<Entity>_MobileFormPage` / `<Entity>_MobileListPage` (no prefix in the plan — clio applies the
@@ -168,16 +172,19 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      decline), apply each `guide.adaptiveLayout[].adaptiveDiff` (a `merge` by container name that sets the
      container's per-breakpoint columns) via `update-page`. Apply BOTH sides — applying only one leaves
      fields pinned to their old cells. The runtime reflows by `row`/`column` (one item per cell).
-7b. **Register the mobile section** — only after **Gate S** (see below); skip entirely if the user
-   declined or `sectionRegistration.sourcePageIsSection` is false. Use the `guide.sectionRegistration`
-   facts and `registrationActions`:
-   - **Make the section mobile:** `odata-update` `SysModule` id = `sectionRegistration.sysModuleId`,
+7b. **Register the mobile page** — only after **Gate S** (see below). The bullets below are independently
+   conditional, NOT all gated on one flag: the section + workplace bullets apply only when
+   `sectionRegistration.sourcePageIsSection` is true (a form/edit page is NOT a section — skip those two
+   for it), and the default-mobile-edit-page bullet applies only when `sectionRegistration.isFormPage` is
+   true. Skip 7b entirely only when the user declined or none of these conditions holds. Use the
+   `guide.sectionRegistration` facts and `registrationActions`:
+   - **Make the section mobile** (only when `sourcePageIsSection` is true): `odata-update` `SysModule` id = `sectionRegistration.sysModuleId`,
      data `{ "MobileSectionSchemaUId": "<new mobile list page schema UId>" }`, `confirm=true`. Get the
      new page's schema UId from the `create-page` result / `get-page`.
    - **Workplace (user's choice):** add the section to the chosen workplace with `odata-create`
      `SysModuleInWorkplace` `{ SysModuleId, SysWorkplaceId, Position }`; to create a new mobile
      workplace first `odata-create` `SysWorkplace` `{ Name, SysApplicationClientTypeId: <Mobile>, Position }`.
-   - **Default mobile EDIT page (form pages):** register the converted mobile form page as the object's
+   - **Default mobile EDIT page** (only when `isFormPage` is true — independent of `sourcePageIsSection`): register the converted mobile form page as the object's
      default mobile card with `create-related-page-addon` (`environment-name`, `package-name`,
      `entity-schema-name`, `schema-type=mobile`, and `pages` = a single entry
      `{ page-schema-name, is-default: true }`). It writes the `MobileRelatedPage` add-on into the package

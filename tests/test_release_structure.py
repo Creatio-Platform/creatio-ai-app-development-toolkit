@@ -353,7 +353,7 @@ class ReleaseStructureTests(unittest.TestCase):
     # orchestrator-driven skills only — standalone skills the user invokes
     # directly (e.g. a migration skill) are deliberately NOT listed and are not
     # expected to be wired into the orchestrator.
-    ORCHESTRATOR_HANDOFF_SKILLS = ("creatio-ui-guidelines", "creatio-schema-naming")
+    ORCHESTRATOR_HANDOFF_SKILLS = ("creatio-ui-guidelines", "creatio-schema-naming", "creatio-mobile-page-conversion")
 
     def test_orchestrator_wires_its_handoff_skills(self):
         """Each orchestrator-driven skill must exist and be referenced by name in
