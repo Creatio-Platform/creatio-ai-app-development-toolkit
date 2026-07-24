@@ -724,3 +724,63 @@ export function renderChecklist(result, opts = {}) {
     "> Present this **AFTER implementing** (not part of the approval plan). One row per deliverable / handler / ⚠ Confirm item. Fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) and **Evidence** (schema saved · render checked · on-stand query) for EVERY row. A row left `☐ pending` = not verified = the migration is NOT complete. **Do not delete rows.**",
     ...CK].join("\n");
 }
+
+// VERIFIED done-gate: diff the EXPECTED deliverables (from the manifest → changeSet) against the ACTUALLY BUILT
+// Freedom page, so "done" is checked against reality, not the agent's prose claim. `built` is what the agent
+// fetches with clio `get-page` after building: { ops: [{name,type,parentName}], parentSchemaName,
+// miniPageBuilt: true|false|null }. Presence is judged by Freedom COMPONENT TYPE (the robust signal — a missing
+// progress bar = no `crt.EntityStageProgressBar`), plus counts for fields/tabs/details. Returns the Plan-vs-Done
+// table with Status AUTO-FILLED (✅ found / ❌ MISSING / ⚠ unverified) and a hard verdict: any ❌ ⇒ INCOMPLETE.
+export function renderVerify(result, opts = {}, built = {}) {
+  const cs = result.changeSet || {};
+  const ops = Array.isArray(built.ops) ? built.ops : [];
+  const parentTpl = built.parentSchemaName || opts.planMeta?.formTemplate || "";
+  const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
+  const hasType = (t) => typeCount(t) > 0;
+  const dcm = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  const rows = []; let missing = 0, unverified = 0;
+  // st: "ok" | "missing" | "warn"
+  const row = (label, st, ev) => { if (st === "missing") missing++; else if (st === "warn") unverified++; rows.push({ label, mark: st === "ok" ? "✅ Done" : st === "missing" ? "❌ MISSING" : "⚠ verify", ev }); };
+  // Pages — mini page (a separate schema; the agent reports whether it was created)
+  if (result.miniPage?.schema) {
+    if (built.miniPageBuilt === true) row(`Mini page \`${esc(result.miniPage.schema)}\``, "ok", "created on-stand");
+    else if (built.miniPageBuilt === false) row(`Mini page \`${esc(result.miniPage.schema)}\``, "missing", "NOT created — the section still opens the full form on '+ New'");
+    else row(`Mini page \`${esc(result.miniPage.schema)}\``, "warn", "not verified — get-page the mini schema / pass built.miniPageBuilt");
+  }
+  // Fields — expected count vs built field-like leaf components (Input/ComboBox/… — not containers/grids/tabs/buttons)
+  const FIELD_RE = /^crt\.(Input|ComboBox|DateTimeEdit|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
+  const expFields = (cs.viewConfigDiff || []).filter(isField).length;
+  const builtFields = ops.filter((o) => FIELD_RE.test(o.type || "")).length;
+  if (expFields) row(`Fields (${expFields} expected)`, builtFields >= expFields ? "ok" : "warn", `${builtFields} field components on the built page${builtFields < expFields ? " — fewer than expected; check which fields were dropped" : ""}`);
+  // Tabs — expected client tabs vs built crt.TabContainer
+  const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
+  if (expTabs) { const b = typeCount("crt.TabContainer"); row(`Tabs (${expTabs} expected)`, b >= expTabs ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.TabContainer built`); }
+  // Details / related lists — expected vs built crt.DataGrid
+  const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+  if (expDetails) { const b = typeCount("crt.DataGrid"); row(`Related lists (${expDetails} expected)`, b >= expDetails ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.DataGrid built`); }
+  // Standard features by Freedom component TYPE (the commonly-dropped ones)
+  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };
+  for (const s of cs.standardFeatures || []) {
+    const f = s.feature || s.caption || ""; const t = FEATURE_TYPE[f];
+    if (!t || s.uiShape === "list") continue; // list-shaped features covered by Related lists above
+    row(`${esc(f)} (\`${t}\`)`, hasType(t) ? "ok" : "missing", hasType(t) ? `found ${t}` : `NO ${t} on the built page`);
+  }
+  // DCM widgets — only when a case is present
+  if (dcm) {
+    const barOk = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl);
+    row("DCM case progress bar", barOk ? "ok" : "missing", barOk ? (hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`) : `NO crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\` (not a progress-bar template)`);
+    row("DCM Next steps", hasType("crt.NextSteps") ? "ok" : "missing", hasType("crt.NextSteps") ? "crt.NextSteps built" : "NO crt.NextSteps tab on the built page");
+  }
+  // Card actions — Run process / Print → a button on the page
+  for (const a of cs.cardActions || []) {
+    if (/process/i.test(a)) row("Run-process action", hasType("crt.Button") ? "ok" : "warn", hasType("crt.Button") ? "a crt.Button is present — confirm it runs the process" : "no crt.Button found — confirm the Run-process action");
+  }
+  const V = [];
+  const verdict = missing > 0 ? `⛔ **INCOMPLETE — ${missing} deliverable(s) MISSING** (fix and re-verify)` : unverified > 0 ? `⚠ **${unverified} row(s) not verified** — resolve before calling it done` : `✅ **All verified deliverables are present on the built page**`;
+  V.push("### ✅ Plan-vs-Done — VERIFIED against the built page", "",
+    `> Auto-checked the built Freedom page (from \`get-page\`) against the plan's expected deliverables. ${verdict}`,
+    "", "| Deliverable | Status | Evidence (built page) |", "| --- | --- | --- |");
+  for (const r of rows) V.push(`| ${r.label} | ${r.mark} | ${esc(r.ev)} |`);
+  V.push("", `**Verdict:** ${verdict}`);
+  return { markdown: V.join("\n"), missing, unverified, complete: missing === 0 && unverified === 0 };
+}

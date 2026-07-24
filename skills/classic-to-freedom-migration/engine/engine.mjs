@@ -715,7 +715,12 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // A real fetched base-template chain ALWAYS defines `getActions` (it surfaces the base ProcessButton / Run
   // process). So the skeleton test keys on getActions, NOT merely a non-zero method count: a hand-typed stub
   // with a token `dummy(){}` method has size 1 but still no getActions — it must NOT clear this gate.
-  const looksSkeletal = seedTemplate.length > 0 && !hasGetActions;
+  // EXCEPTION — a MINI PAGE: its base template is `BaseMiniPage`, which by design has NO actions menu and so
+  // genuinely defines no `getActions`. A real, fully-fetched mini-page seed therefore has no getActions and
+  // would FALSE-trip this gate (⛔ blocking every mini-page fold — the recurring miss). `isMiniPage` is threaded
+  // from the mini-page fold, so skip the getActions-based skeleton test for mini pages (the `seeded` check still
+  // guards against an empty seed).
+  const looksSkeletal = seedTemplate.length > 0 && !hasGetActions && !opts.isMiniPage;
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
     seedMethods: seedMethodNames.size, hasGetActions,

@@ -22,13 +22,15 @@
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
+// `--verify --built <file>` = the VERIFIED done-gate: diff the actually-built page (clio get-page ownBodySummary)
+// against expected deliverables; exit 2 if any deliverable is MISSING or unverified.
 // Prefer inline "body" (get-classic-migration-bundle writes bodies inline into the manifest) over "file" to avoid path fragility.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
-import { renderDesignSpec, renderPlan, renderChecklist } from "./designspec.mjs";
+import { renderDesignSpec, renderPlan, renderChecklist, renderVerify } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -69,7 +71,7 @@ export function runMigration(manifest, opts = {}) {
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionSchemas = parse(manifest.section);
-  const eff = mergeHierarchy(schemas, { seedTemplate });
+  const eff = mergeHierarchy(schemas, { seedTemplate, isMiniPage: !!opts.isMiniPage });
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns, so the
   // mapper can resolve auto-named (SchemaNDetail) details and show the related-list columns in the spec.
   const detailSchemas = {};
@@ -500,6 +502,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
+  const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
+  const builtIdx = argv.indexOf("--built");     // --built <file>: the get-page ownBodySummary of the built page(s)
+  if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
+    fail("`--verify` needs `--built <file>` — a JSON with the built page(s): { \"ops\": [{name,type,parentName}], \"parentSchemaName\", \"miniPageBuilt\": true|false|null } (from clio `get-page` ownBodySummary).");
+  const builtFile = builtIdx >= 0 ? argv[builtIdx + 1] : null;
   const outIdx = argv.indexOf("--out");        // --out <file>: WRITE the output to a file so the agent presents the file, not a hand-paste
   // `--out` must be followed by a real path. Without this guard a trailing `--out` silently fell back to
   // stdout (documented flag → no write), and `--out --plan` swallowed the next flag — both silent misfires.
@@ -509,7 +516,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       fail("`--out` needs a file path (e.g. `--out plan.md`) — got " + (next === undefined ? "no argument" : `the flag '${next}'`) + "; nothing was written");
   }
   const outFile = outIdx >= 0 ? argv[outIdx + 1] : null;
-  const arg = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--out"); // positional manifest arg ('-' = stdin)
+  const arg = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--out" && argv[i - 1] !== "--built"); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
   // instead (also the `--out manifest.json` typo, where the only path was consumed by --out, lands here).
@@ -529,10 +536,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
-  let output;
+  let output, verifyIncomplete = false;
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else if (checklistMode) output = result.checklist + "\n";
+  else if (verifyMode) {
+    let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
+    catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
+    const specOpts2 = { template: manifest.template, planMeta: manifest.planMeta, signals: result.signals };
+    const v = renderVerify(result, specOpts2, built);
+    output = v.markdown + "\n";
+    verifyIncomplete = v.missing > 0 || v.unverified > 0; // any MISSING or unverified deliverable ⇒ not done
+  }
   else output = JSON.stringify(result, null, 2) + "\n";
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
   // fails loudly so a blocked/incomplete run can't be mistaken for a clean one — stderr note + non-zero exit
@@ -542,11 +557,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
   const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0));
-  const notReady = gateBad || structBad || planIncomplete;
+  const notReady = gateBad || structBad || planIncomplete || verifyIncomplete;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
+  else if (verifyMode) label = "verification";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -703,6 +703,18 @@ check("#19: real seed (methods incl. getActions) → not skeletal, no skeletal-s
   && !realSeed.warnings.some(w => w.name === "skeletal-seed"));
 check("#19: no seed at all → seedQuality.seeded=false, not flagged skeletal",
   mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })]).seedQuality.seeded === false);
+// #19 mini-page EXCEPTION: BaseMiniPage genuinely has NO getActions (no actions menu), so a REAL mini-page seed
+// (methods but no getActions) must NOT false-trip the skeletal gate when isMiniPage is set — else every mini-page
+// fold blocks. Same seed WITHOUT isMiniPage still blocks (the record-page rule is unchanged).
+const miniSeedArgs = [[L("Client", { entity: "X", diff: [di({ name: "MF", parentName: "ProfileContainer", propertyName: "items", bindTo: "MF" })] })],
+  { seedTemplate: [L("BaseMiniPage", { diff: [di({ name: "ProfileContainer", itemType: 15 })], methods: ["init", "onSaved", "loadValues"] })] }]; // real mini-page base: methods, NO getActions
+const miniSeedYes = mergeHierarchy(miniSeedArgs[0], { ...miniSeedArgs[1], isMiniPage: true });
+const miniSeedNo = mergeHierarchy(miniSeedArgs[0], miniSeedArgs[1]);
+check("#19 mini page: a real BaseMiniPage seed (methods, no getActions) is NOT skeletal under isMiniPage (no false block)",
+  miniSeedYes.seedQuality.looksSkeletal === false && !miniSeedYes.warnings.some(w => w.name === "skeletal-seed"),
+  () => miniSeedYes.seedQuality);
+check("#19 mini page: the SAME getActions-less seed WITHOUT isMiniPage still blocks (record-page rule unchanged)",
+  miniSeedNo.seedQuality.looksSkeletal === true && miniSeedNo.warnings.some(w => w.name === "skeletal-seed"));
 
 /* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
 const capClient = () => L("Client", { entity: "X", diff: [
@@ -1962,6 +1974,41 @@ const capRes = { resources: { TabCap: "Basic information", GrpCap: "Sender" }, v
 ] };
 check("region caption: a RESOLVED group caption still shows as the group (Tab · … › Group)",
   /\| Tab · Basic information › Sender \|/.test(renderDesignSpec({ entity: "X", changeSet: capRes })));
+
+/* ---- VERIFIED done-gate (renderVerify): diff EXPECTED deliverables vs the ACTUALLY-BUILT page (get-page
+   ownBodySummary), so "done" is checked against reality — catches the s46 miss (progress bar / Next steps /
+   Approvals / Communication options / mini page all silently dropped while the agent declared "complete"). ---- */
+const vResult = {
+  changeSet: {
+    viewConfigDiff: [{ name: "A", values: { control: "$Contact" } }, { name: "B", values: { control: "$Owner" } }],
+    standardFeatures: [{ feature: "Communication options" }, { feature: "Approvals" }],
+    details: [{ detailSchema: "D1", entity: "E1" }], cardActions: ["SecurityCheckProcessButton"],
+  },
+  signals: { dcm: { resolved: true, present: true } }, miniPage: { schema: "XMiniPage" },
+};
+// the real s46 shape: fields + a DataGrid + a button built, but NO progress bar / Next steps / comm options /
+// approvals, plain template, mini page not created.
+const vMissing = renderVerify(vResult, {}, {
+  ops: [{ name: "AF", type: "crt.Input" }, { name: "BF", type: "crt.Input" }, { name: "DG", type: "crt.DataGrid" }, { name: "Btn", type: "crt.Button" }],
+  parentSchemaName: "PageWithTabsFreedomTemplate", miniPageBuilt: false,
+});
+check("verify: a built page missing the DCM progress bar / Next steps / Communication options / Approvals / mini page is flagged INCOMPLETE",
+  vMissing.missing >= 4 && vMissing.complete === false
+  && /DCM case progress bar \| ❌ MISSING/.test(vMissing.markdown)
+  && /Mini page `XMiniPage` \| ❌ MISSING/.test(vMissing.markdown)
+  && /INCOMPLETE/.test(vMissing.markdown),
+  () => vMissing.markdown.split("\n").filter((l) => /❌|Verdict/.test(l)));
+const vOk = renderVerify(vResult, {}, {
+  ops: [{ name: "AF", type: "crt.Input" }, { name: "BF", type: "crt.Input" }, { name: "DG", type: "crt.DataGrid" },
+    { name: "Bar", type: "crt.EntityStageProgressBar" }, { name: "NS", type: "crt.NextSteps" },
+    { name: "CC", type: "crt.ContactCommunication" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+  parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
+});
+check("verify: a built page with all expected deliverables present → complete (no MISSING/unverified)",
+  vOk.missing === 0 && vOk.complete === true && /All verified deliverables are present/.test(vOk.markdown),
+  () => vOk.markdown.split("\n").filter((l) => /❌|⚠|Verdict/.test(l)));
+check("verify: DCM progress bar counts as PRESENT when built on PageWithTabsAndProgressBarTemplate (template ships it)",
+  /DCM case progress bar \| ✅ Done/.test(renderVerify({ changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: { dcm: { resolved: true, present: true } } }, {}, { ops: [], parentSchemaName: "PageWithTabsAndProgressBarTemplate" }).markdown));
 
 /* ---- session review (Applicant): three defects ---- */
 // #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned
