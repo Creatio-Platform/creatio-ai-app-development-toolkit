@@ -715,6 +715,14 @@ check("#19 mini page: a real BaseMiniPage seed (methods, no getActions) is NOT s
   () => miniSeedYes.seedQuality);
 check("#19 mini page: the SAME getActions-less seed WITHOUT isMiniPage still blocks (record-page rule unchanged)",
   miniSeedNo.seedQuality.looksSkeletal === true && miniSeedNo.warnings.some(w => w.name === "skeletal-seed"));
+// the guard is REPLACED, not removed: a hand-typed skeleton mini-page seed (bare containers, ZERO methods) is
+// STILL skeletal under isMiniPage — the mini-page signal is "no methods at all", not "no getActions".
+const miniSkelSeed = mergeHierarchy(
+  [L("Client", { entity: "X", diff: [di({ name: "MF", parentName: "ProfileContainer", propertyName: "items", bindTo: "MF" })] })],
+  { seedTemplate: [L("BaseMiniPage", { diff: [di({ name: "ProfileContainer", itemType: 15 })] })], isMiniPage: true }); // bare containers, NO methods
+check("#19 mini page: a hand-typed skeleton mini-page seed (0 methods) is STILL skeletal under isMiniPage (guard kept)",
+  miniSkelSeed.seedQuality.looksSkeletal === true && miniSkelSeed.warnings.some(w => w.name === "skeletal-seed"),
+  () => miniSkelSeed.seedQuality);
 
 /* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
 const capClient = () => L("Client", { entity: "X", diff: [

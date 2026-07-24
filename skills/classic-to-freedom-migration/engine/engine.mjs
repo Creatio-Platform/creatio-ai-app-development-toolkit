@@ -712,15 +712,15 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
   const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
   const hasGetActions = seedMethodNames.has("getActions");
-  // A real fetched base-template chain ALWAYS defines `getActions` (it surfaces the base ProcessButton / Run
+  // A real fetched RECORD-page base chain ALWAYS defines `getActions` (it surfaces the base ProcessButton / Run
   // process). So the skeleton test keys on getActions, NOT merely a non-zero method count: a hand-typed stub
   // with a token `dummy(){}` method has size 1 but still no getActions — it must NOT clear this gate.
-  // EXCEPTION — a MINI PAGE: its base template is `BaseMiniPage`, which by design has NO actions menu and so
-  // genuinely defines no `getActions`. A real, fully-fetched mini-page seed therefore has no getActions and
-  // would FALSE-trip this gate (⛔ blocking every mini-page fold — the recurring miss). `isMiniPage` is threaded
-  // from the mini-page fold, so skip the getActions-based skeleton test for mini pages (the `seeded` check still
-  // guards against an empty seed).
-  const looksSkeletal = seedTemplate.length > 0 && !hasGetActions && !opts.isMiniPage;
+  // MINI PAGE — different signal: its base template is `BaseMiniPage`, which by design has NO actions menu and so
+  // genuinely defines no `getActions` (keying on getActions FALSE-blocks every real mini-page fold — the recurring
+  // miss). But we must still catch a hand-typed skeleton mini-page seed, so key on "the seed defines NO methods AT
+  // ALL": a real fetched mini-page base has many (BaseMiniPage/BaseEntityPage → dozens), a bare-container stub has
+  // zero. `isMiniPage` is threaded from the mini-page fold.
+  const looksSkeletal = seedTemplate.length > 0 && (opts.isMiniPage ? seedMethodNames.size === 0 : !hasGetActions);
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
     seedMethods: seedMethodNames.size, hasGetActions,
