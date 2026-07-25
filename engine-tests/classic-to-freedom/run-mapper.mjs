@@ -582,7 +582,9 @@ check("design-spec: Confirm section present (⚠ worklist)",
   /#### ⚠ Confirm before I build/.test(cli.designSpec));
 // a clean (non-skeletal) seed defining the base containers the SupportUnit fixture patches — so these CLI
 // runs are gate-CLEAN (exit 0, no ⛔ banner) and stay pure shape tests; the blocked path is tested separately.
-const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){},getActions:function(){}}};});' }];
+// Carries ≥5 methods so it clears the KIND-AGNOSTIC skeletal gate (a real fetched base chain has 150+; the gate
+// blocks a broken/near-empty fetch of < 5 methods).
+const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){},getActions:function(){},onSaved:function(){},setColumns:function(){},loadValues:function(){},onRender:function(){}}};});' }];
 const SU_SCHEMAS = [
   { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
   { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }];
@@ -692,37 +694,36 @@ check("#6: a section body that fails to parse is advisory (role:\"section\"), ne
   && (secBad.parseDiagnostics || []).some((d) => d.role === "section" && /section parse error/.test(d.kind || "")));
 
 /* ---- #19: seed-quality validation — a skeleton seed (0 methods) is caught as a warning (hard gate) ---- */
-const skelSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
-  { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })] })] });        // seed = bare containers, no methods
-check("#19: skeletal seed (0 methods) → seedQuality.looksSkeletal + a 'skeletal-seed' warning (gate blocks)",
+// #19 — KIND-AGNOSTIC skeletal gate: the seed always comes from get-classic-migration-bundle (real bodies), so
+// the thing worth catching is a broken/near-empty FETCH, not a hand skeleton. Signal = method COUNT (< 5), NOT a
+// specific method: a real fetched base chain of ANY kind has many methods (record ≈347, section 428, mini 152);
+// a broken/empty fetch has ≈0. This removes the old getActions/isMiniPage special-casing that false-blocked real
+// section/mini seeds (they lack `getActions` by design).
+const clientF = () => [L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })];
+const many = ["init", "onSaved", "loadValues", "getActions", "setColumns", "onRender"]; // 6 methods — a real seed
+const skelSeed = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })] })] }); // bare containers, 0 methods
+check("#19: near-empty seed (0 methods) → looksSkeletal + a 'skeletal-seed' warning (broken-fetch gate blocks)",
   skelSeed.seedQuality.looksSkeletal === true && skelSeed.warnings.some(w => w.name === "skeletal-seed"));
-const realSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
-  { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "getActions"] })] }); // seed with real methods
-check("#19: real seed (methods incl. getActions) → not skeletal, no skeletal-seed warning",
-  realSeed.seedQuality.looksSkeletal === false && realSeed.seedQuality.hasGetActions === true
-  && !realSeed.warnings.some(w => w.name === "skeletal-seed"));
+const stub1 = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["dummy"] })] }); // 1 token method
+check("#19: a 1-token-method stub (< 5) still blocks (the token-method hole is closed)",
+  stub1.seedQuality.looksSkeletal === true && stub1.warnings.some(w => w.name === "skeletal-seed"));
+const realSeed = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: many })] });
+check("#19: a real seed (≥5 methods) → not skeletal, no warning",
+  realSeed.seedQuality.looksSkeletal === false && !realSeed.warnings.some(w => w.name === "skeletal-seed"));
+// THE FIX: a real SECTION seed (BaseSectionV2 — many methods, NO getActions, has getSectionActions instead) is NO
+// LONGER false-blocked. Under the old getActions rule this wrongly tripped the gate → agent workaround → hollow folds.
+const sectionSeed = mergeHierarchy(clientF(), { seedTemplate: [L("BaseSectionV2", { diff: [di({ name: "Header", itemType: 15 })],
+  methods: ["init", "getSectionActions", "loadGrid", "onRender", "setColumns", "getFilters"] })] }); // 6 methods, NO getActions
+check("#19: a real SECTION seed (many methods, NO getActions) is NOT skeletal — the false-block that caused the workaround is fixed",
+  sectionSeed.seedQuality.looksSkeletal === false && sectionSeed.seedQuality.hasGetActions === false
+  && !sectionSeed.warnings.some(w => w.name === "skeletal-seed"));
+// A real MINI-PAGE seed (BaseMiniPage — methods, no getActions) clears the gate with NO isMiniPage special-casing.
+const miniSeed = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "MF", parentName: "ProfileContainer", propertyName: "items", bindTo: "MF" })] })],
+  { seedTemplate: [L("BaseMiniPage", { diff: [di({ name: "ProfileContainer", itemType: 15 })], methods: many })] });
+check("#19: a real MINI-PAGE seed (methods, no getActions) is NOT skeletal — no isMiniPage flag needed anymore",
+  miniSeed.seedQuality.looksSkeletal === false && !miniSeed.warnings.some(w => w.name === "skeletal-seed"));
 check("#19: no seed at all → seedQuality.seeded=false, not flagged skeletal",
-  mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })]).seedQuality.seeded === false);
-// #19 mini-page EXCEPTION: BaseMiniPage genuinely has NO getActions (no actions menu), so a REAL mini-page seed
-// (methods but no getActions) must NOT false-trip the skeletal gate when isMiniPage is set — else every mini-page
-// fold blocks. Same seed WITHOUT isMiniPage still blocks (the record-page rule is unchanged).
-const miniSeedArgs = [[L("Client", { entity: "X", diff: [di({ name: "MF", parentName: "ProfileContainer", propertyName: "items", bindTo: "MF" })] })],
-  { seedTemplate: [L("BaseMiniPage", { diff: [di({ name: "ProfileContainer", itemType: 15 })], methods: ["init", "onSaved", "loadValues"] })] }]; // real mini-page base: methods, NO getActions
-const miniSeedYes = mergeHierarchy(miniSeedArgs[0], { ...miniSeedArgs[1], isMiniPage: true });
-const miniSeedNo = mergeHierarchy(miniSeedArgs[0], miniSeedArgs[1]);
-check("#19 mini page: a real BaseMiniPage seed (methods, no getActions) is NOT skeletal under isMiniPage (no false block)",
-  miniSeedYes.seedQuality.looksSkeletal === false && !miniSeedYes.warnings.some(w => w.name === "skeletal-seed"),
-  () => miniSeedYes.seedQuality);
-check("#19 mini page: the SAME getActions-less seed WITHOUT isMiniPage still blocks (record-page rule unchanged)",
-  miniSeedNo.seedQuality.looksSkeletal === true && miniSeedNo.warnings.some(w => w.name === "skeletal-seed"));
-// the guard is REPLACED, not removed: a hand-typed skeleton mini-page seed (bare containers, ZERO methods) is
-// STILL skeletal under isMiniPage — the mini-page signal is "no methods at all", not "no getActions".
-const miniSkelSeed = mergeHierarchy(
-  [L("Client", { entity: "X", diff: [di({ name: "MF", parentName: "ProfileContainer", propertyName: "items", bindTo: "MF" })] })],
-  { seedTemplate: [L("BaseMiniPage", { diff: [di({ name: "ProfileContainer", itemType: 15 })] })], isMiniPage: true }); // bare containers, NO methods
-check("#19 mini page: a hand-typed skeleton mini-page seed (0 methods) is STILL skeletal under isMiniPage (guard kept)",
-  miniSkelSeed.seedQuality.looksSkeletal === true && miniSkelSeed.warnings.some(w => w.name === "skeletal-seed"),
-  () => miniSkelSeed.seedQuality);
+  mergeHierarchy(clientF()).seedQuality.seeded === false);
 
 /* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
 const capClient = () => L("Client", { entity: "X", diff: [
@@ -1014,6 +1015,40 @@ check("widgets: Recommendations is inherited base-template chrome — hidden fro
   && !recoCs.changeSet.widgets.some((w) => w.widget === "Recommendations")
   && !/Recommendations/.test(recoCs.designSpec));
 
+// s48 — base-seed WIDGET-CHROME gate. The Freedom base template DEFINES DCM / Feed / Timeline / Duplicates /
+// Recommendations universally, so their mere presence in the merged page is NOT proof the classic page had the
+// widget — emitting on presence leaked base chrome onto every record page AND every detail/child fold. A base
+// widget now emits ONLY with real evidence: (1) a classic (non-seed) layer contributed the container or an
+// ANCESTOR (Feed's ESNFeedContainer sits under the classic-touched ESNTab), or (2) — for DCM, which never lives
+// in the page body on a case-driven page like Applicant — the resolved on-stand `signals.dcm`.
+const chromeSeed = L("Tpl", { diff: [
+  di({ name: "Tabs", itemType: 15 }),
+  di({ name: "ESNTab", itemType: 0, parentName: "Tabs" }),
+  di({ name: "ESNFeedContainer", itemType: 0, parentName: "ESNTab" }),
+  di({ name: "DcmActionsDashboardContainer", itemType: 0, parentName: "Header" }),
+  di({ name: "DuplicatesWidgetContainer", itemType: 0, parentName: "LeftModulesContainer" }),
+  di({ name: "RecommendationModuleContainer", itemType: 0, parentName: "LeftModulesContainer" }),
+], methods: ["frameworkInit", "getActions"] });
+// classic page: genuinely has the ESN feed (declares ESNTab) + a field — but NOT DCM / Duplicates / Recommendations.
+const chromeClient = L("Client", { entity: "X", diff: [
+  di({ name: "ESNTab", itemType: 0, parentName: "Tabs" }),
+  di({ name: "Name", parentName: "Header", propertyName: "items", bindTo: "Name" }),
+] });
+const chromeEff = mergeHierarchy([chromeClient], { seedTemplate: [chromeSeed] });
+const chromeNoDcm = mapToFreedom(chromeEff, {});
+const chromeDcm = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } } });
+const wNames = (cs) => new Set((cs.widgets || []).map((w) => w.widget));
+check("s48/widget-gate: base chrome with NO classic evidence (Duplicates) is DROPPED — not emitted from the inherited container",
+  !wNames(chromeNoDcm).has("Duplicates") && !wNames(chromeDcm).has("Duplicates"));
+check("s48/widget-gate: inherited Recommendations (no classic evidence) is dropped ENTIRELY — not even kept as chrome",
+  !chromeNoDcm.chromeWidgets.some((w) => w.widget === "Recommendations"));
+check("s48/widget-gate: Feed IS emitted — the classic page touched its ESN tab, so ESNFeedContainer's ancestor is schemaTouched",
+  wNames(chromeNoDcm).has("Feed (ESN)") && wNames(chromeDcm).has("Feed (ESN)"));
+check("s48/widget-gate: DCM (progress bar + Next steps) is DROPPED without the on-stand signal — base container, no page-body evidence",
+  !wNames(chromeNoDcm).has("Case progress bar") && !wNames(chromeNoDcm).has("Next steps"));
+check("s48/widget-gate: DCM EMITS when signals.dcm is resolved+present, even though the classic page body has no dashboard",
+  wNames(chromeDcm).has("Case progress bar") && wNames(chromeDcm).has("Next steps"));
+
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.
 const ordCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
@@ -1262,8 +1297,27 @@ check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Sho
   && rf("ST")?.values.type === "crt.Input" && rf("MT")?.values.type === "crt.Input"
   && rf("LT")?.values.type === "crt.Input" && rf("LT")?.values.typeLabel === "Long text"
   && rf("XT")?.values.type === "crt.Input" && rf("XT")?.values.typeLabel === "Long text");
-check("scalarControl: a genuinely unknown type code (44=URL) still falls to a loud field-control decision",
-  rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && d.item === "UNK"));
+check("scalarControl: a genuinely unknown type code (44=URL) still falls to a loud field-control decision (folded: field named in the summary)",
+  rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bUNK\b/.test(d.reason)));
+// s48 — get-entity-schema-properties returns some core scalars as the NUMERIC DataValueType code, not a name
+// (Money "6" on the ASPContractData configurator was 202 field-control misses). Map the stable core codes;
+// an uncertain text-range code (e.g. 31) still falls to field-control (not guessed into a wrong control).
+const codeCols = { MON: { type: "6" }, DT7: { type: "7" }, BOOL: { type: "12" }, INT: { type: "4" }, FLT: { type: "5" }, TXT: { type: "1" }, DEC31: { type: "31" }, URL44: { type: "44" } };
+const codeNames = Object.keys(codeCols);
+const codeCs = runMigration({ entity: "X", entityColumns: codeCols,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${codeNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+const codeF = (n) => codeCs.changeSet.viewConfigDiff.find((o) => o.name === n);
+check("scalarControl: numeric DataValueType codes map — Money '6'→NumberInput (Decimal), DateTime '7', Boolean '12', Integer '4', Float '5', Text '1', Decimal(0.1) '31'",
+  codeF("MON")?.values.type === "crt.NumberInput" && codeF("MON")?.values.typeLabel === "Decimal"
+  && codeF("DT7")?.values.type === "crt.DateTimePicker" && codeF("DT7")?.values.typeLabel === "Date/time"
+  && codeF("BOOL")?.values.type === "crt.Checkbox" && codeF("BOOL")?.values.typeLabel === "Boolean"
+  && codeF("INT")?.values.type === "crt.NumberInput" && codeF("INT")?.values.typeLabel === "Integer"
+  && codeF("FLT")?.values.type === "crt.NumberInput"
+  && codeF("TXT")?.values.type === "crt.Input"
+  && codeF("DEC31")?.values.type === "crt.NumberInput" && codeF("DEC31")?.values.typeLabel === "Decimal"); // "31" = Decimal(0.1), confirmed on-stand
+check("scalarControl: a genuinely unknown code (44=URL) is NOT guessed — still a loud field-control decision",
+  codeF("URL44")?.values.type === "crt.Input"   // defaulted
+  && codeCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bURL44\b/.test(d.reason)));
 
 // Blocker 1 — the AST parser (which replaced the vm) must not let an unresolved structural field pass as a
 // clean-but-EMPTY page. (a) A diff built via a top-level const alias now resolves statically (part 2); (b) a
@@ -1620,10 +1674,30 @@ const dvBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[`
   + `{operation:"insert",name:"F2",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Amt"}},`
   + `{operation:"insert",name:"F3",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Vis",visible:{bindTo:"IsShown"}}}]};});`;
 const dv = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: dvBody }] }, { baseDir: FIX });
-check("T3: two classic items on one column → duplicate-binding decision",
-  dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding" && n.item === "Amt"));
+check("T3: two classic items on one column → duplicate-binding decision (folded: column named in the summary)",
+  dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding" && /\bAmt\b/.test(n.reason)));
 check("T3: a field with a bound (dynamic) 'visible' → visibility-rule decision",
   dv.changeSet.needsDecision.some((n) => n.kind === "visibility-rule" && n.item === "Vis"));
+// s48 — FOLD the per-field noise on a DENSE page. A classic page packing many fields into a 24-col grid collapses
+// into the narrow Freedom target with a collision on nearly every field (ASPContractData → ~950 individual ⚠).
+// The engine still relocates them; it now folds the REPORT to ONE summary per container + ONE page-level
+// `layout-density` TODO (choose the Freedom container/grid before design), and folds field-control to one summary.
+const denseOps = Array.from({ length: 40 }, (_, i) =>
+  `{operation:"insert",name:"F${i}",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Col${i}",layout:{column:${(i % 4) * 6},row:${Math.floor(i / 4)},colSpan:6,rowSpan:1}}}`).join(",");
+const dense = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${denseOps}]};});` }] }, { baseDir: FIX });
+const dnd = dense.changeSet.needsDecision;
+check("s48/fold: layout-collision is folded to ONE decision PER PAGE (lists affected containers, not one per field/container)",
+  dnd.filter((n) => n.kind === "layout-collision").length === 1
+  && /\d+ field\(s\) across \d+ container\(s\)/.test(dnd.find((n) => n.kind === "layout-collision")?.reason || ""));
+check("s48/fold: a single page-level layout-density TODO is raised — choose Freedom container/grid BEFORE design",
+  dnd.filter((n) => n.kind === "layout-density").length === 1
+  && /TODO before designing/.test(dnd.find((n) => n.kind === "layout-density")?.reason || ""));
+check("s48/fold: field-control is folded to ONE summary naming the count + a wrong-entity hint (not one per field)",
+  dnd.filter((n) => n.kind === "field-control").length === 1
+  && /have no classic contentType/.test(dnd.find((n) => n.kind === "field-control")?.reason || ""));
+check("s48/fold: the folded kinds do NOT scale with field count — collision+field-control+duplicate-binding ≤ 3 entries for a 40-field page (was ~80)",
+  dnd.filter((n) => ["layout-collision", "field-control", "duplicate-binding"].includes(n.kind)).length <= 3);
 // layout-truncated — a container past the MAX_FIELDS_PER_CONTAINER relocation bound (500); generated, not hand-typed.
 let ltFields = "";
 for (let i = 0; i < 502; i++) ltFields += `{operation:"insert",name:"C${i}",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"C${i}"}},`;

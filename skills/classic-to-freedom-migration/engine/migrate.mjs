@@ -131,6 +131,7 @@ export function runMigration(manifest, opts = {}) {
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
+    signals: manifest.signals || {},          // on-stand signals (dcm/…) — gate DCM widget emission on the resolved case
   });
   // Attach each detail's ADD/EDIT MECHANISM to the mapped detail and raise it as a decision, so the Freedom
   // rebuild reproduces the real add flow instead of shipping a plain related list. (renderPlan shows d.addMode

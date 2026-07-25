@@ -53,15 +53,25 @@ function resolveOwner(startParent, index, profileAnchors = PROFILE_CONTAINERS) {
 }
 const tabGridName = (tab) => `${tab}Grid`;
 
+// Some column types arrive from get-entity-schema-properties as the numeric Terrasoft DataValueType CODE
+// rather than a name — inconsistently: on real stands Date comes as "8", Money as "6", and the Decimal-precision
+// variants as codes too (all VERIFIED on-stand on the ASPContractData configurator: 202 Money columns as "6";
+// code "31" = "Decimal (0.1)", i.e. a Float variant → NumberInput). Normalize the codes we have ground truth for
+// to their names so the name-based mapping below catches them. ONLY confirmed codes are listed — the numeric
+// range is NOT cleanly partitioned (31 is a decimal, yet 30/32 were believed to be text), so an UNCONFIRMED code
+// is left unmapped and flagged loudly (a folded field-control decision) rather than guessed into a wrong control.
+// If another Decimal-precision code (0.01/0.001/…) surfaces on a future page, confirm it on-stand and add it here.
+const DATAVALUETYPE_CODE = { "1": "text", "4": "integer", "5": "float", "6": "money", "7": "datetime", "8": "date", "12": "boolean", "31": "float" };
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
-  // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by
-  // NAME (Boolean/DateTime/Integer/Float/Money/ShortText/MediumText/LongText/MaxSizeText/RichText), but Date
-  // arrives as the numeric code "8". (Earlier phantom codes 27/28/29/30/32 were never emitted — text came by
-  // name, so those columns wrongly fell to null.) Genuinely unknown codes (18=Color, 44=URL, 31, …) stay null.
+  // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
+  // (Boolean/DateTime/Integer/Float/Money/ShortText/MediumText/LongText/MaxSizeText/RichText); some core scalars
+  // arrive as a numeric DataValueType code (Date "8", Money "6", Decimal "31", …) — normalized above. Genuinely
+  // unknown/unconfirmed codes (18=Color, 44=URL, …) stay null → the caller flags a loud field-control decision.
+  t = DATAVALUETYPE_CODE[t] || t;
   if (t === "boolean") return { type: "crt.Checkbox" };
   if (t === "datetime") return { type: "crt.DateTimePicker", picker: "datetime" };
-  if (t === "date" || t === "8") return { type: "crt.DateTimePicker", picker: "date" };
+  if (t === "date") return { type: "crt.DateTimePicker", picker: "date" };
   if (["integer", "decimal", "float", "money"].includes(t)) return { type: "crt.NumberInput" };
   if (["longtext", "maxsizetext", "richtext"].includes(t)) return { type: "crt.Input", multiline: true };
   if (["text", "shorttext", "mediumtext"].includes(t)) return { type: "crt.Input" };
@@ -88,12 +98,13 @@ function control(dataType, contentType, ref) {
 // stores them as text); text carries its length when the column metadata provides it.
 function fieldTypeLabel(col, meta, ctl) {
   if (ctl.lookup) return "Lookup";
-  const t = String(meta.type || "").toLowerCase();
+  let t = String(meta.type || "").toLowerCase();
+  t = DATAVALUETYPE_CODE[t] || t;   // same numeric-code normalization as scalarControl (Money "6", …)
   if (/email/i.test(col)) return "Email";
   if (/phone|mobile/i.test(col)) return "Phone";
   if (ctl.type === "crt.Checkbox" || t === "boolean") return "Boolean";
   if (ctl.picker === "datetime" || t === "datetime") return "Date/time";
-  if (ctl.picker === "date" || t === "date" || t === "8") return "Date";
+  if (ctl.picker === "date" || t === "date") return "Date";
   if (t === "integer") return "Integer";
   if (["decimal", "float", "money"].includes(t)) return "Decimal";
   if (ctl.multiline) return t === "richtext" ? "Rich text" : "Long text";
@@ -168,8 +179,14 @@ const GRID_24 = Array.from({ length: 24 }, () => "minmax(32px, 1fr)");
 const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add. A case can exist even if the classic page tracked stage only via a Stage lookup + history detail.";
 const DCM_PROGRESS_NOTE = "Case-stage progress bar (crt.EntityStageProgressBar) — NOT in the default Freedom form template. When the object has a DCM case, PREFER building the form page from `PageWithTabsAndProgressBarTemplate` (it ships the bar placed) and RE-BIND the new page to your entity, rather than hand-adding the widget. FALLBACK (already on a no-bar template / page exists): PLACE IT in `MainContainer` (the content container below the header), at the TOP of the content — NOT in `MainHeader`, and not as a bare child of `Main`. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
 const DCM_NEXTSTEPS_NOTE = "Next steps (crt.NextSteps) — NOT in the default Freedom form template; ADD it as a TAB in the card toggle panel BESIDE the Feed and Attachments tabs when the object has a configured DCM case. Build the tab like Feed/Attachments: caption via `#ResourceString(Key)#` (NOT $Resources.Strings.*), set the tab icon to `flag-icon` (do not guess — an invented name renders empty), put the header (Label + '+' menu button) in the tab's `tools` slot and the widget in `items`. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
-const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top" };
-const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed" };
+// `signal: "dcm"` — DCM is NOT evidenced by the classic page BODY (the DcmActionsDashboard containers are
+// Freedom base-template chrome, never touched by the page's own layers); its presence is an ON-STAND fact
+// (a configured DCM case, `manifest.signals.dcm`). So these two widgets emit ONLY when the resolved dcm
+// signal is present — NOT from the inherited base container (which would leak DCM onto every record/detail
+// page). The signals-completeness gate blocks the plan until `signals.dcm` is resolved, so a non-blocked
+// plan always has a definite answer here.
+const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
+const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
 const WIDGET_BY_MODULE = {
   DcmActionsDashboardModule: [DCM_PROGRESS, DCM_NEXTSTEPS], // DCM case dashboard → BOTH Freedom components
   ActionsDashboardModule: [DCM_NEXTSTEPS],
@@ -280,7 +297,7 @@ export function mapToFreedom(eff, opts = {}) {
   D.accountedFor.forEach(a => accountedFor.add(a));
 
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
-  const _w = mapWidgets(eff);
+  const _w = mapWidgets(eff, { signals: opts.signals });
   const { widgets, chromeWidgets } = _w;
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
@@ -440,6 +457,12 @@ function mapFields(ctx, containers) {
   const claimCells = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) => cells.add(k));
   const placedCount = {};       // parent -> fields placed so far (bounds the relocation search)
   const truncatedContainers = new Set();
+  // FOLD the repetitive PER-FIELD decisions — a dense classic page emits one collision/control/dup line PER
+  // FIELD (~950 unactionable entries). Accumulate here; emit ONE summary per kind (per container for collisions)
+  // after the loop. The relocation / control-defaulting / naming behavior is unchanged — only the reporting folds.
+  const collisionByContainer = new Map(); // parent -> { count, gridCols, sample: [] }
+  const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
+  const dupBindingCols = [];              // { col, elName } — column bound by multiple classic items
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -505,14 +528,12 @@ function mapFields(ctx, containers) {
     if (f.bindTo && Object.keys(cols).length && !(col in cols)) needsDecision.push({ kind: "virtual-field", item: col,
       reason: `field '${col}' is not a real column on the entity — likely an auto-filled companion loaded from a selected lookup (an on-change / set-info handler). Build it as a READ-ONLY field bound to a VIEW-MODEL attribute and wire the lookup's on-change handler to load/clear it; do NOT drop it (that collapses the island to a lone field). Confirm the column if it should be a real entity field.` });
     const ctl = control(meta.type, f.contentType, meta.ref);
-    if (!ctl) needsDecision.push({ kind: "field-control", item: col,
-      reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });
+    if (!ctl) fieldControlCols.push(col);   // folded into one summary after the loop
     const c = ctl || { type: "crt.Input" };
     // #4: unique element name derived from the column; two classic items on one column -> _2, _3 + flag.
     nameCount[col] = (nameCount[col] || 0) + 1;
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
-      reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
+    if (nameCount[col] > 1) dupBindingCols.push({ col, elName });   // folded into one summary after the loop
     // Convert the classic 24-col grid coordinates (0-based) into the TARGET Freedom grid, rather than dumping
     // them verbatim into a native container (which overflows and breaks the layout). Target grid width:
     //   profile island  -> 1 column  (every field full-width, stacked)
@@ -559,8 +580,9 @@ function mapFields(ctx, containers) {
       if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
         const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
         while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
-        needsDecision.push({ kind: "layout-collision", item: col,
-          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${rowSpan > 1 ? `, spans ${rowSpan} rows` : ""}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
+        let cc = collisionByContainer.get(parent);   // folded into one summary per container after the loop
+        if (!cc) { cc = { count: 0, gridCols, sample: [] }; collisionByContainer.set(parent, cc); }
+        cc.count++; if (cc.sample.length < 6) cc.sample.push(col);
       }
     } else {
       let cur = autoRow[parent] || 1;
@@ -632,6 +654,34 @@ function mapFields(ctx, containers) {
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
+  }
+  // ---- FOLD the accumulated per-field noise into summaries (declarations near the loop top) ----
+  const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
+  // The DESIGN-PREREQUISITE (surfaced ONCE, not per field): a dense multi-column classic grid does NOT map 1:1
+  // onto the narrow (1–2 col) Freedom form, and choosing the right target container/grid is a WHOLE-PAGE decision
+  // the agent must make BEFORE designing — the engine only auto-relocates collisions as a fallback. Fire it when
+  // the collapse is systemic so it doesn't nag pages with a stray collision or two.
+  if (totalCollisions >= 12) needsDecision.push({ kind: "layout-density", item: "(page layout)",
+    reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
+  // ONE layout-collision summary for the WHOLE page (not per container, not per field) — it lists the affected
+  // containers with per-container counts so the agent knows WHERE to rework, but stays a single worklist line.
+  if (collisionByContainer.size) {
+    const perContainer = [...collisionByContainer.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([parent, cc]) => `${parent} (${cc.count})`);
+    const shown = perContainer.slice(0, 10).join(", ") + (perContainer.length > 10 ? ` … (+${perContainer.length - 10} more)` : "");
+    needsDecision.push({ kind: "layout-collision", item: "(page layout)",
+      reason: `${totalCollisions} field(s) across ${collisionByContainer.size} container(s) landed on already-occupied cells when the classic layout collapsed into the narrow Freedom target and were auto-relocated (rows approximate). Affected containers (field count): ${shown}. Review these containers' layout as a whole (see the page-layout TODO) rather than each field.` });
+  }
+  if (fieldControlCols.length) {
+    const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
+    needsDecision.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
+      reason: `${fieldControlCols.length} field(s) have no classic contentType and the entity column type was NOT recognized — defaulted to \`crt.Input\`. Usual causes: (a) the type came back as an UNMAPPED DataValueType code (get-entity-schema-properties returns some types by code, not name — e.g. an exotic code like 31); or (b) the column is missing from \`manifest.entityColumns\` — often because the section was bundled under the WRONG entity (verify the bundled entity). Check the type on-stand and confirm the control: ${shown}` });
+  }
+  if (dupBindingCols.length) {
+    const shown = dupBindingCols.slice(0, 12).map((d) => `${d.col}→${d.elName}`).join(", ") + (dupBindingCols.length > 12 ? ` … (+${dupBindingCols.length - 12} more)` : "");
+    needsDecision.push({ kind: "duplicate-binding", item: `(${dupBindingCols.length} columns)`,
+      reason: `${dupBindingCols.length} column(s) are bound by more than one classic item (emitted with _2/_3 suffixes so none is dropped); confirm which to keep for each: ${shown}` });
   }
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
   // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
@@ -923,14 +973,49 @@ function mapImages(eff) {
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
 // Returns its own needsDecision[] / accountedFor[]; the orchestrator merges them.
-function mapWidgets(eff) {
+function mapWidgets(eff, opts = {}) {
   const widgets = [], chromeWidgets = [], needsDecision = [], accountedFor = [];
   const seenWidget = new Set();
-  const addWidget = (defs, classic, base) => {
+  // A widget catalog entry maps a base-template CONTAINER/MODULE (e.g. ESNFeedContainer, DcmActionsDashboard…)
+  // to a Freedom analog. But the base Freedom template DEFINES all of these universally, so their mere presence
+  // in the merged page is NOT evidence the classic page actually had the widget — emitting on presence leaked
+  // base chrome (Timeline / Duplicates / Recommendations / a stray Feed / DCM) onto every record page AND every
+  // detail/child fold. Two real evidence sources decide emission instead:
+  //   (1) CLASSIC EVIDENCE — the container, or an ancestor of it, was `schemaTouched` (a non-seed page layer
+  //       contributed it). The classic page places the ESN feed via its `ESNTab`, so ESNFeedContainer's ancestor
+  //       ESNTab is schemaTouched ⇒ Feed is genuine. Timeline/Duplicates/Recommendations sit in a pure base-seed
+  //       subtree (nothing schemaTouched) ⇒ inherited chrome ⇒ dropped. A classic page that DID have a Timeline
+  //       tab would carry a schemaTouched TimelineTab and emit it — the rule generalises, no per-widget hardcode.
+  //   (2) ON-STAND SIGNAL — DCM (`signal:"dcm"`) is never in the page body (it comes from the DCM case schema),
+  //       so it emits only when `manifest.signals.dcm` is resolved+present, regardless of container presence.
+  const dcmPresent = opts.signals?.dcm?.resolved === true && !!opts.signals.dcm.present;
+  const byName = new Map((eff.items || []).map((i) => [i.name, i]));
+  // "a classic (non-seed) page layer contributed this element" — either it INSERTED it fresh (`!templateOwned`,
+  // the defining insert was a client layer) or it MERGED/MOVED onto a base-seed element (`schemaTouched`). The
+  // classic page places the ESN feed by reconfiguring the base `ESNTab`, so ESNTab is classic-contributed while
+  // its structural ancestors (Tabs/CardContentContainer) stay pure seed — the walk stops at the real evidence.
+  const classicContributed = (it) => !!it && (!it.templateOwned || it.schemaTouched);
+  const classicEvidence = (name) => {
+    let cur = byName.get(name), guard = 0;
+    while (cur && guard++ < 32) {
+      if (classicContributed(cur)) return true;           // self or an ancestor was placed/reconfigured by a page layer
+      cur = cur.parent ? byName.get(cur.parent) : null;
+    }
+    return false;
+  };
+  // `base` = the widget's source is base-template chrome (templateOwned / fromTemplate); `evident` = a classic
+  // layer contributed it (self/ancestor). A base widget with no classic evidence is inherited chrome → skip.
+  const addWidget = (defs, classic, base, evident) => {
     if (!defs) return;
     accountedFor.push(classic);
+    const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
     for (const w of (Array.isArray(defs) ? defs : [defs])) {
       if (seenWidget.has(w.widget)) continue;
+      // GATE: a base-chrome widget emits only with real evidence it belongs to THIS page. DCM never lives in the
+      // page body on a case-driven page (Applicant), so it also accepts the resolved on-stand signal; a classic
+      // page that DOES embed the dashboard module in its body still emits it via classic evidence.
+      if (w.signal === "dcm") { if (!dcmPresent && !classicEvident) continue; }
+      else if (!classicEvident) continue;
       seenWidget.add(w.widget);
       // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited base-template
       // scaffolding, not page content — hide them from the design spec instead of hardcoding an "ignore" per run.
@@ -944,8 +1029,8 @@ function mapWidgets(eff) {
       needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
     }
   };
-  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate);
-  for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned);
+  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
+  for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
   return { widgets, chromeWidgets, needsDecision, accountedFor };
 }
 

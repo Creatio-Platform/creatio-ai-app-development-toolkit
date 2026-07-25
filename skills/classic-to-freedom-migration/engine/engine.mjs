@@ -712,15 +712,18 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
   const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
   const hasGetActions = seedMethodNames.has("getActions");
-  // A real fetched RECORD-page base chain ALWAYS defines `getActions` (it surfaces the base ProcessButton / Run
-  // process). So the skeleton test keys on getActions, NOT merely a non-zero method count: a hand-typed stub
-  // with a token `dummy(){}` method has size 1 but still no getActions — it must NOT clear this gate.
-  // MINI PAGE — different signal: its base template is `BaseMiniPage`, which by design has NO actions menu and so
-  // genuinely defines no `getActions` (keying on getActions FALSE-blocks every real mini-page fold — the recurring
-  // miss). But we must still catch a hand-typed skeleton mini-page seed, so key on "the seed defines NO methods AT
-  // ALL": a real fetched mini-page base has many (BaseMiniPage/BaseEntityPage → dozens), a bare-container stub has
-  // zero. `isMiniPage` is threaded from the mini-page fold.
-  const looksSkeletal = seedTemplate.length > 0 && (opts.isMiniPage ? seedMethodNames.size === 0 : !hasGetActions);
+  // #19 — the seed must be the REAL fetched base-template chain, not a broken/empty bundle fetch. Since the seed
+  // ALWAYS comes from `get-classic-migration-bundle` (real schema bodies read off the stand) — never hand-authored
+  // in the normal flow — the thing worth catching is a broken/near-empty FETCH, not a "hand skeleton". So the test
+  // is KIND-AGNOSTIC: a real fetched base chain of ANY kind defines MANY methods (verified on-stand: record ≈347,
+  // section `BaseSectionV2` = 428, mini `BaseMiniPage` = 152), while a broken/empty fetch has ≈0. Keying on the
+  // method COUNT (not a specific method) fixes the false-block this used to hit: it keyed on `getActions`, which
+  // ONLY record pages define — sections define `getSectionActions`, mini pages none — so real section/mini seeds
+  // were wrongly flagged, which pushed the agent into a workaround (bundling the section as `schemas` + a thin
+  // seed) that produced hollow folds. Count-based: 150–430 (real) all clear; ≈0 (broken fetch) blocks; a token
+  // 1-method stub still blocks (< 5). BLIND SPOT (accepted): a PARTIAL fetch with >5 methods is not caught here.
+  const SEED_MIN_METHODS = 5;
+  const looksSkeletal = seedTemplate.length > 0 && seedMethodNames.size < SEED_MIN_METHODS;
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
     seedMethods: seedMethodNames.size, hasGetActions,
@@ -728,7 +731,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   };
   if (looksSkeletal) warnings.push({
     op: "seed", name: "skeletal-seed", schema: "(seed)",
-    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) but NO getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton (or a partial chain), not the fetched template body. Re-assemble the manifest via get-classic-migration-bundle so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define only ${seedMethodNames.size} method(s) — a REAL fetched base-template chain of any kind defines many (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-migration-bundle so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
   });
 
   return {
@@ -740,7 +743,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
-      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
