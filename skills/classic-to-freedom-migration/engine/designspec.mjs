@@ -71,7 +71,11 @@ function regionResolver(viewConfigDiff, resources = {}) {
         return island ? `Side profile › ${island}` : "Side profile";
       }
       if (p === "HeaderContainer") return "Header";
-      if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
+      // (removed a legacy hardcode that mapped `GeneralInfoTabContainer` → "⚠ fallback (unresolved)" — it dates
+      // from when that container was a catch-all with no real tab. The mapper now emits it as a proper `crt.Tab`
+      // (isTab, caption "General information"), so the normal crt.Tab climb below resolves it to "Tab · General
+      // information". The hardcode short-circuited BEFORE that check and falsely flagged ~20 real General-info
+      // fields as unresolved on every page that has this tab.)
       const o = byName.get(p);
       if (!o) return esc(p);
       if (o.values?.type === "crt.Tab") return group ? `Tab · ${label(o)} › ${group}` : `Tab · ${label(o)}`;
@@ -390,20 +394,10 @@ export function renderDesignSpec(result, opts = {}) {
   // every `reason:` are plain prose (audited: none contain `<`/`>`/backtick/`|`/`](` as literal output), so `esc`
   // has nothing engine-authored to mangle. Keep new reasons that way (put any code identifier or angle-bracketed
   // token in `item`, which is likewise `esc`d) so this stays true.
-  // Client-layer removals the engine advises KEEPing (removed by a layer NOT confirmed client-editable) are
-  // almost always base elements RE-LAID-OUT by a child layer, not genuine deletions — in a parallel Freedom
-  // rebuild there is nothing to remove. One ⚠ row each floods the worklist with non-actionable noise (a typed
-  // entity's client layers re-lay-out dozens). Collapse them into ONE summary line; only CONFIRMED client removes
-  // (remove/hide on Freedom) stay as individual actionable items.
-  const keepRemovals = nd.filter((n) => n.kind === "removal" && n.keep);
-  const actionable = nd.filter((n) => !(n.kind === "removal" && n.keep));
-  const confirm = actionable.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
-  if (keepRemovals.length) {
-    const bys = [...new Set(keepRemovals.map((r) => r.removedBy).filter(Boolean))].map((b) => "`" + esc(b) + "`").join(", ");
-    const names = keepRemovals.map((r) => esc(r.item));
-    const shown = names.slice(0, 12).join(" · ") + (names.length > 12 ? ` · … (+${names.length - 12} more)` : "");
-    confirm.push(`- **[removals ×${keepRemovals.length}]** base elements re-laid-out / removed by client layer(s) ${bys || "(unnamed)"} — a parallel Freedom rebuild removes nothing, so **KEEP all on Freedom** unless a specific one is a deliberate hide you can confirm on-stand: ${shown}`);
-  }
+  // Removals are NOT a worklist item — a removed element is simply out of the final effective scope (the mapper
+  // no longer emits `removal` decisions; a fresh Freedom rebuild builds the alive set, so there is nothing to
+  // "remove"). Every remaining decision is a genuine open item.
+  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
   // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -718,12 +712,9 @@ export function renderChecklist(result, opts = {}) {
   const natives = acts.filter((a) => !/process|print/i.test(a));
   if (natives.length) actItems.push(`Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`);
   grp("Card actions", actItems);
-  // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere; keep-removals collapsed)
+  // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   const SHOWN_ELSEWHERE_CK = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
-  const ndAll = (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind));
-  const keepRm = ndAll.filter((nn) => nn.kind === "removal" && nn.keep);
-  const confItems = ndAll.filter((nn) => !(nn.kind === "removal" && nn.keep)).map((d) => `[${esc(d.kind)}] ${esc(d.item)}`);
-  if (keepRm.length) confItems.push(`[removals ×${keepRm.length}] client-layer re-layout — KEEP all`);
+  const confItems = (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind)).map((d) => `[${esc(d.kind)}] ${esc(d.item)}`);
   grp("⚠ Confirm worklist", confItems);
   // Child pages
   grp("Child pages", childs.map((c) => `${esc(c.entity)} — separate page?`));

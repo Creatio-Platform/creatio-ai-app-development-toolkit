@@ -187,34 +187,39 @@ check("B1: field routes into the existing base tab + base-tab-placement flagged"
   b1cs.viewConfigDiff.some(o => o.name === "Note" && o.parentName === "ESNTab")
   && b1cs.needsDecision.some(n => n.kind === "base-tab-placement" && n.item === "ESNTab"));
 
-/* ---- C3: a template-internal remove (by a seed schema) is context, not a client B6 decision ---- */
+/* ---- removals are NOT surfaced — a removed element is simply out of the final effective scope (a fresh Freedom
+   rebuild builds the ALIVE set; "the client removed X" needs no action). No `removal` decision, no `[removals ×N]`
+   line, whether the remove came from a client layer or a template-internal remove. ---- */
 const c3seed = L("Tpl", { diff: [di({ name: "BaseA", itemType: 15 }), di({ name: "BaseB", itemType: 15 }),
   di({ operation: "remove", name: "BaseB" })] });                    // seed removes its OWN base element
 const c3client = L("Client", { entity: "X", diff: [di({ operation: "remove", name: "BaseA" })] }); // client removes a base element
 const c3cs = mapToFreedom(mergeHierarchy([c3client], { seedTemplate: [c3seed] }));
-check("C3: client remove of a base element surfaces as a removal decision (BaseA)",
-  c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseA"));
-check("C3: template-internal remove (seed removed its own element) is NOT a removal decision (BaseB)",
-  !c3cs.needsDecision.some(n => n.kind === "removal" && n.item === "BaseB"));
-
-/* ---- session review (Documents typed): KEEP-removals collapse into ONE worklist line ---- */
-// A typed entity's client layers re-lay-out many base elements as remove+re-insert; each is a KEEP-by-default
-// removal. Rendered one ⚠ row each they flooded the worklist (confusing noise). They must fold into ONE line.
+check("removals: a client remove of a base element produces NO removal decision (out of scope, not a worklist item)",
+  !c3cs.needsDecision.some(n => n.kind === "removal"));
 const rmSeed = L("Tpl", { diff: [di({ name: "R1", itemType: 15 }), di({ name: "R2", itemType: 15 }), di({ name: "R3", itemType: 15 })] });
 const rmClient = L("WorkCorrespondence", { entity: "X", diff: [di({ operation: "remove", name: "R1" }), di({ operation: "remove", name: "R2" }), di({ operation: "remove", name: "R3" })] });
-const rmMerge = mergeHierarchy([rmClient], { seedTemplate: [rmSeed] });
-const rmSpec = renderDesignSpec({ entity: "X", changeSet: mapToFreedom(rmMerge) });
-check("removals collapse: N KEEP-removals fold into ONE '[removals ×N]' worklist line (naming the client layer), not N noisy rows",
-  /\*\*\[removals ×3\]\*\*/.test(rmSpec)
-  && /KEEP all on Freedom/.test(rmSpec)
-  && /`WorkCorrespondence`/.test(rmSpec)
-  && !/\*\*\[removal\]\*\*/.test(rmSpec),
+const rmSpec = renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] })) });
+check("removals: N client removes produce NO '[removal]' rows and NO '[removals ×N]' collapse line — the plan just carries the final scope",
+  !/\*\*\[removal\]\*\*/.test(rmSpec) && !/\[removals ×/.test(rmSpec),
   () => rmSpec.split("\n").filter((l) => /removal/i.test(l)));
-check("removals collapse: a CONFIRMED client remove (removing layer IS client-editable) stays an individual '[removal]' item — remove/hide on Freedom",
-  (() => {
-    const s = renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] }), { clientEditableSchemas: ["WorkCorrespondence"] }) });
-    return /\*\*\[removal\]\*\* R1 — [^\n]*remove\/hide on Freedom/.test(s) && !/\[removals ×/.test(s);
-  })());
+check("removals: even a CONFIRMED client remove (removing layer IS client-editable) is NOT surfaced — removed = out of scope",
+  !renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] }), { clientEditableSchemas: ["WorkCorrespondence"] }) }).match(/\[removal/));
+
+/* ---- regionResolver: nested General-info fields resolve to their TAB, not a legacy "fallback" hardcode ---- */
+// Fields sit under GeneralInfoBlock → GeneralInfoGroup → GeneralInfoTabContainer (a real crt.Tab). A removed
+// legacy hardcode mapped `GeneralInfoTabContainer` → "⚠ fallback (unresolved)" and SHORT-CIRCUITED the crt.Tab
+// climb, falsely flagging ~20 real General-info fields as unresolved on every page with this tab.
+const giSpec = renderDesignSpec({ entity: "X", changeSet: {
+  resources: { GeneralInfoTabCaption: "General information" },
+  viewConfigDiff: [
+    { name: "F1", parentName: "GeneralInfoBlock", values: { control: "$Buyer", type: "crt.Input", titleText: "Buyer" } },
+    { name: "GeneralInfoBlock", parentName: "GeneralInfoGroup", values: { type: "crt.GridContainer" } },
+    { name: "GeneralInfoGroup", parentName: "GeneralInfoTabContainer", values: { type: "crt.GridContainer" } },
+    { name: "GeneralInfoTabContainer", parentName: "Tabs", values: { type: "crt.Tab", caption: "$Resources.Strings.GeneralInfoTabCaption" } },
+  ], standardFeatures: [], details: [], cardActions: [], needsDecision: [] } });
+check("regionResolver: nested General-info fields resolve to 'Tab · General information' (no legacy fallback hardcode)",
+  /Tab · General information/.test(giSpec) && !/fallback \(unresolved\)/.test(giSpec),
+  () => giSpec.split("\n").filter((l) => /Buyer|General information|fallback/.test(l)));
 
 /* ---- C5 build-out: a LABELLED classic CONTROL_GROUP inside a tab becomes a crt.ExpansionPanel (not flattened).
    An UNCAPTIONED CONTROL_GROUP (the auto `Tab<hash>TabLabelGroup<hash>` layout wrapper) is NOT a labelled group —
@@ -311,10 +316,12 @@ const efClient = L("Client", { entity: "X",
 const efcs = mapToFreedom(mergeHierarchy([efClient]));
 const lk = efcs.entityBusinessRules.find(r => r.targetAttribute === "Lk");
 const st = efcs.entityBusinessRules.find(r => r.targetAttribute === "St");
-check("entity-filter: dynamic filter marked incomplete + flagged (entity-filter)",
-  lk?.complete === false && efcs.needsDecision.some(n => n.kind === "entity-filter" && n.item === "Lk"));
-check("entity-filter: static filter marked complete + NOT flagged",
-  st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && n.item === "St"));
+check("entity-filter: dynamic filter → incomplete + folded into ONE concrete entity-filter line naming the lookup + its filter column (Lk by OtherCol)",
+  lk?.complete === false
+  && efcs.needsDecision.filter(n => n.kind === "entity-filter").length === 1
+  && efcs.needsDecision.some(n => n.kind === "entity-filter" && /Lk by OtherCol/.test(n.reason)));
+check("entity-filter: static filter marked complete + NOT in the folded line",
+  st?.complete === true && !efcs.needsDecision.some(n => n.kind === "entity-filter" && /\bSt by\b/.test(n.reason)));
 
 /* ---- image component + tooltip carry (Product gaps) ---- */
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [

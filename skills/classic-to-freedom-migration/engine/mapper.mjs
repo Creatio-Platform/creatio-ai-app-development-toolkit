@@ -862,17 +862,11 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditabl
   for (const m of payloadMethods)
     needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
 
-  // removals (B6) — client removals only; template-internal removes are context (F9, C3).
-  // `keep` = the KEEP-by-default case (removed by a layer NOT confirmed client-editable) — almost always a base
-  // element RE-LAID-OUT by a child layer, not a genuine deletion; the renderer COLLAPSES these into one summary
-  // line so the worklist isn't flooded. `removedBy` lets the renderer name the culprit layer(s).
-  for (const rm of eff.removed.filter(x => !x.fromTemplate)) {
-    const clientRemoved = clientEditableSchemas.has(rm.removedBy);
-    needsDecision.push({ kind: "removal", item: rm.name, removedBy: rm.removedBy, keep: !clientRemoved,
-      reason: clientRemoved
-        ? `client schema '${rm.removedBy}' removed it — remove/hide on Freedom`
-        : `removed by '${rm.removedBy}' (not confirmed client-editable) — KEEP on Freedom unless confirmed` });
-  }
+  // removals (B6) — NOT surfaced as decisions. A removed element is simply OUT of the final effective scope: a
+  // parallel fresh Freedom rebuild builds the ALIVE set (which already excludes removed items), so "the client
+  // removed X" needs no action — you just don't build X. Flagging removals only added noise (a re-laid-out base
+  // element read as a "deletion to confirm"). The final scope is the answer; removals are not a worklist item.
+  // (`eff.removed` is still available for diagnostics; it just no longer generates ⚠ decisions.)
 
   // Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff)
   // e.g. CasesEstimateLabel → the SLA response/solution timer + its START/END buttons. The migration
@@ -938,8 +932,8 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
     entityBusinessRules.push({ action: "apply-static-filter", targetAttribute: r.attr, filter, complete,
       conditions: r.conditions, note: "entity-level; filter rooted on target lookup's reference schema; resolve lookup constants via odata-read",
       provenance: r.provenance });
-    if (!complete) needsDecision.push({ kind: "entity-filter", item: r.attr,
-      reason: `FILTRATION on '${r.attr}' has no resolved static value (dynamic / column-reference / macro filter) — resolve the target column, comparison and value (or column ref) before applying` });
+    // incomplete FILTRATIONs are FOLDED into one concrete worklist line in mapRules (naming each lookup + its
+    // filter column) — a per-rule vague "resolve the value" punt read as N separate assumptions.
   } else if (r.ruleType === "BINDPARAMETER") {
     const acts = PROP_ACTION[r.property];
     if (!acts) { needsDecision.push({ kind: "rule", item: r.attr, reason: `BINDPARAMETER property '${r.property}' unmapped` }); return; }
@@ -969,6 +963,21 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   for (const t of ruleTargets) if (!emittedCols.has(t) && !knownElements.has(t))
     needsDecision.push({ kind: "rule-target-missing", item: t,
       reason: `business rule targets '${t}' but the page has no element for it — neither a mapped field nor a tab/group/container. It is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).` });
+  // FOLD the incomplete FILTRATIONs (dynamic / column-reference lookup filters — no static constant) into ONE
+  // CONCRETE line naming each lookup and its filter column(s). The engine already captured the filter column, so
+  // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
+  // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
+  const incompleteFilters = entityBusinessRules.filter((r) => !r.complete);
+  if (incompleteFilters.length) {
+    const byTarget = new Map();
+    for (const r of incompleteFilters) {
+      if (!byTarget.has(r.targetAttribute)) byTarget.set(r.targetAttribute, new Set());
+      if (r.filter?.columnPath) byTarget.get(r.targetAttribute).add(r.filter.columnPath);
+    }
+    const parts = [...byTarget.entries()].map(([t, cols]) => cols.size ? `${t} by ${[...cols].join("/")}` : `${t} (filter column unresolved)`);
+    needsDecision.push({ kind: "entity-filter", item: `(${byTarget.size} lookup${byTarget.size === 1 ? "" : "s"})`,
+      reason: `${byTarget.size} lookup field(s) carry a DYNAMIC / column-reference classic filter (restrict the dropdown by a related column, no static constant) — reproduce each as a Freedom lookup filter (filter the lookup by the named column via a business rule / data-source filter): ${parts.join(", ")}. Confirm each comparison.` });
+  }
   return { pageBusinessRules, entityBusinessRules, needsDecision };
 }
 
