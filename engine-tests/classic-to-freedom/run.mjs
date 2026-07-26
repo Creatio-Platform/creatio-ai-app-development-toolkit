@@ -133,6 +133,22 @@ const tomb = mergeHierarchy([
 ]);
 check("F2: parent surviving only as a tombstone is reported unresolved (engine⇄mapper consistent)",
   tomb.unresolvedParents.includes("Grp") && !tomb.items.some(i => i.name === "Grp"));
+// CASCADE REMOVE — removing a container drops its BASE (templateOwned) subtree (Classic runtime parity), so a
+// heavily-layered page's base remove+re-layout no longer FALSE-blocks on unresolvedParents; but a CLIENT-authored
+// orphan of the same removed container still SURFACES (never silently drop client content). Both in one fixture.
+const casc = mergeHierarchy(
+  [makeSchema("Client", { entity: "X", diff: [
+    { operation: "insert", name: "ClientChild", parentName: "BaseGrp", propertyName: "items", bindTo: "CliCol" }, // client content placed under the base group
+    { operation: "remove", name: "BaseGrp" },                                                                     // ...then the base group is removed
+  ] })],
+  { seedTemplate: [makeSchema("Tpl", { diff: [
+    { operation: "insert", name: "BaseGrp", itemType: 15 },
+    { operation: "insert", name: "BaseChild", parentName: "BaseGrp", propertyName: "items", bindTo: "BaseCol" },  // BASE child under the group
+  ], methods: ["a", "b", "c", "d", "e", "f"] })] });
+check("cascade: a BASE (templateOwned) child of a removed container is SWEPT (runtime parity — no false unresolvedParent, not in alive)",
+  !casc.items.some((i) => i.name === "BaseChild"));
+check("cascade: a CLIENT-authored orphan of the same removed container still SURFACES (unresolvedParents) — client content not silently dropped",
+  casc.unresolvedParents.includes("BaseGrp") && casc.items.some((i) => i.name === "ClientChild"));
 
 /* ---- C2: a merge that introduces contentType on an ALREADY-defined field must carry it (not drop) ---- */
 const c2 = mergeHierarchy([

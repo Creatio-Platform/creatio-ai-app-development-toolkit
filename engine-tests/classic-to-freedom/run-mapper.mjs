@@ -1910,6 +1910,20 @@ const docTypedBind = runMigration({
 });
 check("typed-page bindOnly: an identical-to-base typed page is RESOLVED (structure complete) + rendered Bind-only",
   docTypedBind.structure.complete === true && /Bind-only/.test(docTypedBind.plan));
+// review/s51 (Lead): a typed entity with a BIND-ONLY variant must STILL render the SHARED BASE FORM — the bind-only
+// type reuses it. Before the fix the base form was suppressed whenever ANY typedPages existed, so the bind-only
+// type pointed at a "shared form" that was never rendered and the whole main form (43 fields on real Lead) vanished.
+const typedBindBase = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Fld",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Amount"}}]};});` }],
+  typedPages: [{ schema: "XVar2Page", type: "B", bindOnly: true }], planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("typed bindOnly: the SHARED base form IS rendered (its fields present), not suppressed — bind-only reuses it, no phantom form",
+  /### Shared form \(base\)/.test(typedBindBase.plan)
+  && /Amount/.test(typedBindBase.plan)
+  && /Bind the \*\*Shared form \(base\) above\*\*/.test(typedBindBase.plan)
+  && typedBindBase.structure.complete === true,
+  () => typedBindBase.plan.split("\n").filter((l) => /Shared form|Bind-only|Amount|Typed page/.test(l)));
 
 /* ---- on-stand signals gate: DCM / connected processes / printables must be RESOLVED before the plan, not
    deferred to build (the recurring "faithful to the classic body, check later" miss — Documents session). No
@@ -2135,6 +2149,25 @@ check("verify: a built page with all expected deliverables present → complete 
   () => vOk.markdown.split("\n").filter((l) => /❌|⚠|Verdict/.test(l)));
 check("verify: DCM progress bar counts as PRESENT when built on PageWithTabsAndProgressBarTemplate (template ships it)",
   /DCM case progress bar \| ✅ Done/.test(renderVerify({ changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: { dcm: { resolved: true, present: true } } }, {}, { ops: [], parentSchemaName: "PageWithTabsAndProgressBarTemplate" }).markdown));
+// regression (review): a correctly-built page with a DATE field (crt.DateTimePicker) + multiple tabs must verify
+// COMPLETE. Guards renderVerify's field/tab component-type vocabulary against the mapper's ACTUAL emitted types —
+// the mapper emits crt.DateTimePicker for dates (NOT crt.DateTimeEdit) and crt.Tab per tab (a page has ONE
+// crt.TabContainer). A drift under-counted fields / compared tabs-vs-container → false "not done" + exit 2.
+const vTypes = renderVerify(
+  { changeSet: { viewConfigDiff: [
+      { name: "DueDate", parentName: "T1", values: { control: "$DueDate", type: "crt.DateTimePicker" } },
+      { name: "Name",    parentName: "T1", values: { control: "$Name",    type: "crt.Input" } },
+      { name: "T1", values: { type: "crt.Tab", caption: "$Resources.Strings.T1" } },
+      { name: "T2", values: { type: "crt.Tab", caption: "$Resources.Strings.T2" } },
+    ], standardFeatures: [], details: [], cardActions: [] }, signals: {} },
+  {},
+  { ops: [
+      { name: "DueDate", type: "crt.DateTimePicker" }, { name: "Name", type: "crt.Input" },
+      { name: "TabsCtr", type: "crt.TabContainer" }, { name: "T1", type: "crt.Tab" }, { name: "T2", type: "crt.Tab" },
+    ], parentSchemaName: "FormPageTemplate", miniPageBuilt: null });
+check("verify: correctly-built page with a date field (crt.DateTimePicker) + 2 tabs → complete (no false 'fewer than expected' / tab miss)",
+  vTypes.complete === true && vTypes.missing === 0 && vTypes.unverified === 0,
+  () => vTypes.markdown.split("\n").filter((l) => /Fields|Tabs|Verdict/.test(l)));
 
 /* ---- session review (Applicant): three defects ---- */
 // #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned

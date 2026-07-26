@@ -677,8 +677,35 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     }
   }
 
+  // CASCADE REMOVE (runtime parity). In Classic, removing a container removes its WHOLE SUBTREE. The diff replay
+  // above tombstones only the explicitly-`remove`d item, leaving its still-alive children pointing at a removed
+  // parent — which then surfaced as false `unresolvedParents` and HARD-BLOCKED legitimate remove+re-layout pages
+  // (a heavily-layered page removes base containers to re-lay-out; the base children dangled). Propagate the
+  // removal DOWN: an item whose parent is a TOMBSTONED item (transitively) is itself removed, exactly as the
+  // runtime drops the subtree. Two guards keep this precise:
+  //   • cascade ONLY through a parent that EXISTS and is `removed` — a parent that was NEVER defined (absent) is a
+  //     genuine seed gap (F2) and MUST still surface as unresolvedParents, so we do NOT sweep its children.
+  //   • a child re-parented by a later `move` carries its NEW parent, so it is swept only if that new parent is
+  //     itself removed — a move into an ALIVE container legitimately keeps the child.
+  //   • sweep ONLY `templateOwned` (base) orphans — base chrome the runtime drops with its container. A
+  //     CLIENT-authored orphan (a block/detail the client put under a since-removed container) is NOT masked: it
+  //     still surfaces as unresolvedParents so the agent decides where it goes (silently dropping client content
+  //     is the worse failure — e.g. Contract's client `ContractSumBlock` under a removed `ContractSumGroup`).
+  // Fixpoint over the item set (a removed container's removed child can in turn orphan ITS children).
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const it of items.values()) {
+      if (it.removed || !it.parent || !it.templateOwned) continue;
+      const p = items.get(it.parent);
+      if (p && p.removed) { it.removed = true; it.removedBy = it.removedBy || p.removedBy; it.removedBySeed = p.removedBySeed; it.cascadeRemoved = true; changed = true; }
+    }
+  }
+
   const alive = [...items.values()].filter(i => !i.removed);
-  const removed = [...items.values()].filter(i => i.removed);
+  // cascade-removed items are structural cleanup (a removed container's subtree), NOT a client B6 decision — keep
+  // them out of `removed` so they don't flood the removals worklist; excluding them from `alive` already cleared
+  // the false unresolvedParents.
+  const removed = [...items.values()].filter(i => i.removed && !i.cascadeRemoved);
   const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);
 
   // Parent containers referenced by an ALIVE item but never defined by an ALIVE item == base-template

@@ -471,6 +471,11 @@ export function renderPlan(result, opts = {}) {
   // live THERE, in the mappings below). The base fold's counts (often 8 fields · 0 rules) describe only the
   // shared parent, so reporting them as "Size" mis-describes the job. Summarize by typed-form count instead.
   const typed = result.typedPages || [];
+  // A BIND-ONLY typed entry ("layout identical to the base") REUSES the shared base form — so that base form IS a
+  // real deliverable and MUST render (else the plan says "bind the shared form" but no shared-form spec exists,
+  // which is exactly how a real Lead migration lost its whole 43-field main form). The base is suppressed ONLY
+  // when EVERY type has its OWN fold. `someBindOnly` gates that below.
+  const someBindOnly = typed.some((t) => t.bindOnly);
   const sizeLine = typed.length
     ? `- **Size:** ${typed.length} typed form${typed.length === 1 ? "" : "s"} (per-type fields, rules and details are in **Typed page mappings** below) · ${(cs.details || []).length + (cs.standardFeatures || []).length} shared details/features · ${(cs.cardActions || []).length} actions`
     : `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`;
@@ -513,6 +518,7 @@ export function renderPlan(result, opts = {}) {
   const formTpl = pm.formTemplate || opts.template || null;
   const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
   if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
+  else if (someBindOnly) scopeRows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
     const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed form)`;
     const tgt = t.bindOnly ? "bind shared form by Type" : (formTpl ? esc(formTpl) : "<FILL: Freedom form template>");
@@ -548,7 +554,7 @@ export function renderPlan(result, opts = {}) {
   const usesProgressBar = formTpl && /ProgressBar/i.test(formTpl);
   if (typed.length) {
     P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
-    P.push(`> **Template:** build every per-type form on ${formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template"}${dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : ""}. The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`);
+    P.push(`> **Template:** build every per-type form on ${formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template"}${dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : ""}. ${someBindOnly ? `The **shared base \`${esc(entity)}\` form IS rendered below** ("Shared form (base)") because ${typed.filter((t) => t.bindOnly).length} type(s) are bind-only and reuse it; own-fold types (if any) render under Typed page mappings.` : `The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`}`);
   } else if (dcmPresent) {
     P.push(`> **Template — DCM case present:** the form page must ship a stage **progress bar**. Build it on **\`PageWithTabsAndProgressBarTemplate\`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity; hand-adding \`crt.EntityStageProgressBar\` into a plain template's MainContainer is the FALLBACK.${formTpl && !usesProgressBar ? ` ⚠ The selected form template \`${esc(formTpl)}\` has no progress bar — reconsider it against the DCM case (or plan the MainContainer fallback explicitly).` : ""}`);
   }
@@ -566,23 +572,31 @@ export function renderPlan(result, opts = {}) {
     // NON-TYPED — the single form spec (Layout/Logic/Confirm); the List page was already rendered above.
     P.push("", renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), "");
   } else {
-    // SHARED across all typed forms — the base fold's details/features are inherited by EVERY per-type form
-    // (the History tab's lists, Approvals, Attachments, Connections, change log, …). List them ONCE here — NOT
-    // per type and NOT as a base field mapping. Each per-type section below adds only that type's OWN content.
-    const shFeatures = cs.standardFeatures || [], shDetails = cs.details || [];
-    if (shFeatures.length || shDetails.length) {
-      P.push("### Shared across all typed forms (inherited from the base form)", "",
-        `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`);
-      for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
-      for (const d of shDetails) P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${d.entity ? ` (${esc(d.entity)})` : ""}${addModeText(d.addMode)}`);
-      P.push("");
+    if (someBindOnly) {
+      // ≥1 BIND-ONLY type reuses the shared base form → render its FULL spec (Layout/Logic/Confirm). Its Layout
+      // already carries the shared details/features, so the separate "Shared across all typed forms" list is NOT
+      // repeated. (Without this the base form was suppressed and bind-only types pointed at a non-existent form.)
+      P.push("### Shared form (base) — bind-only type(s) bind to this by Type", "",
+        renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), "");
+    } else {
+      // ALL types own-fold — the base is NOT a deliverable; its details/features are inherited by EVERY per-type
+      // form (History tab lists, Approvals, Attachments, …). List them ONCE here — not per type, not as a base
+      // field mapping. Each per-type section below adds only that type's OWN content.
+      const shFeatures = cs.standardFeatures || [], shDetails = cs.details || [];
+      if (shFeatures.length || shDetails.length) {
+        P.push("### Shared across all typed forms (inherited from the base form)", "",
+          `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`);
+        for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
+        for (const d of shDetails) P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${d.entity ? ` (${esc(d.entity)})` : ""}${addModeText(d.addMode)}`);
+        P.push("");
+      }
     }
     // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
     P.push("### Typed page mappings", "");
     for (const t of typed) {
       P.push(`#### Typed form: ${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""}`);
       if (t.bindOnly) {
-        P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the shared Freedom form for this Type (by the Type column).`);
+        P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the **Shared form (base) above** for this Type (by the Type column).`);
       } else if (t.spec) {
         P.push("", demoteHeadings(t.spec, 2));
       } else if (t.specError) {
@@ -748,13 +762,19 @@ export function renderVerify(result, opts = {}, built = {}) {
     else row(`Mini page \`${esc(result.miniPage.schema)}\``, "warn", "not verified — get-page the mini schema / pass built.miniPageBuilt");
   }
   // Fields — expected count vs built field-like leaf components (Input/ComboBox/… — not containers/grids/tabs/buttons)
-  const FIELD_RE = /^crt\.(Input|ComboBox|DateTimeEdit|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
+  // MUST match the mapper's ACTUAL emitted control vocabulary (scalarControl/control in mapper.mjs): dates are
+  // emitted as `crt.DateTimePicker` — NOT `crt.DateTimeEdit` (which the mapper never emits). The extra tolerant
+  // types (MoneyInput/ColorEdit/TextArea/MultilineInput) accept real on-stand builds. Keep this set in sync with
+  // scalarControl — a drift here under-counts fields and false-fails the done-gate.
+  const FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
   const expFields = (cs.viewConfigDiff || []).filter(isField).length;
   const builtFields = ops.filter((o) => FIELD_RE.test(o.type || "")).length;
   if (expFields) row(`Fields (${expFields} expected)`, builtFields >= expFields ? "ok" : "warn", `${builtFields} field components on the built page${builtFields < expFields ? " — fewer than expected; check which fields were dropped" : ""}`);
-  // Tabs — expected client tabs vs built crt.TabContainer
+  // Tabs — expected client tabs vs built crt.Tab (apples-to-apples: the mapper emits ONE crt.Tab per tab, and a
+  // page has exactly ONE crt.TabContainer wrapping them all — counting the container would false-fail any page
+  // with ≥2 tabs, since 1 (container) < N (expected tabs)).
   const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
-  if (expTabs) { const b = typeCount("crt.TabContainer"); row(`Tabs (${expTabs} expected)`, b >= expTabs ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.TabContainer built`); }
+  if (expTabs) { const b = typeCount("crt.Tab"); row(`Tabs (${expTabs} expected)`, b >= expTabs ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.Tab built`); }
   // Details / related lists — expected vs built crt.DataGrid
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   if (expDetails) { const b = typeCount("crt.DataGrid"); row(`Related lists (${expDetails} expected)`, b >= expDetails ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.DataGrid built`); }
@@ -774,6 +794,7 @@ export function renderVerify(result, opts = {}, built = {}) {
   // Card actions — Run process / Print → a button on the page
   for (const a of cs.cardActions || []) {
     if (/process/i.test(a)) row("Run-process action", hasType("crt.Button") ? "ok" : "warn", hasType("crt.Button") ? "a crt.Button is present — confirm it runs the process" : "no crt.Button found — confirm the Run-process action");
+    else if (/print/i.test(a)) row("Print action", hasType("crt.Button") ? "ok" : "warn", hasType("crt.Button") ? "a crt.Button is present — confirm it triggers Print" : "no crt.Button found — confirm the Print action");
   }
   const V = [];
   const verdict = missing > 0 ? `⛔ **INCOMPLETE — ${missing} deliverable(s) MISSING** (fix and re-verify)` : unverified > 0 ? `⚠ **${unverified} row(s) not verified** — resolve before calling it done` : `✅ **All verified deliverables are present on the built page**`;
