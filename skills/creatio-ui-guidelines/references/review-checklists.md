@@ -39,14 +39,14 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Ready templates are reused where possible.
 - [ ] Header is not overloaded.
 - [ ] Important fields fit in the header/profile area.
-- [ ] Long pages are split into tabs, groups, islands, or wizard steps.
+- [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
 - [ ] Field groups have clear names and no unnecessary one-field duplicate-title groups.
-- [ ] No container (group / tab / profile island) holds a single lone field; each holds a logically related set (≥2–3 fields).
+- [ ] No container (group / tab / profile island) holds a single lone field, and thin 1–2-field groups are avoided; each holds a logically related block (≥3–4 fields as a rule of thumb) — merge or fill stubs rather than scatter tiny groups.
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
-- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty.
+- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area.
 - [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
 - [ ] One-column/two-column mixes do not break reading flow.
 - [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2).
@@ -92,6 +92,9 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Operations over 30 seconds or unknown duration are asynchronous with notification.
 - [ ] Dialogs follow Creatio/mini-page styling and place instructions before controls.
 - [ ] Dialog button labels are consistent and result-oriented.
+- [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M).
+- [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin.
+- [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
 
 ### Copy and content
 
