@@ -216,18 +216,44 @@ check("removals collapse: a CONFIRMED client remove (removing layer IS client-ed
     return /\*\*\[removal\]\*\* R1 — [^\n]*remove\/hide on Freedom/.test(s) && !/\[removals ×/.test(s);
   })());
 
-/* ---- C5 build-out: a classic CONTROL_GROUP inside a tab becomes a crt.ExpansionPanel (not flattened) ---- */
+/* ---- C5 build-out: a LABELLED classic CONTROL_GROUP inside a tab becomes a crt.ExpansionPanel (not flattened).
+   An UNCAPTIONED CONTROL_GROUP (the auto `Tab<hash>TabLabelGroup<hash>` layout wrapper) is NOT a labelled group —
+   it becomes a plain crt.GridContainer with NO caption decision (an unlabelled group is not a missing label). ---- */
 const c5client = L("Client", { entity: "X", diff: [
   di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
-  di({ name: "Grp1", parentName: "MyTab", itemType: 15 }),                          // CONTROL_GROUP
+  di({ name: "Grp1", parentName: "MyTab", itemType: 15, caption: "Resources.Strings.DeliveryCaption" }), // LABELLED CONTROL_GROUP
   di({ name: "GF", parentName: "Grp1", propertyName: "items", bindTo: "ColG" })] });
-const c5cs = mapToFreedom(mergeHierarchy([c5client]));
-check("C5: CONTROL_GROUP is BUILT as a crt.ExpansionPanel under the tab",
+const c5cs = mapToFreedom(mergeHierarchy([c5client]), { resources: { DeliveryCaption: "Delivery" } });
+check("C5: a LABELLED CONTROL_GROUP is built as a crt.ExpansionPanel under the tab",
   c5cs.viewConfigDiff.some(o => o.name === "Grp1" && o.values?.type === "crt.ExpansionPanel"));
-check("C5: field routes into the GROUP's grid (nesting preserved, not flattened to the tab grid)",
+check("C5: field routes into the GROUP's panel grid (nesting preserved, not flattened to the tab grid)",
   c5cs.viewConfigDiff.some(o => o.name === "ColG" && o.parentName === "Grp1Grid"));
-check("C5: synthesized group caption flagged (group-caption)",
-  c5cs.needsDecision.some(n => n.kind === "group-caption" && n.item === "Grp1"));
+check("C5: a RESOLVED group caption raises NO group-caption decision",
+  !c5cs.needsDecision.some(n => n.kind === "group-caption" && n.item === "Grp1"));
+// uncaptioned CONTROL_GROUP → plain grid container, NO caption decision (this is the session-flagged noise: dozens
+// of `Tab…TabLabelGroup…` wrappers had no classic caption yet each raised a bogus "author the string" decision).
+const c5bare = L("Client", { entity: "X", diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+  di({ name: "Grp2", parentName: "MyTab", itemType: 15 }),                          // UNCAPTIONED CONTROL_GROUP
+  di({ name: "GF2", parentName: "Grp2", propertyName: "items", bindTo: "ColH" })] });
+const c5bareCs = mapToFreedom(mergeHierarchy([c5bare]));
+check("C5: an UNCAPTIONED CONTROL_GROUP becomes a plain crt.GridContainer (not a captioned ExpansionPanel)",
+  c5bareCs.viewConfigDiff.some(o => o.name === "Grp2" && o.values?.type === "crt.GridContainer"));
+check("C5: an uncaptioned group nests its field (Grp2) but raises NO group-caption decision — just a layout wrapper",
+  c5bareCs.viewConfigDiff.some(o => o.name === "ColH" && o.parentName === "Grp2")
+  && !c5bareCs.needsDecision.some(n => n.kind === "group-caption"));
+// the REAL session case: Creatio's designer auto-group `Tab<hex>TabLabelGroup<hex>` DOES carry a caption ref, but
+// it is an auto SELF-DERIVED key (`Resources.Strings.<name>GroupCaption`) that never resolves — it must be treated
+// as a plain grid layout wrapper (GridContainer), NOT flagged as a missing group label (was ~9 bogus ⚠ on 2Page).
+const c5auto = L("Client", { entity: "X", diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+  di({ name: "Tab65312131TabLabelGroupc131d3f4", parentName: "MyTab", itemType: 15,
+      caption: "Resources.Strings.Tab65312131TabLabelGroupc131d3f4GroupCaption" }),          // designer auto layout group
+  di({ name: "GF3", parentName: "Tab65312131TabLabelGroupc131d3f4", propertyName: "items", bindTo: "ColK" })] });
+const c5autoCs = mapToFreedom(mergeHierarchy([c5auto]));  // no resources → the auto key can't resolve
+check("C5: a designer auto `Tab…TabLabelGroup…` group (auto caption ref, unresolvable) → crt.GridContainer, NO group-caption ⚠",
+  c5autoCs.viewConfigDiff.some(o => o.name === "Tab65312131TabLabelGroupc131d3f4" && o.values?.type === "crt.GridContainer")
+  && !c5autoCs.needsDecision.some(n => n.kind === "group-caption"));
 
 /* ---- #4: a CONTROL_GROUP declared via `this.Terrasoft.ViewItemType.*` (the dominant real-body idiom, and the
    bare `terrasoft` define-param form) must resolve to 15 end-to-end, so ensureGroup builds a crt.ExpansionPanel.
@@ -236,10 +262,10 @@ check("C5: synthesized group caption flagged (group-caption)",
    parses a real body so a regression in the `this.Terrasoft`/param transition is caught. ---- */
 const symGrpBody = 'define("Client",["terrasoft"],function(Terrasoft){return{entitySchemaName:"X",diff:[' +
   '{operation:"insert",name:"MyTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP,isTab:true}},' +
-  '{operation:"insert",name:"Grp1",parentName:"MyTab",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP}},' +
+  '{operation:"insert",name:"Grp1",parentName:"MyTab",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP,caption:"Resources.Strings.GCap"}},' +
   '{operation:"insert",name:"GF1",parentName:"Grp1",propertyName:"items",values:{bindTo:"ColA"}},' +
   '{operation:"insert",name:"GF2",parentName:"Grp1",propertyName:"items",values:{bindTo:"ColB"}}]};});';
-const symGrpCs = mapToFreedom(mergeHierarchy([parseSchema(symGrpBody, "Client")]));
+const symGrpCs = mapToFreedom(mergeHierarchy([parseSchema(symGrpBody, "Client")]), { resources: { GCap: "Group" } });
 check("#4: a `this.Terrasoft.ViewItemType.CONTROL_GROUP` group builds as crt.ExpansionPanel (not a degraded plain container)",
   symGrpCs.viewConfigDiff.some(o => o.name === "Grp1" && o.values?.type === "crt.ExpansionPanel"),
   () => JSON.stringify(symGrpCs.viewConfigDiff.map(o => ({ name: o.name, type: o.values?.type }))));
@@ -254,6 +280,15 @@ const c4cs = mapToFreedom(mergeHierarchy([c4client], { seedTemplate: [c4seed] })
 check("C4: rule on a base (excluded) field is flagged rule-target-missing",
   c4cs.needsDecision.some(n => n.kind === "rule-target-missing" && n.item === "BaseCol")
   && !c4cs.viewConfigDiff.some(o => o.name === "BaseCol"));
+// C4b: a business rule targeting a TAB / GROUP / CONTAINER (not a field) is VALID — hiding a tab hides its fields.
+// The target IS a known element (in eff.items), so it must NOT be mis-flagged as rule-target-missing.
+const c4bClient = L("Client", { entity: "X", diff: [
+  di({ name: "MyTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+  di({ name: "Fld", parentName: "MyTab", propertyName: "items", bindTo: "Col" })],
+  businessRules: { MyTab: { vis: { ruleType: 0, property: 0 } } } });   // Visible rule ON THE TAB
+const c4bcs = mapToFreedom(mergeHierarchy([c4bClient]));
+check("C4b: a rule targeting a TAB/GROUP (a known element, not a field) is NOT flagged rule-target-missing",
+  !c4bcs.needsDecision.some(n => n.kind === "rule-target-missing" && n.item === "MyTab"));
 
 /* ---- Detail placement (tab + order) + editability not assumed ---- */
 const dClient = L("Client", { entity: "X", diff: [
@@ -1419,8 +1454,8 @@ const f7 = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
 ] })]));
 const f7a = f7.viewConfigDiff.find((o) => o.name === "A")?.values.layoutConfig;
 const f7b = f7.viewConfigDiff.find((o) => o.name === "B")?.values.layoutConfig;
-check("F7: two fields collapsing onto the same Freedom cell are separated (distinct col:row) + layout-collision flagged",
-  f7a && f7b && !(f7a.column === f7b.column && f7a.row === f7b.row) && f7.needsDecision.some((n) => n.kind === "layout-collision"),
+check("F7: two fields collapsing onto the same Freedom cell are separated (distinct col:row) — the relocation mechanic (reporting is folded into layout-density on dense pages)",
+  f7a && f7b && !(f7a.column === f7b.column && f7a.row === f7b.row),
   () => ({ A: f7a, B: f7b, decisions: f7.needsDecision.map((n) => n.kind) }));
 const f7u = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "TD", parentName: "Tabs", propertyName: "tabs", isTab: true }),
@@ -1531,7 +1566,7 @@ check("#5: the injected HTML tag + Markdown link inside the reason are NEUTRALIZ
   () => confirmLines);
 // guard: `esc` (not `strip`) on reason must NOT mangle engine-authored prose — the reason still reads normally.
 check("#5: engine-authored reason prose is preserved (no stray HTML entities from esc over plain text)",
-  reasonRun.changeSet.needsDecision.some((n) => n.kind === "virtual-field" && /is not a real column on the entity/.test(n.reason))
+  reasonRun.changeSet.needsDecision.some((n) => n.kind === "virtual-field" && /binds to a column that does NOT exist on the entity/.test(n.reason))
   && !/&lt;X&gt;/.test(reasonRun.designSpec));
 
 // determinism (#11) — the same manifest must produce byte-identical output on repeat runs (no dependence on
@@ -1674,8 +1709,9 @@ const dvBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[`
   + `{operation:"insert",name:"F2",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Amt"}},`
   + `{operation:"insert",name:"F3",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Vis",visible:{bindTo:"IsShown"}}}]};});`;
 const dv = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: dvBody }] }, { baseDir: FIX });
-check("T3: two classic items on one column → duplicate-binding decision (folded: column named in the summary)",
-  dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding" && /\bAmt\b/.test(n.reason)));
+check("T3: two classic items on one column → emitted with UNIQUE names (Amt, Amt_2), NO duplicate-binding ⚠ (a normal configurator pattern resolved at design time)",
+  dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt") && dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt_2")
+  && !dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding"));
 check("T3: a field with a bound (dynamic) 'visible' → visibility-rule decision",
   dv.changeSet.needsDecision.some((n) => n.kind === "visibility-rule" && n.item === "Vis"));
 // s48 — FOLD the per-field noise on a DENSE page. A classic page packing many fields into a 24-col grid collapses
@@ -1687,17 +1723,17 @@ const denseOps = Array.from({ length: 40 }, (_, i) =>
 const dense = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${denseOps}]};});` }] }, { baseDir: FIX });
 const dnd = dense.changeSet.needsDecision;
-check("s48/fold: layout-collision is folded to ONE decision PER PAGE (lists affected containers, not one per field/container)",
-  dnd.filter((n) => n.kind === "layout-collision").length === 1
-  && /\d+ field\(s\) across \d+ container\(s\)/.test(dnd.find((n) => n.kind === "layout-collision")?.reason || ""));
-check("s48/fold: a single page-level layout-density TODO is raised — choose Freedom container/grid BEFORE design",
+check("s48/fold: NO separate layout-collision decision — it is merged into the single layout-density TODO (no duplicate line)",
+  dnd.filter((n) => n.kind === "layout-collision").length === 0);
+check("s48/fold: ONE page-level layout-density TODO — the design prerequisite only, NO per-container list (client-useless noise)",
   dnd.filter((n) => n.kind === "layout-density").length === 1
-  && /TODO before designing/.test(dnd.find((n) => n.kind === "layout-density")?.reason || ""));
-check("s48/fold: field-control is folded to ONE summary naming the count + a wrong-entity hint (not one per field)",
+  && /TODO before designing/.test(dnd.find((n) => n.kind === "layout-density")?.reason || "")
+  && !/Densest containers|Affected containers|across \d+ container/.test(dnd.find((n) => n.kind === "layout-density")?.reason || ""));
+check("s48/fold: field-control is folded to ONE summary (type-not-recognized only; wrong-entity/missing-column moved to virtual-field)",
   dnd.filter((n) => n.kind === "field-control").length === 1
-  && /have no classic contentType/.test(dnd.find((n) => n.kind === "field-control")?.reason || ""));
-check("s48/fold: the folded kinds do NOT scale with field count — collision+field-control+duplicate-binding ≤ 3 entries for a 40-field page (was ~80)",
-  dnd.filter((n) => ["layout-collision", "field-control", "duplicate-binding"].includes(n.kind)).length <= 3);
+  && /TYPE was not recognized/.test(dnd.find((n) => n.kind === "field-control")?.reason || ""));
+check("s48/fold: the folded kinds do NOT scale with field count — density+field-control ≤ 2 entries for a 40-field page (was ~80)",
+  dnd.filter((n) => ["layout-density", "field-control"].includes(n.kind)).length <= 2);
 // layout-truncated — a container past the MAX_FIELDS_PER_CONTAINER relocation bound (500); generated, not hand-typed.
 let ltFields = "";
 for (let i = 0; i < 502; i++) ltFields += `{operation:"insert",name:"C${i}",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"C${i}"}},`;
@@ -1737,10 +1773,9 @@ const m4span = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
 ] })]));
 const mtTall = m4span.viewConfigDiff.find((o) => o.name === "Tall")?.values.layoutConfig;
 const mtNxt = m4span.viewConfigDiff.find((o) => o.name === "Nxt")?.values.layoutConfig;
-check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap) + flagged; layoutConfig.rowSpan carries the classic value",
+check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap); layoutConfig.rowSpan carries the classic value",
   mtTall && mtNxt && mtTall.rowSpan === 2 && mtNxt.rowSpan === 1   // the classic rowSpan is preserved on the Freedom field
-  && !(mtNxt.column === mtTall.column && mtNxt.row >= mtTall.row && mtNxt.row < mtTall.row + mtTall.rowSpan)
-  && m4span.needsDecision.some((n) => n.kind === "layout-collision"),
+  && !(mtNxt.column === mtTall.column && mtNxt.row >= mtTall.row && mtNxt.row < mtTall.row + mtTall.rowSpan),
   () => ({ Tall: mtTall, Nxt: mtNxt }));
 
 // Major 7 — a skeleton seed with a token method (no getActions) is STILL skeletal (keys on getActions, not count).
@@ -1941,9 +1976,8 @@ const msCs = mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [
 ] })]));
 const ms1 = msCs.viewConfigDiff.find((o) => o.name === "W1")?.values.layoutConfig;
 const ms2 = msCs.viewConfigDiff.find((o) => o.name === "W2")?.values.layoutConfig;
-check("#3 multi-span collision: two span-2 fields on the same row don't overlap (2nd relocated) + flagged",
-  ms1 && ms2 && ms2.colSpan === 2 && ms2.row !== ms1.row
-  && msCs.needsDecision.some((n) => n.kind === "layout-collision"),
+check("#3 multi-span collision: two span-2 fields on the same row don't overlap (2nd relocated) — the relocation mechanic",
+  ms1 && ms2 && ms2.colSpan === 2 && ms2.row !== ms1.row,
   () => ({ W1: ms1, W2: ms2 }));
 
 // #8 grandchild embedding — a 2-level child tree EMBEDS the grandchild's spec nested (not a "map by hand" note).

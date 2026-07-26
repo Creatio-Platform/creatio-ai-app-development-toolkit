@@ -111,6 +111,23 @@ function fieldTypeLabel(col, meta, ctl) {
   return meta.length ? `Text (${meta.length})` : "Text";
 }
 
+// Nearest existing entity columns to a (missing) bound column — ranked by longest shared substring (≥5 chars).
+// Lets the "binds to a column not on the entity" decision name likely real columns (ASPAVFirepit → ASPFirepit /
+// ASPPVFirepit) so the agent spots a rename/typo instead of getting a blind "unknown column".
+function nearestColumns(col, cols, limit = 3) {
+  const a = String(col).toLowerCase();
+  const lcs = (x, y) => {
+    let best = 0; const dp = new Array(y.length + 1).fill(0);
+    for (let i = 1; i <= x.length; i++) { let prev = 0; for (let j = 1; j <= y.length; j++) { const t = dp[j]; dp[j] = x[i - 1] === y[j - 1] ? prev + 1 : 0; if (dp[j] > best) best = dp[j]; prev = t; } }
+    return best;
+  };
+  return Object.keys(cols)
+    .map((k) => [k, lcs(a, k.toLowerCase())])
+    .filter(([, n]) => n >= 5)
+    .sort((p, q) => q[1] - p[1])
+    .slice(0, limit)
+    .map(([k]) => k);
+}
 // BINDPARAMETER property -> [action, inverseAction] (rules are one-way -> always emit the inverse)
 const PROP_ACTION = {
   Required: ["make-required", "make-optional"],
@@ -286,8 +303,9 @@ export function mapToFreedom(eff, opts = {}) {
   F.needsDecision.forEach(d => needsDecision.push(d));
   F.accountedFor.forEach(a => accountedFor.add(a));
 
-  // ---- rules ----
-  const _r = mapRules(payloadRules, payloadFields);
+  // ---- rules ---- (pass ALL known element names so a rule targeting a tab/group/container — not just a field —
+  // is recognised as a valid target, not mis-flagged as "no field for it")
+  const _r = mapRules(payloadRules, payloadFields, new Set((eff.items || []).map(i => i.name)));
   const { pageBusinessRules, entityBusinessRules } = _r;
   _r.needsDecision.forEach(d => needsDecision.push(d));
 
@@ -398,20 +416,28 @@ function createContainers(ctx) {
     if (emittedGroups.has(g.name)) return emittedGroups.get(g.name);
     accounted.add(g.name);
     let inner;
-    if (g.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP) {
-      // CONTROL_GROUP -> collapsible crt.ExpansionPanel wrapping a grid (e.g. the "Delivery" group).
-      const c = caption(g.caption, g.name);
+    // A CONTROL_GROUP is rendered as a collapsible crt.ExpansionPanel ONLY when it is a genuinely LABELLED group
+    // (a user title like "Delivery"). Two kinds of group have NO real title and are just grid layout wrappers:
+    //   • a group with NO caption at all (synthesized `<name>Caption` key), and
+    //   • Creatio's designer-generated `Tab<hex>TabLabelGroup<hex>` layout wrappers — these DO carry a caption ref,
+    //     but it is an AUTO SELF-DERIVED key (`Resources.Strings.<groupName>GroupCaption`) the user never authored,
+    //     so it never resolves. Rendering these as captioned panels flooded the plan with bogus [group-caption]
+    //     "unresolved key / author the string" decisions for groups that were never titled.
+    // Both ⇒ plain crt.GridContainer, NO caption decision. Only a genuinely-labelled group gets the ExpansionPanel
+    // (and a resolve decision only when its real caption ref is unresolved).
+    const autoLayoutGroup = /TabLabelGroup[0-9a-f]{4,}$/i.test(g.name); // designer auto grid-layout wrapper
+    const c = g.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP ? caption(g.caption, g.name) : null;
+    if (c && !c.synthesized && !autoLayoutGroup) {
+      // labelled collapsible group -> crt.ExpansionPanel wrapping a grid.
       structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
         values: { type: "crt.ExpansionPanel", caption: c.binding, collapsible: true } });
       inner = g.name + "Grid";
       structural.push({ operation: "insert", name: inner, parentName: g.name, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_2 } });
       if (!c.resolved) nd.push({ kind: "group-caption", item: g.name,
-        reason: c.synthesized
-          ? `synthesized ExpansionPanel caption key '${c.key}' for classic group — author the localized string for it`
-          : `group caption '${c.key}' is an unresolved resource key — pass manifest.resources to resolve it, or confirm the real label` });
+        reason: `group caption '${c.key}' is an unresolved resource key — pass manifest.resources to resolve it, or confirm the real label` });
     } else {
-      // GRID_LAYOUT / generic structural container -> crt.GridContainer.
+      // GRID_LAYOUT / generic container, OR an uncaptioned CONTROL_GROUP -> plain crt.GridContainer (no caption).
       inner = g.name;
       structural.push({ operation: "insert", name: inner, parentName, propertyName: "items",
         values: { type: "crt.GridContainer", columns: GRID_2 } });
@@ -462,7 +488,6 @@ function mapFields(ctx, containers) {
   // after the loop. The relocation / control-defaulting / naming behavior is unchanged — only the reporting folds.
   const collisionByContainer = new Map(); // parent -> { count, gridCols, sample: [] }
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
-  const dupBindingCols = [];              // { col, elName } — column bound by multiple classic items
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -521,19 +546,27 @@ function mapFields(ctx, containers) {
     }
     const col = f.bindTo || f.name || "Field";
     const meta = colMeta(col);
-    // A bound field whose column is NOT among the entity's real columns (when entityColumns is supplied) is
-    // usually an AUTO-FILLED companion loaded from a selected lookup by an on<X>Change/set<X>Info handler
-    // (e.g. Department/StaffUnit from the chosen Request) — build it READ-ONLY on a view-model attribute and
-    // wire that handler; do NOT drop it, because dropping is what collapses an island to a lone field.
-    if (f.bindTo && Object.keys(cols).length && !(col in cols)) needsDecision.push({ kind: "virtual-field", item: col,
-      reason: `field '${col}' is not a real column on the entity — likely an auto-filled companion loaded from a selected lookup (an on-change / set-info handler). Build it as a READ-ONLY field bound to a VIEW-MODEL attribute and wire the lookup's on-change handler to load/clear it; do NOT drop it (that collapses the island to a lone field). Confirm the column if it should be a real entity field.` });
+    // Two DISTINCT, previously-conflated causes of an unresolved control — split so the plan reads clearly:
+    //  (b) the bound COLUMN does not exist on the entity (a renamed/typo/removed column, or an auto-filled lookup
+    //      companion) → its OWN decision naming the nearest real columns. NOT also flagged as field-control.
+    //  (a) the column EXISTS (or no entityColumns were supplied to check) but its TYPE didn't resolve to a control
+    //      → the folded `field-control` summary below.
+    const haveCols = Object.keys(cols).length > 0;
+    const missingColumn = !!f.bindTo && haveCols && !(col in cols);
+    if (missingColumn) {
+      const near = nearestColumns(col, cols);
+      needsDecision.push({ kind: "virtual-field", item: col,
+        reason: `field '${col}' binds to a column that does NOT exist on the entity${near.length ? ` (nearest existing columns: ${near.join(", ")})` : ""}. Either it is a renamed/typo/removed column — verify the real column name on-stand — or an auto-filled companion loaded from a selected lookup by an on-change / set-info handler (e.g. Department/StaffUnit): then build it READ-ONLY on a view-model attribute and wire that handler. Do NOT drop it (dropping collapses an island to a lone field).` });
+    }
     const ctl = control(meta.type, f.contentType, meta.ref);
-    if (!ctl) fieldControlCols.push(col);   // folded into one summary after the loop
+    if (!ctl && !missingColumn) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     const c = ctl || { type: "crt.Input" };
     // #4: unique element name derived from the column; two classic items on one column -> _2, _3 + flag.
     nameCount[col] = (nameCount[col] || 0) + 1;
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    if (nameCount[col] > 1) dupBindingCols.push({ col, elName });   // folded into one summary after the loop
+    // NOTE: the same column bound by several classic items (emitted as `col`, `col_2`, `col_3` so none is dropped)
+    // is a NORMAL configurator pattern — the same field placed on the canvas more than once. It is resolved at
+    // page-design time, not a migration defect, so it raises NO decision (only the unique naming is applied).
     // Convert the classic 24-col grid coordinates (0-based) into the TARGET Freedom grid, rather than dumping
     // them verbatim into a native container (which overflows and breaks the layout). Target grid width:
     //   profile island  -> 1 column  (every field full-width, stacked)
@@ -657,31 +690,18 @@ function mapFields(ctx, containers) {
   }
   // ---- FOLD the accumulated per-field noise into summaries (declarations near the loop top) ----
   const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
-  // The DESIGN-PREREQUISITE (surfaced ONCE, not per field): a dense multi-column classic grid does NOT map 1:1
-  // onto the narrow (1–2 col) Freedom form, and choosing the right target container/grid is a WHOLE-PAGE decision
-  // the agent must make BEFORE designing — the engine only auto-relocates collisions as a fallback. Fire it when
-  // the collapse is systemic so it doesn't nag pages with a stray collision or two.
+  // The DESIGN-PREREQUISITE — the ONLY layout signal surfaced (not per field, and NOT a second per-page
+  // "layout-collision" line: that said the same thing twice, and the per-container breakdown is engine-internal
+  // noise the agent can't act on). A dense multi-column classic grid does NOT map 1:1 onto the narrow (1–2 col)
+  // Freedom form; choosing the right target container/grid is a WHOLE-PAGE decision the agent must make BEFORE
+  // designing — the engine only auto-relocates collisions as a fallback. Fire only when the collapse is systemic
+  // so it doesn't nag pages with a stray collision or two.
   if (totalCollisions >= 12) needsDecision.push({ kind: "layout-density", item: "(page layout)",
     reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
-  // ONE layout-collision summary for the WHOLE page (not per container, not per field) — it lists the affected
-  // containers with per-container counts so the agent knows WHERE to rework, but stays a single worklist line.
-  if (collisionByContainer.size) {
-    const perContainer = [...collisionByContainer.entries()]
-      .sort((a, b) => b[1].count - a[1].count)
-      .map(([parent, cc]) => `${parent} (${cc.count})`);
-    const shown = perContainer.slice(0, 10).join(", ") + (perContainer.length > 10 ? ` … (+${perContainer.length - 10} more)` : "");
-    needsDecision.push({ kind: "layout-collision", item: "(page layout)",
-      reason: `${totalCollisions} field(s) across ${collisionByContainer.size} container(s) landed on already-occupied cells when the classic layout collapsed into the narrow Freedom target and were auto-relocated (rows approximate). Affected containers (field count): ${shown}. Review these containers' layout as a whole (see the page-layout TODO) rather than each field.` });
-  }
   if (fieldControlCols.length) {
     const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
     needsDecision.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
-      reason: `${fieldControlCols.length} field(s) have no classic contentType and the entity column type was NOT recognized — defaulted to \`crt.Input\`. Usual causes: (a) the type came back as an UNMAPPED DataValueType code (get-entity-schema-properties returns some types by code, not name — e.g. an exotic code like 31); or (b) the column is missing from \`manifest.entityColumns\` — often because the section was bundled under the WRONG entity (verify the bundled entity). Check the type on-stand and confirm the control: ${shown}` });
-  }
-  if (dupBindingCols.length) {
-    const shown = dupBindingCols.slice(0, 12).map((d) => `${d.col}→${d.elName}`).join(", ") + (dupBindingCols.length > 12 ? ` … (+${dupBindingCols.length - 12} more)` : "");
-    needsDecision.push({ kind: "duplicate-binding", item: `(${dupBindingCols.length} columns)`,
-      reason: `${dupBindingCols.length} column(s) are bound by more than one classic item (emitted with _2/_3 suffixes so none is dropped); confirm which to keep for each: ${shown}` });
+      reason: `${fieldControlCols.length} field(s): the entity column exists but its TYPE was not recognized (an unmapped/exotic DataValueType code that get-entity-schema-properties returned as a number), OR no \`manifest.entityColumns\` was supplied to resolve types — defaulted to \`crt.Input\`. Confirm the control on-stand: ${shown}` });
   }
   // #9b: >1 classic left-area island → each rebuilt as its own container in the side profile (above),
   // preserving the split the user sees on the classic page. Surface it as a KNOWN decision.
@@ -935,17 +955,20 @@ function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
 }
 
 // rules → page/entity business rules (declarative). Returns its own needsDecision[].
-function mapRules(payloadRules, payloadFields) {
+function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   const pageBusinessRules = [], entityBusinessRules = [], needsDecision = [];
   for (const r of payloadRules) mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision);
-  // C4: a rule whose target column has NO field insert in this ChangeSet (its field is template context
-  // excluded from payload, or an entity-only column) would dangle on a non-existent element — flag it.
+  // C4: flag a rule ONLY when its target resolves to NOTHING on the page — neither a mapped field NOR any known
+  // element (tab / group / container). Business rules legitimately target more than fields: hiding a TAB or GROUP
+  // hides all its fields, so a rule targeting `…TabLabel` / `…Group…` is valid, not a dangling reference. Those
+  // used to be mis-flagged as "no field for it"; now only a target absent from the whole page (an entity-only
+  // column with no element, or a stale binding) is surfaced.
   const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
   const ruleTargets = new Set(
     [...pageBusinessRules.map(r => r.element), ...entityBusinessRules.map(r => r.targetAttribute)].filter(Boolean));
-  for (const t of ruleTargets) if (!emittedCols.has(t))
+  for (const t of ruleTargets) if (!emittedCols.has(t) && !knownElements.has(t))
     needsDecision.push({ kind: "rule-target-missing", item: t,
-      reason: `business rule targets '${t}' but no field for it is inserted (base/template field or entity-only column) — ensure the Freedom target provides the element` });
+      reason: `business rule targets '${t}' but the page has no element for it — neither a mapped field nor a tab/group/container. It is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).` });
   return { pageBusinessRules, entityBusinessRules, needsDecision };
 }
 
