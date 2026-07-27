@@ -219,7 +219,8 @@ export function renderDesignSpec(result, opts = {}) {
     const mp = result.miniPage;
     let addRecordDesc;
     if (mp?.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
-    else if (mp && (mp.unfolded || mp.specError || mp.cyclic)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
+    else if (mp?.cyclic) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — ↩ already mapped above (cycle); its spec appears higher in this plan`;
+    else if (mp && (mp.unfolded || mp.specError)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
     else if (result.miniPageNone) addRecordDesc = "full edit page — verified on-stand: no add-record mini page";
     else if (!result.miniPageVerified) addRecordDesc = "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
     else addRecordDesc = "full edit page (no add-record mini page)";
@@ -470,6 +471,8 @@ export function renderPlan(result, opts = {}) {
       P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
       if (t.bindOnly) {
         P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the shared Freedom form for this Type (by the Type column).`);
+      } else if (t.cyclic) {
+        P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);
       } else if (t.spec) {
         P.push("", demoteHeadings(t.spec, 2));
       } else if (t.specError) {
@@ -501,7 +504,11 @@ export function renderPlan(result, opts = {}) {
       const h = "#".repeat(Math.min(6, lvl));
       const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
       P.push(`${h} Child page: ${head}`);
-      if (c.spec) {
+      if (c.cyclic) {
+        // a cycle: this page is mapped higher on the same branch — do NOT re-embed (infinite recursion) and do
+        // NOT flag it as unmapped; point the reader up. The structure gate treats it as resolved (see childPageIssue).
+        P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
+      } else if (c.spec) {
         P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
         for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
       } else if (c.specError) {

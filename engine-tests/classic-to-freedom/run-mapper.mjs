@@ -407,6 +407,32 @@ const loopRun = runMigration(loopManifest);
 check("recursion depth cap: cyclic childPageSchemas terminates and is bounded (no runaway)",
   !!loopRun && Array.isArray(loopRun.childPages) && loopRun.childPages.length > 0);
 
+/* ---- cycle = resolved-elsewhere, not a gap (Alexandr review). A cycle must NOT make structure.complete
+   unsatisfiable (false-red on child pages) NOR clear it silently while the renderer warns (false-green on
+   typed/mini). The gate and the rendered plan must AGREE. ---- */
+// (a) mutual-reference A<->B child pages, both bundles supplied → structure.complete === true (was: never true).
+const cycA = { entity: "AE", noParentTemplate: true,
+  schemas: [{ pkg: "AP", body: `define("APage",[],function(){return{entitySchemaName:"AE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{BDetail:{schemaName:"BDetail",entitySchemaName:"BE"}}};});` }],
+  detailSchemas: { BDetail: { entity: "BE", editPage: "BPage" } }, childPageSchemas: {} };
+const cycB = { entity: "BE", noParentTemplate: true,
+  schemas: [{ pkg: "BP", body: `define("BPage",[],function(){return{entitySchemaName:"BE",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}],details:{ADetail:{schemaName:"ADetail",entitySchemaName:"AE"}}};});` }],
+  detailSchemas: { ADetail: { entity: "AE", editPage: "APage" } }, childPageSchemas: {} };
+cycA.childPageSchemas.BPage = cycB; cycB.childPageSchemas.APage = cycA;
+const cycRun = runMigration(cycA);
+check("cycle: a mutual-reference A<->B child graph reaches structure.complete=true (no false-red / forbidden false assertion)",
+  cycRun.structure.complete === true && /Already mapped above \(cycle\)/.test(cycRun.plan),
+  () => cycRun.structure.issues);
+// (b) a cyclic typed page: the structure gate and the renderer must agree — resolved, NOT a "NOT resolved" banner.
+const cycT = { entity: "XE", noParentTemplate: true,
+  schemas: [{ pkg: "XP", body: `define("XPage",[],function(){return{entitySchemaName:"XE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  typedPages: [{ schema: "TP" }], typedPageSchemas: {} };
+cycT.typedPageSchemas.TP = cycT;
+const cycTRun = runMigration(cycT);
+check("cycle: a cyclic typed page is resolved-elsewhere — no typed structure issue AND the plan shows the cycle note, not a 'NOT resolved' banner (gate/renderer agree)",
+  !cycTRun.structure.issues.some((i) => /typed page/.test(i))
+  && /Already mapped above \(cycle\)/.test(cycTRun.plan) && !/NOT resolved — this typed form/.test(cycTRun.plan),
+  () => cycTRun.structure.issues.filter((i) => /typed/.test(i)));
+
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   details: {

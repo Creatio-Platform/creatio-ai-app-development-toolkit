@@ -33,6 +33,12 @@ import { renderDesignSpec, renderPlan } from "./designspec.mjs";
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
 // child is fine. Returns the issue string, or null when the child page raises no structure issue.
 function childPageIssue(c) {
+  // A CYCLE (this page is reachable from itself — e.g. Contract→Order→Contract) is NOT a gap: the target page
+  // is already being mapped higher on the SAME plan branch, so it is resolved-elsewhere. Without this a cyclic
+  // child with a real `editPage` fell into the "REAL edit page NOT mapped" branch below and `structure.complete`
+  // could never become true for a mutually-referencing graph — the only escape being a FALSE editPage/editable
+  // assertion, exactly the dodge the contract forbids. (The renderer marks the row "already mapped above (cycle)".)
+  if (c.cyclic) return null;
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
     : null;
@@ -239,7 +245,10 @@ export function runMigration(manifest, opts = {}) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    if (visited.has(tkey)) { t.cyclic = true; t.resolved = "fold"; continue; }
+    // A cycle is its OWN resolved state — NOT `"fold"` (which claims a spec was produced): the typed form is
+    // mapped higher on this branch. `"fold"` here made the structure gate pass (false-green) while the renderer,
+    // seeing no spec, printed a "NOT resolved" banner — the two disagreed. `"cycle"` is handled consistently by both.
+    if (visited.has(tkey)) { t.cyclic = true; t.resolved = "cycle"; continue; }
     try {
       const tRes = runMigration(typedSchemas[tkey], { baseDir, visited: new Set([...visited, tkey]) });
       t.spec = tRes.designSpec;
@@ -365,6 +374,7 @@ export function runMigration(manifest, opts = {}) {
     // this is what stops the "per-type field mapping done at build" deferral.
     for (const t of typedPages) {
       if (t.resolved === "bind") continue;
+      if (t.resolved === "cycle") continue; // mapped higher on this branch (cycle) — resolved elsewhere, not a gap
       if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
       if (t.resolved === "fold") {
         if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`);
