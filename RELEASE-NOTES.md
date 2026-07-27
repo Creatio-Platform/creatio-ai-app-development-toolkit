@@ -6,6 +6,28 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.5.0 (2026-07-27)
+
+### Features
+
+- Add the `creatio-branding-orchestrator` skill — brand or theme an app to match a brandbook, company site, or chosen colors and fonts: guided palette conversation, logo intake and application (with a white-logo preference for dark top panels), and a palette-matched app background. SVG assets are sanitized before upload, and background/branding upload mechanics are delegated to clio. (ENG-92981)
+- Apply a newly generated theme to the current user's profile by default, aligned with `clio set-user-theme` becoming a confirmed write. (ENG-93302)
+- Add the `creatio-mobile-page-conversion` skill — convert a Freedom UI web page into a Freedom UI mobile page, toggle-aware via a feature-flag preflight gate, with a preflight recovery message and a form-page guard. (ENG-91228)
+- Business Plan and UI guidelines now cover related lists (expanded lists / details). (ENG-92614)
+
+### Bug Fixes / Guidance
+
+- Clarify lookup/enum seeding guidance to prevent a runtime-insert fallback. (ENG-93865)
+- Add a transient section-creation failure playbook runbook. (ENG-93376)
+
+### CI
+
+- Bump `actions/checkout` from 7.0.0 to 7.0.1. (#54)
+- Bump `actions/setup-node` from 6.4.0 to 7.0.0. (#45)
+- Exclude engine fixtures and the vendored parser from SonarCloud analysis. (#50)
+
+---
+
 ## 1.4.0 (2026-07-09)
 
 ### Features
