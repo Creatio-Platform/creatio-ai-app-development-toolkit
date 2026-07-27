@@ -475,7 +475,7 @@ export function renderPlan(result, opts = {}) {
       } else if (t.specError) {
         P.push(`> ⚠ typed-page bundle supplied but failed to parse: ${esc(t.specError)} — fix the bundle and re-run.`);
       } else {
-        P.push(`> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-migration-bundle --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`);
+        P.push(`> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-page-sources --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`);
       }
       P.push("");
     }

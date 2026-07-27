@@ -546,7 +546,7 @@ const autoClient = L("Client", { entity: "X", details: {
          di({ name: "Auto", parentName: "T3", propertyName: "items", itemType: 2 })] });
 const autocs = mapToFreedom(mergeHierarchy([autoClient]));
 check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unresolved (fetch its schema)",
-  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-migration-bundle/.test(n.reason)));
+  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-page-sources/.test(n.reason)));
 
 /* ---- #10c: the design spec is GENERATED deterministically (table, not agent prose) ---- */
 // The recurring failure: the agent paraphrases the design spec into prose (no per-field table, wrong

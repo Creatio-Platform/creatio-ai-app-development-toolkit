@@ -1,6 +1,6 @@
 // engine/migrate.mjs — the CLI driver the SKILL invokes.
 //
-// Turns the raw Classic schema bodies (assembled by clio get-classic-migration-bundle, or the
+// Turns the raw Classic schema bodies (assembled by clio get-classic-page-sources, or the
 // manual fallback) into one effective Classic page and a Freedom ChangeSet + needsDecision[]. This is the
 // deterministic 80% the skill used to ask the agent to do by hand (enumerate chain → merge diff/details/
 // businessRules by eye). A thin I/O wrapper over engine.mjs (mergeHierarchy) + mapper.mjs (mapToFreedom); the
@@ -21,7 +21,7 @@
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate } // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
 //   }
 // CLI: `--plan`/`--spec` print the artifact; add `--out <file>` to WRITE it (the agent presents the file, not stdout).
-// Prefer inline "body" (get-classic-migration-bundle writes bodies inline into the manifest) over "file" to avoid path fragility.
+// Prefer inline "body" (get-classic-page-sources writes bodies inline into the manifest) over "file" to avoid path fragility.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -371,7 +371,7 @@ export function runMigration(manifest, opts = {}) {
         continue;
       }
       const typeNote = t.type ? ` (type "${t.type}")` : "";
-      issues.push(`typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-migration-bundle --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
+      issues.push(`typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
     }
     // add-record mini page (a section/list concern — only gated when this migration has a section). It must be
     // RESOLVED: folded (bundle in manifest.miniPageSchemas), or verified-none (manifest.addRecordMiniPage:false).
@@ -380,7 +380,7 @@ export function runMigration(manifest, opts = {}) {
     if (section) {
       if (miniPage) {
         if (miniPage.specError) issues.push(`add mini page '${miniPage.schema}': supplied bundle failed to parse (${miniPage.specError}) — fix and re-run`);
-        else if (miniPage.unfolded) issues.push(`add mini page '${miniPage.schema}': NOT folded — assemble its bundle (\`get-classic-migration-bundle --schema-name ${miniPage.schema}\`) into manifest.miniPageSchemas so the engine folds its layout here (or record manifest.addRecordMiniPage:false if there is genuinely none)`);
+        else if (miniPage.unfolded) issues.push(`add mini page '${miniPage.schema}': NOT folded — assemble its bundle (\`get-classic-page-sources --schema-name ${miniPage.schema}\`) into manifest.miniPageSchemas so the engine folds its layout here (or record manifest.addRecordMiniPage:false if there is genuinely none)`);
         else if (miniPage.structIncomplete) issues.push(`add mini page '${miniPage.schema}': its OWN structure is incomplete — resolve and re-run`);
       } else if (!miniPageVerified) {
         issues.push(`add-record mini page NOT verified — check \`list-entity-client-schemas\` (a per-type edit page with \`miniPageSchema\` + \`miniPageModes\` containing "add") and record manifest.addRecordMiniPage: { "schema": "<MiniPage>" } to fold it, or false if there is none. Do NOT assume "no mini page" — it is registered at the module/edit-page level, not always in the section body.`);

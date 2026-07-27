@@ -753,7 +753,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   };
   if (looksSkeletal) warnings.push({
     op: "seed", name: "skeletal-seed", schema: "(seed)",
-    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) but NO getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton (or a partial chain), not the fetched template body. Re-assemble the manifest via get-classic-migration-bundle so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) but NO getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton (or a partial chain), not the fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
   });
 
   return {

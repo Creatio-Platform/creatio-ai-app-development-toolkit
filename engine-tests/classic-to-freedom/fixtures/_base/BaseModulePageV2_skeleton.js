@@ -7,7 +7,7 @@
 // resolution skips it and still picks the concrete entity from the client schemas.
 //
 // In production these seed schemas are the REAL parent-template bodies, assembled by
-// clio get-classic-migration-bundle (it walks the Parent chain and reads every base-template body itself).
+// clio get-classic-page-sources (it walks the Parent chain and reads every base-template body itself).
 // This fixture is the offline stand-in that proves the mechanism.
 define("BaseModulePageV2", [], function() {
 	return {

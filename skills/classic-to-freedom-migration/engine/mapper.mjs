@@ -705,7 +705,7 @@ function mapDetails(ctx, containers, profileRegion) {
     if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
       const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
-        reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-migration-bundle gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
+        reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
