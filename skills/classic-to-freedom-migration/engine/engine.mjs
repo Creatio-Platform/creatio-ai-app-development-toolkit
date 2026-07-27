@@ -42,7 +42,12 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     // mapper can name them; a run-process action maps to a Freedom "Run process" card action / handler.
     processLaunch: (() => {
       if (!/ProcessModuleUtilities|executeProcess|RunProcessRequest|\brunProcess\b|showProcessPage|openProcessByRecord|ProcessSchemaManager/.test(src)) return null;
-      const names = [...new Set([...src.matchAll(/["']([A-Za-z][\w.]*(?:Process|SecurityCheck|Recruiting)[\w.]*)["']/g)].map(mt => mt[1]))];
+      // The two `[\w.]*` runs around the literal alternation are BOUNDED ({0,128}) so this stays linear on a
+      // hostile body: the previous unbounded form was polynomial (~O(n²)) ReDoS on `src` — a long unterminated
+      // quoted run with many "Process" substrings drove per-schema parse time to seconds/tens-of-seconds (~32 s
+      // at 700 KB, a size real Classic bodies reach), defeating the "must not hang on hostile input" guarantee
+      // this file's MAX_AST_DEPTH / rowSpan clamps already defend. Real schema names are far under 128 chars.
+      const names = [...new Set([...src.matchAll(/["']([A-Za-z][\w.]{0,128}(?:Process|SecurityCheck|Recruiting)[\w.]{0,128})["']/g)].map(mt => mt[1]))];
       return { names };
     })(),
     // ---- SECTION-schema signals (meaningful for *Section schemas; empty/null for pages) ----

@@ -73,7 +73,11 @@ function scalarControl(t) {
 // rendered a scalar via a picker, which is a read-only VALUE FROM A LINKED RECORD (linkedDisplay): keep the real
 // data type (Email/Phone/Text) and flag the linked-value intent instead of mislabelling the control as a lookup.
 function control(dataType, contentType, ref) {
-  const t = (dataType || "").toLowerCase();
+  // `dataType` is tool/agent-assembled JSON — it can arrive as a NUMBER (this code expects Date as the
+  // numeric code 8; see scalarControl). `(dataType || "").toLowerCase()` throws a TypeError on a number,
+  // which escapes mapToFreedom → runMigration (called with no try/catch in migrate.mjs) and breaks the
+  // documented "runMigration does NOT throw" contract. Coerce with String() first — mirrors fieldTypeLabel.
+  const t = String(dataType ?? "").toLowerCase();
   if (t === "lookup") return { type: "crt.ComboBox", lookup: true };
   const scalar = scalarControl(t);
   if (contentType === CONTENT_TYPE.LOOKUP) {
