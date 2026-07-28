@@ -571,9 +571,9 @@ export function renderPlan(result, opts = {}) {
   // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
   const signals = opts.signals || {};
-  const P = [`## ${entity} — Classic → Freedom UI`, ""]; // entity already esc'd above (esc ⊇ strip)
-  P.push(...renderPlanBanners(result, opts));
-  P.push(
+  const P = [
+    `## ${entity} — Classic → Freedom UI`, "", // entity already esc'd above (esc ⊇ strip)
+    ...renderPlanBanners(result, opts),
     "### Overview",
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
     `**Environment:** ${fill(pm.environment, "<FILL: environment name>")} ·`,
@@ -588,7 +588,7 @@ export function renderPlan(result, opts = {}) {
     "### On-stand signals",
     signalLine(signals.dcm, "DCM case"), signalLine(signals.processes, "Connected processes"),
     signalLine(signals.printables, "Printables"), "",
-  );
+  ];
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
