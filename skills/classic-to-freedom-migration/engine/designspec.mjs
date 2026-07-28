@@ -422,7 +422,7 @@ export function renderPlan(result, opts = {}) {
   // deliberately N/A), not a "check later" the build silently drops.
   const sigLine = (k, label) => {
     const s = signals[k];
-    if (!s || s.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
+    if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
     const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
     const presentNote = list ? ` — ${list}` : "";
