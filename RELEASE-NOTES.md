@@ -2,6 +2,8 @@
 
 Releases are listed in reverse chronological order. Each release has a `## X.Y.Z (YYYY-MM-DD)` header. Subsections (`###`) under each release are free-form — pick what reflects the actual scope (Features, Bug Fixes, Breaking Changes, Migration Notes, Documentation, etc.).
 
+**Write each section as an announcement, not a changelog.** Open the section body with a one-sentence **bold hook** that says what the release unlocks and why it matters — the release workflow uses that leading `**bold**` sentence as the GitHub Release *title* (`X.Y.Z — <hook>`), so a section without one publishes under the bare version number. Then group the changes under short `###` sections, lead each bullet with the user-facing value (not the internal mechanism), and link the PR (`#NN`) so external readers can follow it. Emoji section headers (✨ / 🔒 / 🛠️) are welcome. See the most recent release below for the house style.
+
 To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)` section at the top of this file and runs `node scripts/bump-version.js X.Y.Z`, merge it, then trigger the `Release` GitHub Actions workflow with the same version. The workflow validates the prepared main branch, tags it, and uses this section as the body of the GitHub Release.
 
 ---
