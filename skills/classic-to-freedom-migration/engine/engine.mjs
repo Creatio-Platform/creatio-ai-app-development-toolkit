@@ -651,6 +651,116 @@ function makeItem(op, seed, pkg) {
   };
 }
 
+// diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
+function replayDiffOp(op, items, { seed, pkg }, warnings) {
+  const cur = items.get(op.name);
+  if (op.operation === "insert") { items.set(op.name, makeItem(op, seed, pkg)); return; }
+  if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
+  if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
+  if (op.operation === "remove") return replayRemove(op, cur, items, { seed, pkg }, warnings);
+}
+
+// patch in place; carry contentType/itemType too — a later schema can introduce a control hint
+// (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
+function replayMerge(op, cur, items, { seed, pkg }, warnings) {
+  if (!cur) {
+    // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
+    // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
+    // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
+    items.set(op.name, makeItem(op, seed, pkg));
+    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
+    return;
+  }
+  for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
+}
+
+// classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
+// spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
+// e.g. Product's IsArchive/"Inactive" checkbox).
+function replayMove(op, cur, { seed, pkg }, warnings) {
+  if (!cur) {
+    warnings.push({ op: "move", name: op.name, schema: pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+    return;
+  }
+  if (op.parentName) { cur.parent = op.parentName; }
+  // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
+  // (previously only the parent was updated, so a pure reorder silently kept the old position).
+  if (op.order != null) { cur.order = op.order; }
+  if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
+}
+
+// removedBySeed: a template-internal remove (base template dropping a base element) is context,
+// not a client B6 decision — the mapper filters it out like every other template-only element.
+function replayRemove(op, cur, items, { seed, pkg }, warnings) {
+  if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
+  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
+  warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+}
+
+// businessRules + legacy rules (merge by attribute::ruleKey)
+function mergeRuleBlocks(L, seed, rules) {
+  for (const [sys, block] of [["businessRules", L.businessRules], ["rules", L.rules]]) {
+    for (const attr of Object.keys(block || {})) {
+      const ar = block[attr]; if (!ar || typeof ar !== "object") continue;
+      for (const key of Object.keys(ar)) {
+        const id = `${attr}::${key}`;
+        const rec = normalizeRule(ar[key] || {}, { attr, key, sys, seed, pkg: L.pkg });
+        if (rules.has(id)) { const p = rules.get(id); rec.provenance = [...p.provenance, L.pkg]; rec.schemaTouched = p.schemaTouched || !seed; }
+        rules.set(id, rec);
+      }
+    }
+  }
+}
+
+function normalizeRule(r, { attr, key, sys, seed, pkg }) {
+  return {
+    attr, key, system: sys,
+    // guard: only decode when numeric (after enum seeding legacy rules are numbers too);
+    // a still-non-numeric value is genuinely symbolic/unknown -> flagged, never silently "0".
+    ruleType: isNum(r.ruleType) ? (RULE_TYPE[r.ruleType] ?? String(r.ruleType)) : "symbolic",
+    property: isNum(r.property) ? (PROP[r.property] ?? String(r.property)) : null,
+    conditions: sanitizeConditions(r.conditions),
+    filterColumn: strOrNull(r.baseAttributePatch),
+    comparison: numOrNull(r.comparisonType),
+    value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
+    dataValueType: numOrNull(r.dataValueType),
+    enabled: r.enabled !== false, removed: r.removed === true,
+    provenance: [pkg], schemaTouched: !seed,
+  };
+}
+
+function mergeDetails(L, seed, details) {
+  for (const k of Object.keys(L.details)) {
+    const prev = details.get(k);
+    const rec = { key: k, ...L.details[k], provenance: [L.pkg], schemaTouched: !seed };
+    if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
+    details.set(k, rec);
+  }
+}
+
+// methods (override stack) — track whether any schema schema contributed
+function mergeMethods(L, seed, methods) {
+  for (const m of L.methods) {
+    const prev = methods.get(m);
+    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed });
+  }
+}
+
+// modules (widgets/charts) — merge by key
+function mergeModules(L, seed, components) {
+  for (const c of L.modules || []) {
+    const prev = components.get(c.key);
+    const rec = { ...c, provenance: [L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed };
+    if (prev) rec.provenance = [...prev.provenance, L.pkg];
+    components.set(c.key, rec);
+  }
+}
+
 export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
@@ -677,95 +787,14 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
   for (const { L, seed } of tagged) {
-    // diff replay
     for (const op of L.diff) {
       if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      const cur = items.get(op.name);
-      if (op.operation === "insert") {
-        items.set(op.name, makeItem(op, seed, L.pkg));
-      } else if (op.operation === "merge") {
-        // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
-        // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
-        if (cur) {
-          for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
-          for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
-          cur.provenance.push(L.pkg);
-          if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
-        }
-        else {
-          // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
-          // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
-          // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
-          items.set(op.name, makeItem(op, seed, L.pkg));
-          warnings.push({ op: "merge", name: op.name, schema: L.pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
-        }
-      } else if (op.operation === "move") {
-        // classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
-        // spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
-        // e.g. Product's IsArchive/"Inactive" checkbox).
-        if (cur) {
-          if (op.parentName) { cur.parent = op.parentName; }
-          // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
-          // (previously only the parent was updated, so a pure reorder silently kept the old position).
-          if (op.order != null) { cur.order = op.order; }
-          if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
-          cur.provenance.push(L.pkg);
-          if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
-        } else {
-          warnings.push({ op: "move", name: op.name, schema: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
-        }
-      } else if (op.operation === "remove") {
-        // removedBySeed: a template-internal remove (base template dropping a base element) is context,
-        // not a client B6 decision — the mapper filters it out like every other template-only element.
-        if (cur) { cur.removed = true; cur.removedBy = L.pkg; cur.removedBySeed = seed; }
-        else {
-          items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, removedBySeed: seed, provenance: [L.pkg] });
-          warnings.push({ op: "remove", name: op.name, schema: L.pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
-        }
-      }
+      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
     }
-    // businessRules + legacy rules (merge by attribute::ruleKey)
-    for (const [sys, block] of [["businessRules", L.businessRules], ["rules", L.rules]]) {
-      for (const attr of Object.keys(block || {})) {
-        const ar = block[attr]; if (!ar || typeof ar !== "object") continue;
-        for (const key of Object.keys(ar)) {
-          const r = ar[key] || {};
-          const id = `${attr}::${key}`;
-          const rec = {
-            attr, key, system: sys,
-            // guard: only decode when numeric (after enum seeding legacy rules are numbers too);
-            // a still-non-numeric value is genuinely symbolic/unknown -> flagged, never silently "0".
-            ruleType: typeof r.ruleType === "number" ? (RULE_TYPE[r.ruleType] ?? String(r.ruleType)) : "symbolic",
-            property: typeof r.property === "number" ? (PROP[r.property] ?? String(r.property)) : null,
-            conditions: sanitizeConditions(r.conditions),
-            filterColumn: isStr(r.baseAttributePatch) ? r.baseAttributePatch : null,
-            comparison: typeof r.comparisonType === "number" ? r.comparisonType : null,
-            value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
-            dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null,
-            enabled: r.enabled !== false, removed: r.removed === true,
-            provenance: [L.pkg], schemaTouched: !seed,
-          };
-          if (rules.has(id)) { const p = rules.get(id); rec.provenance = [...p.provenance, L.pkg]; rec.schemaTouched = p.schemaTouched || !seed; }
-          rules.set(id, rec);
-        }
-      }
-    }
-    // details
-    for (const k of Object.keys(L.details)) {
-      const prev = details.get(k);
-      const rec = { key: k, ...L.details[k], provenance: [L.pkg], schemaTouched: !seed };
-      if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
-      details.set(k, rec);
-    }
-    // methods (override stack) — track whether any schema schema contributed
-    for (const m of L.methods) { const prev = methods.get(m); methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed }); }
-    // modules (widgets/charts) — merge by key
-    for (const c of L.modules || []) {
-      const prev = components.get(c.key);
-      const rec = { ...c, provenance: [L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed };
-      if (prev) rec.provenance = [...prev.provenance, L.pkg];
-      components.set(c.key, rec);
-    }
+    mergeRuleBlocks(L, seed, rules);
+    mergeDetails(L, seed, details);
+    mergeMethods(L, seed, methods);
+    mergeModules(L, seed, components);
   }
 
   const alive = [...items.values()].filter(i => !i.removed);
