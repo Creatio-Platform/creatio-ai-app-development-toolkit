@@ -203,7 +203,7 @@ check("removals: N client removes produce NO '[removal]' rows and NO '[removals 
   !/\*\*\[removal\]\*\*/.test(rmSpec) && !/\[removals ×/.test(rmSpec),
   () => rmSpec.split("\n").filter((l) => /removal/i.test(l)));
 check("removals: even a CONFIRMED client remove (removing layer IS client-editable) is NOT surfaced — removed = out of scope",
-  !renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] }), { clientEditableSchemas: ["WorkCorrespondence"] }) }).match(/\[removal/));
+  !/\[removal/.exec(renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] }), { clientEditableSchemas: ["WorkCorrespondence"] }) })));
 
 /* ---- regionResolver: nested General-info fields resolve to their TAB, not a legacy "fallback" hardcode ---- */
 // Fields sit under GeneralInfoBlock → GeneralInfoGroup → GeneralInfoTabContainer (a real crt.Tab). A removed
@@ -453,7 +453,7 @@ const migNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mj
   input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", file: "does_not_exist_zzz.js" }] }), encoding: "utf8" });
 check("migrate.mjs CLI: a missing schema file exits 1 with a clean diagnostic (no stdout, no raw stack)",
   migNoFile.status === 1 && /migrate\.mjs:/.test(migNoFile.stderr || "") && /ENOENT|no such file|cannot/i.test(migNoFile.stderr || "")
-  && !/\bat \w+.*:\d+:\d+/.test(migNoFile.stderr || "") && (migNoFile.stdout || "").trim() === "",
+  && !/^\s+at /m.test(migNoFile.stderr || "") && (migNoFile.stdout || "").trim() === "",
   () => ({ status: migNoFile.status, stderr: (migNoFile.stderr || "").slice(0, 160) }));
 // `--out` without a path must FAIL LOUDLY, not silently fall back to stdout (trailing) or swallow a flag.
 const okManifest = JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[]};});` }] });
@@ -1439,8 +1439,9 @@ check("scalarControl: a genuinely unknown type code (44=URL) still falls to a lo
 // an uncertain text-range code (e.g. 31) still falls to field-control (not guessed into a wrong control).
 const codeCols = { MON: { type: "6" }, DT7: { type: "7" }, BOOL: { type: "12" }, INT: { type: "4" }, FLT: { type: "5" }, TXT: { type: "1" }, DEC31: { type: "31" }, URL44: { type: "44" } };
 const codeNames = Object.keys(codeCols);
+const codeDiff = codeNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const codeCs = runMigration({ entity: "X", entityColumns: codeCols,
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${codeNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${codeDiff}]};});` }] }, { baseDir: FIX });
 const codeF = (n) => codeCs.changeSet.viewConfigDiff.find((o) => o.name === n);
 check("scalarControl: numeric DataValueType codes map — Money '6'→NumberInput (Decimal), DateTime '7', Boolean '12', Integer '4', Float '5', Text '1', Decimal(0.1) '31'",
   codeF("MON")?.values.type === "crt.NumberInput" && codeF("MON")?.values.typeLabel === "Decimal"
@@ -1504,7 +1505,7 @@ check("return-none: a factory with NO return blocks the gate (empty schema, not 
 // path (previously the alias silently collapsed to null → a group mis-classified as a field).
 const enumDirect = parseSchema(`define("P",[],function(){ return {entitySchemaName:"X", diff:[{operation:"insert",name:"G",parentName:"Header",values:{itemType: Terrasoft.core.enums.ViewItemType.CONTROL_GROUP}}]}; });`, "P");
 const enumAlias = parseSchema(`define("P",[],function(){ var vt = Terrasoft.core.enums.ViewItemType; return {entitySchemaName:"X", diff:[{operation:"insert",name:"G",parentName:"Header",values:{itemType: vt.CONTROL_GROUP}}]}; });`, "P");
-const itOf = (r) => (r.diff.find((d) => d.name === "G") || {}).itemType;
+const itOf = (r) => r.diff.find((d) => d.name === "G")?.itemType;
 check("enum-alias: an aliased enum member resolves identically to the full path (CONTROL_GROUP → 15)",
   itOf(enumDirect) === 15 && itOf(enumAlias) === 15,
   () => ({ direct: itOf(enumDirect), alias: itOf(enumAlias) }));
@@ -1602,7 +1603,7 @@ const f5 = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA
   childPageSchemas: { CH: f5child, CHPage: f5child } }, { baseDir: FIX });
 const f5ch = f5.childPages.find((c) => c.entity === "CH");
 check("F5: a deep child tree maps fully — the child is mapped AND its own grandchild is mapped (no depth cap)",
-  f5ch && f5ch.spec && f5ch.grandChildren >= 1,
+  f5ch?.spec && f5ch.grandChildren >= 1,
   () => ({ childMapped: !!f5ch?.spec, grandChildren: f5ch?.grandChildren }));
 
 /* ---- Minor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
