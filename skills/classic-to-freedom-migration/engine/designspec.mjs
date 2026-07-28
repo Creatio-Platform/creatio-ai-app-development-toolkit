@@ -411,21 +411,11 @@ export function renderDesignSpec(result, opts = {}) {
 // Pages table as `Rebuild (child)` rows (recursive sub-migrations), not a separate section.
 // The agent fills the placeholders and pastes VERBATIM — it cannot drop or restructure the generated
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
-export function renderPlan(result, opts = {}) {
-  const cs = result.changeSet || {};
-  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
-  const fields = (cs.viewConfigDiff || []).filter(isField);
-  const childs = result.childPages || [];
-  // planMeta (manifest.planMeta) supplies the few AGENT decisions so the engine can render a COMPLETE plan and
-  // WRITE it (CLI --out) — the agent presents the written file instead of hand-pasting/editing the tables. Any
-  // value not supplied falls back to its `<FILL: …>` placeholder (resolve by adding it to planMeta and re-running).
-  const pm = opts.planMeta || {};
-  // planMeta + entity are STAND/USER-derived and land in the plan the agent presents "verbatim". Sanitize every
-  // filled value (esc → single inert line, pipe-escaped) so a value like `X\n## INJECTED` cannot inject a new
-  // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
-  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
+// The four ⛔ banners that sit above Overview, in the order the reader must act on them. Each says the plan is
+// NOT approvable and names what to fix, because a blocked/incomplete plan reaching approval is the failure mode
+// this whole gate exists to prevent.
+function renderPlanBanners(result, opts) {
   const P = [];
-  P.push(`## ${entity} — Classic → Freedom UI`, ""); // entity already esc'd above (esc ⊇ strip)
   // ⛔ HARD GATE banner at the VERY TOP of the plan (RV1/RV2) — first thing the agent (and the user it pastes
   // to) sees, above Overview. A blocked plan is NOT an approvable plan: fix the signals and re-run `--plan`.
   const gate = result.gate || { blocked: false, reasons: [] };
@@ -449,11 +439,140 @@ export function renderPlan(result, opts = {}) {
   // on-stand SIGNALS gate — the ⚠ conditional checks (DCM case / connected processes / printables) must be
   // RESOLVED before approval, not deferred to build. Unresolved → the plan is INCOMPLETE (finding: recurring
   // "check later" miss). The agent runs the existing queries and records manifest.signals.
-  const signals = opts.signals || {};
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) {
     P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`ProcessInModules\` by the section \`SysModule\` (names via \`VwSysProcess\`); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   }
+  return P;
+}
+
+// One Main-scope row per child edit page. Honest label by resolution state — never assert "Rebuild (child)"
+// for a child we have not resolved: mapped, or a real edit page is named -> Rebuild (child);
+// verified-none / view-only -> Reuse; else -> ⚠ resolve.
+function childScopeRow(c) {
+  let target, call, label;
+  if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
+    target = "Freedom record page"; call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
+  } else if (c.editPage === false || c.editable === false) {
+    target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
+  } else {
+    target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
+  }
+  return `| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`;
+}
+
+// The body of one typed-form section: the folded spec, or the reason it has none.
+function typedFormBody(t) {
+  if (t.bindOnly) return `> **Bind-only** — layout identical to the base; no separate form. Bind the shared Freedom form for this Type (by the Type column).`;
+  if (t.cyclic) return `> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`;
+  if (t.spec) return "\n" + demoteHeadings(t.spec, 2);
+  if (t.specError) return `> ⚠ typed-page bundle supplied but failed to parse: ${esc(t.specError)} — fix the bundle and re-run.`;
+  return `> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-page-sources --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`;
+}
+
+// Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
+// A typed entity's real form deliverables. Unresolved (no bundle, not bindOnly) → a ⚠ the structure gate blocks on.
+function renderTypedPageMappings(typed) {
+  const P = ["### Typed page mappings", ""];
+  for (const t of typed) {
+    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`, typedFormBody(t), "");
+  }
+  return P;
+}
+
+// Add mini-page mapping — the FULL layout of the section's quick-add mini page (folded from
+// manifest.miniPageSchemas). Rendered when resolved; an unfolded/unverified one is flagged in List page + gate.
+function renderMiniPageMapping(miniPage) {
+  if (!miniPage || !(miniPage.spec || miniPage.specError)) return [];
+  const body = miniPage.spec
+    ? "\n" + demoteHeadings(miniPage.spec, 2)
+    : `> ⚠ mini-page bundle supplied but failed to parse: ${esc(miniPage.specError)} — fix and re-run.`;
+  return ["### Add mini-page mapping", "", `#### Mini page: ${esc(miniPage.schema)}`, body, ""];
+}
+
+// On-stand signals — the resolved DCM/process/printable answers (or an ⚠ if unresolved). This is the RESULT
+// of the checks the SKILL mandates at plan time; rendering them here makes each a tracked plan item (built or
+// deliberately N/A), not a "check later" the build silently drops.
+function signalLine(s, label) {
+  if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
+  if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
+  const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
+  const presentNote = list ? ` — ${list}` : "";
+  return `- **${label}:** present${presentNote} → build it`;
+}
+
+// Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
+// (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
+// A TYPED entity has NO single form deliverable — every record opens a per-type page, so the per-type forms
+// ARE the deliverables and the base `<entity> form page` is only their shared parent/seed (not a separate
+// form). A non-typed entity keeps its one form-page row.
+function mainScopeRows(pm, opts, entity, typed, fill, mainCall) {
+  const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
+  if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
+  for (const t of typed) {
+    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    const cls = `${esc(t.schema)}${typeNote} (typed form)`;
+    rows.push(`| ${cls} | ${t.bindOnly ? "bind shared form by Type" : "per-type Freedom form"} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
+  }
+  return rows;
+}
+
+// Why a child page has no embedded spec — one branch per resolution state. Returns null when the child IS
+// mapped (the caller embeds its spec and recurses into grandchildren instead).
+function childPageGap(c) {
+  if (c.cyclic) {
+    // a cycle: this page is mapped higher on the same branch — do NOT re-embed (infinite recursion) and do
+    // NOT flag it as unmapped; point the reader up. The structure gate treats it as resolved (see childPageIssue).
+    return `> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`;
+  }
+  if (c.spec) return null;   // mapped — the caller embeds the spec and recurses into grandchildren
+  if (c.specError) return `> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`;
+  // a real Classic edit page is named (from getEditPageName) → mapping is MANDATORY.
+  if (typeof c.editPage === "string" && c.editPage) return `> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`;
+  // agent verified on-stand (recorded "editPage": false in the manifest): no separate Classic *Page.
+  if (c.editPage === false) return `> **Verified: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list; nothing to migrate here.`;
+  // classic detail hides add-record → view/attach-only; no child edit page to map.
+  if (c.editable === false) return `> **Read/attach-only** related list (the classic detail hides add-record) → no child edit page to map. Confirm no \`*Page\` exists for \`${esc(c.entity)}\`; if one does, add it and re-run.`;
+  // UNVERIFIED — the structure gate blocks the plan until this is resolved one way or the other.
+  return `> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`**: if a \`*Page\` exists, add it to \`childPageSchemas\` and re-run; if none exists, record \`"editPage": false\` on this detail and re-run. "out of scope" is never a valid self-declared skip.`;
+}
+
+// Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
+// Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot
+// that keeps the mapping a REQUIRED, visible deliverable rather than a table row the agent treats as done.
+// Recursive: embed each child's spec AND its own resolved children (grandchildren, …) nested one heading
+// level deeper. The engine writes the FULL tree — it does not stop at depth 1 and tell the agent to map
+// the rest by hand (that contradicted "the engine writes the whole plan"). An unresolved node at any depth
+// still renders its ⚠/FILL slot, so nothing is silently dropped. `lvl` = the `Child page:` heading level.
+function renderChildPage(c, lvl) {
+  const h = "#".repeat(Math.min(6, lvl));
+  const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
+  const P = [`${h} Child page: ${head}`];
+  const gap = childPageGap(c);
+  if (gap) { P.push(gap, ""); return P; }
+  P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
+  for (const g of (c.childPages || [])) P.push(...renderChildPage(g, lvl + 1)); // EMBED grandchildren recursively
+  P.push("");
+  return P;
+}
+
+export function renderPlan(result, opts = {}) {
+  const cs = result.changeSet || {};
+  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
+  const fields = (cs.viewConfigDiff || []).filter(isField);
+  const childs = result.childPages || [];
+  // planMeta (manifest.planMeta) supplies the few AGENT decisions so the engine can render a COMPLETE plan and
+  // WRITE it (CLI --out) — the agent presents the written file instead of hand-pasting/editing the tables. Any
+  // value not supplied falls back to its `<FILL: …>` placeholder (resolve by adding it to planMeta and re-running).
+  const pm = opts.planMeta || {};
+  // planMeta + entity are STAND/USER-derived and land in the plan the agent presents "verbatim". Sanitize every
+  // filled value (esc → single inert line, pipe-escaped) so a value like `X\n## INJECTED` cannot inject a new
+  // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
+  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
+  const signals = opts.signals || {};
+  const P = [`## ${entity} — Classic → Freedom UI`, ""]; // entity already esc'd above (esc ⊇ strip)
+  P.push(...renderPlanBanners(result, opts));
   P.push(
     "### Overview",
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
@@ -467,18 +586,9 @@ export function renderPlan(result, opts = {}) {
     escBareLine(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>")), // bare line → also escape a leading block marker (finding 5)
     "",
   );
-  // On-stand signals — the resolved DCM/process/printable answers (or an ⚠ if unresolved). This is the RESULT
-  // of the checks the SKILL mandates at plan time; rendering them here makes each a tracked plan item (built or
-  // deliberately N/A), not a "check later" the build silently drops.
-  const sigLine = (k, label) => {
-    const s = signals[k];
-    if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
-    if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
-    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
-    const presentNote = list ? ` — ${list}` : "";
-    return `- **${label}:** present${presentNote} → build it`;
-  };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
+  P.push("### On-stand signals",
+    signalLine(signals.dcm, "DCM case"), signalLine(signals.processes, "Connected processes"),
+    signalLine(signals.printables, "Printables"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -486,108 +596,29 @@ export function renderPlan(result, opts = {}) {
   // page with clio `get-page`, diff the engine's design onto it, apply via `update-page` (never a duplicate);
   // see `./references/existing-freedom-reconcile.md`. Default is Rebuild (safe for the tested custom-section case).
   const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
-  // A TYPED entity has NO single form deliverable — every record opens a per-type page, so the per-type forms
-  // (rows below) ARE the deliverables and the base `<entity> form page` is only their shared parent/seed (not
-  // a separate form). A non-typed entity keeps its one form-page row.
   const typed = result.typedPages || [];
-  const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
-  if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
-  for (const t of typed) {
-    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
-    const cls = `${esc(t.schema)}${typeNote} (typed form)`;
-    scopeRows.push(`| ${cls} | ${t.bindOnly ? "bind shared form by Type" : "per-type Freedom form"} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
-  }
-  P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
+  P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |",
+    ...mainScopeRows(pm, opts, entity, typed, fill, mainCall));
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  for (const c of childs) {
-    // Honest label by resolution state — never assert "Rebuild (child)" for a child we have not resolved:
-    //   mapped, or a real edit page is named -> Rebuild (child); verified-none / view-only -> Reuse; else -> ⚠ resolve.
-    let target, call, label;
-    if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
-      target = "Freedom record page"; call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
-    } else if (c.editPage === false || c.editable === false) {
-      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
-    } else {
-      target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
-    }
-    P.push(`| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`);
-  }
-  P.push("");
+  P.push(...childs.map(childScopeRow), "");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   if (typed.length) P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
   if (typed.length) P.push("", `> The form spec immediately below is the **base \`${esc(entity)}\` layout** — the SHARED parent every per-type form inherits. It is NOT a separate deliverable; the actual forms to build are the per-type ones under **Typed page mappings**.`);
   P.push("", renderDesignSpec(result, { ...opts, embedded: true }), "");
   // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
   // A typed entity's real form deliverables. Unresolved (no bundle, not bindOnly) → a ⚠ the structure gate blocks on.
-  if (typed.length) {
-    P.push("### Typed page mappings", "");
-    for (const t of typed) {
-      const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
-      P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
-      if (t.bindOnly) {
-        P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the shared Freedom form for this Type (by the Type column).`);
-      } else if (t.cyclic) {
-        P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);
-      } else if (t.spec) {
-        P.push("", demoteHeadings(t.spec, 2));
-      } else if (t.specError) {
-        P.push(`> ⚠ typed-page bundle supplied but failed to parse: ${esc(t.specError)} — fix the bundle and re-run.`);
-      } else {
-        P.push(`> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-page-sources --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`);
-      }
-      P.push("");
-    }
-  }
-  // Add mini-page mapping — the FULL layout of the section's quick-add mini page (folded from
-  // manifest.miniPageSchemas). Rendered when resolved; an unfolded/unverified one is flagged in List page + gate.
-  if (result.miniPage && (result.miniPage.spec || result.miniPage.specError)) {
-    P.push("### Add mini-page mapping", "", `#### Mini page: ${esc(result.miniPage.schema)}`);
-    if (result.miniPage.spec) P.push("", demoteHeadings(result.miniPage.spec, 2));
-    else P.push(`> ⚠ mini-page bundle supplied but failed to parse: ${esc(result.miniPage.specError)} — fix and re-run.`);
-    P.push("");
-  }
+  if (typed.length) P.push(...renderTypedPageMappings(typed));
+  P.push(...renderMiniPageMapping(result.miniPage));
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot
   // that keeps the mapping a REQUIRED, visible deliverable rather than a table row the agent treats as done.
   if (childs.length) {
     P.push("### Child page mappings", "");
-    // Recursive: embed each child's spec AND its own resolved children (grandchildren, …) nested one heading
-    // level deeper. The engine writes the FULL tree — it does not stop at depth 1 and tell the agent to map
-    // the rest by hand (that contradicted "the engine writes the whole plan"). An unresolved node at any depth
-    // still renders its ⚠/FILL slot, so nothing is silently dropped. `lvl` = the `Child page:` heading level.
-    const renderChild = (c, lvl) => {
-      const h = "#".repeat(Math.min(6, lvl));
-      const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
-      P.push(`${h} Child page: ${head}`);
-      if (c.cyclic) {
-        // a cycle: this page is mapped higher on the same branch — do NOT re-embed (infinite recursion) and do
-        // NOT flag it as unmapped; point the reader up. The structure gate treats it as resolved (see childPageIssue).
-        P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
-      } else if (c.spec) {
-        P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
-        for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
-      } else if (c.specError) {
-        P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
-      } else if (typeof c.editPage === "string" && c.editPage) {
-        // a real Classic edit page is named (from getEditPageName) → mapping is MANDATORY.
-        P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
-      } else if (c.editPage === false) {
-        // agent verified on-stand (recorded "editPage": false in the manifest): no separate Classic *Page.
-        P.push(`> **Verified: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list; nothing to migrate here.`);
-      } else if (c.editable === false) {
-        // classic detail hides add-record → view/attach-only; no child edit page to map.
-        P.push(`> **Read/attach-only** related list (the classic detail hides add-record) → no child edit page to map. Confirm no \`*Page\` exists for \`${esc(c.entity)}\`; if one does, add it and re-run.`);
-      } else {
-        // UNVERIFIED — the structure gate blocks the plan until this is resolved one way or the other.
-        P.push(`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`**: if a \`*Page\` exists, add it to \`childPageSchemas\` and re-run; if none exists, record \`"editPage": false\` on this detail and re-run. "out of scope" is never a valid self-declared skip.`);
-      }
-      P.push("");
-    };
-    for (const c of childs) renderChild(c, 4);
+    for (const c of childs) P.push(...renderChildPage(c, 4));
   }
   P.push("> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
   return P.join("\n");
