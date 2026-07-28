@@ -456,7 +456,7 @@ function fixedFilterObjects(body) {
   let i = m.index + m[0].length, bracket = 1, brace = 0, start = -1;
   while (i < body.length && bracket > 0) {
     const c = body[i];
-    if (c === '"' || c === "'" || c === "`") { const q = c; i++; while (i < body.length && body[i] !== q) { i += body[i] === "\\" ? 2 : 1; } i++; continue; }
+    if (c === '"' || c === "'" || c === "`") { i = skipStringLiteral(body, i); continue; }
     if (c === "[") bracket++;
     else if (c === "]") bracket--;
     else if (c === "{") { if (brace === 0) { start = i; } brace++; }
@@ -466,64 +466,84 @@ function fixedFilterObjects(body) {
   return objs;
 }
 
+// Index just past the string literal opening at `body[i]`, so a brace/bracket inside a literal is never
+// counted by the depth walk above. Escapes consume two characters.
+function skipStringLiteral(body, i) {
+  const quote = body[i];
+  let j = i + 1;
+  while (j < body.length && body[j] !== quote) { j += body[j] === "\\" ? 2 : 1; }
+  return j + 1;
+}
+
 const isNum = (v) => typeof v === "number";
 const isStr = (v) => typeof v === "string";
+// `x` when it is a string / number, else null — the normalizers below apply this to nearly every field, and
+// as a named helper each application costs no cognitive complexity in the caller.
+const strOrNull = (v) => (isStr(v) ? v : null);
+const numOrNull = (v) => (isNum(v) ? v : null);
 function safeKeys(o) { return o && typeof o === "object" ? Object.keys(o).filter(k => typeof k === "string") : []; }
 function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? o : {}; }
 
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
-  return diff.map((op, i) => {
-    // A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
-    // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
-    // null-safe filter at the end drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried on
-    // every surviving op so the dynamic-property reporter (migrate.mjs) can match a `diff.<i>.values.*`
-    // diagnostic to its element by that index instead of by array position — which drifts once any op is
-    // dropped here (null slot or nameless "?"), the label-desync the reporter otherwise hit.
-    if (op == null || typeof op !== "object") return null;
-    const v = op.values && typeof op.values === "object" ? op.values : {};
-    // caption resource key: `caption.bindTo`, else a bare string, else null.
-    const captionStr = isStr(v.caption) ? v.caption : null;
-    const caption = v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : captionStr;
-    // field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
-    let hint = null;
-    if (isStr(v.hint?.bindTo)) hint = v.hint.bindTo;
-    else if (isStr(v.hint?.content?.bindTo)) hint = v.hint.content.bindTo;
-    else if (isStr(v.hint)) hint = v.hint;
-    // visibility: static false / a dynamic expression (bind/rule) / true; null = this op didn't set it.
-    const visibleDynamic = v.visible && typeof v.visible === "object" ? "dynamic" : null;
-    const visible = typeof v.visible === "boolean" ? v.visible : visibleDynamic;
-    const opIndex = isNum(op.index) ? op.index : null; // diff-op index fallback (RV5, used for `order` below)
-    return {
-      operation: isStr(op.operation) ? op.operation : "?",
-      name: isStr(op.name) ? op.name : "?",
-      parentName: isStr(op.parentName) ? op.parentName : null,
-      propertyName: isStr(op.propertyName) ? op.propertyName : null,
-      index: isNum(op.index) ? op.index : null,
-      bindTo: isStr(v.bindTo) ? v.bindTo : null,
-      itemType: isNum(v.itemType) ? v.itemType : null,      // 0 grid,2 detail,15 group
-      contentType: isNum(v.contentType) ? v.contentType : null,
-      isTab: op.propertyName === "tabs",
-      hasCaption: !!(v.caption),
-      // caption resource key (tab/group/detail label) — carried so the real caption is shown for
-      // cross-check instead of only a synthesized placeholder.
-      caption,
-      // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
-      // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
-      order: v && isNum(v.order) ? v.order : opIndex,
-      // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
-      // (e.g. a wide 3-column header) instead of inventing a single narrow column.
-      layout: normalizeLayout(v.layout),
-      // tooltip resource key (classic `tip.content.bindTo = "Resources.Strings.XTip"`) — carried to the
-      // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
-      // recognising non-field components the mapper otherwise drops.
-      tip: v.tip?.content && isStr(v.tip.content.bindTo) ? v.tip.content.bindTo : null,
-      hint,
-      generator: isStr(v.generator) ? v.generator : null,
-      visible,
-      astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
-    };
-  }).filter(op => op && op.name !== "?");
+  return diff.map(normalizeDiffOp).filter(op => op && op.name !== "?");
+}
+
+// caption resource key: `caption.bindTo`, else a bare string, else null.
+const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
+
+// field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
+function hintKey(v) {
+  if (isStr(v.hint?.bindTo)) return v.hint.bindTo;
+  if (isStr(v.hint?.content?.bindTo)) return v.hint.content.bindTo;
+  return strOrNull(v.hint);
+}
+
+// visibility: static false / a dynamic expression (bind/rule) / true; null = this op didn't set it.
+function visibility(v) {
+  if (typeof v.visible === "boolean") return v.visible;
+  return v.visible && typeof v.visible === "object" ? "dynamic" : null;
+}
+
+// A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
+// straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
+// null-safe filter in normalizeDiff drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried
+// on every surviving op so the dynamic-property reporter (migrate.mjs) can match a `diff.<i>.values.*`
+// diagnostic to its element by that index instead of by array position — which drifts once any op is
+// dropped here (null slot or nameless "?"), the label-desync the reporter otherwise hit.
+function normalizeDiffOp(op, i) {
+  if (op == null || typeof op !== "object") return null;
+  const v = plainObj(op.values);
+  const opIndex = numOrNull(op.index); // diff-op index fallback (RV5, used for `order` below)
+  return {
+    operation: isStr(op.operation) ? op.operation : "?",
+    name: isStr(op.name) ? op.name : "?",
+    parentName: strOrNull(op.parentName),
+    propertyName: strOrNull(op.propertyName),
+    index: opIndex,
+    bindTo: strOrNull(v.bindTo),
+    itemType: numOrNull(v.itemType),      // 0 grid,2 detail,15 group
+    contentType: numOrNull(v.contentType),
+    isTab: op.propertyName === "tabs",
+    hasCaption: !!(v.caption),
+    // caption resource key (tab/group/detail label) — carried so the real caption is shown for
+    // cross-check instead of only a synthesized placeholder.
+    caption: captionKey(v),
+    // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
+    // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
+    order: isNum(v.order) ? v.order : opIndex,
+    // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
+    // (e.g. a wide 3-column header) instead of inventing a single narrow column.
+    layout: normalizeLayout(v.layout),
+    // tooltip resource key (classic `tip.content.bindTo = "Resources.Strings.XTip"`) — carried to the
+    // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
+    // recognising non-field components the mapper otherwise drops.
+    tip: v.tip?.content && isStr(v.tip.content.bindTo) ? v.tip.content.bindTo : null,
+    hint: hintKey(v),
+    generator: strOrNull(v.generator),
+    visible: visibility(v),
+    astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
+  };
 }
 
 function normalizeLayout(l) {
@@ -535,13 +555,13 @@ function normalizeLayout(l) {
 
 function normalizeDetails(d) {
   const out = {};
-  if (d && typeof d === "object") for (const k of Object.keys(d)) {
-    const e = d[k] || {};
-    const f = e.filter && typeof e.filter === "object" ? e.filter : {};
-    out[k] = { schemaName: isStr(e.schemaName) ? e.schemaName : null,
-               entitySchemaName: isStr(e.entitySchemaName) ? e.entitySchemaName : null,
-               detailColumn: isStr(f.detailColumn) ? f.detailColumn : null,
-               masterColumn: isStr(f.masterColumn) ? f.masterColumn : null };
+  for (const k of safeKeys(d)) {
+    const e = plainObj(d[k]);
+    const f = plainObj(e.filter);
+    out[k] = { schemaName: strOrNull(e.schemaName),
+               entitySchemaName: strOrNull(e.entitySchemaName),
+               detailColumn: strOrNull(f.detailColumn),
+               masterColumn: strOrNull(f.masterColumn) };
   }
   return out;
 }
