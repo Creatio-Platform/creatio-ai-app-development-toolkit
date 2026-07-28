@@ -363,7 +363,10 @@ const migNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mj
   input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", file: "does_not_exist_zzz.js" }] }), encoding: "utf8" });
 check("migrate.mjs CLI: a missing schema file exits 1 with a clean diagnostic (no stdout, no raw stack)",
   migNoFile.status === 1 && /migrate\.mjs:/.test(migNoFile.stderr || "") && /ENOENT|no such file|cannot/i.test(migNoFile.stderr || "")
-  && !/\bat \w+.*:\d+:\d+/.test(migNoFile.stderr || "") && (migNoFile.stdout || "").trim() === "",
+  // `\w[^\n]*` (not `\w+.*`): the two quantifiers in `\w+.*` can both match the same word characters, so a
+  // long stderr line makes the match super-linear (S8786). A single `\w` plus a newline-bounded tail is
+  // unambiguous and asserts the same shape: `at <ident> … :LINE:COL` on ONE line.
+  && !/\bat \w[^\n]*:\d+:\d+/.test(migNoFile.stderr || "") && (migNoFile.stdout || "").trim() === "",
   () => ({ status: migNoFile.status, stderr: (migNoFile.stderr || "").slice(0, 160) }));
 // `--out` without a path must FAIL LOUDLY, not silently fall back to stdout (trailing) or swallow a flag.
 const okManifest = JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[]};});` }] });
@@ -1301,7 +1304,7 @@ check("return-none: a factory with NO return blocks the gate (empty schema, not 
 // path (previously the alias silently collapsed to null → a group mis-classified as a field).
 const enumDirect = parseSchema(`define("P",[],function(){ return {entitySchemaName:"X", diff:[{operation:"insert",name:"G",parentName:"Header",values:{itemType: Terrasoft.core.enums.ViewItemType.CONTROL_GROUP}}]}; });`, "P");
 const enumAlias = parseSchema(`define("P",[],function(){ var vt = Terrasoft.core.enums.ViewItemType; return {entitySchemaName:"X", diff:[{operation:"insert",name:"G",parentName:"Header",values:{itemType: vt.CONTROL_GROUP}}]}; });`, "P");
-const itOf = (r) => (r.diff.find((d) => d.name === "G") || {}).itemType;
+const itOf = (r) => r.diff.find((d) => d.name === "G")?.itemType;
 check("enum-alias: an aliased enum member resolves identically to the full path (CONTROL_GROUP → 15)",
   itOf(enumDirect) === 15 && itOf(enumAlias) === 15,
   () => ({ direct: itOf(enumDirect), alias: itOf(enumAlias) }));
@@ -1399,7 +1402,7 @@ const f5 = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA
   childPageSchemas: { CH: f5child, CHPage: f5child } }, { baseDir: FIX });
 const f5ch = f5.childPages.find((c) => c.entity === "CH");
 check("F5: a deep child tree maps fully — the child is mapped AND its own grandchild is mapped (no depth cap)",
-  f5ch && f5ch.spec && f5ch.grandChildren >= 1,
+  f5ch?.spec && f5ch.grandChildren >= 1,
   () => ({ childMapped: !!f5ch?.spec, grandChildren: f5ch?.grandChildren }));
 
 /* ---- Minor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
@@ -1441,7 +1444,7 @@ check("sanitize (Major 5): an inline HTML tag + Markdown link + newline caption 
 // entity-heading path (Major 1): entity from an untrusted body can't start a new heading line in the SPEC.
 const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("sanitize: entity with \\n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)",
+check(String.raw`sanitize: entity with \n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)`,
   !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.designSpec) && !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.plan),
   () => (entRun.designSpec + "\n" + entRun.plan).split("\n").filter((l) => /OWNED/.test(l)));
 // entity is `esc`d (not `strip`-only): an inline HTML tag / Markdown link in the entitySchemaName must be
@@ -1603,7 +1606,7 @@ const e3 = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",parentName:"Header",propertyName:"items",values:{bindTo:"noname"}},{operation:"insert",name:"BB",parentName:"Header",propertyName:"items",values:{bindTo:"BB",visible:computeVis()}}]};});` }] }, { baseDir: FIX });
 check("E3: dynamic-property is labeled by the real field name ('BB'), not a desynced 'diff[N]', after an op is dropped",
   e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "BB")
-  && !e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && /^diff\[/.test(n.item)),
+  && !e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item.startsWith("diff[")),
   () => e3.changeSet.needsDecision.filter((n) => n.kind === "dynamic-property").map((n) => n.item));
 
 /* ---- T3: cover needsDecision kinds the mapper emits but no golden asserted — a regression that stops emitting
@@ -1843,7 +1846,7 @@ const msCs = mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [
 const ms1 = msCs.viewConfigDiff.find((o) => o.name === "W1")?.values.layoutConfig;
 const ms2 = msCs.viewConfigDiff.find((o) => o.name === "W2")?.values.layoutConfig;
 check("#3 multi-span collision: two span-2 fields on the same row don't overlap (2nd relocated) + flagged",
-  ms1 && ms2 && ms2.colSpan === 2 && ms2.row !== ms1.row
+  ms1 && ms2?.colSpan === 2 && ms2.row !== ms1.row
   && msCs.needsDecision.some((n) => n.kind === "layout-collision"),
   () => ({ W1: ms1, W2: ms2 }));
 
