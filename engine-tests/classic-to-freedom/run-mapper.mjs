@@ -433,6 +433,16 @@ check("cycle: a cyclic typed page is resolved-elsewhere — no typed structure i
   && /Already mapped above \(cycle\)/.test(cycTRun.plan) && !/NOT resolved — this typed form/.test(cycTRun.plan),
   () => cycTRun.structure.issues.filter((i) => /typed/.test(i)));
 
+/* ---- diamond reuse memo: a child page reached from TWO parents (non-cyclic) is folded ONCE and reused, not
+   re-parsed per reference — the O(references)→O(distinct) fix for whole-package scope. ---- */
+const diamond = runMigration({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"},D2:{schemaName:"D2",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "SharedPage" }, D2: { entity: "Shared", editPage: "SharedPage" } },
+  childPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: `define("SharedPage",[],function(){return{entitySchemaName:"Shared",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});` }] } } });
+check("perf: a diamond (one child page referenced by two details) is folded once and reused (memo hit), both rows still mapped",
+  diamond.memoStats.hits === 1 && diamond.memoStats.misses === 1 && diamond.childPages.filter((c) => c.spec).length === 2,
+  () => diamond.memoStats);
+
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   details: {
@@ -1643,6 +1653,11 @@ check("E5: an entry with neither 'body' nor 'file' throws a clear, named error",
   /neither an inline 'body' nor a string 'file'/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P" }] }, { baseDir: FIX })) || ""));
 check("E5: a schema 'file' escaping the manifest base dir is rejected (path traversal)",
   /escapes the manifest base directory/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P", file: "../../../etc/passwd" }] }, { baseDir: FIX })) || ""));
+// containment applies to RELATIVE escapes only — an ABSOLUTE path outside baseDir is a legit caller choice (the
+// fixtures pass path.join(FIX, …)); rejecting it broke `npm test` from the engine dir (CWD ≠ fixtures root).
+check("E5: an ABSOLUTE file path outside baseDir is honored (not mis-rejected as traversal), regardless of CWD",
+  (() => { const r = runMigration({ entity: "SupportUnit", schemas: [{ pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") }] }, { baseDir: os.tmpdir() });
+    return r.entity === "SupportUnit" && !r.parseErrors.some((e) => /escapes/.test(e.error || "")); })());
 
 // Major 4 — field ORDER drives row assignment (not Map order); rowSpan occupancy prevents vertical overlap.
 const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
