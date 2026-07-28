@@ -8,17 +8,19 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ## 1.6.0 (2026-07-29)
 
-### Features
+**Your Classic pages finally have a map to Freedom.** Migrating a Creatio Classic UI page to Freedom UI has always been archaeology — hunt down the client schema, work out which base template it inherits from, rebuild the merged tree by hand, then guess the Freedom equivalent and hope nothing got dropped. This release hands that job to an agent skill backed by a deterministic engine: the mechanical 80% is reconstructed for you, and only the real judgment calls come back for review.
 
-- Add the `classic-to-freedom-migration` skill and its bundled deterministic engine — an approval-gated workflow that migrates a Creatio **Classic UI** section/page (or a whole package/application) to a parallel **Freedom UI** analog. It is ~80% deterministic: a zero-dependency Node merge-engine + mapper reconstructs the *effective* Classic page from its schema layer chain (true dependency order + mandatory parent-template seed) and emits a Freedom ChangeSet plus a per-page design spec / migration plan, with the ~20% that needs judgment surfaced as a `needsDecision[]` worklist. Covers faithful layout (profile islands, tab/group nesting, 24-column grid, wide-header detection), standard-feature recognition (Approvals / Attachments / Activities / Emails / Feed) vs generic related lists, recursive child / typed / mini-page mapping (cycle- and diamond-safe), section-level concerns (add-record mini page, section actions, quick filters, list columns), and a hard correctness gate on parse errors / unresolved parents / skeletal seeds. (ENG-93681)
+### ✨ What's new
 
-### Security / Hardening
+- **`classic-to-freedom-migration` — Classic → Freedom UI, planned before it's built.** Point it at a Classic section/page (or a whole package/application) and it reconstructs the *effective* Classic page from its full schema inheritance chain — correct dependency order, with the parent-template seed folded in — then emits a Freedom **ChangeSet** and a ready-to-present **design spec / migration plan** you approve before anything is written. It gets the layout right (profile islands, tab & group nesting, the 24-column grid, wide-header detection), recognises standard features (Approvals / Attachments / Activities / Emails / Feed) instead of flattening them to generic lists, follows the page **tree** recursively (child, typed, and mini pages — cycle- and diamond-safe), and captures section concerns like the add-record mini page, section actions, quick filters and list columns. Anything it can't decide deterministically is surfaced as an explicit **worklist**, and a hard correctness gate refuses to hand you a plan built on parse errors, an unresolved parent chain, or a skeletal seed — so a page is never silently half-migrated. ([#46](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/46))
 
-- The engine parses untrusted Classic schema bodies through a vendored, integrity-pinned **acorn** AST parser (static evaluation, never `vm`), so a hostile body cannot reach `process`/`require`/fs. Supply-chain controls: tamper-evidence via `verify-vendor.mjs` (SHA-256 pin) and an upstream-npm authenticity anchor via `verify-vendor-upstream.mjs`, both wired into CI, plus a weekly OSV audit. Hostile-input hardening throughout: bounded process-name extraction (ReDoS), clamped grid spans, null-safe diff/rule-condition handling, and path-traversal containment on manifest `file` inputs. (ENG-93681)
+### 🔒 Safe by construction
 
-### CI
+- The engine reads **untrusted** Classic schema bodies through a vendored, integrity-pinned **acorn** parser and *statically evaluates* them — it never executes them, so a hostile page body can't reach `process`, `require`, or the filesystem. The vendored parser is tamper-evidenced against its recorded hash and independently anchored to its real npm release in CI (plus a weekly vulnerability audit), and hostile input is contained end-to-end: bounded name extraction (no catastrophic regex backtracking), clamped grid spans, null-safe merging, and path-traversal guards on file inputs. ([#46](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/46))
 
-- Block merges on new SonarCloud issues. (#59)
+### 🛠️ Under the hood
+
+- New-code quality is now enforced in CI — merges are blocked on newly introduced SonarCloud issues, keeping the engine reference-quality as it grows. ([#59](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/59))
 
 ---
 
