@@ -6,6 +6,32 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.6.0 (2026-07-29)
+
+**Beta — your Classic pages finally have a map to Freedom.** Migrating a Creatio Classic UI page to Freedom UI has always been archaeology — hunt down the client schema, work out which base template it inherits from, rebuild the merged tree by hand, then guess the Freedom equivalent and hope nothing got dropped. This first release hands that job to an agent skill backed by a deterministic engine: the mechanical work is reconstructed for you and only the real judgment calls come back for review. It ships as an early **Beta** with deliberately limited migration coverage — **layout, components, and business rules** — so treat its output as a reviewed draft to build from, not a finished migration (see *Beta scope* below).
+
+### ✨ What's new
+
+- **`classic-to-freedom-migration` — Classic → Freedom UI, planned before it's built.** Point it at a Classic section/page (or a whole package/application) and it reconstructs the *effective* Classic page from its full schema inheritance chain — correct dependency order, with the parent-template seed folded in — then emits a Freedom **ChangeSet** and a ready-to-present **design spec / migration plan** you approve before anything is written. Anything it can't decide deterministically is surfaced as an explicit **worklist**, and a hard correctness gate refuses to hand you a plan built on parse errors, an unresolved parent chain, or a skeletal seed — so a page is never silently half-migrated. ([#46](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/46))
+
+### 🧪 Beta scope
+
+- This Beta migrates the three areas that carry the most manual toil, and **only** those:
+  - **Layout** — profile islands, tab & group nesting, the 24-column grid, wide-header detection.
+  - **Components** — fields and their controls, standard features (Approvals / Attachments / Activities / Emails / Feed) recognised instead of flattened to generic lists, and the page **tree** (child, typed, and mini pages — cycle- and diamond-safe), plus section concerns (add-record mini page, section actions, quick filters, list columns).
+  - **Business rules** — the declarative page/entity rules carried over from the Classic page.
+- Everything outside those three — imperative handler logic, custom modules/widgets, process launches, and other page behaviour — is **surfaced for you to port manually**, not auto-migrated. Coverage will expand in later releases.
+
+### 🔒 Safe by construction
+
+- The engine reads **untrusted** Classic schema bodies through a vendored, integrity-pinned **acorn** parser and *statically evaluates* them — it never executes them, so a hostile page body can't reach `process`, `require`, or the filesystem. The vendored parser is tamper-evidenced against its recorded hash and independently anchored to its real npm release in CI (plus a weekly vulnerability audit), and hostile input is contained end-to-end: bounded name extraction (no catastrophic regex backtracking), clamped grid spans, null-safe merging, and path-traversal guards on file inputs. ([#46](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/46))
+
+### 🛠️ Under the hood
+
+- New-code quality is now enforced in CI — merges are blocked on newly introduced SonarCloud issues, keeping the engine reference-quality as it grows. ([#59](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/59))
+
+---
+
 ## 1.5.0 (2026-07-27)
 
 ### Features
