@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MANIFEST = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor", "provenance.json");
 const sha256Lf = (buf) =>
@@ -38,11 +38,11 @@ function readTarEntry(tar, wanted) {
   for (let off = 0; off + 512 <= tar.length;) {
     const header = tar.subarray(off, off + 512);
     if (header.every((b) => b === 0)) break; // two zero blocks mark end-of-archive
-    const str = (start, len) => header.toString("utf8", start, start + len).replace(/\0.*$/, "").trim();
+    const str = (start, len) => header.toString("utf8", start, start + len).replace(/\0.*/s, "").trim();
     const name = str(0, 100), prefix = str(345, 155);
     const full = prefix ? `${prefix}/${name}` : name;
-    const size = parseInt(str(124, 12) || "0", 8) || 0;
-    const type = String.fromCharCode(header[156]);
+    const size = Number.parseInt(str(124, 12) || "0", 8) || 0;
+    const type = String.fromCodePoint(header[156]);
     const dataOff = off + 512;
     if ((type === "0" || type === "\0" || type === "") && full === wanted) return tar.subarray(dataOff, dataOff + size);
     off = dataOff + Math.ceil(size / 512) * 512; // advance past this entry's data (also skips 'x'/'g' headers)
@@ -101,4 +101,7 @@ async function main() {
   return 0;
 }
 
-process.exit(await main());
+// Export the pure helpers so an OFFLINE test can exercise the hand-rolled ustar reader / integrity check
+// without the live-network CI job; run the CLI only when invoked directly (not on import).
+export { readTarEntry, integrityOk, tarPathOf, sha256Lf };
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) process.exit(await main());

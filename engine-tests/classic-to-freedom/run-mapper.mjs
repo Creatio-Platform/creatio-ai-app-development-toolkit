@@ -497,6 +497,42 @@ const loopRun = runMigration(loopManifest);
 check("recursion depth cap: cyclic childPageSchemas terminates and is bounded (no runaway)",
   !!loopRun && Array.isArray(loopRun.childPages) && loopRun.childPages.length > 0);
 
+/* ---- cycle = resolved-elsewhere, not a gap (Alexandr review). A cycle must NOT make structure.complete
+   unsatisfiable (false-red on child pages) NOR clear it silently while the renderer warns (false-green on
+   typed/mini). The gate and the rendered plan must AGREE. ---- */
+// (a) mutual-reference A<->B child pages, both bundles supplied → structure.complete === true (was: never true).
+const cycA = { entity: "AE", noParentTemplate: true,
+  schemas: [{ pkg: "AP", body: `define("APage",[],function(){return{entitySchemaName:"AE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{BDetail:{schemaName:"BDetail",entitySchemaName:"BE"}}};});` }],
+  detailSchemas: { BDetail: { entity: "BE", editPage: "BPage" } }, childPageSchemas: {} };
+const cycB = { entity: "BE", noParentTemplate: true,
+  schemas: [{ pkg: "BP", body: `define("BPage",[],function(){return{entitySchemaName:"BE",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}],details:{ADetail:{schemaName:"ADetail",entitySchemaName:"AE"}}};});` }],
+  detailSchemas: { ADetail: { entity: "AE", editPage: "APage" } }, childPageSchemas: {} };
+cycA.childPageSchemas.BPage = cycB; cycB.childPageSchemas.APage = cycA;
+const cycRun = runMigration(cycA);
+check("cycle: a mutual-reference A<->B child graph reaches structure.complete=true (no false-red / forbidden false assertion)",
+  cycRun.structure.complete === true && /Already mapped above \(cycle\)/.test(cycRun.plan),
+  () => cycRun.structure.issues);
+// (b) a cyclic typed page: the structure gate and the renderer must agree — resolved, NOT a "NOT resolved" banner.
+const cycT = { entity: "XE", noParentTemplate: true,
+  schemas: [{ pkg: "XP", body: `define("XPage",[],function(){return{entitySchemaName:"XE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  typedPages: [{ schema: "TP" }], typedPageSchemas: {} };
+cycT.typedPageSchemas.TP = cycT;
+const cycTRun = runMigration(cycT);
+check("cycle: a cyclic typed page is resolved-elsewhere — no typed structure issue AND the plan shows the cycle note, not a 'NOT resolved' banner (gate/renderer agree)",
+  !cycTRun.structure.issues.some((i) => /typed page/.test(i))
+  && /Already mapped above \(cycle\)/.test(cycTRun.plan) && !/NOT resolved — this typed form/.test(cycTRun.plan),
+  () => cycTRun.structure.issues.filter((i) => /typed/.test(i)));
+
+/* ---- diamond reuse memo: a child page reached from TWO parents (non-cyclic) is folded ONCE and reused, not
+   re-parsed per reference — the O(references)→O(distinct) fix for whole-package scope. ---- */
+const diamond = runMigration({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"},D2:{schemaName:"D2",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "SharedPage" }, D2: { entity: "Shared", editPage: "SharedPage" } },
+  childPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: `define("SharedPage",[],function(){return{entitySchemaName:"Shared",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});` }] } } });
+check("perf: a diamond (one child page referenced by two details) is folded once and reused (memo hit), both rows still mapped",
+  diamond.memoStats.hits === 1 && diamond.memoStats.misses === 1 && diamond.childPages.filter((c) => c.spec).length === 2,
+  () => diamond.memoStats);
+
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
   details: {
@@ -636,7 +672,7 @@ const autoClient = L("Client", { entity: "X", details: {
          di({ name: "Auto", parentName: "T3", propertyName: "items", itemType: 2 })] });
 const autocs = mapToFreedom(mergeHierarchy([autoClient]));
 check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unresolved (fetch its schema)",
-  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-migration-bundle/.test(n.reason)));
+  autocs.needsDecision.some(n => n.kind === "detail-unresolved" && n.item === "Schema2Detail" && /get-classic-page-sources/.test(n.reason)));
 
 /* ---- #10c: the design spec is GENERATED deterministically (table, not agent prose) ---- */
 // The recurring failure: the agent paraphrases the design spec into prose (no per-field table, wrong
@@ -1298,8 +1334,9 @@ check("RV9: parseSchema marks propertyName:'tabs' as isTab (parse layer exercise
 // RV15 — drive every control() type branch via entityColumns (the rich Contract fixture passes none).
 const ctlCols = { D: { type: "date" }, DT: { type: "datetime" }, I: { type: "integer" }, DEC: { type: "decimal" }, MON: { type: "money" }, T: { type: "text", length: 100 }, RICH: { type: "richtext" }, LK: { type: "Lookup", ref: "Contact" } };
 const ctlNames = ["D", "DT", "I", "DEC", "MON", "T", "RICH", "LK"];
+const ctlDiff = ctlNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const ctlCs = runMigration({ entity: "X", entityColumns: ctlCols,
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ctlNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ctlDiff}]};});` }] }, { baseDir: FIX });
 const cf = (n) => ctlCs.changeSet.viewConfigDiff.find((o) => o.name === n);
 check("RV15: control() type branches — date/datetime→DateTimePicker, int/decimal/money→NumberInput, text/richtext→Input, lookup→ComboBox",
   cf("D")?.values.type === "crt.DateTimePicker" && cf("DT")?.values.type === "crt.DateTimePicker"
@@ -1368,8 +1405,9 @@ check("L5: section processLaunch + processNames captured from an executeProcess 
 // map. A genuinely unknown code (44=URL) still falls to a loud field-control decision.
 const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "44" } };
 const rdNames = ["DT8", "ST", "MT", "LT", "XT", "UNK"];
+const rdDiff = rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const rdCs = runMigration({ entity: "X", entityColumns: rdCols,
-  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",")}]};});` }] }, { baseDir: FIX });
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${rdDiff}]};});` }] }, { baseDir: FIX });
 const rf = (n) => rdCs.changeSet.viewConfigDiff.find((o) => o.name === n);
 check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Short/Medium text→Input; Long/MaxSize→Input (Long text label)",
   rf("DT8")?.values.type === "crt.DateTimePicker" && rf("DT8")?.values.typeLabel === "Date"
@@ -1591,6 +1629,14 @@ const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMet
 check("sanitize: entity with \\n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)",
   !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.designSpec) && !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.plan),
   () => (entRun.designSpec + "\n" + entRun.plan).split("\n").filter((l) => /OWNED/.test(l)));
+// entity is `esc`d (not `strip`-only): an inline HTML tag / Markdown link in the entitySchemaName must be
+// neutralized in the title headings it feeds (spec `## … — Design spec`, `### … form page`; plan `## … —`).
+const entHtml = runMigration({ entity: "<img src=x onerror=alert(1)> ](javascript:alert(1))", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("sanitize: an entity with an inline HTML tag / Markdown link is neutralized in the spec AND plan headings (not just newline-safe)",
+  !/<img/.test(entHtml.designSpec) && !/<img/.test(entHtml.plan) && /&lt;img/.test(entHtml.designSpec)
+  && !/\]\(javascript/.test(entHtml.designSpec) && !/\]\(javascript/.test(entHtml.plan),
+  () => (entHtml.designSpec + "\n" + entHtml.plan).split("\n").filter((l) => /img|javascript/.test(l)));
 
 // #5 — stand-derived tokens reach `needsDecision.reason` too (container/field names, captions, bound hints),
 // which the design spec renders verbatim in the ⚠ Confirm list. That sink used `strip` (kills newlines but
@@ -1787,6 +1833,20 @@ for (let i = 0; i < 502; i++) ltFields += `{operation:"insert",name:"C${i}",pare
 const lt = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[${ltFields.slice(0, -1)}]};});` }] }, { baseDir: FIX });
 check("T3: a container past the field-count bound → layout-truncated decision (DoS relocation guard)",
   lt.changeSet.needsDecision.some((n) => n.kind === "layout-truncated"));
+// hostile-input hardening: an unclamped `layout.rowSpan` (e.g. 1e9) fed a span-aware occupancy walk
+// (Array.from({length: rowSpan})) → OOM / RangeError. rowSpan is now clamped like colSpan, so a crafted body
+// completes cleanly (no throw, no hang) instead of crashing the CLI — preserving the "does NOT throw" contract.
+const rsHostile = (() => {
+  const t0 = Date.now();
+  try {
+    const r = runMigration({ entity: "X", seed: CLEAN_SEED,
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F",layout:{column:0,row:0,colSpan:1,rowSpan:1000000000}}}]};});` }] }, { baseDir: FIX });
+    return { ok: true, fields: r.changeSet.viewConfigDiff.length, ms: Date.now() - t0 };
+  } catch (e) { return { ok: false, err: e.message }; }
+})();
+check("hostile input: a huge layout.rowSpan is clamped (no OOM/throw) and the field still maps",
+  rsHostile.ok === true && rsHostile.fields >= 1 && rsHostile.ms < 5000,
+  () => rsHostile);
 // detail-placement — a detail whose owning tab cannot be resolved (declared in `details`, never placed in a tab).
 const dpCs = mapToFreedom(mergeHierarchy([L("P", { entity: "X",
   diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })],
@@ -1802,6 +1862,11 @@ check("E5: an entry with neither 'body' nor 'file' throws a clear, named error",
   /neither an inline 'body' nor a string 'file'/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P" }] }, { baseDir: FIX })) || ""));
 check("E5: a schema 'file' escaping the manifest base dir is rejected (path traversal)",
   /escapes the manifest base directory/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P", file: "../../../etc/passwd" }] }, { baseDir: FIX })) || ""));
+// containment applies to RELATIVE escapes only — an ABSOLUTE path outside baseDir is a legit caller choice (the
+// fixtures pass path.join(FIX, …)); rejecting it broke `npm test` from the engine dir (CWD ≠ fixtures root).
+check("E5: an ABSOLUTE file path outside baseDir is honored (not mis-rejected as traversal), regardless of CWD",
+  (() => { const r = runMigration({ entity: "SupportUnit", schemas: [{ pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") }] }, { baseDir: os.tmpdir() });
+    return r.entity === "SupportUnit" && !r.parseErrors.some((e) => /escapes/.test(e.error || "")); })());
 
 // Major 4 — field ORDER drives row assignment (not Map order); rowSpan occupancy prevents vertical overlap.
 const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
@@ -1856,6 +1921,19 @@ check("section quick filters: initFixedFiltersConfig → each filter's {name, co
   && docSecParsed.quickFilters.some((f) => f.name === "PeriodFilter" && f.column === "Date" && f.type === "DATE")
   && docSecParsed.quickFilters.some((f) => f.name === "Owner" && f.column === "Owner" && f.type === "LOOKUP"),
   () => docSecParsed.quickFilters);
+// per-entry extraction (not a single ordered name→columnName regex): a column-less filter yields column:null
+// WITHOUT stealing the next entry's name, reversed `{columnName, name}` order still pairs, and the dominant
+// `this.Terrasoft.DataValueType.*` idiom resolves the type.
+const qfMk = (filters) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{initFixedFiltersConfig:function(){var c={entitySchema:this.entitySchema,filters:[${filters}]};this.set("F",c);}}};});`;
+const qfEdge = parseSchema(qfMk(
+  `{name:"Period",caption:this.get("X"),dataValueType:this.Terrasoft.DataValueType.DATE,startDate:{},dueDate:{}},`
+  + `{columnName:"Owner",dataValueType:Terrasoft.DataValueType.LOOKUP,name:"Owner"}`), "XSection").quickFilters;
+check("section quick filters: a column-less filter yields column:null and does NOT steal the next entry's name",
+  qfEdge.length === 2 && qfEdge[0].name === "Period" && qfEdge[0].column === null && qfEdge[0].type === "DATE",
+  () => qfEdge);
+check("section quick filters: reversed `{columnName, name}` order still pairs (order-independent per-entry parse)",
+  qfEdge.some((f) => f.name === "Owner" && f.column === "Owner" && f.type === "LOOKUP"),
+  () => qfEdge);
 check("section actions: standard getButtonMenuItem/\"Click\".bindTo shape is caught (createRegistry), callParent excluded",
   docSecParsed.sectionActions.includes("createRegistry") && !docSecParsed.sectionActions.includes("callParent"),
   () => docSecParsed.sectionActions);

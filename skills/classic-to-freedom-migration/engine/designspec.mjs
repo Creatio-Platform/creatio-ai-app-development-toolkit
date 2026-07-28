@@ -35,11 +35,11 @@ const esc = (s) => strip(s)
   .replaceAll("`", "ˋ")
   .replaceAll("|", String.raw`\|`)
   .replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-  .replaceAll("](", "]\\(");
+  .replaceAll("](", String.raw`]\(`);
 // A value rendered on its OWN line (not after an inline label) must ALSO not START with a Markdown block
 // marker — `#` `>` `-` `+` `*` or `N.` — else e.g. "## Boom" becomes a real heading. Escapes the leading
 // marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
-const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, "$1\\$2");
+const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, String.raw`$1\$2`);
 const isField = (o) => !!o?.values?.control;
 const DASH = "—";
 
@@ -122,7 +122,7 @@ const addModeText = (am) => {
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const section = result.section || null;
-  const entity = strip(result.entity || "?"); // stand-derived → collapse to one line so it can't inject a heading (finding 6)
+  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize `<`/`>`/backtick/`](` so a hostile entitySchemaName can't inject into the title headings it feeds
   const vcd = cs.viewConfigDiff || [];
   const regionOf = regionResolver(vcd, cs.resources || {}); // pass the resource map so a resolved tab caption shows its text, not the $Resources key
   const tabRegion = (tab) => regionOf(tab);
@@ -294,14 +294,15 @@ export function renderDesignSpec(result, opts = {}) {
   if (isSectionMigration && !opts.formOnly) {
     L.push("### List page");
     if (!section) {
-      L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **list columns / quick filters / section actions were NOT analyzed**. `get-classic-migration-bundle` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
+      L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **list columns / quick filters / section actions were NOT analyzed**. `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
     }
     // Add-record mini page — resolved from list-entity-client-schemas (result.miniPage), NOT assumed from the
     // section body (which registered none even when a per-type mini page existed → a false "no mini page").
     const mp = result.miniPage;
     let addRecordDesc;
-    if (mp && mp.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
-    else if (mp && (mp.unfolded || mp.specError || mp.cyclic)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
+    if (mp?.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
+    else if (mp?.cyclic) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — ↩ already mapped above (cycle); its spec appears higher in this plan`;
+    else if (mp && (mp.unfolded || mp.specError)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
     else if (result.miniPageNone) addRecordDesc = "full edit page — verified on-stand: no add-record mini page";
     else if (!result.miniPageVerified) addRecordDesc = "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
     else addRecordDesc = "full edit page (no add-record mini page)";
@@ -473,7 +474,7 @@ export function renderDesignSpec(result, opts = {}) {
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
-  const entity = strip(result.entity || "?"); // stand-derived → one line (finding 6): can't inject a heading/row
+  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
   const fields = (cs.viewConfigDiff || []).filter(isField);
   const childs = result.childPages || [];
   // planMeta (manifest.planMeta) supplies the few AGENT decisions so the engine can render a COMPLETE plan and
@@ -485,7 +486,7 @@ export function renderPlan(result, opts = {}) {
   // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
   const P = [];
-  P.push(`## ${strip(entity)} — Classic → Freedom UI`, "");
+  P.push(`## ${entity} — Classic → Freedom UI`, ""); // entity already esc'd above (esc ⊇ strip)
   // ⛔ HARD GATE banner at the VERY TOP of the plan (RV1/RV2) — first thing the agent (and the user it pastes
   // to) sees, above Overview. A blocked plan is NOT an approvable plan: fix the signals and re-run `--plan`.
   const gate = result.gate || { blocked: false, reasons: [] };
@@ -546,8 +547,9 @@ export function renderPlan(result, opts = {}) {
     const s = signals[k];
     if (!s || s.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
-    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
-    return `- **${label}:** present${list ? ` — ${list}` : ""} → build it`;
+    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
+    const presentNote = list ? ` — ${list}` : "";
+    return `- **${label}:** present${presentNote} → build it`;
   };
   P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
@@ -641,15 +643,18 @@ export function renderPlan(result, opts = {}) {
     // Typed page mappings — the FULL per-type form spec for each typed page (folded from manifest.typedPageSchemas).
     P.push("### Typed page mappings", "");
     for (const t of typed) {
-      P.push(`#### Typed form: ${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""}`);
+      const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+      P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
       if (t.bindOnly) {
         P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the **Shared form (base) above** for this Type (by the Type column).`);
+      } else if (t.cyclic) {
+        P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);
       } else if (t.spec) {
         P.push("", demoteHeadings(t.spec, 2));
       } else if (t.specError) {
         P.push(`> ⚠ typed-page bundle supplied but failed to parse: ${esc(t.specError)} — fix the bundle and re-run.`);
       } else {
-        P.push(`> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-migration-bundle --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`);
+        P.push(`> ⚠ **NOT resolved — this typed form has no design spec.** Assemble its bundle (\`get-classic-page-sources --schema-name ${esc(t.schema)}\`) into \`manifest.typedPageSchemas["${esc(t.schema)}"]\` so the engine folds its FULL per-type layout here, OR mark the \`typedPages\` entry \`{ "bindOnly": true }\` if its layout is identical to the base. **"Map at build" is not allowed** — the structure gate blocks the plan until every typed form is resolved.`);
       }
       P.push("");
     }
@@ -667,7 +672,11 @@ export function renderPlan(result, opts = {}) {
       const h = "#".repeat(Math.min(6, lvl));
       const head = `${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
       P.push(`${h} Child page: ${head}`);
-      if (c.spec) {
+      if (c.cyclic) {
+        // a cycle: this page is mapped higher on the same branch — do NOT re-embed (infinite recursion) and do
+        // NOT flag it as unmapped; point the reader up. The structure gate treats it as resolved (see childPageIssue).
+        P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
+      } else if (c.spec) {
         P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
         for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
       } else if (c.specError) {

@@ -83,7 +83,11 @@ function scalarControl(t) {
 // rendered a scalar via a picker, which is a read-only VALUE FROM A LINKED RECORD (linkedDisplay): keep the real
 // data type (Email/Phone/Text) and flag the linked-value intent instead of mislabelling the control as a lookup.
 function control(dataType, contentType, ref) {
-  const t = (dataType || "").toLowerCase();
+  // `dataType` is tool/agent-assembled JSON — it can arrive as a NUMBER (this code expects Date as the
+  // numeric code 8; see scalarControl). `(dataType || "").toLowerCase()` throws a TypeError on a number,
+  // which escapes mapToFreedom → runMigration (called with no try/catch in migrate.mjs) and breaks the
+  // documented "runMigration does NOT throw" contract. Coerce with String() first — mirrors fieldTypeLabel.
+  const t = String(dataType ?? "").toLowerCase();
   if (t === "lookup") return { type: "crt.ComboBox", lookup: true };
   const scalar = scalarControl(t);
   if (contentType === CONTENT_TYPE.LOOKUP) {
@@ -606,7 +610,11 @@ function mapFields(ctx, containers) {
     // authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
     // field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
     // coexist; only true overlaps are moved.
-    const rowSpan = cl.rowSpan != null ? cl.rowSpan : 1;
+    // Clamp rowSpan the same way colSpan is clamped above: it flows into a span-aware 2-D occupancy walk
+    // (`Array.from({length: rowSpan})`), so an unclamped hostile `layout:{rowSpan:1e9}` would OOM / RangeError
+    // the CLI — defeating this file's own hostile-input hardening and the "runMigration does NOT throw" contract.
+    // Real rowSpans are 1–3; bound to [1, MAX_FIELDS_PER_CONTAINER] so malformed input degrades cleanly.
+    const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
     // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
     // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
@@ -784,7 +792,7 @@ function mapDetails(ctx, containers, profileRegion) {
     if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
       const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
-        reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-migration-bundle gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
+        reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
@@ -796,7 +804,7 @@ function mapDetails(ctx, containers, profileRegion) {
     // flag it THEN (and point at the fix), instead of emitting an identical "confirm editability" line on every
     // detail whose config we already have.
     if (!dinfo) needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
-      reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-migration-bundle gathers these) so editability resolves from the detail's grid config, or confirm view-only vs add/edit/delete.` });
+      reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-page-sources gathers these) so editability resolves from the detail's grid config, or confirm view-only vs add/edit/delete.` });
     // a related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
     // page, if the classic detail used one) is a SEPARATE migration, not covered by migrating this master
     // page. Surface it so it isn't silently skipped.

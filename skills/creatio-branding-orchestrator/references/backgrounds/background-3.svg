@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <!-- Template 3: low-poly corner facets. Placeholder art; color slots are palette tokens. -->
+  <rect width="1920" height="1080" fill="{{primary-10}}"/>
+  <polygon points="0,1080 640,1080 0,640" fill="{{primary-100}}" opacity="0.55"/>
+  <polygon points="0,1080 640,1080 320,820" fill="{{primary-200}}" opacity="0.45"/>
+  <polygon points="1920,0 1280,0 1920,440" fill="{{secondary-100}}" opacity="0.50"/>
+  <polygon points="1920,0 1280,0 1600,260" fill="{{secondary-200}}" opacity="0.40"/>
+  <polygon points="1920,1080 1920,760 1560,1080" fill="{{primary-300}}" opacity="0.30"/>
+  <polygon points="0,0 360,0 0,320" fill="{{primary-50}}" opacity="0.60"/>
+</svg>

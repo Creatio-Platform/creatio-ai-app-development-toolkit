@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.11'
@@ -31,8 +31,8 @@ jobs:
     name: Manifest version sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: '20'
       - name: Check manifest sync
@@ -79,3 +79,9 @@ jobs:
         if: always()   # run even if the merge goldens failed, so one runner's failure never hides the other's results
         working-directory: engine-tests/classic-to-freedom
         run: node run-mapper.mjs
+      # offline unit tests for the hand-rolled infra parsers (ustar reader / integrity / sonar glob matcher) that
+      # otherwise run only inside live-network / real-tree jobs — deterministic, network-free coverage.
+      - name: Run infra-parser goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-infra.mjs

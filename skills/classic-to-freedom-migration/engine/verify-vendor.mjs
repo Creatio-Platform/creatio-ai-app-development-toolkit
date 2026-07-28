@@ -18,7 +18,7 @@
 //
 // The pin is over LF-NORMALIZED bytes so it equals the upstream npm artifact's hash and is immune to
 // line-ending churn between platforms/checkouts — a CRLF checkout verifies identically to an LF one.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -29,9 +29,16 @@ import { fileURLToPath } from "node:url";
 // VALIDATED before use: honored ONLY when it canonicalizes under the OS temp dir — otherwise ignored and the
 // real co-located vendor is used. This keeps the tests working while closing the path-traversal surface (S8707).
 const DEFAULT_VENDOR = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
-const overrideArg = process.argv[2] ? path.resolve(process.argv[2]) : null;
-const tmpRoot = path.resolve(os.tmpdir()) + path.sep;
-const VENDOR_DIR = overrideArg && overrideArg.startsWith(tmpRoot) ? overrideArg : DEFAULT_VENDOR;
+// Resolve BOTH sides through the real filesystem before the containment check: path.resolve does NOT follow
+// symlinks, and on macOS os.tmpdir() (/var/folders/…) is a symlink to /private/var/folders/…. A caller that
+// builds its override via fs.realpathSync/mkdtemp (landing under /private/…) would then fail the prefix check
+// and silently fall back to the REAL vendor dir — so a negative tamper-detection golden would pass VACUOUSLY
+// against the genuine files. realpathSync needs the path to exist; fall back to the resolved path if it doesn't.
+const realpathSafe = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+const overrideArg = process.argv[2] ? realpathSafe(process.argv[2]) : null;
+const tmpReal = realpathSafe(os.tmpdir());
+const tmpRoot = tmpReal + path.sep;
+const VENDOR_DIR = overrideArg && (overrideArg === tmpReal || overrideArg.startsWith(tmpRoot)) ? overrideArg : DEFAULT_VENDOR;
 const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 
 const sha256Lf = (buf) =>

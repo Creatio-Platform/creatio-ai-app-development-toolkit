@@ -8,69 +8,76 @@
 // enforced once that base dir lands on the branch. Zero dependencies (Node fs only).
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cfg = path.join(root, ".sonarcloud.properties");
-if (!existsSync(cfg)) {
-  console.log("check-sonar-exclusions: no .sonarcloud.properties present — nothing to check.");
-  process.exit(0);
-}
-
-const line = readFileSync(cfg, "utf8").split(/\r?\n/).find((l) => l.trimStart().startsWith("sonar.exclusions="));
-const globs = line ? line.slice(line.indexOf("=") + 1).split(",").map((s) => s.trim()).filter(Boolean) : [];
-if (!globs.length) {
-  console.log("check-sonar-exclusions: no sonar.exclusions globs — nothing to check.");
-  process.exit(0);
-}
 
 // literal prefix before the first wildcard -> the base dir that must exist for the glob to be "active"
-const baseDir = (glob) => {
+export const baseDir = (glob) => {
   const star = glob.indexOf("*");
   const lit = star === -1 ? glob : glob.slice(0, star);
   const dir = lit.endsWith("/") ? lit.slice(0, -1) : path.posix.dirname(lit);
   return dir === "." ? "" : dir;
 };
-// minimal glob -> anchored regex: `**` spans directories, `*` stays within a path segment.
-const toRegex = (glob) => {
+// minimal glob -> anchored regex: `**` spans directories, `*` stays within a path segment. Path-segment
+// literals are regex-escaped so a `.` / `[` in a real path can't act as a metacharacter. Exported (with baseDir)
+// so an offline unit test can cover the metachar / separator edge cases without walking a real tree.
+export const toRegex = (glob) => {
   let re = "";
   for (let i = 0; i < glob.length; i++) {
     if (glob[i] === "*" && glob[i + 1] === "*") { re += "(?:.*)"; i++; if (glob[i + 1] === "/") i++; }
     else if (glob[i] === "*") re += "[^/]*";
-    else re += glob[i].replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    else re += glob[i].replace(/[.+?^${}()|[\]\\]/g, String.raw`\$&`);
   }
   return new RegExp("^" + re + "$");
 };
-const walk = (dir, acc = []) => {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === ".git" || e.name === "node_modules") continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) walk(full, acc);
-    else acc.push(path.relative(root, full).split(path.sep).join("/"));
-  }
-  return acc;
-};
 
-const files = walk(root);
-let failed = 0, skipped = 0;
-for (const glob of globs) {
-  const base = baseDir(glob);
-  if (base && !existsSync(path.join(root, base))) {
-    console.log(`  ⏭  ${glob} — base '${base}/' absent (forward-provisioned); skipped`);
-    skipped++;
-    continue;
+function main() {
+  const cfg = path.join(root, ".sonarcloud.properties");
+  if (!existsSync(cfg)) {
+    console.log("check-sonar-exclusions: no .sonarcloud.properties present — nothing to check.");
+    return 0;
   }
-  const rx = toRegex(glob);
-  const n = files.filter((f) => rx.test(f)).length;
-  if (n > 0) {
-    console.log(`  ✓ ${glob} — ${n} file(s)`);
-  } else {
-    console.error(`  ✗ ${glob} — matches ZERO files though its base dir exists: the exclusion is a silent no-op (rename/drift?). Fix the glob or the path.`);
-    failed++;
+  const line = readFileSync(cfg, "utf8").split(/\r?\n/).find((l) => l.trimStart().startsWith("sonar.exclusions="));
+  const globs = line ? line.slice(line.indexOf("=") + 1).split(",").map((s) => s.trim()).filter(Boolean) : [];
+  if (!globs.length) {
+    console.log("check-sonar-exclusions: no sonar.exclusions globs — nothing to check.");
+    return 0;
   }
+  const walk = (dir, acc = []) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === ".git" || e.name === "node_modules") continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, acc);
+      else acc.push(path.relative(root, full).split(path.sep).join("/"));
+    }
+    return acc;
+  };
+  const files = walk(root);
+  let failed = 0, skipped = 0;
+  for (const glob of globs) {
+    const base = baseDir(glob);
+    if (base && !existsSync(path.join(root, base))) {
+      console.log(`  ⏭  ${glob} — base '${base}/' absent (forward-provisioned); skipped`);
+      skipped++;
+      continue;
+    }
+    const rx = toRegex(glob);
+    const n = files.filter((f) => rx.test(f)).length;
+    if (n > 0) {
+      console.log(`  ✓ ${glob} — ${n} file(s)`);
+    } else {
+      console.error(`  ✗ ${glob} — matches ZERO files though its base dir exists: the exclusion is a silent no-op (rename/drift?). Fix the glob or the path.`);
+      failed++;
+    }
+  }
+  if (failed) {
+    console.error(`\ncheck-sonar-exclusions: ${failed} glob(s) match nothing while their base dir exists — failing loud (Minor 1, PR #50).`);
+    return 1;
+  }
+  console.log(`check-sonar-exclusions: OK (${globs.length - skipped} active, ${skipped} forward-provisioned).`);
+  return 0;
 }
-if (failed) {
-  console.error(`\ncheck-sonar-exclusions: ${failed} glob(s) match nothing while their base dir exists — failing loud (Minor 1, PR #50).`);
-  process.exit(1);
-}
-console.log(`check-sonar-exclusions: OK (${globs.length - skipped} active, ${skipped} forward-provisioned).`);
+
+// Run the CLI only when invoked directly (not on import) so the exported helpers are unit-testable offline.
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) process.exit(main());
