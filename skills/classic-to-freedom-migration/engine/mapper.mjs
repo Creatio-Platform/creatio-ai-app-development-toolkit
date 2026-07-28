@@ -416,6 +416,145 @@ function createContainers(ctx) {
   return { structural, ensureTab, ensureGroup, ensureProfileIsland };
 }
 
+// Cell-occupancy helpers, module-level so they are created ONCE (they were re-created per field). `cells` is
+// passed in so they stay pure. A per-container placement cap bounds the relocation scan on hostile input
+// (thousands of insert-ops all colliding would otherwise be O(n²)) — the analog of the AST depth-cap;
+// excess is flagged.
+const MAX_FIELDS_PER_CONTAINER = 500;
+const span = (start, n) => Array.from({ length: Math.max(1, n) }, (_, i) => start + i);
+const cellKeys = (c, cs, r, rs) => span(c, cs).flatMap((cc) => span(r, rs).map((rr) => cc + ":" + rr));
+const cellFree = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).every((k) => !cells.has(k));
+const claimCells = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) => cells.add(k));
+
+// F3: route a field by ancestry (climb the item tree) instead of only recognising Profile/Header. Mutates
+// `needsDecision`/`accountedFor` — the two accumulators the caller collects — and returns the Freedom
+// container the field lands in.
+function routeFieldToContainer(f, own, ctx, needsDecision, accountedFor) {
+  const { profileRegion, islandOf, splitIslands, ensureTab, ensureGroup, ensureProfileIsland } = ctx;
+  if (own.kind === "profile") {
+    let parent = profileRegion(own);
+    // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields are
+    // migrated into the profile) so they are not mis-flagged as "produced no Freedom element".
+    for (const g of own.groups) accountedFor.add(g.name);
+    // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
+    const island = islandOf(own);
+    if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
+    return parent;
+  }
+  if (own.kind === "tab") {
+    let parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
+    // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
+    // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
+    if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
+    else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
+    return parent;
+  }
+  const parent = FLAT_FALLBACK; // parent chain unresolvable
+  const why = own.why === "undefined-parent"
+    ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
+    : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
+  needsDecision.push({ kind: "container", item: f.name || f.bindTo,
+    reason: `${why} — placed in ${parent} for now` });
+  return parent;
+}
+
+// Convert the classic 24-col grid coordinates (0-based) into the TARGET Freedom grid, rather than dumping
+// them verbatim into a native container (which overflows and breaks the layout). Target grid width:
+//   profile island  -> 1 column  (every field full-width, stacked)
+//   tab / group      -> 2 columns (classic left half -> col 1, right half -> col 2; full-width -> span 2)
+//   wide header      -> 24 columns kept 1:1 (rare multi-column Header, flagged as a layout-type decision)
+function convertGridGeometry(cl, own, headerIsWide) {
+  const profileGridCols = (own.via === "Header" && headerIsWide) ? 24 : 1;
+  const gridCols = own.kind === "profile" ? profileGridCols : 2;
+  let column, colSpan;
+  if (gridCols === 1) {
+    column = 1; colSpan = 1;
+  } else if (gridCols === 2) {
+    column = (cl.column ?? 0) >= 12 ? 2 : 1;      // classic right half (col >= 12) -> Freedom column 2
+    colSpan = (cl.colSpan ?? 24) >= 24 ? 2 : 1;   // classic full-width -> span both columns, else one
+  } else {
+    column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
+    colSpan = cl.colSpan != null ? cl.colSpan : 24;
+  }
+  // Clamp the span to the grid's right edge: a field at column C can span at most (gridCols - C + 1) columns.
+  // Without this a full-width classic field landing in Freedom column 2 (or an over-wide header span) would
+  // claim a phantom column and overflow the container. column is already 1-based and ≤ gridCols here.
+  column = Math.min(Math.max(1, column), gridCols);
+  colSpan = Math.max(1, Math.min(colSpan, gridCols - column + 1));
+  // Clamp rowSpan the same way colSpan is clamped: it flows into a span-aware 2-D occupancy walk
+  // (`Array.from({length: rowSpan})`), so an unclamped hostile `layout:{rowSpan:1e9}` would OOM / RangeError
+  // the CLI — defeating this file's own hostile-input hardening and the "runMigration does NOT throw" contract.
+  // Real rowSpans are 1–3; bound to [1, MAX_FIELDS_PER_CONTAINER] so malformed input degrades cleanly.
+  const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
+  return { column, colSpan, rowSpan, gridCols };
+}
+
+// Grid-cell assignment (R9 + collision) — the target Freedom grid is coarser than the classic 24-col one,
+// so two classic columns can collapse onto the SAME Freedom (column,row) cell (e.g. col0/span6 and
+// col6/span6 both → column 1). Track occupied cells (span-aware) per container: an explicit classic row is
+// authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
+// field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
+// coexist; only true overlaps are moved.
+// `grid` carries the caller's per-container occupancy state (usedCells/autoRow/placedCount/truncated).
+function assignGridRow(parent, col, geom, cl, grid, needsDecision) {
+  const { column, colSpan, rowSpan, gridCols } = geom;
+  const { usedCells, autoRow, placedCount, truncatedContainers } = grid;
+  // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
+  // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
+  const cells = usedCells[parent] || (usedCells[parent] = new Set());
+  const cap = (placedCount[parent] = (placedCount[parent] || 0) + 1) > MAX_FIELDS_PER_CONTAINER; // relocation scan bound
+  if (cap && !truncatedContainers.has(parent)) {
+    truncatedContainers.add(parent);
+    needsDecision.push({ kind: "layout-truncated", item: parent,
+      reason: `container '${parent}' holds more than ${MAX_FIELDS_PER_CONTAINER} fields — collision relocation is bounded past this point (rows may be approximate). This is far beyond any real page; confirm the input is not malformed.` });
+  }
+  const explicitRow = cl.row != null ? cl.row + 1 : null;
+  let row;
+  if (explicitRow != null) {
+    row = explicitRow;
+    if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
+      const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
+      while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
+      const spanNote = rowSpan > 1 ? `, spans ${rowSpan} rows` : "";
+      needsDecision.push({ kind: "layout-collision", item: col,
+        reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${spanNote}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
+    }
+  } else {
+    let cur = autoRow[parent] || 1;
+    if (!cap) {   // past the per-container cap, skip the (bounded) relocation scan — just place at the cursor
+      const limit = cur + MAX_FIELDS_PER_CONTAINER;
+      while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
+    }
+    row = cur;
+    autoRow[parent] = cur + 1;
+  }
+  claimCells(cells, column, colSpan, row, rowSpan);
+  return row;
+}
+
+// The field's column, its entity metadata, the resolved Freedom control and the unique element name.
+// `nameCount` is the caller's per-column counter (mutated) so duplicate bindings get _2/_3 suffixes.
+function resolveFieldElement(f, { cols, colMeta }, nameCount, needsDecision) {
+  const col = f.bindTo || f.name || "Field";
+  const meta = colMeta(col);
+  // A bound field whose column is NOT among the entity's real columns (when entityColumns is supplied) is
+  // usually an AUTO-FILLED companion loaded from a selected lookup by an on<X>Change/set<X>Info handler
+  // (e.g. Department/StaffUnit from the chosen Request) — build it READ-ONLY on a view-model attribute and
+  // wire that handler; do NOT drop it, because dropping is what collapses an island to a lone field.
+  if (f.bindTo && Object.keys(cols).length && !(col in cols)) needsDecision.push({ kind: "virtual-field", item: col,
+    reason: `field '${col}' is not a real column on the entity — likely an auto-filled companion loaded from a selected lookup (an on-change / set-info handler). Build it as a READ-ONLY field bound to a VIEW-MODEL attribute and wire the lookup's on-change handler to load/clear it; do NOT drop it (that collapses the island to a lone field). Confirm the column if it should be a real entity field.` });
+  const ctl = control(meta.type, f.contentType, meta.ref);
+  if (!ctl) needsDecision.push({ kind: "field-control", item: col,
+    reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });
+  const c = ctl || { type: "crt.Input" };
+  // #4: unique element name derived from the column; two classic items on one column -> _2, _3 + flag.
+  nameCount[col] = (nameCount[col] || 0) + 1;
+  const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+  if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
+    reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
+  return { col, meta, c, elName };
+}
+
 // fields (3-part binding: control + attribute + dataSource). Routes each payload field into its Freedom
 // container by climbing the classic ancestry, converting the classic 24-col grid into the target grid.
 // Returns viewConfigDiff/attributes/pdsColumns + its needsDecision[]/accountedFor[] + the profileRegion
@@ -426,23 +565,17 @@ function mapFields(ctx, containers) {
   const needsDecision = [], viewConfigDiff = [], accountedFor = new Set();
   const attributes = {}, pdsColumns = {};
   let fieldsWithTitle = 0;
+  const nameCount = {};
   // R9 — faithful per-container row assignment. An explicit classic row is authoritative and kept verbatim;
   // a field with NO explicit row takes the next row not already claimed in that container. The old code kept
   // a single counter bumped on EVERY field (explicit ones too), so a container mixing explicit and auto rows
   // mis-numbered the autos — an auto field landing on an explicit field's row, or leaving gaps.
-  const autoRow = {};    // parent -> next auto row to try (1-based)
-  const usedCells = {};  // parent -> Set of "col:row" cells already taken (span-aware), so nothing overlaps
-  const nameCount = {};
-  // Cell-occupancy helpers hoisted OUT of the field loop (were re-created per field). `cells` is passed in so
-  // they stay pure. A per-container placement cap bounds the relocation scan on hostile input (thousands of
-  // insert-ops all colliding would otherwise be O(n²)) — the analog of the AST depth-cap; excess is flagged.
-  const MAX_FIELDS_PER_CONTAINER = 500;
-  const span = (start, n) => Array.from({ length: Math.max(1, n) }, (_, i) => start + i);
-  const cellKeys = (c, cs, r, rs) => span(c, cs).flatMap((cc) => span(r, rs).map((rr) => cc + ":" + rr));
-  const cellFree = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).every((k) => !cells.has(k));
-  const claimCells = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) => cells.add(k));
-  const placedCount = {};       // parent -> fields placed so far (bounds the relocation search)
-  const truncatedContainers = new Set();
+  const grid = {
+    autoRow: {},    // parent -> next auto row to try (1-based)
+    usedCells: {},  // parent -> Set of "col:row" cells already taken (span-aware), so nothing overlaps
+    placedCount: {},              // parent -> fields placed so far (bounds the relocation search)
+    truncatedContainers: new Set(),
+  };
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
@@ -474,112 +607,19 @@ function mapFields(ctx, containers) {
     .filter(r => r.own.kind === "profile" && !(r.own.via === "Header" && headerIsWide))
     .map(r => islandOf(r.own)).filter(Boolean));
   const splitIslands = distinctProfileIslands.size > 1;
+  const routeCtx = { profileRegion, islandOf, splitIslands, ensureTab, ensureGroup, ensureProfileIsland };
   for (const { f, own } of resolved) {
-    // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
-    let parent;
-    if (own.kind === "profile") {
-      parent = profileRegion(own);
-      // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields are
-      // migrated into the profile) so they are not mis-flagged as "produced no Freedom element".
-      for (const g of own.groups) accountedFor.add(g.name);
-      // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
-      const island = islandOf(own);
-      if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
-    } else if (own.kind === "tab") {
-      parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
-      // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
-      // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
-      if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
-      else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
-    } else {
-      parent = FLAT_FALLBACK; // parent chain unresolvable
-      const why = own.why === "undefined-parent"
-        ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
-        : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
-      needsDecision.push({ kind: "container", item: f.name || f.bindTo,
-        reason: `${why} — placed in ${parent} for now` });
-    }
-    const col = f.bindTo || f.name || "Field";
-    const meta = colMeta(col);
-    // A bound field whose column is NOT among the entity's real columns (when entityColumns is supplied) is
-    // usually an AUTO-FILLED companion loaded from a selected lookup by an on<X>Change/set<X>Info handler
-    // (e.g. Department/StaffUnit from the chosen Request) — build it READ-ONLY on a view-model attribute and
-    // wire that handler; do NOT drop it, because dropping is what collapses an island to a lone field.
-    if (f.bindTo && Object.keys(cols).length && !(col in cols)) needsDecision.push({ kind: "virtual-field", item: col,
-      reason: `field '${col}' is not a real column on the entity — likely an auto-filled companion loaded from a selected lookup (an on-change / set-info handler). Build it as a READ-ONLY field bound to a VIEW-MODEL attribute and wire the lookup's on-change handler to load/clear it; do NOT drop it (that collapses the island to a lone field). Confirm the column if it should be a real entity field.` });
-    const ctl = control(meta.type, f.contentType, meta.ref);
-    if (!ctl) needsDecision.push({ kind: "field-control", item: col,
-      reason: "no classic contentType and no entity column type — confirm control", suggestion: "crt.Input" });
-    const c = ctl || { type: "crt.Input" };
-    // #4: unique element name derived from the column; two classic items on one column -> _2, _3 + flag.
-    nameCount[col] = (nameCount[col] || 0) + 1;
-    const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
-      reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
+    const parent = routeFieldToContainer(f, own, routeCtx, needsDecision, accountedFor);
+    const { col, meta, c, elName } = resolveFieldElement(f, { cols, colMeta }, nameCount, needsDecision);
     // Convert the classic 24-col grid coordinates (0-based) into the TARGET Freedom grid, rather than dumping
     // them verbatim into a native container (which overflows and breaks the layout). Target grid width:
     //   profile island  -> 1 column  (every field full-width, stacked)
     //   tab / group      -> 2 columns (classic left half -> col 1, right half -> col 2; full-width -> span 2)
     //   wide header      -> 24 columns kept 1:1 (rare multi-column Header, flagged as a layout-type decision)
     const cl = f.layout || {};
-    const profileGridCols = (own.via === "Header" && headerIsWide) ? 24 : 1;
-    const gridCols = own.kind === "profile" ? profileGridCols : 2;
-    let column, colSpan;
-    if (gridCols === 1) {
-      column = 1; colSpan = 1;
-    } else if (gridCols === 2) {
-      column = (cl.column ?? 0) >= 12 ? 2 : 1;      // classic right half (col >= 12) -> Freedom column 2
-      colSpan = (cl.colSpan ?? 24) >= 24 ? 2 : 1;   // classic full-width -> span both columns, else one
-    } else {
-      column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
-      colSpan = cl.colSpan != null ? cl.colSpan : 24;
-    }
-    // Clamp the span to the grid's right edge: a field at column C can span at most (gridCols - C + 1) columns.
-    // Without this a full-width classic field landing in Freedom column 2 (or an over-wide header span) would
-    // claim a phantom column and overflow the container. column is already 1-based and ≤ gridCols here.
-    column = Math.min(Math.max(1, column), gridCols);
-    colSpan = Math.max(1, Math.min(colSpan, gridCols - column + 1));
-    // Grid-cell assignment (R9 + collision) — the target Freedom grid is coarser than the classic 24-col one,
-    // so two classic columns can collapse onto the SAME Freedom (column,row) cell (e.g. col0/span6 and
-    // col6/span6 both → column 1). Track occupied cells (span-aware) per container: an explicit classic row is
-    // authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
-    // field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
-    // coexist; only true overlaps are moved.
-    // Clamp rowSpan the same way colSpan is clamped above: it flows into a span-aware 2-D occupancy walk
-    // (`Array.from({length: rowSpan})`), so an unclamped hostile `layout:{rowSpan:1e9}` would OOM / RangeError
-    // the CLI — defeating this file's own hostile-input hardening and the "runMigration does NOT throw" contract.
-    // Real rowSpans are 1–3; bound to [1, MAX_FIELDS_PER_CONTAINER] so malformed input degrades cleanly.
-    const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
-    // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
-    // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
-    const cells = usedCells[parent] || (usedCells[parent] = new Set());
-    const cap = (placedCount[parent] = (placedCount[parent] || 0) + 1) > MAX_FIELDS_PER_CONTAINER; // relocation scan bound
-    if (cap && !truncatedContainers.has(parent)) {
-      truncatedContainers.add(parent);
-      needsDecision.push({ kind: "layout-truncated", item: parent,
-        reason: `container '${parent}' holds more than ${MAX_FIELDS_PER_CONTAINER} fields — collision relocation is bounded past this point (rows may be approximate). This is far beyond any real page; confirm the input is not malformed.` });
-    }
-    const explicitRow = cl.row != null ? cl.row + 1 : null;
-    let row;
-    if (explicitRow != null) {
-      row = explicitRow;
-      if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
-        const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
-        while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
-        const spanNote = rowSpan > 1 ? `, spans ${rowSpan} rows` : "";
-        needsDecision.push({ kind: "layout-collision", item: col,
-          reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${spanNote}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
-      }
-    } else {
-      let cur = autoRow[parent] || 1;
-      if (!cap) {   // past the per-container cap, skip the (bounded) relocation scan — just place at the cursor
-        const limit = cur + MAX_FIELDS_PER_CONTAINER;
-        while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
-      }
-      row = cur;
-      autoRow[parent] = cur + 1;
-    }
-    claimCells(cells, column, colSpan, row, rowSpan);
+    const geom = convertGridGeometry(cl, own, headerIsWide);
+    const { column, colSpan, rowSpan, gridCols } = geom;
+    const row = assignGridRow(parent, col, geom, cl, grid, needsDecision);
     const layoutConfig = {
       column,
       row,
