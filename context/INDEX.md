@@ -17,7 +17,7 @@ Start with `AGENTS.md`, then follow the current stage runbook in `runbooks/`.
 When you need exact tool names, required fields, aliases, defaults, response shapes, or error codes:
 
 1. Call `tools/list` to confirm tool availability.
-2. Call `get-tool-contract` — natively when the host exposes clio MCP as tool-calls, otherwise through `runtime/scripts/mcp_client.py` (stdio fallback). Both transports must resolve the same `clio` (one config, one environment list); see `AGENTS.md`, "clio MCP transport preference".
+2. Call `get-tool-contract` — natively when the host exposes clio MCP as tool-calls. If native tools are not surfaced, that is not automatically a blocker: run the `clio_mcp_preflight.py` gate (see `AGENTS.md`, "clio MCP availability preflight") — State B means clio is usable over stdio, State C means stop with a prerequisites blocker. Do not silently fall back. `runtime/scripts/mcp_client.py` is an explicit opt-in escape hatch, not the default fallback. Both transports must resolve the same `clio` (one config, one environment list); see `AGENTS.md`, "clio MCP transport preference".
 3. Use `docs://mcp/guides/app-modeling` for app-modeling semantics.
 4. Treat repository docs as workflow and policy guidance only.
 
@@ -54,7 +54,7 @@ Reading rules:
 | Local clio CLI commands | `context/clio-cli-reference.md` | environment setup, package management, dev tools |
 | DataForge tool parameter contract and response fields | `context/model-discovery-evidence.md` | DataForge tool reference for Agent 1 availability check |
 | Product telemetry consent, events, and payload | `context/product-telemetry.md` | consent flow, the 14 workflow events, and the agent-sent payload fields |
-| MCP transport helper | `runtime/scripts/mcp_client.py` | stdio client wrapper — fallback only, used when the host has no native clio MCP |
+| MCP transport helper | `runtime/scripts/mcp_client.py` | stdio client wrapper — explicit opt-in escape hatch only, used after the developer opts in on a host with no native clio MCP; never the automatic response to an unavailable server |
 
 ## Canonical MCP Guidance
 

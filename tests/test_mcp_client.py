@@ -18,6 +18,7 @@ from runtime.scripts.mcp_client import (
     _parse_rpc_result,
     _validate_params,
     call_mcp_tool,
+    force_kill_shared_client,
     load_cli_arguments,
     list_mcp_resources,
     main,
@@ -435,6 +436,111 @@ class ParamValidationTests(unittest.TestCase):
     def test_unknown_parameter_rejection_uses_normalized_contract_fields(self):
         errors = _validate_params("list-pages", {"environment-name": "local", "app-code": "UsrTodo"}, self.contract_index)
         self.assertTrue(any("Unknown parameter 'app-code'" in error for error in errors))
+
+
+class ForceKillSharedClientTests(unittest.TestCase):
+    # PR #55 R2-5: pin the sanctioned kill API's kill-and-swallow contract directly (the
+    # preflight only exercises it indirectly), so a refactor can't silently break it.
+
+    def test_kills_captured_proc(self):
+        proc = Mock()
+        client = SimpleNamespace(_proc=proc)
+        with patch("runtime.scripts.mcp_client._shared_client", client):
+            force_kill_shared_client()
+        proc.kill.assert_called_once()
+
+    def test_swallows_benign_already_dead_error(self):
+        # ProcessLookupError/OSError from killing an already-reaped proc must NOT propagate.
+        proc = Mock()
+        proc.kill.side_effect = ProcessLookupError()
+        client = SimpleNamespace(_proc=proc)
+        with patch("runtime.scripts.mcp_client._shared_client", client):
+            force_kill_shared_client()  # must not raise
+        proc.kill.assert_called_once()
+
+    def test_propagates_unexpected_error(self):
+        # PR #55 R2-4: an unexpected kill failure must NOT be swallowed (else an orphaned
+        # clio child is indistinguishable from the normal no-op).
+        proc = Mock()
+        proc.kill.side_effect = RuntimeError("unexpected")
+        client = SimpleNamespace(_proc=proc)
+        with patch("runtime.scripts.mcp_client._shared_client", client):
+            with self.assertRaises(RuntimeError):
+                force_kill_shared_client()
+
+    def test_is_none_safe_when_no_shared_client(self):
+        with patch("runtime.scripts.mcp_client._shared_client", None):
+            force_kill_shared_client()  # must not raise
+
+
+class EnsureStartedEncodingTests(unittest.TestCase):
+    # PR #55 R2-3: _ensure_started uses Popen(encoding="utf-8", errors="replace"); prove a
+    # malformed-byte stream from the clio child is decoded with replacement chars instead
+    # of raising mid-readline (so a corrupt response is classified, not a masked crash).
+    def test_ensure_started_replaces_invalid_utf8_without_raising(self):
+        emit_bad_bytes = "import sys; sys.stdout.buffer.write(b'\\xff\\xfe not-utf8\\n'); sys.stdout.flush()"
+        with patch(
+            "runtime.scripts.mcp_client._build_clio_cmd",
+            return_value=[sys.executable, "-c", emit_bad_bytes],
+        ):
+            client = PersistentMcpClient()
+            proc = None
+            try:
+                client._ensure_started()
+                proc = client._proc
+                line = proc.stdout.readline()  # must not raise UnicodeDecodeError
+            finally:
+                client._kill()
+                if proc is not None:
+                    for stream in (proc.stdin, proc.stdout, proc.stderr):
+                        if stream is not None:
+                            stream.close()
+        self.assertIn("�", line, "invalid bytes must be replaced, not crash the read loop")
+        self.assertIn("not-utf8", line)
+
+
+class ForceKillRealSubprocessTests(unittest.TestCase):
+    # PR #55 R3: prove the FULL chain — real Popen + real _shared_client + the real
+    # force_kill_shared_client() — actually terminates a genuinely blocked child (not a
+    # mock). This is the PR's core no-orphan safety guarantee; mocks can't falsify it.
+    def test_force_kill_terminates_a_real_blocked_child(self):
+        import subprocess
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],  # blocks until stdin EOF/kill
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            self.assertIsNone(proc.poll(), "child should be alive (blocked) before the kill")
+            with patch("runtime.scripts.mcp_client._shared_client", SimpleNamespace(_proc=proc)):
+                force_kill_shared_client()
+            proc.wait(timeout=10)
+            self.assertIsNotNone(proc.poll(), "force_kill must actually terminate the real child")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+
+
+class InitializeOnceValidationTests(unittest.TestCase):
+    # PR #55 R3: _initialize_once must NOT mark itself initialized when the handshake
+    # response never arrived (child killed mid-initialize / EOF) — it must raise, so
+    # call_method aborts instead of writing to a dead pipe and triggering call_mcp_tool's
+    # retry-driven re-spawn.
+    def test_raises_when_init_response_absent(self):
+        client = PersistentMcpClient()
+        client._send_and_receive = lambda message, target_id, timeout: []  # EOF: nothing collected
+        with self.assertRaises(RuntimeError):
+            client._initialize_once()
+        self.assertFalse(client._initialized)
+
+    def test_marks_initialized_when_init_response_present(self):
+        client = PersistentMcpClient()
+        client._send_and_receive = lambda message, target_id, timeout: [f'{{"id": {target_id}}}']
+        client._initialize_once()
+        self.assertTrue(client._initialized)
 
 
 if __name__ == "__main__":
