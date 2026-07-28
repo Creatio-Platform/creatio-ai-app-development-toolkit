@@ -272,14 +272,21 @@ export function mapToFreedom(eff, opts = {}) {
   // the counts so the exclusion is transparent, not silent.
   const notTpl = (x) => !x.fromTemplate;                          // keyed categories + removals
   const payloadFields = eff.fields.filter(f => !f.templateOwned); // diff-items: by INSERT origin (C6)
-  // Blocker — a base (template-owned) field a CLIENT schema RECONFIGURED (merge/move: hid it, moved it, …) is
-  // excluded from the payload as template context, so its client override would silently vanish and the gate
-  // stayed green. Surface each as a decision: the Freedom template provides the field, but the client's
-  // customization (the reconcile delta) must be re-applied to it — never shipped as the bare template default.
+  // A base (template-owned) field a CLIENT schema RECONFIGURED (hid / moved / re-laid-out it) is excluded from
+  // the payload as template context, so its client override would silently vanish. This is NOT a decision to
+  // punt — the delta is KNOWN, so emit it as a CONCRETE applied override (what to change on the existing base
+  // field). The build just applies it; the parallel-analog build does not re-create the field, it modifies the
+  // template's copy. Only when the change can't be read concretely does `change` fall back to "reconfigured".
+  const baseFieldOverrides = [];
   for (const f of eff.fields.filter(f => f.templateOwned && f.schemaTouched)) {
-    const changes = [f.visible === false ? "hidden" : null, f.layout ? "moved/re-laid-out" : null].filter(Boolean).join(", ") || "reconfigured";
-    needsDecision.push({ kind: "base-field-override", item: f.bindTo || f.name,
-      reason: `base field '${f.bindTo || f.name}' is provided by the Freedom template, but a client schema ${changes} it — the parallel-analog build does NOT re-create base fields, so APPLY this customization onto the Freedom base field. Do not silently ship the template default.` });
+    const hidden = f.visible === false;
+    const lay = f.layout || null;
+    const parts = [];
+    if (hidden) parts.push("hide it");
+    if (lay && (lay.column != null || lay.row != null)) parts.push(`move to column ${lay.column ?? "?"}${lay.row != null ? `, row ${lay.row}` : ""}${lay.colSpan != null ? ` (span ${lay.colSpan})` : ""}`);
+    else if (lay) parts.push("re-lay-out (position changed)");
+    const change = parts.join("; ") || "reconfigured (delta not concretely readable — inspect the client schema)";
+    baseFieldOverrides.push({ field: f.bindTo || f.name, hidden, layout: lay, change });
   }
   const payloadRules = eff.rules.filter(notTpl);
   const payloadDetails = eff.details.filter(notTpl);
@@ -360,6 +367,9 @@ export function mapToFreedom(eff, opts = {}) {
     chromeWidgets,
     // image/photo components (generator-based) → Freedom image component.
     images,
+    // base (template-provided) fields a client schema reconfigured (hide/move) — CONCRETE overrides to APPLY
+    // onto the template's field (the build does not re-create base fields), not a decision to confirm.
+    baseFieldOverrides,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
     // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
@@ -416,18 +426,18 @@ function createContainers(ctx) {
     if (emittedGroups.has(g.name)) return emittedGroups.get(g.name);
     accounted.add(g.name);
     let inner;
-    // A CONTROL_GROUP is rendered as a collapsible crt.ExpansionPanel ONLY when it is a genuinely LABELLED group
-    // (a user title like "Delivery"). Two kinds of group have NO real title and are just grid layout wrappers:
-    //   • a group with NO caption at all (synthesized `<name>Caption` key), and
-    //   • Creatio's designer-generated `Tab<hex>TabLabelGroup<hex>` layout wrappers — these DO carry a caption ref,
-    //     but it is an AUTO SELF-DERIVED key (`Resources.Strings.<groupName>GroupCaption`) the user never authored,
-    //     so it never resolves. Rendering these as captioned panels flooded the plan with bogus [group-caption]
-    //     "unresolved key / author the string" decisions for groups that were never titled.
-    // Both ⇒ plain crt.GridContainer, NO caption decision. Only a genuinely-labelled group gets the ExpansionPanel
-    // (and a resolve decision only when its real caption ref is unresolved).
-    const autoLayoutGroup = /TabLabelGroup[0-9a-f]{4,}$/i.test(g.name); // designer auto grid-layout wrapper
+    // A CONTROL_GROUP is a collapsible crt.ExpansionPanel when it is a genuinely LABELLED group. The reliable
+    // discriminator is whether its caption RESOLVES to real text — NOT the name pattern:
+    //   • caption RESOLVES to real text (e.g. "Pricing") ⇒ LABELLED ⇒ ExpansionPanel, even when the name is the
+    //     designer-auto `Tab<hex>TabLabelGroup<hex>` form (the designer stores a REAL user label under that auto
+    //     key — flattening those to a grid on the name alone DROPPED real "Pricing" groups).
+    //   • caption does NOT resolve: if it is a genuine ref on a MEANINGFUL name (e.g. NotesControlGroup) ⇒ still an
+    //     ExpansionPanel + a [group-caption] decision to resolve; if it is an AUTO self-derived key on the
+    //     `TabLabelGroup<hex>` name (never authored) OR there is no caption at all ⇒ plain crt.GridContainer, no
+    //     decision (an unlabelled layout wrapper is not a missing label).
+    const autoLayoutGroup = /TabLabelGroup[0-9a-f]{4,}$/i.test(g.name); // designer auto grid-layout wrapper name
     const c = g.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP ? caption(g.caption, g.name) : null;
-    if (c && !c.synthesized && !autoLayoutGroup) {
+    if (c && (c.resolved || (!c.synthesized && !autoLayoutGroup))) {
       // labelled collapsible group -> crt.ExpansionPanel wrapping a grid.
       structural.push({ operation: "insert", name: g.name, parentName, propertyName: "items",
         values: { type: "crt.ExpansionPanel", caption: c.binding, collapsible: true } });
@@ -778,10 +788,15 @@ function mapDetails(ctx, containers, profileRegion) {
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
-    // editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
-    // OWN config/schema. Do NOT hardcode an "add" toolbar; leave it unresolved + flag it.
-    needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
-      reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` });
+    // editability (view-only vs add/edit/delete) lives in the detail's OWN config, NOT on the master. When that
+    // config IS supplied (dinfo — the bundle gathers detailSchemas automatically), it is RESOLVED, not punted:
+    // an editable grid (addMode.editableGrid) → inline add/edit/delete; an explicit view-only flag → view/attach
+    // only; otherwise the standard related-list behaviour (add/edit/delete via the child edit page, already
+    // surfaced as detail-editpage). Only when the detail schema was NOT bundled is it genuinely undeterminable —
+    // flag it THEN (and point at the fix), instead of emitting an identical "confirm editability" line on every
+    // detail whose config we already have.
+    if (!dinfo) needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
+      reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-migration-bundle gathers these) so editability resolves from the detail's grid config, or confirm view-only vs add/edit/delete.` });
     // a related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
     // page, if the classic detail used one) is a SEPARATE migration, not covered by migrating this master
     // page. Surface it so it isn't silently skipped.
@@ -891,7 +906,24 @@ function mapUnmappedDrop(eff, accountedFor) {
   //    child routed through it); a childless one IS surfaced, so nothing vanishes on name convention alone.
   const HARD_SCAFFOLD_RX = /(?:_gridLayout|Grid)$|^Tabs$/;
   const SOFT_STRUCT_RX = /(?:Tabs|Tab|TabContainer|ControlGroup|Group)$/;
+  const byName = new Map((eff.items || []).map(i => [i.name, i]));
   const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
+  // A CONTAINER whose subtree DID produce Freedom elements is a real layout container (a profile island, a
+  // photo wrapper, a header column block), NOT an unmapped micro-widget — even when its NAME misses the
+  // SOFT_STRUCT_RX whitelist (PhotoContainer / EmployeeProfile / HeaderColumnContainer). Flagging those was a
+  // false "port manually or drop" for a block whose fields/image were already migrated. Mark every ancestor of
+  // an accounted-for item as "has a mapped descendant" and never surface it. The genuine SLA-timer case — a
+  // container whose ENTIRE subtree mapped to nothing — has no accounted descendant, so it still surfaces.
+  const hasMappedDesc = new Set();
+  for (const i of (eff.items || [])) {
+    const mapped = accountedFor.has(i.name) || !!i.bindTo
+      || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP;
+    if (!mapped) continue;
+    for (let p = i.parent, guard = 0; p && !hasMappedDesc.has(p) && guard < 64; guard++) {
+      hasMappedDesc.add(p);
+      p = byName.get(p)?.parent;
+    }
+  }
   const dropped = new Set();
   for (const i of (eff.items || [])) {
     // A template-owned item is layout/chrome the Freedom template already provides — skip it, INCLUDING its
@@ -900,6 +932,7 @@ function mapUnmappedDrop(eff, accountedFor) {
     // real gap worth surfacing.
     if (i.templateOwned || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
     if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
+    if (hasMappedDesc.has(i.name)) continue; // real layout container — its subtree produced Freedom elements
     if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
     dropped.add(i.name);
   }
@@ -996,9 +1029,13 @@ function mapImages(eff) {
     if (!genImg && !nameImg) continue;
     accountedFor.push(i.name);
     images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
-    const genNote = i.generator ? ` (generator ${i.generator})` : "";
-    needsDecision.push({ kind: "image", item: i.name,
-      reason: `image/photo component '${i.name}'${genNote} → Freedom image component; wire the source/upload handlers (getSrc/onChange)` });
+    // An image/photo is a NORMAL element — it already renders as an Image row in the Layout table (mapped to a
+    // Freedom image component bound to the image column). It is NOT a decision: pushing a per-image `⚠ Confirm`
+    // ("wire getSrc/onChange handlers") duplicated the layout row and dressed a plain column-bound image up as
+    // custom imperative work — that "wire the handlers" language is classic-generator vocabulary, not Freedom
+    // (a Freedom image field binds to the column declaratively). So we emit NO needsDecision here; the layout
+    // row carries the mapping. (A genuinely computed image with a custom source handler is surfaced through the
+    // normal handler-stub / logic path, named — not as a blanket image warning.)
   }
   return { images, needsDecision, accountedFor };
 }

@@ -220,15 +220,32 @@ export function renderDesignSpec(result, opts = {}) {
     else source = "native — confirm on-stand";
     rows.push({ region, sort: 2, cells: [esc(w.widget), "Component", source, DASH, w.note ? esc(w.note) : DASH] });
   }
+  // Print / Run-process card actions are CONDITIONAL on stand data (are there reports? is a process connected?).
+  // The engine no longer hands the agent a wall of "go check on-stand" SQL on every plan: the SKILL resolves
+  // these signals at plan time (the signals gate blocks the top-level plan until they are), so when the answer
+  // is KNOWN the row states it CONCRETELY (present → wire these; none → NOT migrated). The full how-to-check
+  // instruction is kept ONLY as the fallback for the still-unresolved case (e.g. a child page not gated on it).
+  const sigOf = (k) => result.signals?.[k];
+  const sigList = (s) => (s?.cases || s?.items || s?.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
+  const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
+  const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
   for (const a of cs.cardActions || []) {
     const name = a.replace(/Button$/, "");
     let type = "Action", note = DASH;
     if (/process/i.test(name)) {
-      // migrate the Run-process button ONLY if a process is actually connected to the entity; show HOW to check.
-      note = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
+      const sp = sigOf("processes");
+      if (opts.isChildPage) note = "Child edit page — no section-level Run-process menu; migrate only if THIS child page's own ACTIONS had a run-process (confirm), else not applicable.";
+      else if (sp?.resolved === true) note = sp.present
+        ? `Connected process${sigList(sp) ? `: ${sigList(sp)}` : " (name unresolved — resolve via `VwSysProcess` by Id)"} → wire as a Freedom **Run process** card action.`
+        : "**Not migrated** — no process connected to this section (checked `ProcessInModules` on-stand).";
+      else note = PROCESS_HOWTO;
     } else if (/print/i.test(name)) {
-      // migrate Print ONLY if printables/reports exist for the section; show HOW to check.
-      note = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
+      const spr = sigOf("printables");
+      if (opts.isChildPage) note = "Child edit page — no section-level Print menu; migrate only if THIS child page's own ACTIONS had a printable (confirm), else not applicable.";
+      else if (spr?.resolved === true) note = spr.present
+        ? `Printable${sigList(spr) ? `: ${sigList(spr)}` : "s present"} → wire as the Freedom **print** action.`
+        : "**Not migrated** — no printables/reports for this section (checked `SysModuleReport` on-stand).";
+      else note = PRINT_HOWTO;
     } else if (name === "ViewOptions") {
       type = "—"; note = "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action.";
     } else if (name === "Tag") {
@@ -236,11 +253,14 @@ export function renderDesignSpec(result, opts = {}) {
     }
     rows.push({ region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] });
   }
-  // RV12 — image/photo components (mapper emits them in cs.images, each with its own needsDecision) were the
-  // only category with no Layout row. Give them one, placed in the region their parent resolves to.
+  // RV12 — image/photo components (mapper emits them in cs.images) render as a NORMAL Layout row, placed in the
+  // region their parent resolves to. A Freedom image field binds to the image column declaratively — it is a
+  // plain mapping, not custom imperative wiring, so the row carries no "⚠ wire getSrc/onChange" scare (that was
+  // classic-generator vocabulary that read as an assumption on every migration). The classic generator is kept
+  // in Source only as provenance.
   for (const im of cs.images || []) {
-    const src = im.generator ? `generator ${esc(im.generator)}` : "native image — confirm";
-    rows.push({ region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "Image", src, DASH, "⚠ wire source/upload (getSrc/onChange)"] });
+    const src = im.generator ? `generator ${esc(im.generator)}` : "image column";
+    rows.push({ region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "Image", src, DASH, "→ Freedom image component (bind to the image column)"] });
   }
   // group by region (first-seen order), stable by `sort` then insertion within region
   const order = [];
@@ -267,7 +287,10 @@ export function renderDesignSpec(result, opts = {}) {
   // section name from the entity, not the page prefix — clio PR #937). In that gathered-nothing case the List
   // page block must still render (with a ⚠) rather than silently vanish — a section migration ALWAYS has a list
   // page, and dropping the whole block hides that the columns/filters/actions were never analyzed.
-  const isSectionMigration = section || result.miniPage || opts.planMeta?.sectionSchema;
+  // A MINI page is NOT a section — it has no list page. When rendering the mini page's OWN spec (isMiniPage),
+  // suppress the List-page block entirely (rendering one gave the mini fold a spurious "##### List page" with a
+  // misleading "no add-record mini page" line — a mini page inside a mini page).
+  const isSectionMigration = (section || result.miniPage || opts.planMeta?.sectionSchema) && !opts.isMiniPage;
   if (isSectionMigration && !opts.formOnly) {
     L.push("### List page");
     if (!section) {
@@ -311,8 +334,11 @@ export function renderDesignSpec(result, opts = {}) {
   if (opts.listPageOnly) return L.join("\n");
 
   // ---- Form page — its Layout / Logic / Confirm nested under one page heading (the Main-scope form row) ----
+  // A mini page's form section is titled "Mini page (quick-add)" — NOT "<entity> form page" — so it can't be
+  // mistaken for the record page's form section (the two rendered under the SAME "<entity> form page" heading,
+  // which read as a duplicated block for the same page).
   L.push(
-    `### ${entity} form page`,
+    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
     "#### Layout",
     "| Region | Element | Type | Source | Rule | Additional |",
     "| --- | --- | --- | --- | --- | --- |",
@@ -377,6 +403,33 @@ export function renderDesignSpec(result, opts = {}) {
     );
     for (const row of logic) L.push(`| ${row.join(" | ")} |`);
     L.push("");
+  }
+
+  // ---- Base-field overrides — base fields the Freedom template already provides, that a CLIENT schema
+  // reconfigured (hid / moved). The parallel-analog build does NOT re-create base fields, so these are CONCRETE
+  // changes to APPLY onto the template's existing field — a build instruction, not a ⚠ decision to confirm.
+  const bfo = cs.baseFieldOverrides || [];
+  if (bfo.length) {
+    L.push(
+      "#### Base-field overrides (apply onto the template's fields)",
+      `> These base fields ship with the Freedom template; the client schema reconfigured them. APPLY each change onto the existing base field — do NOT re-create the field, and do NOT ship the bare template default.`,
+      "| Base field | Apply |",
+      "| --- | --- |",
+    );
+    for (const o of bfo) L.push(`| ${esc(o.field)} | ${esc(o.change)} |`);
+    L.push("");
+  }
+
+  // ---- Child page with FEW fields → recommend a lighter shell. A related-list child that is a small, flat
+  // edit form (a handful of fields, no tabs, no nested details) is better opened as an edit MINI PAGE / modal
+  // than rebuilt as a full record page — less chrome, faster add/edit inline from the parent list. Surface it as
+  // a recommendation on the child's own spec (only for child pages, so the top-level record page is untouched).
+  if (opts.isChildPage) {
+    const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
+    const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+    if (fields.length && fields.length <= 5 && !hasTabs && !nDetails) {
+      L.push(`> **Recommendation — small child form (${fields.length} field${fields.length === 1 ? "" : "s"}, no tabs/details):** consider opening this related-list child as an **edit mini page / modal** (a lightweight add/edit shell) rather than a full record page, or pick a lighter form template. Confirm the desired shell before building.`, "");
+    }
   }
 
   // ---- Confirm before I build (the ⚠ worklist) — the agent appends discovery risks/gaps here ----
@@ -643,41 +696,42 @@ export function renderPlan(result, opts = {}) {
   return P.join("\n");
 }
 
-// The Plan-vs-Done checklist — a complete-by-construction control table DERIVED from the plan (one row per
-// deliverable / handler / ⚠ Confirm item), so nothing is silently dropped from the final report. It is NOT part
-// of `--plan` (that is the pre-build approval artifact); the agent produces this at the END via `--checklist`,
-// AFTER implementing, and fills Status + Evidence per row. Grouped at tab/region granularity for the form
-// (islands/field-groups collapse to their tab); business rules folded to a count; handlers + ⚠ Confirm items
-// stay one row each (that is exactly where the silent drops happened).
-export function renderChecklist(result, opts = {}) {
+// Shared grouped Plan-vs-Done structure. BOTH `--checklist` (pre, all `☐ pending`) and `--verify` (post, Status
+// AUTO-FILLED from the built page) render THIS same structure, so the close-gate looks EXACTLY like the grouped
+// checklist Kateryna refined — not a second flat table. Each row carries an optional `vk` (verify-kind): the
+// machine check against the built page (get-page). Rows WITHOUT a vk are agent-confirmed (logic / confirm / child
+// / quality / placement) — surfaced so nothing is silently dropped, but NOT part of the hard machine gate.
+// Grouped at tab/region granularity; business rules folded to a count; handlers + ⚠ Confirm one row each.
+function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
   const typed = result.typedPages || [];
   const childs = result.childPages || [];
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
-  const CK = [];
-  let n = 0;
-  const grp = (title, items) => {
-    if (!items.length) return;
-    CK.push("", `**${title}**`, "", "| # | Deliverable | Status | Evidence |", "| --- | --- | --- | --- |");
-    for (const it of items) CK.push(`| ${++n} | ${it} | ☐ pending | — |`);
-  };
+  const groups = [];
+  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push({ title, rows: r }); };
   // Pages — every page this migration creates (the mini page is a page, not a footnote)
-  const pages = [`List page → ${fill(pm.listTemplate, "<FILL: list template>")}`];
-  if (!typed.length) pages.push(`Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`);
-  for (const t of typed) pages.push(`Typed form \`${esc(t.schema)}\`${t.type ? ` — type "${esc(t.type)}"` : ""}${t.bindOnly ? " (bind by Type)" : ""}`);
-  if (result.miniPage?.schema) pages.push(`Mini page \`${esc(result.miniPage.schema)}\``);
-  grp("Pages", pages);
+  const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
+  if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
+  for (const t of typed) pages.push({ label: `Typed form \`${esc(t.schema)}\`${t.type ? ` — type "${esc(t.type)}"` : ""}${t.bindOnly ? " (bind by Type)" : ""}` });
+  if (result.miniPage?.schema) pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
+  // Navigable SECTION registration — a section migration's pages are unreachable until the Freedom section is
+  // registered in an app (`create-app-section`) and appears in the menu. This is a DELIVERABLE in its own right:
+  // one real run created the list + form pages but never registered the section, and — because a hand-built
+  // summary had no row for it — it was silently dropped until the user caught it. Surface it so it can't vanish.
+  if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it" });
+  G("Pages", pages);
   // List page contents
   const section = result.section || null;
   const listItems = [];
   if (pm.sectionSchema || section || result.miniPage) {
-    listItems.push("List columns");
-    if ((section?.quickFilters || []).length) listItems.push(`Quick filters (${section.quickFilters.length})`);
-    if ((section?.sectionActions || []).length) listItems.push(`Section actions (${section.sectionActions.length})`);
+    listItems.push({ label: "List columns" });
+    if ((section?.quickFilters || []).length) listItems.push({ label: `Quick filters (${section.quickFilters.length})` });
+    if ((section?.sectionActions || []).length) listItems.push({ label: `Section actions (${section.sectionActions.length})` });
   }
-  grp("List page", listItems);
-  // Form — Layout, grouped at TOP-LEVEL tab/region (islands + field-groups collapse to their tab)
+  G("List page", listItems);
+  // Form — Layout, grouped at TOP-LEVEL tab/region (islands + field-groups collapse to their tab). PLACEMENT rows
+  // (agent-confirmed: get-page cannot say which Freedom tab a field landed in); the machine COVERAGE rows follow.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   const top = (r) => { const s = String(r).split(" › ")[0]; return s === "Header / top" ? "Header" : s; };
   const order = [];
@@ -690,109 +744,121 @@ export function renderChecklist(result, opts = {}) {
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const s of cs.standardFeatures || []) add(s.tab ? regionOf(s.tab) : "⚠ unplaced", esc(s.feature || s.caption || "feature"));
   for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
-  const layoutItems = order.map((k) => {
+  const layout = order.map((k) => {
     const e = byRegion.get(k);
     const parts = [];
     if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
     parts.push(...e.items);
-    return `${k} — ${parts.join(" · ")}`;
+    return { label: `${k} — ${parts.join(" · ")}` };
   });
-  grp("Form — Layout (by tab/region)", layoutItems);
-  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case)
+  G("Form — Layout (by tab/region)", layout);
+  // Form — Coverage: the MACHINE-verifiable rows (counts + component types from get-page). This is where the hard
+  // gate lives; `--verify` fills these ✅/❌/⚠ from the built page, `--checklist` shows them ☐ pending.
+  const cover = [];
+  // Form TEMPLATE — the built page's parent template must be the one the plan recommends (e.g. an island-top /
+  // progress-bar template). A real run's plan said "use the top-island template" but built on the plain default,
+  // losing the top profile island; get-page's `parentSchemaName` makes that machine-checkable.
+  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
+  const expFields = (cs.viewConfigDiff || []).filter(isField).length;
+  const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
+  const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields } });
+  if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
+  if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
+  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };
+  for (const s of cs.standardFeatures || []) {
+    const f = s.feature || s.caption || ""; const t = FEATURE_TYPE[f];
+    if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
+    cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
+  }
+  if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
+    cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } });
+    cover.push({ label: "DCM Next steps", vk: { type: "dcm-next" } });
+  }
+  G("Form — Coverage (verified)", cover);
+  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
-  if (ruleN) logicItems.push(`Business rules × ${ruleN}`);
-  for (const h of cs.handlerStubs || []) logicItems.push(`Handler — \`${esc(h.sourceMethod)}\``);
-  grp("Form — Logic", logicItems);
-  // Card actions — Process/Print each their own row; native view controls folded into one
+  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}` });
+  for (const h of cs.handlerStubs || []) logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` });
+  G("Form — Logic", logicItems);
+  // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
   const acts = cs.cardActions || [];
-  const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => `Card action — ${esc(a.replace(/Button$/, ""))}`);
+  const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
   const natives = acts.filter((a) => !/process|print/i.test(a));
-  if (natives.length) actItems.push(`Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`);
-  grp("Card actions", actItems);
+  if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
+  G("Card actions", actItems);
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   const SHOWN_ELSEWHERE_CK = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
-  const confItems = (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind)).map((d) => `[${esc(d.kind)}] ${esc(d.item)}`);
-  grp("⚠ Confirm worklist", confItems);
+  G("⚠ Confirm worklist", (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind)).map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // Child pages
-  grp("Child pages", childs.map((c) => `${esc(c.entity)} — separate page?`));
-  // Quality gates — ALWAYS present (a page migration always produces a page to review). The Freedom PAGE-DESIGN
-  // guideline: the `creatio-ui-guidelines` skill — how to CREATE/lay out a Freedom page. NOT the clio build
-  // `get-guidance` contracts the agent already reads to write the schema — it is the UI/UX design guideline, the
-  // one that gets skipped. Apply it WHILE designing; if not, run it as a REVIEW pass at the end and FIX findings.
-  grp("Quality gates", ["Freedom **page-design** guidelines — the `creatio-ui-guidelines` skill (how to create/lay out a Freedom page: component choice, colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels) applied WHILE designing the page; if NOT, run it as a REVIEW pass and FIX the findings (style parity with the reference page). NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema"]);
-
-  if (n === 0) return "";
-  return ["### ✅ Plan-vs-Done checklist", "",
-    "> Present this **AFTER implementing** (not part of the approval plan). One row per deliverable / handler / ⚠ Confirm item. Fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) and **Evidence** (schema saved · render checked · on-stand query) for EVERY row. A row left `☐ pending` = not verified = the migration is NOT complete. **Do not delete rows.**",
-    ...CK].join("\n");
+  G("Child pages", childs.map((c) => ({ label: `${esc(c.entity)} — separate page?` })));
+  // Quality gates — ALWAYS present. The Freedom PAGE-DESIGN guideline (the `creatio-ui-guidelines` skill), NOT the
+  // clio build `get-guidance` contracts. Apply WHILE designing; else run as a REVIEW pass and FIX findings.
+  G("Quality gates", [{ label: "Freedom **page-design** guidelines — the `creatio-ui-guidelines` skill (how to create/lay out a Freedom page: component choice, colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels) applied WHILE designing the page; if NOT, run it as a REVIEW pass and FIX the findings (style parity with the reference page). NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema" }]);
+  return groups;
 }
 
-// VERIFIED done-gate: diff the EXPECTED deliverables (from the manifest → changeSet) against the ACTUALLY BUILT
-// Freedom page, so "done" is checked against reality, not the agent's prose claim. `built` is what the agent
-// fetches with clio `get-page` after building: { ops: [{name,type,parentName}], parentSchemaName,
-// miniPageBuilt: true|false|null }. Presence is judged by Freedom COMPONENT TYPE (the robust signal — a missing
-// progress bar = no `crt.EntityStageProgressBar`), plus counts for fields/tabs/details. Returns the Plan-vs-Done
-// table with Status AUTO-FILLED (✅ found / ❌ MISSING / ⚠ unverified) and a hard verdict: any ❌ ⇒ INCOMPLETE.
+// `--checklist` — the grouped Plan-vs-Done skeleton (all rows `☐ pending`), presented AFTER implementing. Not part
+// of `--plan`. The verified version is `--verify` below (SAME structure, Status auto-filled from the built page).
+export function renderChecklist(result, opts = {}) {
+  const groups = checklistGroups(result, opts);
+  if (!groups.length) return "";
+  const L = ["### ✅ Plan-vs-Done checklist", "",
+    "> Present this **AFTER implementing** (not part of the approval plan). One row per deliverable / handler / ⚠ Confirm item. Fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) and **Evidence** for EVERY row. A row left `☐ pending` = not verified. **Do not delete rows.** (Prefer `--verify --built <get-page>` — it auto-fills Status from the built page and hard-blocks on any ❌.)"];
+  let n = 0;
+  for (const g of groups) {
+    L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence |", "| --- | --- | --- | --- |");
+    for (const r of g.rows) L.push(`| ${++n} | ${r.label} | ☐ pending | — |`);
+  }
+  return L.join("\n");
+}
+
+// VERIFIED done-gate — the SAME grouped structure as `--checklist`, but Status AUTO-FILLED from the ACTUALLY BUILT
+// Freedom page (clio `get-page`: { ops:[{name,type,parentName}], parentSchemaName, miniPageBuilt }), so "done" is
+// checked against reality, not the agent's prose. STRUCTURAL rows (a `vk`) are machine-checked ✅/❌/⚠ and drive the
+// HARD verdict (any ❌ ⇒ INCOMPLETE, non-zero exit). Rows with no `vk` (placement / logic / confirm / child /
+// quality) are surfaced as `☐ confirm on-stand` (agent evidence) — visible so nothing drops, but not machine-gated
+// (get-page shows structure, not business-rule logic or which Freedom tab a field landed in). Driven by get-page,
+// so a broken browser/SSO on the stand is NOT an excuse to skip this gate.
 export function renderVerify(result, opts = {}, built = {}) {
-  const cs = result.changeSet || {};
   const ops = Array.isArray(built.ops) ? built.ops : [];
   const parentTpl = built.parentSchemaName || opts.planMeta?.formTemplate || "";
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
   const hasType = (t) => typeCount(t) > 0;
-  const dcm = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
-  const rows = []; let missing = 0, unverified = 0;
-  // st: "ok" | "missing" | "warn"
-  const row = (label, st, ev) => { if (st === "missing") missing++; else if (st === "warn") unverified++; rows.push({ label, mark: st === "ok" ? "✅ Done" : st === "missing" ? "❌ MISSING" : "⚠ verify", ev }); };
-  // Pages — mini page (a separate schema; the agent reports whether it was created)
-  if (result.miniPage?.schema) {
-    if (built.miniPageBuilt === true) row(`Mini page \`${esc(result.miniPage.schema)}\``, "ok", "created on-stand");
-    else if (built.miniPageBuilt === false) row(`Mini page \`${esc(result.miniPage.schema)}\``, "missing", "NOT created — the section still opens the full form on '+ New'");
-    else row(`Mini page \`${esc(result.miniPage.schema)}\``, "warn", "not verified — get-page the mini schema / pass built.miniPageBuilt");
-  }
-  // Fields — expected count vs built field-like leaf components (Input/ComboBox/… — not containers/grids/tabs/buttons)
-  // MUST match the mapper's ACTUAL emitted control vocabulary (scalarControl/control in mapper.mjs): dates are
-  // emitted as `crt.DateTimePicker` — NOT `crt.DateTimeEdit` (which the mapper never emits). The extra tolerant
-  // types (MoneyInput/ColorEdit/TextArea/MultilineInput) accept real on-stand builds. Keep this set in sync with
-  // scalarControl — a drift here under-counts fields and false-fails the done-gate.
   const FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
-  const expFields = (cs.viewConfigDiff || []).filter(isField).length;
-  const builtFields = ops.filter((o) => FIELD_RE.test(o.type || "")).length;
-  if (expFields) row(`Fields (${expFields} expected)`, builtFields >= expFields ? "ok" : "warn", `${builtFields} field components on the built page${builtFields < expFields ? " — fewer than expected; check which fields were dropped" : ""}`);
-  // Tabs — expected client tabs vs built crt.Tab (apples-to-apples: the mapper emits ONE crt.Tab per tab, and a
-  // page has exactly ONE crt.TabContainer wrapping them all — counting the container would false-fail any page
-  // with ≥2 tabs, since 1 (container) < N (expected tabs)).
-  const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
-  if (expTabs) { const b = typeCount("crt.Tab"); row(`Tabs (${expTabs} expected)`, b >= expTabs ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.Tab built`); }
-  // Details / related lists — expected vs built crt.DataGrid
-  const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  if (expDetails) { const b = typeCount("crt.DataGrid"); row(`Related lists (${expDetails} expected)`, b >= expDetails ? "ok" : b > 0 ? "warn" : "missing", `${b} crt.DataGrid built`); }
-  // Standard features by Freedom component TYPE (the commonly-dropped ones)
-  const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };
-  for (const s of cs.standardFeatures || []) {
-    const f = s.feature || s.caption || ""; const t = FEATURE_TYPE[f];
-    if (!t || s.uiShape === "list") continue; // list-shaped features covered by Related lists above
-    row(`${esc(f)} (\`${t}\`)`, hasType(t) ? "ok" : "missing", hasType(t) ? `found ${t}` : `NO ${t} on the built page`);
+  let missing = 0, unverified = 0;
+  // Resolve a row's machine Status from the built page. vk-less rows → agent-confirmed (not part of the gate).
+  const resolve = (vk) => {
+    if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)"];
+    if (vk.type === "formpage") return ops.length ? ["✅ Done", "form page built (get-page returned its components)"] : (missing++, ["❌ MISSING", "get-page returned no components for the form page"]);
+    if (vk.type === "template") return !built.parentSchemaName ? (unverified++, ["⚠ verify", "get-page `parentSchemaName` not provided — confirm the built page's template"])
+      : built.parentSchemaName === vk.exp ? ["✅ Done", `built on \`${esc(vk.exp)}\``]
+      : (unverified++, ["⚠ verify", `built on \`${esc(built.parentSchemaName)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`]);
+    if (vk.type === "mini") return built.miniPageBuilt === true ? ["✅ Done", "created on-stand"]
+      : built.miniPageBuilt === false ? (missing++, ["❌ MISSING", "NOT created — '+ New' still opens the full form"])
+      : (unverified++, ["⚠ verify", "get-page the mini schema / pass built.miniPageBuilt"]);
+    if (vk.type === "fields") { const b = ops.filter((o) => FIELD_RE.test(o.type || "")).length; return b >= vk.n ? ["✅ Done", `${b} field components on the built page`] : (unverified++, ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`]); }
+    if (vk.type === "tabs") { const b = typeCount("crt.Tab"); return b >= vk.n ? ["✅ Done", `${b} crt.Tab built`] : b > 0 ? (unverified++, ["⚠ verify", `${b}/${vk.n} crt.Tab built`]) : (missing++, ["❌ MISSING", "no crt.Tab built"]); }
+    if (vk.type === "details") { const b = typeCount("crt.DataGrid"); return b >= vk.n ? ["✅ Done", `${b} crt.DataGrid built`] : b > 0 ? (unverified++, ["⚠ verify", `${b}/${vk.n} crt.DataGrid built`]) : (missing++, ["❌ MISSING", "no crt.DataGrid built"]); }
+    if (vk.type === "feature") return hasType(vk.ftype) ? ["✅ Done", `found ${vk.ftype}`] : (missing++, [`❌ MISSING`, `NO ${vk.ftype} on the built page`]);
+    if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`] : (missing++, ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``]); }
+    if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built"] : (missing++, ["❌ MISSING", "no crt.NextSteps tab on the built page"]);
+    if (vk.type === "card") return hasType("crt.Button") ? ["✅ Done", "a crt.Button is present — confirm it triggers the action"] : (unverified++, ["⚠ verify", "no crt.Button found — confirm the action"]);
+    unverified++; return ["⚠ verify", "confirm on-stand"];
+  };
+  const groups = checklistGroups(result, opts);
+  const L = []; let n = 0;
+  for (const g of groups) {
+    L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
+    for (const r of g.rows) { const [mark, ev] = resolve(r.vk); L.push(`| ${++n} | ${r.label} | ${mark} | ${esc(ev)} |`); }
   }
-  // DCM widgets — only when a case is present
-  if (dcm) {
-    const barOk = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl);
-    row("DCM case progress bar", barOk ? "ok" : "missing", barOk ? (hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`) : `NO crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\` (not a progress-bar template)`);
-    row("DCM Next steps", hasType("crt.NextSteps") ? "ok" : "missing", hasType("crt.NextSteps") ? "crt.NextSteps built" : "NO crt.NextSteps tab on the built page");
-  }
-  // Card actions — Run process / Print → a button on the page
-  for (const a of cs.cardActions || []) {
-    if (/process/i.test(a)) row("Run-process action", hasType("crt.Button") ? "ok" : "warn", hasType("crt.Button") ? "a crt.Button is present — confirm it runs the process" : "no crt.Button found — confirm the Run-process action");
-    else if (/print/i.test(a)) row("Print action", hasType("crt.Button") ? "ok" : "warn", hasType("crt.Button") ? "a crt.Button is present — confirm it triggers Print" : "no crt.Button found — confirm the Print action");
-  }
-  const V = [];
-  const verdict = missing > 0 ? `⛔ **INCOMPLETE — ${missing} deliverable(s) MISSING** (fix and re-verify)` : unverified > 0 ? `⚠ **${unverified} row(s) not verified** — resolve before calling it done` : `✅ **All verified deliverables are present on the built page**`;
-  V.push("### ✅ Plan-vs-Done — VERIFIED against the built page", "",
-    `> Auto-checked the built Freedom page (from \`get-page\`) against the plan's expected deliverables. ${verdict}`,
-    "", "| Deliverable | Status | Evidence (built page) |", "| --- | --- | --- |");
-  for (const r of rows) V.push(`| ${r.label} | ${r.mark} | ${esc(r.ev)} |`);
-  V.push("", `**Verdict:** ${verdict}`);
-  return { markdown: V.join("\n"), missing, unverified, complete: missing === 0 && unverified === 0 };
+  const verdict = missing > 0 ? `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING** (fix and re-verify)`
+    : unverified > 0 ? `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`
+    : `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
+  const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
+    `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page (\`get-page\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows (logic / confirm / child / quality / placement) are surfaced for the agent — not machine-gated. ${verdict}`,
+    ...L, "", `**Verdict:** ${verdict}`].join("\n");
+  return { markdown: md, missing, unverified, complete: missing === 0 && unverified === 0 };
 }

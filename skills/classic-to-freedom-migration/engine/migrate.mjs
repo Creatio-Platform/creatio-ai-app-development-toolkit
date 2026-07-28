@@ -246,7 +246,7 @@ export function runMigration(manifest, opts = {}) {
     if (!key) continue;
     if (visited.has(key)) { c.cyclic = true; continue; } // already on this branch — a cycle; stop (don't recurse forever)
     try {
-      const childRes = runMigration(childSchemas[key], { baseDir, visited: new Set([...visited, key]) });
+      const childRes = runMigration(childSchemas[key], { baseDir, visited: new Set([...visited, key]), isChildPage: true });
       c.spec = childRes.designSpec;              // the child page's Layout/Section/Logic/Confirm — the mapping
       c.mappedEntity = childRes.entity;
       c.resolvedFrom = key;
@@ -501,7 +501,7 @@ export function runMigration(manifest, opts = {}) {
   const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
   out.signals = signals;
   out.signalsMissing = SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true);
-  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta, planMetaMissing: out.planMetaMissing, signals: out.signals, signalsMissing: out.signalsMissing };
+  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta, planMetaMissing: out.planMetaMissing, signals: out.signals, signalsMissing: out.signalsMissing, isMiniPage: !!opts.isMiniPage, isChildPage: !!opts.isChildPage };
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)

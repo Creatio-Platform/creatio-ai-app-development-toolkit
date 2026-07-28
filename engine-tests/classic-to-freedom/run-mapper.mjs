@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -259,6 +259,15 @@ const c5autoCs = mapToFreedom(mergeHierarchy([c5auto]));  // no resources → th
 check("C5: a designer auto `Tab…TabLabelGroup…` group (auto caption ref, unresolvable) → crt.GridContainer, NO group-caption ⚠",
   c5autoCs.viewConfigDiff.some(o => o.name === "Tab65312131TabLabelGroupc131d3f4" && o.values?.type === "crt.GridContainer")
   && !c5autoCs.needsDecision.some(n => n.kind === "group-caption"));
+// ...BUT the SAME auto-named group whose caption RESOLVES to real text ("Pricing") IS a genuinely labelled group —
+// the designer stores a real user label under the auto key. It must be a crt.ExpansionPanel, NOT flattened to a
+// grid on the name alone (that dropped the real "Pricing" grouping on ASPContractData2Page). Resolution wins over
+// the name pattern.
+const c5autoNamed = mapToFreedom(mergeHierarchy([c5auto]), { resources: { Tab65312131TabLabelGroupc131d3f4GroupCaption: "Pricing" } });
+check("C5: a designer auto-named group whose caption RESOLVES (\"Pricing\") → crt.ExpansionPanel (labelled), NOT flattened to a grid",
+  c5autoNamed.viewConfigDiff.some(o => o.name === "Tab65312131TabLabelGroupc131d3f4" && o.values?.type === "crt.ExpansionPanel")
+  && c5autoNamed.viewConfigDiff.some(o => o.name === "ColK" && o.parentName === "Tab65312131TabLabelGroupc131d3f4Grid")
+  && !c5autoNamed.needsDecision.some(n => n.kind === "group-caption"));
 
 /* ---- #4: a CONTROL_GROUP declared via `this.Terrasoft.ViewItemType.*` (the dominant real-body idiom, and the
    bare `terrasoft` define-param form) must resolve to 15 end-to-end, so ensureGroup builds a crt.ExpansionPanel.
@@ -327,8 +336,11 @@ check("entity-filter: static filter marked complete + NOT in the folded line",
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Photo", parentName: "Header", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
   di({ name: "Code", parentName: "Header", propertyName: "items", bindTo: "Code", tip: "Resources.Strings.CodeTip" })] })]));
-check("image component (generator-based, no bindTo) recognized → images[] + needsDecision",
-  imgCs.images.some(i => i.classic === "Photo") && imgCs.needsDecision.some(n => n.kind === "image" && n.item === "Photo"));
+// review (s-vanislemarina #4): an image/photo is a NORMAL element — it renders as an Image row in the Layout
+// table and is NOT surfaced as a per-image `⚠ Confirm` decision (that duplicated the layout row and dressed a
+// plain column-bound image up as custom "wire getSrc/onChange" work — classic-generator vocabulary, not Freedom).
+check("image component (generator-based, no bindTo) → images[] but NO `image` needsDecision (it's a plain layout mapping, not a decision)",
+  imgCs.images.some(i => i.classic === "Photo") && !imgCs.needsDecision.some(n => n.kind === "image"));
 check("tooltip carried onto the Freedom field (tip.content)",
   imgCs.viewConfigDiff.find(o => o.name === "Code")?.values.tip?.content === "$Resources.Strings.CodeTip");
 
@@ -389,6 +401,23 @@ check("unmapped-component: a CHILDLESS struct-named content item (SlaGroup) IS s
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaGroup"));
 check("unmapped-component: a struct-named PARENT container (RealGroup, has a child) is NOT surfaced (no noise)",
   !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "RealGroup"));
+// review (s-vanislemarina #2/#5): a CONTAINER whose children were MAPPED (a photo wrapper, a profile island, a
+// header column block) is a real layout container — NOT an unmapped micro-widget — even when its NAME misses the
+// struct whitelist (PhotoContainer / EmployeeProfile / HeaderColumnContainer were all falsely flagged "port
+// manually or drop"). Only a container whose ENTIRE subtree mapped to nothing (the true SLA-timer case) surfaces.
+const contCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "PhotoContainer", parentName: "Header", propertyName: "items" }),                        // non-struct name, wraps a mapped image
+  di({ name: "Photo", parentName: "PhotoContainer", propertyName: "items", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
+  di({ name: "InfoBlock", parentName: "Header", propertyName: "items" }),                              // non-struct name, wraps a mapped field
+  di({ name: "PF", parentName: "InfoBlock", propertyName: "items", bindTo: "PF" }),
+  di({ name: "SlaWrap", parentName: "Header", propertyName: "items" }),                                // non-struct name, subtree maps to NOTHING
+  di({ name: "SlaTimer", parentName: "SlaWrap", propertyName: "items", caption: "getSla" })] })]));
+check("unmapped-component: a container wrapping a MAPPED image (PhotoContainer) is NOT flagged",
+  !contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "PhotoContainer"));
+check("unmapped-component: a container wrapping a MAPPED field (InfoBlock) is NOT flagged",
+  !contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "InfoBlock"));
+check("unmapped-component: a container whose WHOLE subtree maps to nothing (SlaWrap) IS still surfaced",
+  contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaWrap"));
 const umTpl = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "CF", parentName: "Header", propertyName: "items", bindTo: "CF" })] })],
   { seedTemplate: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
 check("unmapped-component: template-owned items are NOT flagged (payload = client content only, F9)",
@@ -1204,6 +1233,14 @@ check("STRUCTURE: a non-typed Rebuild form that folds to 0 FIELDS is BLOCKED (ho
   () => hollowForm.structure.issues);
 check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1 field is NOT blocked (even with details)",
   stVerifiedNone.structure.issues.every((i) => !/0 FIELDS/.test(i)));
+// review (s-vanislemarina #3): detail editability lives in the detail's OWN config, not on the master. When the
+// detail schema IS bundled (get-classic-migration-bundle gathers detailSchemas), editability is RESOLVED — no
+// per-detail "confirm view-only vs add/edit/delete" line. It fires ONLY when the schema was NOT bundled.
+check("#3 detail-editability: NOT flagged when the detail's own schema is bundled (editability resolvable from its config)",
+  !/detail-editability/.test(stVerifiedNone.plan));
+const deUnbundled = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }] }, { baseDir: FIX });
+check("#3 detail-editability: STILL flagged when the detail schema was NOT bundled (genuinely undeterminable)",
+  /detail-editability/.test(deUnbundled.plan));
 
 /* ---- Theme 3 — real engine bugs the goldens missed (RV4/RV5/RV6/RV7/RV11) ---- */
 // RV4 — a merge-onto-absent stub must carry the full insert shape (visible/tip/caption/…), not the bare one.
@@ -1671,16 +1708,19 @@ check("Minor5: a whatItDoes value starting with a block marker does NOT render a
 
 /* ---- This round's Blocker + Majors on payload/gate/layout/seed ---- */
 // Blocker — a CLIENT merge that reconfigures a BASE (template-owned) field (hides it, moves it) is excluded
-// from the payload as template context; its override must be SURFACED (base-field-override), not silently lost.
+// from the payload as template context; its override must be SURFACED, not silently lost. It is a CONCRETE
+// applied override (baseFieldOverrides — what to change on the template's field), NOT a ⚠ decision to punt
+// (review s-vanislemarina #6: "if there are changes, just implement them" — the delta is known, so state it).
 const boSeed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }), di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" })], methods: ["init", "getActions"] });
 const boClient = L("Client", { entity: "X", diff: [di({ operation: "merge", name: "BaseFld", visible: false, layout: { column: 6, row: 2 } })] });
 const boCs = mapToFreedom(mergeHierarchy([boClient], { seedTemplate: [boSeed] }));
-check("Blocker: a client override of a BASE field (visible/layout) is surfaced as base-field-override, not silently dropped",
-  boCs.needsDecision.some((n) => n.kind === "base-field-override" && n.item === "BaseCol"),
-  () => boCs.needsDecision.map((n) => n.kind));
+check("Blocker: a client override of a BASE field (visible/layout) is surfaced as a CONCRETE baseFieldOverrides entry (hide + move to column 6, row 2), not a ⚠ decision",
+  boCs.baseFieldOverrides?.some((o) => o.field === "BaseCol" && o.hidden === true && /hide it/.test(o.change) && /column 6, row 2/.test(o.change))
+  && !boCs.needsDecision.some((n) => n.kind === "base-field-override"),
+  () => JSON.stringify(boCs.baseFieldOverrides));
 const boUntouched = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "MyF", parentName: "Header", propertyName: "items", bindTo: "MyF" })] })], { seedTemplate: [boSeed] }));
 check("Blocker: an UNTOUCHED base field is NOT flagged (only client-reconfigured base fields surface)",
-  !boUntouched.needsDecision.some((n) => n.kind === "base-field-override"));
+  !(boUntouched.baseFieldOverrides || []).length);
 
 // Major 2 — a REAL child edit page must require mapping even when add-record is hidden (editable heuristic).
 const m2Body = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"ChildDetail",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;
@@ -2151,11 +2191,25 @@ const vOk = renderVerify(vResult, {}, {
     { name: "CC", type: "crt.ContactCommunication" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
 });
-check("verify: a built page with all expected deliverables present → complete (no MISSING/unverified)",
-  vOk.missing === 0 && vOk.complete === true && /All verified deliverables are present/.test(vOk.markdown),
-  () => vOk.markdown.split("\n").filter((l) => /❌|⚠|Verdict/.test(l)));
+check("verify: a built page with all expected deliverables present → complete (no MISSING / machine-⚠)",
+  vOk.missing === 0 && vOk.complete === true && /All machine-checkable deliverables present/.test(vOk.markdown),
+  () => vOk.markdown.split("\n").filter((l) => /❌|⚠ verify|Verdict/.test(l)));
 check("verify: DCM progress bar counts as PRESENT when built on PageWithTabsAndProgressBarTemplate (template ships it)",
   /DCM case progress bar \| ✅ Done/.test(renderVerify({ changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: { dcm: { resolved: true, present: true } } }, {}, { ops: [], parentSchemaName: "PageWithTabsAndProgressBarTemplate" }).markdown));
+// review (s53 #1): the plan recommends a top-island / progress-bar template but the agent builds on the plain
+// default → the top profile island is lost. verify machine-checks the built page's parentSchemaName vs the
+// recommended formTemplate.
+const tplRes = { changeSet: { viewConfigDiff: [{ name: "F", values: { control: "$F", type: "crt.Input" } }], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+const tplMismatch = renderVerify(tplRes, { planMeta: { formTemplate: "PageWithTabsAndProgressBarTemplate" } }, { ops: [{ name: "F", type: "crt.Input" }], parentSchemaName: "FormPageTemplate" });
+check("verify: built on a DIFFERENT template than recommended → ⚠ + NOT complete (catches taking the standard template instead of the island one)",
+  tplMismatch.complete === false
+  && /built on .FormPageTemplate. but the plan recommended .PageWithTabsAndProgressBarTemplate/.test(tplMismatch.markdown));
+check("verify: built on the RECOMMENDED template → Form template row ✅",
+  /Form template.*\| ✅ Done/.test(renderVerify(tplRes, { planMeta: { formTemplate: "PageWithTabsAndProgressBarTemplate" } }, { ops: [{ name: "F", type: "crt.Input" }], parentSchemaName: "PageWithTabsAndProgressBarTemplate" }).markdown));
+// review (s53 #3): a section migration's pages are unreachable until the section is registered — the control table
+// MUST carry that deliverable so it can't be silently dropped (a real run built pages but never registered it).
+check("checklist: a section migration carries a 'Navigable section registered' deliverable row",
+  /Navigable section registered/.test(renderChecklist({ entity: "X", changeSet: { viewConfigDiff: [{ name: "F", values: { control: "$F", type: "crt.Input" } }], standardFeatures: [], details: [], cardActions: [], needsDecision: [] } }, { planMeta: { sectionSchema: "XSection" } })));
 // regression (review): a correctly-built page with a DATE field (crt.DateTimePicker) + multiple tabs must verify
 // COMPLETE. Guards renderVerify's field/tab component-type vocabulary against the mapper's ACTUAL emitted types —
 // the mapper emits crt.DateTimePicker for dates (NOT crt.DateTimeEdit) and crt.Tab per tab (a page has ONE
@@ -2278,6 +2332,43 @@ check("editable-grid emission: the plan Layout renders 'Editable list' + the fea
   /\| Editable list \|/.test(dmRun.plan) && /INLINE-EDITABLE/.test(dmRun.plan) && /features\.editable\.enable/.test(dmRun.plan));
 check("editable-grid emission: a lookup+service detail with NO editable grid stays a read-only Expanded list",
   regDetail?.composite === "Expanded list" && !regDetail?.editable);
+
+/* ---- render-level fixes (s-vanislemarina): #1 mini heading · #7 few-fields child · #8 pre-resolved Print/Process ---- */
+// #1 — a mini page's form section is titled "Mini page (quick-add)", NOT "<entity> form page", so it can't read
+// as a duplicate of the record page's form section (both used the same "<entity> form page" heading before).
+const miniSpec = renderDesignSpec({ entity: "X", changeSet: { viewConfigDiff: [{ name: "F", parentName: "Header", values: { control: "$F", type: "crt.Input" } }] } }, { isMiniPage: true });
+check("#1 mini page: form section titled 'Mini page (quick-add)', not '### X form page'",
+  /### Mini page \(quick-add\)/.test(miniSpec) && !/### X form page/.test(miniSpec));
+
+// #7 — a small, flat child edit form (≤5 fields, no tabs/details) recommends an edit mini page / modal.
+const fewChild = renderDesignSpec({ entity: "Anniv", changeSet: { viewConfigDiff: [
+  { name: "D", parentName: "Header", values: { control: "$D", type: "crt.DateTimePicker" } },
+  { name: "T", parentName: "Header", values: { control: "$T", type: "crt.Input" } }] } }, { isChildPage: true });
+check("#7 child page, few fields, no tabs/details → recommends an edit mini page / modal",
+  /Recommendation — small child form/.test(fewChild) && /mini page \/ modal/.test(fewChild));
+const bigChild = renderDesignSpec({ entity: "Big", changeSet: { viewConfigDiff:
+  Array.from({ length: 7 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
+check("#7 child page with MANY fields → NO small-form recommendation (no false modal nudge)",
+  !/Recommendation — small child form/.test(bigChild));
+const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
+check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",
+  !/Recommendation — small child form/.test(notChild));
+
+// #8 — Print/Run-process card actions render CONCRETELY when the on-stand signals are resolved (present → wire
+// these; none → NOT migrated), and the full 'go check on-stand' how-to is kept ONLY for the unresolved fallback.
+const paResolved = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] },
+  signals: { printables: { resolved: true, present: false }, processes: { resolved: true, present: true, names: ["Approve order"] } } }, {});
+check("#8 Print, signals resolved present:false → concrete 'Not migrated', drops the SysModuleReport how-to",
+  /Not migrated.*no printables/.test(paResolved) && !/SysModuleReport filtered/.test(paResolved));
+check("#8 Process, signals resolved present:true → names the process + 'Run process', drops the how-to",
+  /Approve order/.test(paResolved) && /Run process/.test(paResolved) && !/Check on-stand with/.test(paResolved));
+const paUnres = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton"] }, signals: {} }, {});
+check("#8 Print, signals NOT resolved → keeps the how-to (fallback so nothing is assumed)",
+  /SysModuleReport/.test(paUnres));
+const paChild = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["ProcessButton"] }, signals: {} }, { isChildPage: true });
+check("#8 Process on a CHILD edit page → short 'no section-level' note, not the full ProcessInModules how-to",
+  /no section-level Run-process/.test(paChild) && !/ProcessInModules/.test(paChild));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
