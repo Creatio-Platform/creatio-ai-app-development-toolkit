@@ -165,7 +165,9 @@ const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:pro
 
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
-function resolveMemberValue(node, scope) {
+// Walk a member chain down to its base, collecting the property names (outermost last). Returns null when any
+// link is unreadable statically: a computed index (`x[i]`) resolves to a proxy → null under the vm too.
+function memberChain(node) {
   const path = [];
   let cur = node;
   while (cur?.type === "MemberExpression") {
@@ -177,27 +179,33 @@ function resolveMemberValue(node, scope) {
     path.unshift(name);
     cur = cur.object;
   }
+  return { path, base: cur };
+}
+
+// Which resolver state the chain's base identifier starts in: `this`, the framework root, or an opaque proxy.
+function baseTag(cur, scope) {
+  if (cur?.type === "ThisExpression") return "this";
+  if (cur?.type !== "Identifier") return null;
+  // param shadows global; the AMD `terrasoft` dep param resolves like the global
+  if (scope.has(cur.name)) return { brm: "brm", terrasoft: "terrasoft" }[scope.get(cur.name).kind] || "proxy";
+  return cur.name === "Terrasoft" ? "terrasoft" : "proxy";
+}
+
+function resolveMemberValue(node, scope) {
+  const chain = memberChain(node);
+  if (!chain) return null;
+  const { path } = chain;
+  let cur = chain.base;
   // If the base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
   // `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
   let guard = 0;
-  while (cur?.type === "Identifier" && scope.has(cur.name) && scope.get(cur.name).kind === "memberAlias" && guard++ < 20) {
-    let a = scope.get(cur.name).node, seg = [];
-    while (a?.type === "MemberExpression") {
-      if (a.computed) return null;
-      const litNm = a.property.type === "Literal" ? String(a.property.value) : null;
-      const nm = a.property.type === "Identifier" ? a.property.name : litNm;
-      if (nm == null) return null;
-      seg.unshift(nm); a = a.object;
-    }
-    path.unshift(...seg); cur = a;
+  while (cur?.type === "Identifier" && scope.get(cur.name)?.kind === "memberAlias" && guard++ < 20) {
+    const aliased = memberChain(scope.get(cur.name).node);
+    if (!aliased) return null;
+    path.unshift(...aliased.path); cur = aliased.base;
   }
-  let tag;
-  if (cur?.type === "ThisExpression") tag = "this";
-  else if (cur?.type === "Identifier") {
-    if (scope.has(cur.name)) { const k = scope.get(cur.name).kind; tag = { brm: "brm", terrasoft: "terrasoft" }[k] || "proxy"; } // param shadows global; the AMD `terrasoft` dep param resolves like the global
-    else if (cur.name === "Terrasoft") tag = "terrasoft";
-    else tag = "proxy";
-  } else return null;
+  let tag = baseTag(cur, scope);
+  if (tag == null) return null;
   for (const k of path) {
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) return k in enumTable ? enumTable[k] : null; // terminal: the next key indexes the enum table
@@ -223,68 +231,76 @@ function makeAstEvaluator(scope, diagnostics, src) {
       case "TemplateLiteral":
         if (node.expressions.length === 0) return node.quasis.map(q => q.value.cooked).join("");
         flag("dynamic-template", node, path); return null;
-      case "ObjectExpression": {
-        const out = {};
-        for (const p of node.properties) {
-          if (p.type === "SpreadElement") { flag("spread-in-object", p, path); continue; }
-          if (p.computed) { flag("computed-key", p, path); continue; }
-          const key = p.key.type === "Identifier" ? p.key.name : String(p.key.value);
-          out[key] = evalNode(p.value, [...path, key]);
-        }
-        return out;
-      }
-      case "ArrayExpression":
-        return node.elements.map((el, i) => {
-          // A sparse hole (`[ , {…}]`) previously returned null with NO diagnostic, then crashed downstream when
-          // normalizeDiff read `.index` off it. Flag it (structural if it sits on `diff`/`details`) so the gate
-          // blocks with a real reason instead of a raw TypeError, and the null slot is skipped by consumers.
-          if (!el) { flag("sparse-hole", node, [...path, i]); return null; }
-          if (el.type === "SpreadElement") { flag("spread-in-array", el, path); return null; }
-          return evalNode(el, [...path, i]);
-        });
-      case "MemberExpression": {
-        const v = resolveMemberValue(node, scope);
-        // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
-        // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
-        // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
-        if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
-        return v;
-      }
+      case "ObjectExpression": return evalObject(node, path);
+      case "ArrayExpression": return evalArray(node, path);
+      case "MemberExpression": return evalMember(node, path);
       case "FunctionExpression":
       case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
-      case "Identifier":
-        if (node.name === "undefined") return undefined;
-        if (scope.has(node.name)) {
-          const m = scope.get(node.name);
-          if (m.kind === "value") return m.value;
-          if (m.kind === "node") return evalNode(m.node, path); // lazy alias: evaluate at the REFERENCE path with the real sink
-          return null; // proxy / BusinessRuleModule param — not a static value
-        }
-        flag("unresolved-identifier", node, path); return null;
-      case "UnaryExpression": {
-        const v = evalNode(node.argument, path);
-        if (node.operator === "-" && typeof v === "number") return -v;
-        if (node.operator === "+" && typeof v === "number") return +v;
-        if (node.operator === "!") return !v;
-        return null;
-      }
-      case "BinaryExpression": {
-        const l = evalNode(node.left, path), r = evalNode(node.right, path);
-        if (l != null && r != null && ["string", "number", "boolean"].includes(typeof l) && ["string", "number", "boolean"].includes(typeof r)) {
-          switch (node.operator) { case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r; }
-        }
-        flag("dynamic-binary", node, path); return null;
-      }
-      case "ConditionalExpression": {
-        const t = evalNode(node.test, path);
-        if (typeof t === "boolean") return evalNode(t ? node.consequent : node.alternate, path);
-        flag("dynamic-conditional", node, path); return null;
-      }
+      case "Identifier": return evalIdentifier(node, path);
+      case "UnaryExpression": return evalUnary(node, path);
+      case "BinaryExpression": return evalBinary(node, path);
+      case "ConditionalExpression": return evalConditional(node, path);
       case "CallExpression": flag("dynamic-call", node, path); return null;
       case "NewExpression": flag("dynamic-new", node, path); return null;
       case "ThisExpression": return null;
       default: flag("unhandled:" + node.type, node, path); return null;
     }
+  }
+  function evalObject(node, path) {
+    const out = {};
+    for (const p of node.properties) {
+      if (p.type === "SpreadElement") { flag("spread-in-object", p, path); continue; }
+      if (p.computed) { flag("computed-key", p, path); continue; }
+      const key = p.key.type === "Identifier" ? p.key.name : String(p.key.value);
+      out[key] = evalNode(p.value, [...path, key]);
+    }
+    return out;
+  }
+  function evalArray(node, path) {
+    return node.elements.map((el, i) => {
+      // A sparse hole (`[ , {…}]`) previously returned null with NO diagnostic, then crashed downstream when
+      // normalizeDiff read `.index` off it. Flag it (structural if it sits on `diff`/`details`) so the gate
+      // blocks with a real reason instead of a raw TypeError, and the null slot is skipped by consumers.
+      if (!el) { flag("sparse-hole", node, [...path, i]); return null; }
+      if (el.type === "SpreadElement") { flag("spread-in-array", el, path); return null; }
+      return evalNode(el, [...path, i]);
+    });
+  }
+  function evalMember(node, path) {
+    const v = resolveMemberValue(node, scope);
+    // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
+    // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
+    // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
+    if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
+    return v;
+  }
+  function evalIdentifier(node, path) {
+    if (node.name === "undefined") return undefined;
+    if (!scope.has(node.name)) { flag("unresolved-identifier", node, path); return null; }
+    const m = scope.get(node.name);
+    if (m.kind === "value") return m.value;
+    if (m.kind === "node") return evalNode(m.node, path); // lazy alias: evaluate at the REFERENCE path with the real sink
+    return null; // proxy / BusinessRuleModule param — not a static value
+  }
+  function evalUnary(node, path) {
+    const v = evalNode(node.argument, path);
+    if (node.operator === "!") return !v;
+    if (typeof v !== "number") return null;
+    if (node.operator === "-") return -v;
+    return node.operator === "+" ? +v : null;
+  }
+  const STATIC_TYPES = ["string", "number", "boolean"];
+  function evalBinary(node, path) {
+    const l = evalNode(node.left, path), r = evalNode(node.right, path);
+    if (l != null && r != null && STATIC_TYPES.includes(typeof l) && STATIC_TYPES.includes(typeof r)) {
+      switch (node.operator) { case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r; }
+    }
+    flag("dynamic-binary", node, path); return null;
+  }
+  function evalConditional(node, path) {
+    const t = evalNode(node.test, path);
+    if (typeof t === "boolean") return evalNode(t ? node.consequent : node.alternate, path);
+    flag("dynamic-conditional", node, path); return null;
   }
   return evalNode;
 }
@@ -413,36 +429,41 @@ function extractFnBody(src, name) {
   for (const re of openers) {
     const m = re.exec(src);
     if (!m) continue;
-    const open = m.index + m[0].length - 1; // index of the opening {
-    let depth = 0;
-    // brace-count, but SKIP string literals and line/block comments so a `{`/`}` inside them is not counted
-    // (fixes mis-scoped getActions / section-action / column scans). Regex literals with braces stay a rare
-    // unhandled edge — acceptable for these hint-only text scans. A hand-advanced index (a while loop, not a
-    // for-counter) because comment/string spans jump `j` forward past whole regions in one step.
-    let j = open;
-    while (j < src.length) {
-      const c = src[j], c2 = src[j + 1];
-      if (c === "/" && c2 === "/") {                       // line comment → skip to the newline
-        const nl = src.indexOf("\n", j);
-        if (nl < 0) return src.slice(open + 1);
-        j = nl + 1; continue;
-      }
-      if (c === "/" && c2 === "*") {                       // block comment → skip past the closing */
-        const e = src.indexOf("*/", j + 2);
-        j = e < 0 ? src.length : e + 2; continue;
-      }
-      if (c === '"' || c === "'" || c === "`") {           // string literal → skip to the matching quote
-        j++;
-        while (j < src.length && src[j] !== c) { if (src[j] === "\\") { j++; } j++; }
-        j++; continue;
-      }
-      if (c === "{") depth++;
-      else if (c === "}" && --depth === 0) return src.slice(open + 1, j);
-      j++;
-    }
-    return src.slice(open + 1); // unbalanced source — return the remainder defensively
+    return sliceBracedBody(src, m.index + m[0].length - 1); // from the index of the opening {
   }
   return "";
+}
+
+// The `{ … }` block starting at `open`, brace-counted but SKIPPING string literals and line/block comments so
+// a `{`/`}` inside them is not counted (fixes mis-scoped getActions / section-action / column scans). Regex
+// literals with braces stay a rare unhandled edge — acceptable for these hint-only text scans. A hand-advanced
+// index (a while loop, not a for-counter) because comment/string spans jump `j` past whole regions in one step.
+// An unbalanced source returns the remainder defensively rather than "".
+function sliceBracedBody(src, open) {
+  let depth = 0, j = open;
+  while (j < src.length) {
+    const c = src[j], c2 = src[j + 1];
+    if (c === "/" && (c2 === "/" || c2 === "*")) {
+      const skipped = skipComment(src, j);
+      if (skipped == null) return src.slice(open + 1);   // unterminated line comment — nothing left to scan
+      j = skipped; continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { j = skipStringLiteral(src, j); continue; }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return src.slice(open + 1, j);
+    j++;
+  }
+  return src.slice(open + 1); // unbalanced source — return the remainder defensively
+}
+
+// Index just past the comment starting at `j`. null when a line comment runs to EOF with no newline.
+function skipComment(src, j) {
+  if (src[j + 1] === "/") {                              // line comment → skip to the newline
+    const nl = src.indexOf("\n", j);
+    return nl < 0 ? null : nl + 1;
+  }
+  const e = src.indexOf("*/", j + 2);                    // block comment → skip past the closing */
+  return e < 0 ? src.length : e + 2;
 }
 
 // The source text of each top-level entry object inside the first `filters: [ … ]` array of `body` (a
@@ -453,17 +474,27 @@ function fixedFilterObjects(body) {
   const m = /filters\s*:\s*\[/.exec(body);
   if (!m) return [];
   const objs = [];
-  let i = m.index + m[0].length, bracket = 1, brace = 0, start = -1;
-  while (i < body.length && bracket > 0) {
+  const depth = { bracket: 1, brace: 0, start: -1 };
+  let i = m.index + m[0].length;
+  while (i < body.length && depth.bracket > 0) {
     const c = body[i];
     if (c === '"' || c === "'" || c === "`") { i = skipStringLiteral(body, i); continue; }
-    if (c === "[") bracket++;
-    else if (c === "]") bracket--;
-    else if (c === "{") { if (brace === 0) { start = i; } brace++; }
-    else if (c === "}") { if (--brace === 0 && start >= 0) { objs.push(body.slice(start, i + 1)); start = -1; } }
+    trackFilterDepth(c, i, depth, body, objs);
     i++;
   }
   return objs;
+}
+
+// One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a
+// brace returning to depth 0 closes an entry — its source text is pushed to `objs`.
+function trackFilterDepth(c, i, depth, body, objs) {
+  if (c === "[") depth.bracket++;
+  else if (c === "]") depth.bracket--;
+  else if (c === "{") { if (depth.brace === 0) { depth.start = i; } depth.brace++; }
+  else if (c === "}" && --depth.brace === 0 && depth.start >= 0) {
+    objs.push(body.slice(depth.start, i + 1));
+    depth.start = -1;
+  }
 }
 
 // Index just past the string literal opening at `body[i]`, so a brace/bracket inside a literal is never
