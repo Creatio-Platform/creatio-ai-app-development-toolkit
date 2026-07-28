@@ -53,6 +53,26 @@ function childPageIssue(c) {
   return `child '${c.entity}' (opened by detail "${c.via}"): child page NOT verified — run list-pages by the CHILD entity, then either add its edit page to manifest.childPageSchemas, or record "editPage": false / "editable": false on this detail once confirmed. No self-declared "out of scope".`;
 }
 
+// ONE resolve → cycle-check → memo → recurse → cache sequence for folding a nested sub-page (child / typed /
+// mini), so the three call sites can no longer drift on cycle or memo semantics (a fix to one used to be easy to
+// miss in the other two). Callers pass the resolved `key` + its schema map + the shared fold context, and only
+// differ in how they map the returned `res` (a runMigration result) onto their OWN record shape. Returns:
+//   { status: "cycle" }        — key is an ancestor on THIS branch → resolved-elsewhere; do not recurse.
+//   { status: "error", error } — the sub-page bundle threw (malformed manifest).
+//   { status: "ok", res }      — mapped, fresh or reused from the run-global memo (diamond reuse).
+// Ordering matters: the branch-local `visited` cycle check runs BEFORE the memo, so a cyclic node is never served
+// a (context-independent) cache entry; only acyclic subtrees are memoized (a cyclic subtree is branch-dependent).
+function foldSubPage(key, schemasMap, ctx) {
+  if (ctx.visited.has(key)) return { status: "cycle" };
+  if (ctx.memo.has(key)) { ctx.memoStats.hits++; return { status: "ok", res: ctx.memo.get(key) }; }
+  try {
+    ctx.memoStats.misses++;
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats });
+    if (!res.treeCyclic) ctx.memo.set(key, res); // cache only context-independent (acyclic) subtrees
+    return { status: "ok", res };
+  } catch (e) { return { status: "error", error: e.message }; }
+}
+
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
@@ -226,59 +246,43 @@ export function runMigration(manifest, opts = {}) {
   // branch reached it), so reusing it under a different parent could mislabel a node — recompute those (rare).
   const memo = opts.memo instanceof Map ? opts.memo : new Map();
   const memoStats = opts.memoStats || { hits: 0, misses: 0 };
+  const foldCtx = { visited, memo, memoStats, baseDir }; // shared fold context for foldSubPage (child/typed/mini)
   const childSchemas = manifest.childPageSchemas || {};
   for (const c of childPages) {
     const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
     if (!key) continue;
-    if (visited.has(key)) { c.cyclic = true; continue; } // already on this branch — a cycle; stop (don't recurse forever)
-    // apply a mapped child result (fresh or memoized) onto the listing row — one place so both paths agree.
-    const applyChild = (res) => {
-      c.spec = res.designSpec;              // the child page's Layout/Section/Logic/Confirm — the mapping
-      c.mappedEntity = res.entity;
-      c.resolvedFrom = key;
-      // carry the child's OWN resolved child pages up so renderPlan can EMBED grandchildren recursively.
-      c.childPages = res.childPages || [];
-      c.grandChildren = c.childPages.length;
-      // Major 3: a nested child's spec is a VALID mapping only if the child cleared its OWN gates.
-      c.childBlocked = !!res.gate?.blocked;
-      c.childReasons = res.gate?.reasons || [];
-      c.childStructIncomplete = !!(res.structure && !res.structure.complete);
-      c.treeCyclic = !!res.treeCyclic;
-    };
-    if (memo.has(key)) { memoStats.hits++; applyChild(memo.get(key)); continue; } // diamond reuse
-    try {
-      memoStats.misses++;
-      const childRes = runMigration(childSchemas[key], { baseDir, visited: new Set([...visited, key]), memo, memoStats });
-      applyChild(childRes);
-      if (!childRes.treeCyclic) memo.set(key, childRes); // cache only context-independent (acyclic) subtrees
-    } catch (e) { c.specError = e.message; }     // malformed child manifest ⇒ note it, keep the listed row
+    const f = foldSubPage(key, childSchemas, foldCtx);
+    if (f.status === "cycle") { c.cyclic = true; continue; }   // mapped higher on this branch
+    if (f.status === "error") { c.specError = f.error; continue; } // malformed child manifest — keep the listed row
+    const res = f.res;
+    c.spec = res.designSpec;                 // the child page's Layout/Section/Logic/Confirm — the mapping
+    c.mappedEntity = res.entity;
+    c.resolvedFrom = key;
+    c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
+    c.grandChildren = c.childPages.length;
+    c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
+    c.childReasons = res.gate?.reasons || [];
+    c.childStructIncomplete = !!(res.structure && !res.structure.complete);
+    c.treeCyclic = !!res.treeCyclic;
   }
   // TYPED-PAGE RECURSION — a typed entity's per-type edit pages are FORM deliverables, not a "map at build"
-  // promise. Fold each like a child page (its own bundle supplied via manifest.typedPageSchemas, keyed by the
-  // typed page schema name) so the plan carries a FULL per-type design spec. `bindOnly:true` on the typedPages
-  // entry is the ONLY escape (layout identical to the base → a type-specific binding, no separate form). An
-  // unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below — the gate blocks it.
+  // promise. Fold each like a child page (bundle in manifest.typedPageSchemas). `bindOnly:true` is the ONLY escape
+  // (layout identical to the base). An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
   const typedSchemas = manifest.typedPageSchemas || {};
   for (const t of typedPages) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    // A cycle is its OWN resolved state — NOT `"fold"` (which claims a spec was produced): the typed form is
-    // mapped higher on this branch. `"fold"` here made the structure gate pass (false-green) while the renderer,
-    // seeing no spec, printed a "NOT resolved" banner — the two disagreed. `"cycle"` is handled consistently by both.
-    if (visited.has(tkey)) { t.cyclic = true; t.resolved = "cycle"; continue; }
-    const applyTyped = (res) => {
-      t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
-      t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
-      t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
-    };
-    if (memo.has(tkey)) { memoStats.hits++; applyTyped(memo.get(tkey)); continue; }
-    try {
-      memoStats.misses++;
-      const tRes = runMigration(typedSchemas[tkey], { baseDir, visited: new Set([...visited, tkey]), memo, memoStats });
-      applyTyped(tRes);
-      if (!tRes.treeCyclic) memo.set(tkey, tRes);
-    } catch (e) { t.specError = e.message; t.resolved = false; }
+    const f = foldSubPage(tkey, typedSchemas, foldCtx);
+    // A cycle is its OWN resolved state — NOT `"fold"` (which claims a spec): the typed form is mapped higher on
+    // this branch. `"fold"` on a cycle made the gate pass while the renderer (no spec) printed "NOT resolved" — the
+    // two disagreed. `"cycle"` is handled consistently by both the structure validator and the renderer.
+    if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
+    if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
+    const res = f.res;
+    t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
+    t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
+    t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
   }
   // ADD-RECORD MINI PAGE — the section's quick-add form. Its registration lives at the module/edit-page level
   // (SysModuleEdit miniPageSchema + miniPageModes containing "add"), NOT always in the section body, so the
@@ -299,21 +303,18 @@ export function runMigration(manifest, opts = {}) {
   if (mpName) {
     miniPage = { schema: mpName, type: (mpDecl && typeof mpDecl === "object" && mpDecl.type) || null };
     const mkey = [miniPage.schema, miniPage.schema + "MiniPage"].find((k) => k && miniPageSchemas[k]);
-    const applyMini = (res) => {
-      miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
-      miniPage.reasons = res.gate?.reasons || [];
-      miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
-    };
-    if (mkey && visited.has(mkey)) { miniPage.cyclic = true; }
-    else if (mkey && memo.has(mkey)) { memoStats.hits++; applyMini(memo.get(mkey)); }
-    else if (mkey) {
-      try {
-        memoStats.misses++;
-        const mRes = runMigration(miniPageSchemas[mkey], { baseDir, visited: new Set([...visited, mkey]), memo, memoStats });
-        applyMini(mRes);
-        if (!mRes.treeCyclic) memo.set(mkey, mRes);
-      } catch (e) { miniPage.specError = e.message; }
-    } else { miniPage.unfolded = true; }
+    if (!mkey) { miniPage.unfolded = true; }
+    else {
+      const f = foldSubPage(mkey, miniPageSchemas, foldCtx);
+      if (f.status === "cycle") { miniPage.cyclic = true; }
+      else if (f.status === "error") { miniPage.specError = f.error; }
+      else {
+        const res = f.res;
+        miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
+        miniPage.reasons = res.gate?.reasons || [];
+        miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
+      }
+    }
   }
   const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
   const decisionSummary = {};
