@@ -6,6 +6,22 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.6.0 (2026-07-29)
+
+### Features
+
+- Add the `classic-to-freedom-migration` skill and its bundled deterministic engine — an approval-gated workflow that migrates a Creatio **Classic UI** section/page (or a whole package/application) to a parallel **Freedom UI** analog. It is ~80% deterministic: a zero-dependency Node merge-engine + mapper reconstructs the *effective* Classic page from its schema layer chain (true dependency order + mandatory parent-template seed) and emits a Freedom ChangeSet plus a per-page design spec / migration plan, with the ~20% that needs judgment surfaced as a `needsDecision[]` worklist. Covers faithful layout (profile islands, tab/group nesting, 24-column grid, wide-header detection), standard-feature recognition (Approvals / Attachments / Activities / Emails / Feed) vs generic related lists, recursive child / typed / mini-page mapping (cycle- and diamond-safe), section-level concerns (add-record mini page, section actions, quick filters, list columns), and a hard correctness gate on parse errors / unresolved parents / skeletal seeds. (ENG-93681)
+
+### Security / Hardening
+
+- The engine parses untrusted Classic schema bodies through a vendored, integrity-pinned **acorn** AST parser (static evaluation, never `vm`), so a hostile body cannot reach `process`/`require`/fs. Supply-chain controls: tamper-evidence via `verify-vendor.mjs` (SHA-256 pin) and an upstream-npm authenticity anchor via `verify-vendor-upstream.mjs`, both wired into CI, plus a weekly OSV audit. Hostile-input hardening throughout: bounded process-name extraction (ReDoS), clamped grid spans, null-safe diff/rule-condition handling, and path-traversal containment on manifest `file` inputs. (ENG-93681)
+
+### CI
+
+- Block merges on new SonarCloud issues. (#59)
+
+---
+
 ## 1.5.0 (2026-07-27)
 
 ### Features
