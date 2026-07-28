@@ -1,5 +1,0 @@
----
-display_name: "Creatio Theme Orchestrator"
-short_description: "Brand and theme a Creatio app from chosen colors and fonts."
-default_prompt: "Use $creatio-theme-orchestrator to brand or theme a Creatio app — match a brandbook or company site, or apply chosen brand colors and fonts — then build and apply the theme through clio MCP."
----
