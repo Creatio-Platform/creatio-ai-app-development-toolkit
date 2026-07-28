@@ -719,17 +719,11 @@ function mapFields(ctx, containers) {
   return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion };
 }
 
-// details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
-// signature, ensures the owning tab exists (via the shared container builder), and resolves titles/columns
-// from manifest.detailSchemas. Returns details[]/standardFeatures[] + its needsDecision[]/accountedFor[].
-function mapDetails(ctx, containers, profileRegion) {
-  const { index, profileAnchors, detailSchemas, resolveText, payloadDetails } = ctx;
-  const { ensureTab } = containers;
-  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set();
-  // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
-  // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
-  // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
-  // a tab (the real placement) and dropping the phantom.
+// #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
+// across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
+// Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
+// a tab (the real placement) and dropping the phantom.
+function dedupDetailPlacements(payloadDetails, { index, profileAnchors, profileRegion }, accountedFor) {
   const detailSig = (d) => [d.schemaName, d.entitySchemaName, d.detailColumn, d.masterColumn].join("|");
   const bySig = new Map();
   for (const d of payloadDetails) {
@@ -743,6 +737,85 @@ function mapDetails(ctx, containers, profileRegion) {
     else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; cur.own = own; } // prefer a resolved placement
     else if (!cur.d.caption && d.caption) cur.d = { ...cur.d, caption: d.caption }; // else keep first, backfill caption on a COPY (don't mutate the shared input detail — mapToFreedom stays pure)
   }
+  return bySig;
+}
+
+// A standard feature is recognised by the detail SCHEMA name (matchFeature), OR — when the schema
+// carries an auto-generated placeholder name (SchemaNDetail) that hides it — by its file-storage
+// ENTITY (`*File`, which always backs the Attachments detail). Entity-inferred matches are flagged
+// as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
+function matchStandardFeature(d, dentity) {
+  const feat = matchFeature(d.schemaName);
+  if (feat) return { feat, featByEntity: false };
+  if ((dentity || "").endsWith("File")) return { feat: FEATURE_CATALOG.FileDetailV2, featByEntity: true };
+  if (dentity === "ContactCommunication") return { feat: FEATURE_CATALOG.ContactCommunicationDetail, featByEntity: true };
+  return { feat: null, featByEntity: false };
+}
+
+// Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
+function emitStandardFeature({ d, dentity, tab, feat, featByEntity }, standardFeatures, needsDecision) {
+  standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
+  const featWhat = featByEntity
+    ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the`
+    : `classic '${d.schemaName}' is the`;
+  const featProvided = feat.templateProvided
+    ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
+    : "; confirm the exact Freedom component + wiring";
+  const featInferred = featByEntity ? ` — inferred from the entity name; confirm this is ${feat.feature} and not a business detail` : "";
+  const featNote = feat.note ? ` — ${feat.note}` : "";
+  needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
+    reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
+}
+
+// A genuine custom detail (no standard-feature match) carries three review flags.
+function flagCustomDetail({ d, dinfo, dentity, tab }, needsDecision) {
+  // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied
+  // (real entity + columns known). Only flag detail-unresolved when the schema was NOT provided.
+  if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
+    const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
+    needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
+      reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
+  }
+  if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
+    reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
+  // Two SEPARATE-migration flags, surfaced together so neither is silently skipped:
+  //  • editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
+  //    OWN config/schema, so leave it unresolved rather than hardcoding an "add" toolbar; and
+  //  • the related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
+  //    page, if the classic detail used one) is a SEPARATE migration.
+  needsDecision.push(
+    { kind: "detail-editability", item: d.schemaName || d.key,
+      reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` },
+    { kind: "detail-editpage", item: dentity || d.schemaName || d.key,
+      reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` },
+  );
+}
+
+// caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
+// localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
+// detail TITLE precedence: resolved page-caption resource → the detail's own title
+// (manifest.detailSchemas.title) → a plain caption → null. Flag only when it stays an unresolved key.
+function resolveDetailTitle(d, dinfo, resolveText, needsDecision) {
+  const resolvedDcap = d.caption ? resolveText(d.caption) : null;
+  const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
+  const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
+  if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
+    reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
+  return detailTitle;
+}
+
+// details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
+// signature, ensures the owning tab exists (via the shared container builder), and resolves titles/columns
+// from manifest.detailSchemas. Returns details[]/standardFeatures[] + its needsDecision[]/accountedFor[].
+function mapDetails(ctx, containers, profileRegion) {
+  const { index, profileAnchors, detailSchemas, resolveText, payloadDetails } = ctx;
+  const { ensureTab } = containers;
+  const needsDecision = [], details = [], standardFeatures = [], accountedFor = new Set();
+  // #11 dedup: the SAME detail (schema+entity+FK) can be declared under more than one key or re-placed
+  // across schemas → without dedup it is emitted TWICE (once resolved into a tab, once with tab:null).
+  // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
+  // a tab (the real placement) and dropping the phantom.
+  const bySig = dedupDetailPlacements(payloadDetails, { index, profileAnchors, profileRegion }, accountedFor);
   for (const { d, tab, own } of bySig.values()) {
     // Ensure the OWNING tab is emitted as a container so the related list / feature has a home AND its
     // caption resolves — a tab holding ONLY details would otherwise never be built (ensureTab is
@@ -756,53 +829,13 @@ function mapDetails(ctx, containers, profileRegion) {
     // carries an auto-generated placeholder name (SchemaNDetail) that hides it — by its file-storage
     // ENTITY (`*File`, which always backs the Attachments detail). Entity-inferred matches are flagged
     // as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
-    let feat = matchFeature(d.schemaName), featByEntity = false;
-    if (!feat && (dentity || "").endsWith("File")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
-    if (!feat && dentity === "ContactCommunication") { feat = FEATURE_CATALOG.ContactCommunicationDetail; featByEntity = true; }
+    const { feat, featByEntity } = matchStandardFeature(d, dentity);
     if (feat) {
-      // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
-      const featWhat = featByEntity
-        ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the`
-        : `classic '${d.schemaName}' is the`;
-      const featProvided = feat.templateProvided
-        ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
-        : "; confirm the exact Freedom component + wiring";
-      const featInferred = featByEntity ? ` — inferred from the entity name; confirm this is ${feat.feature} and not a business detail` : "";
-      const featNote = feat.note ? ` — ${feat.note}` : "";
-      needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
-        reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
+      emitStandardFeature({ d, dentity, tab, feat, featByEntity }, standardFeatures, needsDecision);
       continue;
     }
-    // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied
-    // (real entity + columns known). Only flag detail-unresolved when the schema was NOT provided.
-    if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
-      const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
-      needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
-        reason: `detail schema '${d.schemaName}' is an auto-generated classic name${childEntityNote} — fetch its schema and pass it as manifest.detailSchemas (get-classic-page-sources gathers these automatically) to resolve the real columns and caption before building; do NOT ship a related list under a placeholder name` });
-    }
-    if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
-      reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
-    // Two SEPARATE-migration flags, surfaced together so neither is silently skipped:
-    //  • editability (view-only vs add/edit/delete) is NOT reliably on the master — it lives in the detail's
-    //    OWN config/schema, so leave it unresolved rather than hardcoding an "add" toolbar; and
-    //  • the related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
-    //    page, if the classic detail used one) is a SEPARATE migration.
-    needsDecision.push(
-      { kind: "detail-editability", item: d.schemaName || d.key,
-        reason: `allowed detail actions (view-only vs add/edit/delete) not determinable from the master — resolve from the detail's own config (B2 recursion) or confirm` },
-      { kind: "detail-editpage", item: dentity || d.schemaName || d.key,
-        reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` },
-    );
-    // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
-    // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
-    const resolvedDcap = d.caption ? resolveText(d.caption) : null;
-    const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
-    // detail TITLE: resolved page-caption resource → the detail's own title (manifest.detailSchemas.title)
-    // → a plain caption → null. Flag only when it stays an unresolved resource key.
-    const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
-    if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
-      reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
+    flagCustomDetail({ d, dinfo, dentity, tab }, needsDecision);
+    const detailTitle = resolveDetailTitle(d, dinfo, resolveText, needsDecision);
     details.push({
       composite: "Expanded list", entity: dentity, detailSchema: d.schemaName,
       caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
