@@ -803,9 +803,13 @@ function checklistGroups(result, opts = {}) {
   G("⚠ Confirm worklist", (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind)).map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // Child pages
   G("Child pages", childs.map((c) => ({ label: `${esc(c.entity)} — separate page?` })));
-  // Quality gates — ALWAYS present. The Freedom PAGE-DESIGN guideline (the `creatio-ui-guidelines` skill), NOT the
-  // clio build `get-guidance` contracts. Apply WHILE designing; else run as a REVIEW pass and FIX findings.
-  G("Quality gates", [{ label: "Freedom **page-design** guidelines — the `creatio-ui-guidelines` skill (how to create/lay out a Freedom page: component choice, colSpan/gaps, `caption` vs `title`, island card settings, contrast + labels) applied WHILE designing the page; if NOT, run it as a REVIEW pass and FIX the findings (style parity with the reference page). NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema" }]);
+  // Quality gates — ALWAYS present. Named after the skill and worded so it CANNOT be waved through: the row is
+  // DONE only if the `creatio-ui-guidelines` skill was actually invoked on EVERY built page. Sessions gamed the
+  // old wording by asserting "native components used → style parity is inherent" (a false equivalence — native
+  // components are necessary, not sufficient; a 950-field wall is still native) and demoting real layout problems
+  // to "refine if desired". So acceptance is now a single, checkable fact — did you run the skill on all pages —
+  // and the escape phrases are explicitly rejected.
+  G("Quality gates", [{ label: "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above." }]);
   return groups;
 }
 

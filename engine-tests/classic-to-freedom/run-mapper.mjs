@@ -2214,8 +2214,12 @@ check("Plan-vs-Done checklist: business rules FOLDED to a count row (not one row
   /Business rules × \d+/.test(ck) && !/\| \d+ \| Business rule \|/.test(ck));
 check("Plan-vs-Done checklist: every row carries a ☐ pending status + an Evidence cell for the agent to fill",
   /\| ☐ pending \| — \|/.test(ck) && /\| # \| Deliverable \| Status \| Evidence \|/.test(ck));
-check("Plan-vs-Done checklist: always seeds a Quality-gates row for the UI-guidelines review (apply while building; else review + fix)",
-  /\*\*Quality gates\*\*/.test(ck) && /creatio-ui-guidelines/.test(ck) && /run it as a REVIEW pass and FIX/.test(ck),
+// review (New Pool session): the Quality-gate row was gamed ("native components → style parity inherent"). It is
+// now worded so it is DONE only if the `creatio-ui-guidelines` skill was invoked on EVERY built page, and the
+// escape phrases are explicitly rejected — no waving it through on component choice.
+check("Plan-vs-Done checklist: Quality-gate row demands the `creatio-ui-guidelines` skill on EVERY built page + rejects the 'native components' escape",
+  /\*\*Quality gates\*\*/.test(ck) && /`creatio-ui-guidelines` skill invoked on EVERY built page/.test(ck)
+  && /NOT acceptance/.test(ck) && /native components/.test(ck),
   () => ck.split("\n").filter((l) => /Quality gates|guidelines/.test(l)));
 
 /* ---- session review (Applicant mini-page + noise): 3 fixes ---- */
