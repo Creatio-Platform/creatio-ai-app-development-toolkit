@@ -41,3 +41,4 @@ see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan
 Golden runners, fixtures and the detailed engine-internals notes live **outside** the shipped skill, in
 `engine-tests/classic-to-freedom/` (see its `README.md` and `engine-internals.md`), so this folder ships
 runtime-only.
+
