@@ -297,6 +297,18 @@ function findDefineCall(ast) {
   return null;
 }
 
+// Record ONE top-level `var`/`const` declarator into the scope: a literal → its value; an array/object
+// initializer → a LAZY node (resolved at its reference site with the real diagnostics sink, so a dynamic
+// construct inside is flagged there, not silently dropped); an enum-object member alias
+// (`var vt = Terrasoft.core.enums.ViewItemType`) → its chain, so `vt.GridLayout` still resolves. Anything
+// else is left unbound (→ proxy/null downstream).
+function bindDeclaration(d, scope) {
+  if (d.id.type !== "Identifier" || !d.init) return;
+  if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
+  else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "node", node: d.init });
+  else if (d.init.type === "MemberExpression") scope.set(d.id.name, { kind: "memberAlias", node: d.init });
+}
+
 function buildAstScope(factory, amdDeps, src) {
   const scope = new Map();
   (factory.params || []).forEach((p, i) => {
@@ -321,14 +333,7 @@ function buildAstScope(factory, amdDeps, src) {
   const body = factory.body?.type === "BlockStatement" ? factory.body.body : [];
   for (const st of body)
     if (st.type === "VariableDeclaration")
-      for (const d of st.declarations) {
-        if (d.id.type !== "Identifier" || !d.init) continue;
-        if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
-        else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "node", node: d.init });
-        // an enum-object alias (`var vt = Terrasoft.core.enums.ViewItemType`) — remembered so `vt.GridLayout`
-        // resolves via the alias chain instead of silently collapsing to null (a mis-classified container).
-        else if (d.init.type === "MemberExpression") scope.set(d.id.name, { kind: "memberAlias", node: d.init });
-      }
+      for (const d of st.declarations) bindDeclaration(d, scope);
   return scope;
 }
 

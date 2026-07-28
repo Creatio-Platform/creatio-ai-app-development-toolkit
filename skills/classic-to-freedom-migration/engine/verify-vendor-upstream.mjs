@@ -57,6 +57,40 @@ function integrityOk(tarball, integrity) {
   try { return createHash(m[1]).update(tarball).digest("base64") === m[2]; } catch { return false; }
 }
 
+// Anchor ONE pin to upstream npm: fetch <package>@<version>, verify the tarball against the registry's
+// own dist.integrity, extract the pinned dist file and assert its LF-normalized SHA-256 matches. Logs the
+// verdict; returns true on a match, false on any mismatch / network / registry failure. (Kept out of main()
+// so the per-pin fetch/verify branches don't stack up as one big function.)
+async function anchorPin(name, pin) {
+  const spec = `${pin.package}@${pin.version}`;
+  try {
+    const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pin.package)}`, { headers: { accept: "application/json" } });
+    if (!meta.ok) throw new Error(`registry HTTP ${meta.status}`);
+    const dist = (await meta.json())?.versions?.[pin.version]?.dist;
+    if (!dist?.tarball) throw new Error(`version ${pin.version} not found in registry`);
+    const tgzRes = await fetch(dist.tarball);
+    if (!tgzRes.ok) throw new Error(`tarball HTTP ${tgzRes.status}`);
+    const tgz = Buffer.from(await tgzRes.arrayBuffer());
+    if (dist.integrity && !integrityOk(tgz, dist.integrity)) throw new Error("tarball failed the registry's own dist.integrity check");
+    const inTar = tarPathOf(name, pin);
+    const entry = readTarEntry(gunzipSync(tgz), inTar);
+    if (!entry) throw new Error(`'${inTar}' not found in ${spec} tarball`);
+    const upstream = sha256Lf(entry);
+    if (upstream === pin.sha256) {
+      console.log(`  ✓ ${name}: pinned SHA-256 matches upstream npm ${spec} (${upstream.slice(0, 16)}…)`);
+      return true;
+    }
+    console.error(`  ✗ ${name}: pinned SHA-256 does NOT match upstream npm ${spec}`);
+    console.error(`      pinned   ${pin.sha256}`);
+    console.error(`      upstream ${upstream}`);
+    console.error(`      The vendored bytes (or the pin) diverge from what npm publishes for ${pin.version}. Re-vendor from the real release.`);
+    return false;
+  } catch (e) {
+    console.error(`  ✗ ${name}: could not anchor ${spec} to upstream npm (${e.message})`);
+    return false;
+  }
+}
+
 async function main() {
   let manifest;
   try { manifest = JSON.parse(readFileSync(MANIFEST, "utf8")); }
@@ -66,36 +100,7 @@ async function main() {
   if (!names.length) { console.error("verify-vendor-upstream: provenance.json lists no files — nothing to anchor"); return 1; }
 
   let failed = 0;
-  for (const name of names) {
-    const pin = files[name];
-    const spec = `${pin.package}@${pin.version}`;
-    try {
-      const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pin.package)}`, { headers: { accept: "application/json" } });
-      if (!meta.ok) throw new Error(`registry HTTP ${meta.status}`);
-      const dist = (await meta.json())?.versions?.[pin.version]?.dist;
-      if (!dist?.tarball) throw new Error(`version ${pin.version} not found in registry`);
-      const tgzRes = await fetch(dist.tarball);
-      if (!tgzRes.ok) throw new Error(`tarball HTTP ${tgzRes.status}`);
-      const tgz = Buffer.from(await tgzRes.arrayBuffer());
-      if (dist.integrity && !integrityOk(tgz, dist.integrity)) throw new Error("tarball failed the registry's own dist.integrity check");
-      const inTar = tarPathOf(name, pin);
-      const entry = readTarEntry(gunzipSync(tgz), inTar);
-      if (!entry) throw new Error(`'${inTar}' not found in ${spec} tarball`);
-      const upstream = sha256Lf(entry);
-      if (upstream === pin.sha256) {
-        console.log(`  ✓ ${name}: pinned SHA-256 matches upstream npm ${spec} (${upstream.slice(0, 16)}…)`);
-      } else {
-        console.error(`  ✗ ${name}: pinned SHA-256 does NOT match upstream npm ${spec}`);
-        console.error(`      pinned   ${pin.sha256}`);
-        console.error(`      upstream ${upstream}`);
-        console.error(`      The vendored bytes (or the pin) diverge from what npm publishes for ${pin.version}. Re-vendor from the real release.`);
-        failed++;
-      }
-    } catch (e) {
-      console.error(`  ✗ ${name}: could not anchor ${spec} to upstream npm (${e.message})`);
-      failed++;
-    }
-  }
+  for (const name of names) if (!(await anchorPin(name, files[name]))) failed++;
   if (failed) { console.error(`\nverify-vendor-upstream: ${failed} of ${names.length} pin(s) NOT anchored to upstream npm`); return 1; }
   console.log(`verify-vendor-upstream: ${names.length} pin(s) anchored to upstream npm`);
   return 0;

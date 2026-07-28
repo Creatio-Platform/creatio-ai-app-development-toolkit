@@ -820,33 +820,34 @@ function mapUnmappedDrop(eff, accountedFor) {
   const HARD_SCAFFOLD_RX = /(?:_gridLayout|Grid)$|^Tabs$/;
   const SOFT_STRUCT_RX = /(?:Tabs|Tab|TabContainer|ControlGroup|Group)$/;
   const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
-  const dropped = new Set();
-  for (const i of (eff.items || [])) {
-    // RV7 — a template-owned item is normally layout context (skip), EXCEPT a `…Button` outside the known
-    // action set: it is neither emitted as a card action nor otherwise accounted, so without this it vanished
-    // with zero warning (unlike an identically-named CUSTOM button, which was already flagged).
+  // A genuine DROP candidate: client-authored (or a non-standard template `…Button` — RV7, surfaced unlike
+  // other template-owned layout context), not a field/detail/group/tab the mapper already handles, not already
+  // accounted, not pure scaffolding, and not a structural container that actually parents a routed child.
+  const isDropCandidate = (i) => {
     const isButton = i.name.endsWith("Button");
-    if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
-    if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
-    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
-    dropped.add(i.name);
-  }
+    if ((i.templateOwned && !isButton) || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) return false;
+    if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) return false;
+    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) return false; // structural container (has children)
+    return true;
+  };
+  const dropped = new Set();
+  for (const i of (eff.items || [])) if (isDropCandidate(i)) dropped.add(i.name);
+  // The decision text for a dropped item — a non-standard UI block, a template button outside the action set,
+  // or a custom button — each needing a different Freedom follow-up.
+  const unmappedReason = (i) => {
+    if (!i.name.endsWith("Button")) {
+      const captionNote = i.caption ? ` (caption ${i.caption})` : "";
+      const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
+      return `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
+    }
+    if (i.templateOwned) return `standard/template button '${i.name}' is not in the recognized action set and got no card-action mapping — confirm the Freedom template already provides it, else wire it as a Freedom card action (RV7)`;
+    return `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
+  };
   // Flag only the ROOT of each dropped subtree (whose parent is not itself dropped) → ONE decision per
   // block, not one per leaf: the SLA timer surfaces as a single "port this block" item, not six.
   for (const i of (eff.items || [])) {
     if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
-    const isBtn = i.name.endsWith("Button");
-    const captionNote = i.caption ? ` (caption ${i.caption})` : "";
-    const generatorNote = i.generator ? ` (generator ${i.generator})` : "";
-    let reason;
-    if (!isBtn) {
-      reason = `classic component '${i.name}'${captionNote}${generatorNote} (and its sub-items) produced no Freedom element — non-standard UI (a LABEL/CONTAINER micro-widget block, e.g. an SLA timer) outside the standard record-page vocabulary; port manually to a Freedom custom component or confirm drop`;
-    } else if (i.templateOwned) {
-      reason = `standard/template button '${i.name}' is not in the recognized action set and got no card-action mapping — confirm the Freedom template already provides it, else wire it as a Freedom card action (RV7)`;
-    } else {
-      reason = `custom button '${i.name}' has no Freedom mapping — wire it as a Freedom card action (its click handler is imperative; review the getActions/onClick body)`;
-    }
-    needsDecision.push({ kind: "unmapped-component", item: i.name, reason });
+    needsDecision.push({ kind: "unmapped-component", item: i.name, reason: unmappedReason(i) });
   }
   return { needsDecision };
 }

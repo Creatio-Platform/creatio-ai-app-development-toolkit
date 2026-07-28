@@ -52,15 +52,24 @@ function regionResolver(viewConfigDiff, resources = {}) {
   // (the plan stays readable) — fall back to the key when the text is not resolved.
   const capText = (raw) => { const k = resourceKey(raw); return resources[k] ?? k; }; // same key normalization the mapper used to STORE the string (incl. #anchor strip)
   const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
+  // The region a SINGLE container resolves to, or null to keep climbing. `first` = the outermost group
+  // label seen so far (for the "Side profile › <group>" case). Kept out of the climb loop so the loop —
+  // and this function — stay simple.
+  const regionOfContainer = (p, first) => {
+    if (p === "SideAreaProfileContainer") return first ? `Side profile › ${first}` : "Side profile";
+    if (p === "HeaderContainer") return "Header";
+    if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
+    const o = byName.get(p);
+    if (!o) return esc(p);
+    if (o.values?.type === "crt.Tab") return `Tab · ${label(o)}`;
+    return null; // a resolved non-tab container — keep climbing toward its parent
+  };
   return (parentName) => {
     let p = parentName, hops = 0, first = null;
     while (p && hops++ < 64) {
-      if (p === "SideAreaProfileContainer") return first ? `Side profile › ${first}` : "Side profile";
-      if (p === "HeaderContainer") return "Header";
-      if (p === "GeneralInfoTabContainer") return "⚠ fallback (unresolved)";
-      const o = byName.get(p);
-      if (!o) return esc(p);
-      if (o.values?.type === "crt.Tab") return `Tab · ${label(o)}`;
+      const region = regionOfContainer(p, first);
+      if (region != null) return region;
+      const o = byName.get(p); // exists: regionOfContainer returned null only for a resolved non-tab container
       if (!first) first = label(o);
       p = o.parentName;
     }
