@@ -2,6 +2,26 @@
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance.
 import { parse as acornParse } from "./vendor/acorn.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { checkVendorIntegrity } from "./verify-vendor.mjs";
+
+// Runtime supply-chain gate. parseSchema feeds UNTRUSTED classic bodies to the vendored acorn parser (the AST
+// route is chosen over `vm` precisely to deny RCE from a hostile body) — but vendor/ integrity was verified ONLY
+// in CI, so a local/offline `node migrate.mjs …` or a fork/clone without CI parsed with whatever acorn.mjs was on
+// disk, tampered or not. Verify it against the pinned provenance before the FIRST parse. Lazy + memoized (once per
+// process) at the PARSE surface — NOT a top-level throw: that fails closed but with a huge blast radius (every
+// importer — mapper, designspec, all goldens — would die at import on any integrity hiccup, e.g. a legitimate
+// re-vendor before the pin is bumped). Gating here fails closed only for code that actually parses hostile input.
+let __vendorOk = null;
+function ensureVendorIntegrity() {
+  if (__vendorOk === null) {
+    const r = checkVendorIntegrity(path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor"));
+    __vendorOk = r.ok;
+    if (!r.ok) throw new Error("classic-to-freedom engine: vendored parser integrity check FAILED — refusing to parse untrusted input:\n" + r.failures.join("\n"));
+  }
+  return __vendorOk;
+}
 
 // Build the parse RESULT from the extracted schema object `s` (+ text-scanned signals from `src`).
 // Kept separate from the AST extraction so the "what fields the merge consumes" shape lives in one place.
@@ -348,6 +368,7 @@ function findFactoryReturn(factory) {
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
 export function parseSchema(src, pkg) {
+  ensureVendorIntegrity(); // supply-chain gate — verify the vendored parser before feeding it untrusted input
   const astDiagnostics = [];
   let ast;
   try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }

@@ -777,6 +777,24 @@ check("mini-page GATE: a named mini page without miniPageSchemas → structure I
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
     return r.structure.complete === false && r.structure.issues.some((i) => /NOT folded/.test(i)); })());
+// review (handoff Fix B): the CYCLIC mini-page fold branch (miniPage.cyclic) had no golden — the exact class of
+// bug that already regressed once for typed pages (a cycle rendered as a false-green "fold" while the gate
+// disagreed). A self-referential mini page (its manifest declares its OWN addRecordMiniPage pointing back at
+// itself) must (a) TERMINATE — no runaway recursion, (b) be RECOGNISED as a cycle (treeCyclic), and (c) NOT be
+// misreported as "NOT folded" (a cycle is resolved-elsewhere, not a missing bundle). NB the mini-within-mini
+// self-cycle closes at the nested mini render, which is isMiniPage (no add-record block by design), so the
+// section-level "already mapped above (cycle)" note is not the observable here — treeCyclic + termination are.
+const cycMiniMan = { entity: "ME", noParentTemplate: true, addRecordMiniPage: { schema: "MPage" },
+  section: [{ pkg: "MSec", body: `define("MESection",[],function(){return{entitySchemaName:"ME",methods:{},diff:[]};});` }],
+  schemas: [{ pkg: "MP", body: `define("MPage",[],function(){return{entitySchemaName:"ME",diff:[{operation:"insert",name:"QF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"QuickName"}}]};});` }],
+  miniPageSchemas: {} };
+cycMiniMan.miniPageSchemas["MPage"] = cycMiniMan; // self-reference → the nested mini fold hits the cycle
+const cycMiniRes = runMigration(cycMiniMan);
+check("cycle(mini): a self-referential mini page TERMINATES and is recognised as a cycle (treeCyclic), not runaway recursion",
+  cycMiniRes.treeCyclic === true);
+check("cycle(mini): a cyclic mini renders its mini spec ('Mini page (quick-add)') and is NOT misreported 'NOT folded'",
+  /Mini page \(quick-add\)/.test(cycMiniRes.plan) && !/NOT folded/.test(cycMiniRes.plan),
+  () => cycMiniRes.plan.split("\n").filter((l) => /mini|cycle|NOT folded/i.test(l)).join(" | "));
 
 /* ---- #6: a SECTION body whose `diff` is built via a dynamic construct must NOT hard-block the form-page plan.
    The section `diff` is never merged into the effective page (only its regex-derived list signals are used), so

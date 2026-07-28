@@ -22,7 +22,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Vendor dir defaults to the one co-located with this script. The optional argv[2] override is a TEST-ONLY hook
 // (the negative goldens point the SAME integrity check at a tampered fixture). The CLI-controlled path is
@@ -44,48 +44,55 @@ const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 const sha256Lf = (buf) =>
   createHash("sha256").update(Buffer.from(buf.toString("utf8").replaceAll("\r\n", "\n"), "utf8")).digest("hex");
 
-function main() {
+// PURE integrity check over a given vendor dir — no console, no process.exit — so it can gate at RUNTIME
+// (engine.mjs calls it before parsing untrusted input) AND back the CLI + goldens. Returns:
+//   { ok: bool, failures: string[], results: [{ name, ok, package?, version?, sha256?/expected?/actual?, error? }] }
+export function checkVendorIntegrity(vendorDir) {
+  const manifestPath = path.join(vendorDir, "provenance.json");
+  const results = [], failures = [];
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch (e) {
-    console.error(`verify-vendor: cannot read ${MANIFEST}: ${e.message}`);
-    return 1;
+    return { ok: false, failures: [`cannot read ${manifestPath}: ${e.message}`], results };
   }
   const files = manifest.files || {};
   const names = Object.keys(files);
-  if (names.length === 0) {
-    console.error("verify-vendor: provenance.json lists no files — nothing pinned");
-    return 1;
-  }
-  let failed = 0;
+  if (names.length === 0) return { ok: false, failures: ["provenance.json lists no files — nothing pinned"], results };
   for (const name of names) {
     const pin = files[name];
-    const file = path.join(VENDOR_DIR, name);
+    const file = path.join(vendorDir, name);
     let actual;
     try {
       actual = sha256Lf(readFileSync(file));
     } catch (e) {
-      console.error(`  ✗ ${name}: cannot read (${e.message})`);
-      failed++;
+      const msg = `${name}: cannot read (${e.message})`;
+      failures.push(msg); results.push({ name, ok: false, error: msg });
       continue;
     }
     if (actual === pin.sha256) {
-      console.log(`  ✓ ${name}  ${pin.package}@${pin.version}  sha256 ${actual.slice(0, 16)}…`);
+      results.push({ name, ok: true, package: pin.package, version: pin.version, sha256: actual });
     } else {
-      console.error(`  ✗ ${name}: SHA-256 MISMATCH — vendored file does not match its pinned ${pin.package}@${pin.version} provenance`);
-      console.error(`      expected ${pin.sha256}`);
-      console.error(`      actual   ${actual}`);
-      console.error(`      If this change is intentional, re-vendor from the pinned upstream artifact and update vendor/provenance.json.`);
-      failed++;
+      const msg = `${name}: SHA-256 MISMATCH — vendored file does not match its pinned ${pin.package}@${pin.version} provenance (expected ${pin.sha256}, actual ${actual})`;
+      failures.push(msg); results.push({ name, ok: false, package: pin.package, version: pin.version, expected: pin.sha256, actual });
     }
   }
-  if (failed) {
-    console.error(`\nverify-vendor: ${failed} of ${names.length} vendored file(s) FAILED integrity check`);
+  return { ok: failures.length === 0, failures, results };
+}
+
+// CLI wrapper — prints the human report and returns an exit code. Runs ONLY when this file is invoked directly
+// (see the import.meta.url guard below); importing the module for `checkVendorIntegrity` must NOT run it.
+function main() {
+  const r = checkVendorIntegrity(VENDOR_DIR);
+  for (const res of r.results) if (res.ok) console.log(`  ✓ ${res.name}  ${res.package}@${res.version}  sha256 ${res.sha256.slice(0, 16)}…`);
+  if (!r.ok) {
+    for (const f of r.failures) console.error(`  ✗ ${f}`); // failure strings carry the diagnostic ('cannot read' / 'nothing pinned' / 'SHA-256 MISMATCH')
+    console.error(`\nverify-vendor: integrity check FAILED — ${r.failures.length} problem(s). If a change is intentional, re-vendor from the pinned upstream artifact and update vendor/provenance.json.`);
     return 1;
   }
-  console.log(`verify-vendor: ${names.length} vendored file(s) verified`);
+  console.log(`verify-vendor: ${r.results.length} vendored file(s) verified`);
   return 0;
 }
 
-process.exit(main());
+// Guarded so importing this module (engine.mjs) does NOT execute the CLI / exit the process.
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) process.exit(main());

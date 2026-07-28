@@ -3,7 +3,13 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
+import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 
 let pass = 0, fail = 0;
@@ -73,6 +79,34 @@ check("glob: bracket/paren metacharacters in a segment are escaped (matched lite
 check("glob: anchored — a prefix match alone does not pass", toRegex("engine/**").test("otherengine/x") === false);
 check("baseDir: literal prefix before the first wildcard", baseDir("skills/x/engine/vendor/**") === "skills/x/engine/vendor");
 check("baseDir: a leading-wildcard glob has an empty base (always active)", baseDir("*.js") === "");
+
+console.log("\n===== vendor runtime integrity gate (offline) =====");
+// Fix A: parseSchema feeds UNTRUSTED bodies to the vendored acorn parser; it now verifies vendor/ integrity at
+// RUNTIME (not only in CI) via the PURE checkVendorIntegrity export. These goldens exercise that pure check
+// offline against copied/tampered fixtures under the OS temp dir — never touching the real vendor files.
+const VENDOR = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/vendor/", import.meta.url));
+check("vendor-gate: importing verify-vendor.mjs did NOT exit the process (CLI run is guarded by import.meta.url) — the pure export is a function",
+  typeof checkVendorIntegrity === "function");
+check("vendor-gate: the REAL vendor dir passes (positive control — the check is not vacuously failing)",
+  checkVendorIntegrity(VENDOR).ok === true);
+// negative 1 — a byte-mutated acorn.mjs beside the genuine provenance pin
+const tmpBad = mkdtempSync(path.join(os.tmpdir(), "vendorgate-bad-"));
+copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpBad, "provenance.json"));
+writeFileSync(path.join(tmpBad, "acorn.mjs"), Buffer.concat([readFileSync(path.join(VENDOR, "acorn.mjs")), Buffer.from("\n// tampered\n")]));
+const badRes = checkVendorIntegrity(tmpBad);
+check("vendor-gate: a byte-mutated acorn.mjs FAILS integrity (ok:false + SHA-256 MISMATCH)",
+  badRes.ok === false && badRes.failures.some((f) => /SHA-256 MISMATCH/.test(f)), () => JSON.stringify(badRes.failures));
+// negative 2 — provenance pins a file that is absent
+const tmpMissing = mkdtempSync(path.join(os.tmpdir(), "vendorgate-missing-"));
+copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpMissing, "provenance.json"));
+const missRes = checkVendorIntegrity(tmpMissing);
+check("vendor-gate: a MISSING pinned file FAILS (ok:false + 'cannot read')",
+  missRes.ok === false && missRes.failures.some((f) => /cannot read/.test(f)));
+// the gate does NOT block normal use on the untampered vendor — parseSchema (which calls ensureVendorIntegrity
+// on the co-located real vendor) parses a benign body cleanly.
+check("vendor-gate: parseSchema still parses normally on the untampered vendor (gate passes, real use not blocked)",
+  parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P").entitySchemaName === "X");
+rmSync(tmpBad, { recursive: true, force: true }); rmSync(tmpMissing, { recursive: true, force: true });
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
