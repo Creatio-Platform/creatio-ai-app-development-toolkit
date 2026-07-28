@@ -64,6 +64,10 @@ SENTINEL_BLOCKED = "BLOCKER: clio-mcp-unavailable"
 # missing server is diagnosed in seconds — never the 664s/964s hangs of ENG-92985.
 DEFAULT_PROBE_TIMEOUT = 20
 
+# Upper bound on --timeout so an extreme explicit value can't defeat the "bounded,
+# never hangs" invariant the docs assert (the watchdog window scales with it).
+MAX_PROBE_TIMEOUT = 120
+
 # Hard wall-clock ceiling the watchdog adds on top of the probe timeout. The probe
 # runs on a worker thread; if it overruns (a clio child that is alive but silent, or
 # a blocking stdout read that never sees the deadline), the watchdog force-kills the
@@ -71,10 +75,11 @@ DEFAULT_PROBE_TIMEOUT = 20
 PROBE_WATCHDOG_GRACE = 5
 
 # mcp_client's cold-start `initialize` handshake runs BEFORE the get-tool-contract call
-# and is bounded by its own `min(self._timeout, 30)` cap — independent of the probe's
-# `timeout`. The watchdog window must cover it, or a slow-but-healthy cold start (JIT,
-# AV-scanned dotnet, corporate proxy) gets force-killed and misclassified as blocked.
-_INITIALIZE_CAP_SECONDS = 30
+# and is bounded by its own cap — independent of the probe's `timeout`. The watchdog
+# window must cover it, or a slow-but-healthy cold start (JIT, AV-scanned dotnet,
+# corporate proxy) gets force-killed and misclassified as blocked. Bind to mcp_client's
+# named constant so the two can't silently drift out of sync (a test also asserts equality).
+_INITIALIZE_CAP_SECONDS = mcp_client.INITIALIZE_TIMEOUT_CAP
 
 # `detail` echoes raw server/exception text into agent-visible output. Bound it so a
 # verbose or hostile server response cannot flood agent context; it is diagnostic only.
@@ -84,15 +89,22 @@ MAX_DETAIL_CHARS = 800
 # console/JSON output or any CI transcript. clio talks to Creatio web apps and DBs, so
 # error text can include URL credentials, connection-string secrets, or auth tokens.
 # Over-redaction of diagnostic text is safe; a missed secret is not — patterns are broad.
+_SECRET_KEY = r"(?:password|pwd|secret|token|api[_-]?key)"
 _REDACTIONS = (
     # scheme://user:pass@host  ->  scheme://***:***@host
     (re.compile(r"(//)[^/:@\s]+:[^/@\s]+@"), r"\1***:***@"),
     # bare user:pass@host (no scheme)  ->  ***:***@host
     (re.compile(r"(?<![\w/])[\w.\-]+:[^\s:@/]+@([\w.\-]+)"), r"***:***@\1"),
-    # connection-string credentials: Password=... / pwd=...  ->  <name>=***
-    (re.compile(r"(?i)\b(password|pwd)\s*=\s*[^;\s]+"), r"\1=***"),
-    # auth tokens / keys: access_token=... api_key=... token=... secret=...
-    (re.compile(r"(?i)\b(access[_-]?token|api[_-]?key|token|secret)\s*=\s*[^;&\s]+"), r"\1=***"),
+    # key=value secrets, INCLUDING compound/prefixed names (client_secret, refresh_token,
+    # db_password, UserPassword). No `\b` anchor — `_`/camelCase glue a prefix on with no
+    # word boundary, so the prefix is absorbed instead. Over-redaction is the accepted mode.
+    (re.compile(r"(?i)([\w.\-]*" + _SECRET_KEY + r")\s*=\s*[^;&\s]+"), r"\1=***"),
+    # JSON-style "name": "value" for the same key family  ->  "name": "***"
+    (re.compile(r'(?i)("[\w.\-]*' + _SECRET_KEY + r'"\s*:\s*)"[^"]*"'), r'\1"***"'),
+    # Authorization: Bearer <token> / bare Bearer <token>  ->  Bearer ***
+    (re.compile(r"(?i)(bearer)\s+\S+"), r"\1 ***"),
+    # X-Api-Key: <token> / similar header  ->  <header>: ***
+    (re.compile(r"(?i)(x-api-key\s*:)\s*\S+"), r"\1 ***"),
 )
 
 _NO_SELF_BOOTSTRAP = (
@@ -124,8 +136,10 @@ _REMEDY_UNRESPONSIVE = (
 _REMEDY_HEALTHY = (
     "clio is healthy over stdio (its MCP server answered get-tool-contract).\n"
     "If this host exposes native clio MCP tools, use them. If it does NOT (no native MCP "
-    "transport), runtime/scripts/mcp_client.py is the SANCTIONED path — but run it only "
-    "after the developer explicitly opts in. clio itself is not the blocker here."
+    "transport): FIRST recommend the developer connect clio as a native MCP server (the "
+    "preferred path); only if that cannot be done now is runtime/scripts/mcp_client.py the "
+    "sanctioned fallback, and only after the developer explicitly opts in. clio itself is "
+    "not the blocker here."
 )
 
 
@@ -230,7 +244,12 @@ def _default_prober(timeout):
 
     def run():
         try:
-            box["result"] = mcp_client.call_mcp_tool("get-tool-contract", {}, timeout=timeout)
+            # Single-shot, NON-retrying: call_mcp_tool's get-tool-contract branch retries on
+            # exception (close() + re-call), which would RE-SPAWN a clio child after the
+            # watchdog kill and leave it unsupervised past the gate (PR #55 review). call_tool
+            # does not retry, so after a force-kill the worker raises once and stops.
+            box["result"] = mcp_client._get_shared_client().call_tool(
+                "get-tool-contract", {}, timeout=timeout)
         except Exception as error:  # captured; re-raised on the calling thread below
             box["error"] = error
 
@@ -324,15 +343,18 @@ def main(argv=None):
     parser.add_argument("--json", action="store_true",
                         help="print only the JSON verdict (no leading sentinel line)")
     parsed = parser.parse_args(argv)
-    if parsed.timeout <= 0:
-        parser.error("--timeout must be a positive integer number of seconds")
+    if not 0 < parsed.timeout <= MAX_PROBE_TIMEOUT:
+        parser.error(f"--timeout must be between 1 and {MAX_PROBE_TIMEOUT} seconds")
 
     try:
         result = classify(timeout=parsed.timeout)
     finally:
-        # Reap the persistent clio child deterministically (the gate is one-shot and
-        # never calls close()); avoids an orphaned process / up-to-5s shutdown latency.
-        _force_kill_shared_client()
+        # Reap the persistent clio child deterministically (the gate is one-shot and never
+        # calls close()); best-effort — a cleanup failure must never mask the verdict.
+        try:
+            _force_kill_shared_client()
+        except Exception:
+            pass
     payload = json.dumps(result.to_dict(), indent=2)
     if parsed.json:
         print(payload)

@@ -484,13 +484,63 @@ class EnsureStartedEncodingTests(unittest.TestCase):
             return_value=[sys.executable, "-c", emit_bad_bytes],
         ):
             client = PersistentMcpClient()
+            proc = None
             try:
                 client._ensure_started()
-                line = client._proc.stdout.readline()  # must not raise UnicodeDecodeError
+                proc = client._proc
+                line = proc.stdout.readline()  # must not raise UnicodeDecodeError
             finally:
                 client._kill()
+                if proc is not None:
+                    for stream in (proc.stdin, proc.stdout, proc.stderr):
+                        if stream is not None:
+                            stream.close()
         self.assertIn("�", line, "invalid bytes must be replaced, not crash the read loop")
         self.assertIn("not-utf8", line)
+
+
+class ForceKillRealSubprocessTests(unittest.TestCase):
+    # PR #55 R3: prove the FULL chain — real Popen + real _shared_client + the real
+    # force_kill_shared_client() — actually terminates a genuinely blocked child (not a
+    # mock). This is the PR's core no-orphan safety guarantee; mocks can't falsify it.
+    def test_force_kill_terminates_a_real_blocked_child(self):
+        import subprocess
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],  # blocks until stdin EOF/kill
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            self.assertIsNone(proc.poll(), "child should be alive (blocked) before the kill")
+            with patch("runtime.scripts.mcp_client._shared_client", SimpleNamespace(_proc=proc)):
+                force_kill_shared_client()
+            proc.wait(timeout=10)
+            self.assertIsNotNone(proc.poll(), "force_kill must actually terminate the real child")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+
+
+class InitializeOnceValidationTests(unittest.TestCase):
+    # PR #55 R3: _initialize_once must NOT mark itself initialized when the handshake
+    # response never arrived (child killed mid-initialize / EOF) — it must raise, so
+    # call_method aborts instead of writing to a dead pipe and triggering call_mcp_tool's
+    # retry-driven re-spawn.
+    def test_raises_when_init_response_absent(self):
+        client = PersistentMcpClient()
+        client._send_and_receive = lambda message, target_id, timeout: []  # EOF: nothing collected
+        with self.assertRaises(RuntimeError):
+            client._initialize_once()
+        self.assertFalse(client._initialized)
+
+    def test_marks_initialized_when_init_response_present(self):
+        client = PersistentMcpClient()
+        client._send_and_receive = lambda message, target_id, timeout: [f'{{"id": {target_id}}}']
+        client._initialize_once()
+        self.assertTrue(client._initialized)
 
 
 if __name__ == "__main__":
