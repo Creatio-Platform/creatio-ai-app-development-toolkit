@@ -73,6 +73,263 @@ function foldSubPage(key, schemasMap, ctx) {
   } catch (e) { return { status: "error", error: e.message }; }
 }
 
+// #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns, so the
+// mapper can resolve auto-named (SchemaNDetail) details and show the related-list columns in the spec.
+function parseDetailSchemas(manifest, bodyOf) {
+  const detailSchemas = {};
+  for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
+    detailSchemas[name] = detailSchemaRecord(name, e, bodyOf);
+  }
+  return detailSchemas;
+}
+
+function detailSchemaRecord(name, e, bodyOf) {
+  const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
+  let body = "";
+  if (hasBody) body = typeof e === "string" ? e : bodyOf(e);
+  const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
+  const eObj = (e && typeof e === "object") ? e : {};
+  // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
+  // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages).
+  const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(body);
+  const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
+  // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown.
+  const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body) || /"?addRecordButtonVisible"?\s*:\s*false/.test(body);
+  const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
+  const parsedEntity = p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null;
+  return {
+    entity: eObj.entity || parsedEntity,
+    columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
+    title: eObj.title || null, // human detail title (from its resources)
+    // editPage: explicit manifest value WINS — a string names the child edit page; `false` = the agent verified
+    // on-stand that NO Classic *Page exists. Else the name from getEditPageName; else null = unverified.
+    editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
+    // editable: explicit manifest value WINS (false = verified view/attach-only); else the body heuristic; else null.
+    editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
+    // editableVerified: was `editable:false` an EXPLICIT agent assertion (view/attach-only confirmed), or only
+    // the add-record-hidden heuristic? Hiding Add stops NEW records, not editing EXISTING ones, so the heuristic
+    // alone must NOT waive a child page — only a verified false does (Major).
+    editableVerified: ("editable" in eObj),
+    error: p.error || null,
+    // Major 4 — a detail body's AST diagnostics must reach the gate too: a detail whose `diff` is built by
+    // an unresolved call parses WITHOUT an error but yields columns:null. Keeping them here lets the gate
+    // block on an unresolved STRUCTURAL detail field, instead of a silent green with empty columns.
+    astDiagnostics: p.astDiagnostics || [],
+  };
+}
+
+// Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
+// NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
+// (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
+// the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
+const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
+function reportDynamicMappingProps(schemas, changeSet) {
+  for (const s of schemas) {
+    for (const d of (s.astDiagnostics || [])) {
+      const m = /^diff\.(\d+)\.values\.(\w+)$/.exec(d.path || "");
+      if (!m || !MAPPING_PROPS.has(m[2])) continue;
+      // match by the ORIGINAL AST index (carried as `astIndex`), not array position: normalizeDiff drops
+      // null/nameless ops, so positional indexing drifted and mislabeled the decision (E3).
+      const el = (s.diff || []).find((o) => o.astIndex === +m[1]);
+      const item = el?.name || el?.bindTo || `diff[${m[1]}]`;
+      changeSet.needsDecision.push({ kind: "dynamic-property", item,
+        reason: `'${item}' has a dynamic '${m[2]}' (${d.kind}) the parser could not resolve statically — the ChangeSet shows the DEFAULT (e.g. visible:true). Wire the real Freedom behavior (business rule / binding) instead of shipping the static default.` });
+    }
+  }
+}
+
+// Quick filters unioned across the section chain, first-wins by name (a later schema re-declaring a filter
+// does not duplicate the row).
+function unionQuickFilters(sectionSchemas) {
+  const seen = new Set(), out = [];
+  for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
+    if (f?.name && !seen.has(f.name)) { seen.add(f.name); out.push(f); }
+  }
+  return out;
+}
+
+// section analysis — union the signals across the section schema chain (last-wins for the mini page).
+function analyzeSectionChain(sectionSchemas) {
+  if (!sectionSchemas.length) return null;
+  return {
+    addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
+    sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
+    listColumns: [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
+    quickFilters: unionQuickFilters(sectionSchemas),
+    processLaunch: sectionSchemas.some((l) => l.processLaunch),
+    processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
+  };
+}
+
+// typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
+// (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
+// `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
+// as `manifest.typedPages` (array of names or {schema,type,template,kind}). They are first-class SCOPE and a
+// build TRAP: each Type routes to its OWN Classic page, which takes precedence over a general Freedom
+// RelatedPage binding — so they were collapsed to one form and never listed. Surface them as a decision so
+// they land in the ⚠ Confirm worklist + the Plan-vs-Done table (not just prose), and in the Main-scope table.
+function normalizeTypedPages(manifest, changeSet) {
+  const typedPages = (manifest.typedPages || [])
+    .map((t) => {
+      if (typeof t === "string") return { schema: t };
+      return (t && typeof t === "object") ? t : null;
+    })
+    .filter((t) => t?.schema);
+  if (typedPages.length) {
+    changeSet.needsDecision.push({
+      kind: "typed-page",
+      item: typedPages.map((t) => t.schema).join(", "),
+      reason: `Typed entity: ${typedPages.length} per-type Classic edit page(s). Each record Type routes to its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding (so "+ New" / open-record open Classic unless overridden). Bind — or rebuild — a Freedom form PER Type (by the Type column), not one form for all types; verify per-type routing on-stand after binding.`,
+    });
+  }
+  return typedPages;
+}
+
+// child pages (recursion): each CUSTOM detail's related list opens the child entity's edit form on
+// add/edit — a separate migration. Enumerate them so the plan is a tree (parent + one sub-plan each).
+function enumerateChildPages(changeSet, detailSchemas) {
+  return (changeSet.details || []).map((d) => {
+    const ds = detailSchemas[d.detailSchema];
+    return {
+      entity: d.entity || null,
+      via: d.caption || d.detailSchema || d.entity,
+      // preserve an explicit `false` (agent verified: no page) — `|| null` would swallow it into "unverified".
+      editPage: ds ? (ds.editPage ?? null) : null,
+      editable: ds ? ds.editable : null,
+      editableVerified: ds ? !!ds.editableVerified : false,
+    };
+  }).filter((c) => c.entity);
+}
+
+// RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
+// entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
+// parent page + one real sub-mapping per related list.
+function foldChildPages(childPages, childSchemas, foldCtx) {
+  for (const c of childPages) {
+    const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
+    if (!key) continue;
+    const f = foldSubPage(key, childSchemas, foldCtx);
+    if (f.status === "cycle") { c.cyclic = true; continue; }   // mapped higher on this branch
+    if (f.status === "error") { c.specError = f.error; continue; } // malformed child manifest — keep the listed row
+    const res = f.res;
+    c.spec = res.designSpec;                 // the child page's Layout/Section/Logic/Confirm — the mapping
+    c.mappedEntity = res.entity;
+    c.resolvedFrom = key;
+    c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
+    c.grandChildren = c.childPages.length;
+    c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
+    c.childReasons = res.gate?.reasons || [];
+    c.childStructIncomplete = !!(res.structure && !res.structure.complete);
+    c.treeCyclic = !!res.treeCyclic;
+  }
+}
+
+// TYPED-PAGE RECURSION — a typed entity's per-type edit pages are FORM deliverables, not a "map at build"
+// promise. Fold each like a child page (bundle in manifest.typedPageSchemas). `bindOnly:true` is the ONLY escape
+// (layout identical to the base). An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue.
+function foldTypedPages(typedPages, typedSchemas, foldCtx) {
+  for (const t of typedPages) {
+    if (t.bindOnly === true) { t.resolved = "bind"; continue; }
+    const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
+    if (!tkey) { t.resolved = false; continue; }
+    const f = foldSubPage(tkey, typedSchemas, foldCtx);
+    // A cycle is its OWN resolved state — NOT `"fold"` (which claims a spec): the typed form is mapped higher on
+    // this branch. `"fold"` on a cycle made the gate pass while the renderer (no spec) printed "NOT resolved" — the
+    // two disagreed. `"cycle"` is handled consistently by both the structure validator and the renderer.
+    if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
+    if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
+    const res = f.res;
+    t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
+    t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
+    t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
+  }
+}
+
+// The mini page's schema name: an explicit manifest declaration WINS (`false` = verified none, a string or
+// {schema} names it); otherwise the name the section body registered, else none.
+function resolveMiniPageName(mpDecl, secMpName) {
+  if (mpDecl === false) return null;
+  if (typeof mpDecl === "string" && mpDecl) return mpDecl;
+  if (mpDecl && typeof mpDecl === "object" && mpDecl.schema) return mpDecl.schema;
+  return secMpName || null;
+}
+
+// ADD-RECORD MINI PAGE — the section's quick-add form. Its registration lives at the module/edit-page level
+// (SysModuleEdit miniPageSchema + miniPageModes containing "add"), NOT always in the section body, so the
+// section-body extractor alone can FALSELY report "none". Authoritative source: list-entity-client-schemas
+// (miniPageSchema), supplied as manifest.addRecordMiniPage ({schema}|false). Fold it like a typed/child page
+// via manifest.miniPageSchemas so the plan carries its FULL layout.
+function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
+  const miniPage = { schema: mpName, type: (mpDecl && typeof mpDecl === "object" && mpDecl.type) || null };
+  const mkey = [miniPage.schema, miniPage.schema + "MiniPage"].find((k) => k && miniPageSchemas[k]);
+  if (!mkey) { miniPage.unfolded = true; return miniPage; }
+  const f = foldSubPage(mkey, miniPageSchemas, foldCtx);
+  if (f.status === "cycle") { miniPage.cyclic = true; return miniPage; }
+  if (f.status === "error") { miniPage.specError = f.error; return miniPage; }
+  const res = f.res;
+  miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
+  miniPage.reasons = res.gate?.reasons || [];
+  miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
+  return miniPage;
+}
+
+// a generic related list whose own schema was NOT supplied → its columns and child edit page are unknown
+function detailSchemaIssues(manifest, changeSet) {
+  const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
+  return (changeSet.details || [])
+    .filter((d) => d.detailSchema && !suppliedDetailKeys.has(d.detailSchema))
+    .map((d) => {
+      const entityNote = d.entity ? ` (${d.entity})` : "";
+      return `detail '${d.detailSchema}'${entityNote}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`;
+    });
+}
+
+// typed pages: each must be RESOLVED before the plan — folded (its bundle supplied) or explicitly bindOnly.
+// An unresolved typed form (or one whose own structure is incomplete) blocks, exactly like a child page —
+// this is what stops the "per-type field mapping done at build" deferral.
+function typedPageIssue(t) {
+  if (t.resolved === "bind") return null;
+  if (t.resolved === "cycle") return null; // mapped higher on this branch (cycle) — resolved elsewhere, not a gap
+  if (t.specError) return `typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`;
+  if (t.resolved === "fold") {
+    return t.structIncomplete ? `typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run` : null;
+  }
+  const typeNote = t.type ? ` (type "${t.type}")` : "";
+  return `typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`;
+}
+
+// add-record mini page (a section/list concern — only gated when this migration has a section). It must be
+// RESOLVED: folded (bundle in manifest.miniPageSchemas), or verified-none (manifest.addRecordMiniPage:false).
+// Not asserting absence from the section body alone — that FALSELY reported "none" when the mini page was
+// registered per edit-page (list-entity-client-schemas.miniPageSchema).
+function miniPageIssue(miniPage, miniPageVerified) {
+  if (!miniPage) {
+    if (miniPageVerified) return null;
+    return `add-record mini page NOT verified — check \`list-entity-client-schemas\` (a per-type edit page with \`miniPageSchema\` + \`miniPageModes\` containing "add") and record manifest.addRecordMiniPage: { "schema": "<MiniPage>" } to fold it, or false if there is none. Do NOT assume "no mini page" — it is registered at the module/edit-page level, not always in the section body.`;
+  }
+  if (miniPage.specError) return `add mini page '${miniPage.schema}': supplied bundle failed to parse (${miniPage.specError}) — fix and re-run`;
+  if (miniPage.unfolded) return `add mini page '${miniPage.schema}': NOT folded — assemble its bundle (\`get-classic-page-sources --schema-name ${miniPage.schema}\`) into manifest.miniPageSchemas so the engine folds its layout here (or record manifest.addRecordMiniPage:false if there is genuinely none)`;
+  if (miniPage.structIncomplete) return `add mini page '${miniPage.schema}': its OWN structure is incomplete — resolve and re-run`;
+  return null;
+}
+
+// ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
+// generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
+// Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
+// exit, and the renderer prints it into the plan — the agent literally can't present a clean plan without
+// supplying the schemas. This is INPUT completeness (distinct from the correctness `gate`).
+function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified }) {
+  const issues = [
+    ...detailSchemaIssues(manifest, changeSet),
+    // Major 3: a mapped child whose OWN structure is incomplete, a real-but-unmapped edit page, or an
+    // unverified child each contribute a structure issue (recursive aggregation) — see childPageIssue.
+    ...childPages.map(childPageIssue).filter(Boolean),
+    ...typedPages.map(typedPageIssue).filter(Boolean),
+    ...(section ? [miniPageIssue(miniPage, miniPageVerified)].filter(Boolean) : []),
+  ];
+  return { complete: issues.length === 0, issues };
+}
+
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
@@ -101,40 +358,7 @@ export function runMigration(manifest, opts = {}) {
   const eff = mergeHierarchy(schemas, { seedTemplate });
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns, so the
   // mapper can resolve auto-named (SchemaNDetail) details and show the related-list columns in the spec.
-  const detailSchemas = {};
-  for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
-    const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-    let body = "";
-    if (hasBody) body = typeof e === "string" ? e : bodyOf(e);
-    const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
-    // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
-    // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages).
-    const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(body);
-    // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown.
-    const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body) || /"?addRecordButtonVisible"?\s*:\s*false/.test(body);
-    const eObj = (e && typeof e === "object") ? e : {};
-    const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
-    const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
-    detailSchemas[name] = {
-      entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
-      columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
-      title: eObj.title || null, // human detail title (from its resources)
-      // editPage: explicit manifest value WINS — a string names the child edit page; `false` = the agent verified
-      // on-stand that NO Classic *Page exists. Else the name from getEditPageName; else null = unverified.
-      editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
-      // editable: explicit manifest value WINS (false = verified view/attach-only); else the body heuristic; else null.
-      editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
-      // editableVerified: was `editable:false` an EXPLICIT agent assertion (view/attach-only confirmed), or only
-      // the add-record-hidden heuristic? Hiding Add stops NEW records, not editing EXISTING ones, so the heuristic
-      // alone must NOT waive a child page — only a verified false does (Major).
-      editableVerified: ("editable" in eObj),
-      error: p.error || null,
-      // Major 4 — a detail body's AST diagnostics must reach the gate too: a detail whose `diff` is built by
-      // an unresolved call parses WITHOUT an error but yields columns:null. Keeping them here lets the gate
-      // block on an unresolved STRUCTURAL detail field (below), instead of a silent green with empty columns.
-      astDiagnostics: p.astDiagnostics || [],
-    };
-  }
+  const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     clientEditableSchemas: manifest.clientEditableSchemas || [],
@@ -168,38 +392,8 @@ export function runMigration(manifest, opts = {}) {
     ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),
     ...sectionParseErrors.map((e) => ({ pkg: e.pkg, role: "section", path: "", kind: `section parse error: ${e.error}` })),
   ];
-  // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
-  // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
-  // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
-  // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
-  const MAPPING_PROPS = new Set(["visible", "enabled", "readonly", "readOnly", "layout", "hint", "tip", "caption", "required"]);
-  for (const s of schemas) {
-    for (const d of (s.astDiagnostics || [])) {
-      const m = /^diff\.(\d+)\.values\.(\w+)$/.exec(d.path || "");
-      if (!m || !MAPPING_PROPS.has(m[2])) continue;
-      // match by the ORIGINAL AST index (carried as `astIndex`), not array position: normalizeDiff drops
-      // null/nameless ops, so positional indexing drifted and mislabeled the decision (E3).
-      const el = (s.diff || []).find((o) => o.astIndex === +m[1]);
-      const item = el?.name || el?.bindTo || `diff[${m[1]}]`;
-      changeSet.needsDecision.push({ kind: "dynamic-property", item,
-        reason: `'${item}' has a dynamic '${m[2]}' (${d.kind}) the parser could not resolve statically — the ChangeSet shows the DEFAULT (e.g. visible:true). Wire the real Freedom behavior (business rule / binding) instead of shipping the static default.` });
-    }
-  }
-  // section analysis — union the signals across the section schema chain (last-wins for the mini page).
-  const section = sectionSchemas.length ? {
-    addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
-    sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
-    listColumns: [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
-    quickFilters: (() => {
-      const seen = new Set(), out = [];
-      for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
-        if (f?.name && !seen.has(f.name)) { seen.add(f.name); out.push(f); }
-      }
-      return out;
-    })(),
-    processLaunch: sectionSchemas.some((l) => l.processLaunch),
-    processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
-  } : null;
+  reportDynamicMappingProps(schemas, changeSet);
+  const section = analyzeSectionChain(sectionSchemas);
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
@@ -207,29 +401,8 @@ export function runMigration(manifest, opts = {}) {
   // build TRAP: each Type routes to its OWN Classic page, which takes precedence over a general Freedom
   // RelatedPage binding — so they were collapsed to one form and never listed. Surface them as a decision so
   // they land in the ⚠ Confirm worklist + the Plan-vs-Done table (not just prose), and in the Main-scope table.
-  const typedPages = (manifest.typedPages || [])
-    .map((t) => {
-      if (typeof t === "string") return { schema: t };
-      return (t && typeof t === "object") ? t : null;
-    })
-    .filter((t) => t?.schema);
-  if (typedPages.length) {
-    changeSet.needsDecision.push({
-      kind: "typed-page",
-      item: typedPages.map((t) => t.schema).join(", "),
-      reason: `Typed entity: ${typedPages.length} per-type Classic edit page(s). Each record Type routes to its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding (so "+ New" / open-record open Classic unless overridden). Bind — or rebuild — a Freedom form PER Type (by the Type column), not one form for all types; verify per-type routing on-stand after binding.`,
-    });
-  }
-  // child pages (recursion): each CUSTOM detail's related list opens the child entity's edit form on
-  // add/edit — a separate migration. Enumerate them so the plan is a tree (parent + one sub-plan each).
-  const childPages = (changeSet.details || []).map((d) => ({
-    entity: d.entity || null,
-    via: d.caption || d.detailSchema || d.entity,
-    // preserve an explicit `false` (agent verified: no page) — `|| null` would swallow it into "unverified".
-    editPage: detailSchemas[d.detailSchema] ? (detailSchemas[d.detailSchema].editPage ?? null) : null,
-    editable: detailSchemas[d.detailSchema] ? detailSchemas[d.detailSchema].editable : null,
-    editableVerified: detailSchemas[d.detailSchema] ? !!detailSchemas[d.detailSchema].editableVerified : false,
-  })).filter((c) => c.entity);
+  const typedPages = normalizeTypedPages(manifest, changeSet);
+  const childPages = enumerateChildPages(changeSet, detailSchemas);
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
   // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
@@ -247,75 +420,19 @@ export function runMigration(manifest, opts = {}) {
   const memo = opts.memo instanceof Map ? opts.memo : new Map();
   const memoStats = opts.memoStats || { hits: 0, misses: 0 };
   const foldCtx = { visited, memo, memoStats, baseDir }; // shared fold context for foldSubPage (child/typed/mini)
-  const childSchemas = manifest.childPageSchemas || {};
-  for (const c of childPages) {
-    const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
-    if (!key) continue;
-    const f = foldSubPage(key, childSchemas, foldCtx);
-    if (f.status === "cycle") { c.cyclic = true; continue; }   // mapped higher on this branch
-    if (f.status === "error") { c.specError = f.error; continue; } // malformed child manifest — keep the listed row
-    const res = f.res;
-    c.spec = res.designSpec;                 // the child page's Layout/Section/Logic/Confirm — the mapping
-    c.mappedEntity = res.entity;
-    c.resolvedFrom = key;
-    c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
-    c.grandChildren = c.childPages.length;
-    c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
-    c.childReasons = res.gate?.reasons || [];
-    c.childStructIncomplete = !!(res.structure && !res.structure.complete);
-    c.treeCyclic = !!res.treeCyclic;
-  }
-  // TYPED-PAGE RECURSION — a typed entity's per-type edit pages are FORM deliverables, not a "map at build"
-  // promise. Fold each like a child page (bundle in manifest.typedPageSchemas). `bindOnly:true` is the ONLY escape
-  // (layout identical to the base). An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
-  const typedSchemas = manifest.typedPageSchemas || {};
-  for (const t of typedPages) {
-    if (t.bindOnly === true) { t.resolved = "bind"; continue; }
-    const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
-    if (!tkey) { t.resolved = false; continue; }
-    const f = foldSubPage(tkey, typedSchemas, foldCtx);
-    // A cycle is its OWN resolved state — NOT `"fold"` (which claims a spec): the typed form is mapped higher on
-    // this branch. `"fold"` on a cycle made the gate pass while the renderer (no spec) printed "NOT resolved" — the
-    // two disagreed. `"cycle"` is handled consistently by both the structure validator and the renderer.
-    if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
-    if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
-    const res = f.res;
-    t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
-    t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
-    t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
-  }
+  foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
+  foldTypedPages(typedPages, manifest.typedPageSchemas || {}, foldCtx);
   // ADD-RECORD MINI PAGE — the section's quick-add form. Its registration lives at the module/edit-page level
   // (SysModuleEdit miniPageSchema + miniPageModes containing "add"), NOT always in the section body, so the
   // section-body extractor alone can FALSELY report "none". Authoritative source: list-entity-client-schemas
   // (miniPageSchema), supplied as manifest.addRecordMiniPage ({schema}|false). Fold it like a typed/child page
   // via manifest.miniPageSchemas so the plan carries its FULL layout. Only meaningful when there is a section.
-  const miniPageSchemas = manifest.miniPageSchemas || {};
   const secMpName = sectionSchemas.map((l) => l.addRecordMiniPage).find((v) => typeof v === "string");
   const secMpExists = !!secMpName || sectionSchemas.some((l) => l.addRecordMiniPage === true);
   const mpDecl = manifest.addRecordMiniPage; // {schema}|"name"|false|undefined
-  let mpName;
-  if (mpDecl === false) mpName = null;
-  else if (typeof mpDecl === "string" && mpDecl) mpName = mpDecl;
-  else if (mpDecl && typeof mpDecl === "object" && mpDecl.schema) mpName = mpDecl.schema;
-  else mpName = secMpName || null;
+  const mpName = resolveMiniPageName(mpDecl, secMpName);
   const miniPageVerified = mpDecl !== undefined || secMpExists; // explicit {schema}/false, or the section body names one
-  let miniPage = null;
-  if (mpName) {
-    miniPage = { schema: mpName, type: (mpDecl && typeof mpDecl === "object" && mpDecl.type) || null };
-    const mkey = [miniPage.schema, miniPage.schema + "MiniPage"].find((k) => k && miniPageSchemas[k]);
-    if (!mkey) { miniPage.unfolded = true; }
-    else {
-      const f = foldSubPage(mkey, miniPageSchemas, foldCtx);
-      if (f.status === "cycle") { miniPage.cyclic = true; }
-      else if (f.status === "error") { miniPage.specError = f.error; }
-      else {
-        const res = f.res;
-        miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
-        miniPage.reasons = res.gate?.reasons || [];
-        miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
-      }
-    }
-  }
+  const miniPage = mpName ? foldMiniPage(mpName, mpDecl, manifest.miniPageSchemas || {}, foldCtx) : null;
   const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
@@ -383,48 +500,7 @@ export function runMigration(manifest, opts = {}) {
   // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
   // exit, and the renderer prints it into the plan — the agent literally can't present a clean plan without
   // supplying the schemas. This is INPUT completeness (distinct from the correctness `gate` above).
-  const structure = (() => {
-    const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
-    const issues = [];
-    for (const d of (changeSet.details || [])) {
-      // a generic related list whose own schema was NOT supplied → its columns and child edit page are unknown
-      if (d.detailSchema && !suppliedDetailKeys.has(d.detailSchema)) {
-        const entityNote = d.entity ? ` (${d.entity})` : "";
-        issues.push(`detail '${d.detailSchema}'${entityNote}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
-      }
-    }
-    // Major 3: a mapped child whose OWN structure is incomplete, a real-but-unmapped edit page, or an
-    // unverified child each contribute a structure issue (recursive aggregation) — see childPageIssue.
-    for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
-    // typed pages: each must be RESOLVED before the plan — folded (its bundle supplied) or explicitly bindOnly.
-    // An unresolved typed form (or one whose own structure is incomplete) blocks, exactly like a child page —
-    // this is what stops the "per-type field mapping done at build" deferral.
-    for (const t of typedPages) {
-      if (t.resolved === "bind") continue;
-      if (t.resolved === "cycle") continue; // mapped higher on this branch (cycle) — resolved elsewhere, not a gap
-      if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
-      if (t.resolved === "fold") {
-        if (t.structIncomplete) issues.push(`typed page '${t.schema}': its OWN structure is incomplete — resolve its details/child pages and re-run`);
-        continue;
-      }
-      const typeNote = t.type ? ` (type "${t.type}")` : "";
-      issues.push(`typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
-    }
-    // add-record mini page (a section/list concern — only gated when this migration has a section). It must be
-    // RESOLVED: folded (bundle in manifest.miniPageSchemas), or verified-none (manifest.addRecordMiniPage:false).
-    // Not asserting absence from the section body alone — that FALSELY reported "none" when the mini page was
-    // registered per edit-page (list-entity-client-schemas.miniPageSchema).
-    if (section) {
-      if (miniPage) {
-        if (miniPage.specError) issues.push(`add mini page '${miniPage.schema}': supplied bundle failed to parse (${miniPage.specError}) — fix and re-run`);
-        else if (miniPage.unfolded) issues.push(`add mini page '${miniPage.schema}': NOT folded — assemble its bundle (\`get-classic-page-sources --schema-name ${miniPage.schema}\`) into manifest.miniPageSchemas so the engine folds its layout here (or record manifest.addRecordMiniPage:false if there is genuinely none)`);
-        else if (miniPage.structIncomplete) issues.push(`add mini page '${miniPage.schema}': its OWN structure is incomplete — resolve and re-run`);
-      } else if (!miniPageVerified) {
-        issues.push(`add-record mini page NOT verified — check \`list-entity-client-schemas\` (a per-type edit page with \`miniPageSchema\` + \`miniPageModes\` containing "add") and record manifest.addRecordMiniPage: { "schema": "<MiniPage>" } to fold it, or false if there is none. Do NOT assume "no mini page" — it is registered at the module/edit-page level, not always in the section body.`);
-      }
-    }
-    return { complete: issues.length === 0, issues };
-  })();
+  const structure = validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified });
   // treeCyclic — did THIS run (or any nested child/typed/mini in its subtree) hit a cycle? Only acyclic subtrees
   // are safe to memoize (a cyclic node's "already mapped above" status depends on the branch that reached it).
   const treeCyclic =
