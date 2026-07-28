@@ -79,3 +79,9 @@ jobs:
         if: always()   # run even if the merge goldens failed, so one runner's failure never hides the other's results
         working-directory: engine-tests/classic-to-freedom
         run: node run-mapper.mjs
+      # offline unit tests for the hand-rolled infra parsers (ustar reader / integrity / sonar glob matcher) that
+      # otherwise run only inside live-network / real-tree jobs — deterministic, network-free coverage.
+      - name: Run infra-parser goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-infra.mjs

@@ -8,7 +8,7 @@
 // Reads the pins from vendor/provenance.json; skips cleanly when it is absent (forward-provisioned
 // before the engine PR lands). Network / OSV errors are a WARNING, not a failure — a compensating
 // control must not go flaky on a transient outage. Exit 1 ONLY on a positively-reported vulnerability.
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,16 +28,17 @@ if (!pins.length) {
   process.exit(0);
 }
 
-let vulns = 0;
+let vulns = 0, queryFailures = 0;
 for (const pin of pins) {
   const body = JSON.stringify({ package: { ecosystem: "npm", name: pin.package }, version: pin.version });
   let data;
   try {
     const r = await fetch("https://api.osv.dev/v1/query", { method: "POST", headers: { "content-type": "application/json" }, body });
-    if (!r.ok) { console.warn(`  ⚠ ${pin.package}@${pin.version}: OSV HTTP ${r.status} — skipped (not a failure)`); continue; }
+    if (!r.ok) { console.warn(`  ⚠ ${pin.package}@${pin.version}: OSV HTTP ${r.status} — NOT CHECKED`); queryFailures++; continue; }
     data = await r.json();
   } catch (e) {
-    console.warn(`  ⚠ ${pin.package}@${pin.version}: OSV query failed (${e.message}) — skipped (not a failure)`);
+    console.warn(`  ⚠ ${pin.package}@${pin.version}: OSV query failed (${e.message}) — NOT CHECKED`);
+    queryFailures++;
     continue;
   }
   const found = data.vulns || [];
@@ -52,4 +53,18 @@ if (vulns) {
   console.error(`\naudit-vendored-acorn: ${vulns} vulnerability(ies) against the pinned vendored version(s) — re-vendor to a fixed release and update vendor/provenance.json.`);
   process.exit(1);
 }
-console.log("audit-vendored-acorn: OK.");
+// Observability: a run where some pins could NOT be queried (OSV outage / DNS block / rate-limit) is NOT the
+// same as a confirmed-clean run — it must be visibly distinguishable so a persistently-unreachable endpoint
+// can't silently mask "acorn was never actually checked" for weeks. We keep exit 0 (a weekly compensating
+// control must not go red on a transient network blip), but surface a LOUD, un-missable signal: a GitHub
+// Actions `::warning::` annotation + a step-summary line (both no-ops outside CI).
+if (queryFailures) {
+  const msg = `audit-vendored-acorn: ${queryFailures} of ${pins.length} pin(s) NOT CHECKED (OSV query failed) — this run did NOT confirm the vendored parser is vuln-free; re-run.`;
+  console.warn(`::warning title=Vendored acorn NOT audited::${msg}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `⚠️ ${msg}\n`); } catch { /* summary is best-effort */ }
+  }
+  console.warn(`\n${msg}`);
+  process.exit(0);
+}
+console.log(`audit-vendored-acorn: OK — all ${pins.length} pin(s) checked, no known vulnerabilities.`);

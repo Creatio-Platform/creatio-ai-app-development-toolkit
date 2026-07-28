@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MANIFEST = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor", "provenance.json");
 const sha256Lf = (buf) =>
@@ -101,4 +101,7 @@ async function main() {
   return 0;
 }
 
-process.exit(await main());
+// Export the pure helpers so an OFFLINE test can exercise the hand-rolled ustar reader / integrity check
+// without the live-network CI job; run the CLI only when invoked directly (not on import).
+export { readTarEntry, integrityOk, tarPathOf, sha256Lf };
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) process.exit(await main());
