@@ -178,7 +178,10 @@ export function runMigration(manifest, opts = {}) {
     const parts = [];
     if (am.lookup) parts.push("ADDS via a lookup (pick existing record(s))");
     if (am.service) parts.push(`calls service \`${am.service}${am.method ? "." + am.method : ""}\` to link/insert`);
-    if (am.editableGrid) parts.push(`is an INLINE-EDITABLE grid${am.editableColumns.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : ""}`);
+    if (am.editableGrid) {
+      const colsNote = am.editableColumns?.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : "";
+      parts.push(`is an INLINE-EDITABLE grid${colsNote}`);
+    }
     if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
     changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: d.caption || d.detailSchema || d.entity,
       reason: `Detail '${d.caption || d.detailSchema || d.entity}' is NOT a plain related list — it ${parts.join("; ")}. Reproduce this on Freedom with a CUSTOM add request-handler (open the lookup, then create the link records / call the service) — not a default add-new. If it calls a service, VERIFY that service is deployed on-stand (else port its logic to a process/service). If inline-editable, confirm the Freedom list supports inline edit for those columns via get-component-info.` });
@@ -446,6 +449,7 @@ export function runMigration(manifest, opts = {}) {
     // An unresolved typed form (or one whose own structure is incomplete) blocks, exactly like a child page —
     // this is what stops the "per-type field mapping done at build" deferral.
     for (const t of typedPages) {
+      const typeNote = t.type ? ` (type "${t.type}")` : ""; // reused in the messages below (avoids nested template literals)
       if (t.resolved === "bind") continue;
       if (t.resolved === "cycle") continue; // mapped higher on this branch (cycle) — resolved elsewhere, not a gap
       if (t.specError) { issues.push(`typed page '${t.schema}': supplied bundle failed to parse (${t.specError}) — fix and re-run`); continue; }
@@ -455,11 +459,11 @@ export function runMigration(manifest, opts = {}) {
         //  (1) a NON-EMPTY Layout (a folded form with 0 fields is a degenerate/empty table — bad bundle/seed);
         //  (2) if the typed body DECLARES business rules, they must have MAPPED into the Logic table (a page
         //      whose rules exist but produced 0 mapped rules = an unread/dropped Logic table).
-        if (!t.fieldCount) issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: folded to an EMPTY Layout (0 fields) — the per-type mapping table is not filled. Check its bundle/seed (a real edit page always has fields); do not proceed on an empty form spec.`);
-        else if (t.ruleSources > 0 && !t.ruleCount) issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: its body DECLARES ${t.ruleSources} business-rule source(s) but NONE mapped into the Logic table — the rules were not read. Fix the rule extraction / confirm the shape before proceeding (do not build with an empty Logic table when rules exist).`);
+        if (!t.fieldCount) issues.push(`typed page '${t.schema}'${typeNote}: folded to an EMPTY Layout (0 fields) — the per-type mapping table is not filled. Check its bundle/seed (a real edit page always has fields); do not proceed on an empty form spec.`);
+        else if (t.ruleSources > 0 && !t.ruleCount) issues.push(`typed page '${t.schema}'${typeNote}: its body DECLARES ${t.ruleSources} business-rule source(s) but NONE mapped into the Logic table — the rules were not read. Fix the rule extraction / confirm the shape before proceeding (do not build with an empty Logic table when rules exist).`);
         continue;
       }
-      issues.push(`typed page '${t.schema}'${t.type ? ` (type "${t.type}")` : ""}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
+      issues.push(`typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`);
     }
     // A NON-typed Rebuild form that folded to ZERO fields is a HOLLOW page — the section / its edit page did NOT
     // resolve (wrong page schema, an under-captured layer chain — e.g. a bundle that returned layerCount:1 and
@@ -469,7 +473,7 @@ export function runMigration(manifest, opts = {}) {
     // plan. (Typed pages have their own per-type 0-field gate above; a reconcile/Update of an existing Freedom
     // page legitimately may add no fields, so it is exempt.) TOP-LEVEL only (`visited.size===0`): nested child /
     // typed / mini folds have their OWN 0-field handling above, and firing here would mask their specific gate.
-    if (!typedPages.length && visited.size === 0 && !(manifest.planMeta && manifest.planMeta.freedomExists)) {
+    if (!typedPages.length && visited.size === 0 && !manifest.planMeta?.freedomExists) {
       const mainFields = (changeSet.viewConfigDiff || []).filter((o) => o?.values?.control).length;
       if (mainFields === 0) {
         issues.push(`form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`);

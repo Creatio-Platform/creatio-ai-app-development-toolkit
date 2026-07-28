@@ -122,7 +122,7 @@ function nearestColumns(col, cols, limit = 3) {
   const a = String(col).toLowerCase();
   const lcs = (x, y) => {
     let best = 0; const dp = new Array(y.length + 1).fill(0);
-    for (let i = 1; i <= x.length; i++) { let prev = 0; for (let j = 1; j <= y.length; j++) { const t = dp[j]; dp[j] = x[i - 1] === y[j - 1] ? prev + 1 : 0; if (dp[j] > best) best = dp[j]; prev = t; } }
+    for (let i = 1; i <= x.length; i++) { let prev = 0; for (let j = 1; j <= y.length; j++) { const t = dp[j]; dp[j] = x[i - 1] === y[j - 1] ? prev + 1 : 0; if (dp[j] > best) { best = dp[j]; } prev = t; } }
     return best;
   };
   return Object.keys(cols)
@@ -287,8 +287,11 @@ export function mapToFreedom(eff, opts = {}) {
     const lay = f.layout || null;
     const parts = [];
     if (hidden) parts.push("hide it");
-    if (lay && (lay.column != null || lay.row != null)) parts.push(`move to column ${lay.column ?? "?"}${lay.row != null ? `, row ${lay.row}` : ""}${lay.colSpan != null ? ` (span ${lay.colSpan})` : ""}`);
-    else if (lay) parts.push("re-lay-out (position changed)");
+    if (lay && (lay.column != null || lay.row != null)) {
+      const rowPart = lay.row != null ? `, row ${lay.row}` : "";
+      const spanPart = lay.colSpan != null ? ` (span ${lay.colSpan})` : "";
+      parts.push(`move to column ${lay.column ?? "?"}${rowPart}${spanPart}`);
+    } else if (lay) parts.push("re-lay-out (position changed)");
     const change = parts.join("; ") || "reconfigured (delta not concretely readable — inspect the client schema)";
     baseFieldOverrides.push({ field: f.bindTo || f.name, hidden, layout: lay, change });
   }
@@ -569,8 +572,9 @@ function mapFields(ctx, containers) {
     const missingColumn = !!f.bindTo && haveCols && !(col in cols);
     if (missingColumn) {
       const near = nearestColumns(col, cols);
+      const nearNote = near.length ? ` (nearest existing columns: ${near.join(", ")})` : "";
       needsDecision.push({ kind: "virtual-field", item: col,
-        reason: `field '${col}' binds to a column that does NOT exist on the entity${near.length ? ` (nearest existing columns: ${near.join(", ")})` : ""}. Either it is a renamed/typo/removed column — verify the real column name on-stand — or an auto-filled companion loaded from a selected lookup by an on-change / set-info handler (e.g. Department/StaffUnit): then build it READ-ONLY on a view-model attribute and wire that handler. Do NOT drop it (dropping collapses an island to a lone field).` });
+        reason: `field '${col}' binds to a column that does NOT exist on the entity${nearNote}. Either it is a renamed/typo/removed column — verify the real column name on-stand — or an auto-filled companion loaded from a selected lookup by an on-change / set-info handler (e.g. Department/StaffUnit): then build it READ-ONLY on a view-model attribute and wire that handler. Do NOT drop it (dropping collapses an island to a lone field).` });
     }
     const ctl = control(meta.type, f.contentType, meta.ref);
     if (!ctl && !missingColumn) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
@@ -629,7 +633,7 @@ function mapFields(ctx, containers) {
     if (explicitRow != null) {
       row = explicitRow;
       if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
-        const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
+        const limit = row + MAX_FIELDS_PER_CONTAINER;
         while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
         let cc = collisionByContainer.get(parent);   // folded into one summary per container after the loop
         if (!cc) { cc = { count: 0, gridCols, sample: [] }; collisionByContainer.set(parent, cc); }
@@ -826,7 +830,7 @@ function mapDetails(ctx, containers, profileRegion) {
     // build (version-scoped), so we carry the intent + editable columns, not a hard-coded crt key.
     const am = dinfo?.addMode;
     const editable = am?.editableGrid
-      ? { columns: (am.editableColumns && am.editableColumns.length) ? am.editableColumns : null,
+      ? { columns: am.editableColumns?.length ? am.editableColumns : null,
           enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
           addVia: am.lookup ? "add existing via lookup" : null }
       : null;

@@ -114,7 +114,7 @@ const addModeText = (am) => {
   const p = [];
   if (am.lookup) p.push("add via lookup (pick existing)");
   if (am.service) p.push(`service \`${esc(am.service)}${am.method ? "." + esc(am.method) : ""}\``);
-  if (am.editableGrid) p.push(`inline-editable${(am.editableColumns || []).length ? ` (${am.editableColumns.map(esc).join("/")})` : ""}`);
+  if (am.editableGrid) { const cols = (am.editableColumns || []).length ? ` (${am.editableColumns.map(esc).join("/")})` : ""; p.push(`inline-editable${cols}`); }
   if (!p.length && am.openCardOverridden) p.push("custom add flow");
   return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
 };
@@ -186,9 +186,11 @@ export function renderDesignSpec(result, opts = {}) {
     // ENG-93929 — an editable-grid detail renders as an EDITABLE list: flag the enable directive + which
     // columns are inline-editable, so the build reproduces the inline edit instead of a read-only list.
     const cols = d.columns?.length ? `cols: ${d.columns.map(esc).join(" · ")}` : "";
-    const editNote = d.editable
-      ? `⚠ INLINE-EDITABLE (${esc(d.editable.enableVia)})${(d.editable.columns || []).length ? ` — editable: ${d.editable.columns.map(esc).join(" · ")}` : ""}`
-      : "";
+    let editNote = "";
+    if (d.editable) {
+      const editCols = (d.editable.columns || []).length ? ` — editable: ${d.editable.columns.map(esc).join(" · ")}` : "";
+      editNote = `⚠ INLINE-EDITABLE (${esc(d.editable.enableVia)})${editCols}`;
+    }
     const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
     rows.push({ region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] });
   }
@@ -235,16 +237,18 @@ export function renderDesignSpec(result, opts = {}) {
     if (/process/i.test(name)) {
       const sp = sigOf("processes");
       if (opts.isChildPage) note = "Child edit page — no section-level Run-process menu; migrate only if THIS child page's own ACTIONS had a run-process (confirm), else not applicable.";
-      else if (sp?.resolved === true) note = sp.present
-        ? `Connected process${sigList(sp) ? `: ${sigList(sp)}` : " (name unresolved — resolve via `VwSysProcess` by Id)"} → wire as a Freedom **Run process** card action.`
-        : "**Not migrated** — no process connected to this section (checked `ProcessInModules` on-stand).";
+      else if (sp?.resolved === true) {
+        if (sp.present) { const namePart = sigList(sp) ? `: ${sigList(sp)}` : " (name unresolved — resolve via `VwSysProcess` by Id)"; note = `Connected process${namePart} → wire as a Freedom **Run process** card action.`; }
+        else note = "**Not migrated** — no process connected to this section (checked `ProcessInModules` on-stand).";
+      }
       else note = PROCESS_HOWTO;
     } else if (/print/i.test(name)) {
       const spr = sigOf("printables");
       if (opts.isChildPage) note = "Child edit page — no section-level Print menu; migrate only if THIS child page's own ACTIONS had a printable (confirm), else not applicable.";
-      else if (spr?.resolved === true) note = spr.present
-        ? `Printable${sigList(spr) ? `: ${sigList(spr)}` : "s present"} → wire as the Freedom **print** action.`
-        : "**Not migrated** — no printables/reports for this section (checked `SysModuleReport` on-stand).";
+      else if (spr?.resolved === true) {
+        if (spr.present) { const namePart = sigList(spr) ? `: ${sigList(spr)}` : "s present"; note = `Printable${namePart} → wire as the Freedom **print** action.`; }
+        else note = "**Not migrated** — no printables/reports for this section (checked `SysModuleReport` on-stand).";
+      }
       else note = PRINT_HOWTO;
     } else if (name === "ViewOptions") {
       type = "—"; note = "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action.";
@@ -314,7 +318,11 @@ export function renderDesignSpec(result, opts = {}) {
       L.push(`- **List columns:** ${listCols}`);
       if ((section.quickFilters || []).length) {
         const f = section.quickFilters
-          .map((q) => `\`${esc(q.name)}\`${q.column ? ` (${esc(q.column)}${q.type ? `, ${esc(q.type)}` : ""})` : ""}`)
+          .map((q) => {
+            let s = `\`${esc(q.name)}\``;
+            if (q.column) { const typePart = q.type ? `, ${esc(q.type)}` : ""; s += ` (${esc(q.column)}${typePart})`; }
+            return s;
+          })
           .join(" · ");
         L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
       }
@@ -569,8 +577,11 @@ export function renderPlan(result, opts = {}) {
   if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   else if (someBindOnly) scopeRows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
-    const cls = `${esc(t.schema)}${t.type ? ` — type "${esc(t.type)}"` : ""} (typed form)`;
-    const tgt = t.bindOnly ? "bind shared form by Type" : (formTpl ? esc(formTpl) : "<FILL: Freedom form template>");
+    const typeSuffix = t.type ? ` — type "${esc(t.type)}"` : "";
+    const cls = `${esc(t.schema)}${typeSuffix} (typed form)`;
+    let tgt;
+    if (t.bindOnly) tgt = "bind shared form by Type";
+    else tgt = formTpl ? esc(formTpl) : "<FILL: Freedom form template>";
     scopeRows.push(`| ${cls} | ${tgt} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
   }
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
@@ -602,10 +613,18 @@ export function renderPlan(result, opts = {}) {
   const dcmPresent = result.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
   const usesProgressBar = formTpl && /ProgressBar/i.test(formTpl);
   if (typed.length) {
-    P.push(`> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`);
-    P.push(`> **Template:** build every per-type form on ${formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template"}${dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : ""}. ${someBindOnly ? `The **shared base \`${esc(entity)}\` form IS rendered below** ("Shared form (base)") because ${typed.filter((t) => t.bindOnly).length} type(s) are bind-only and reuse it; own-fold types (if any) render under Typed page mappings.` : `The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`}`);
+    const tplBase = formTpl ? "`" + esc(formTpl) + "`" : "the chosen form template";
+    const dcmBit = dcmPresent ? " — a DCM case is present, so use **`PageWithTabsAndProgressBarTemplate`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity by Type" : "";
+    let sharedBit;
+    if (someBindOnly) sharedBit = `The **shared base \`${esc(entity)}\` form IS rendered below** ("Shared form (base)") because ${typed.filter((t) => t.bindOnly).length} type(s) are bind-only and reuse it; own-fold types (if any) render under Typed page mappings.`;
+    else sharedBit = `The base \`${esc(entity)}\` form layout is NOT shown as a separate mapping (fields are per-type below); the SHARED details/tabs are listed once under **Shared across all typed forms**.`;
+    P.push(
+      `> ⚠ **Typed entity — ${typed.length} per-type Classic edit page(s):** ${typed.map((t) => "`" + esc(t.schema) + "`").join(", ")}. Each record **Type** opens its OWN Classic page, which takes PRECEDENCE over a general Freedom RelatedPage binding — so "+ New" and open-record route to Classic unless you bind a Freedom form **per Type** (by the Type column). The per-type forms below are the deliverables; source them from \`list-entity-client-schemas\` and fold each via \`manifest.typedPageSchemas\`.`,
+      `> **Template:** build every per-type form on ${tplBase}${dcmBit}. ${sharedBit}`,
+    );
   } else if (dcmPresent) {
-    P.push(`> **Template — DCM case present:** the form page must ship a stage **progress bar**. Build it on **\`PageWithTabsAndProgressBarTemplate\`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity; hand-adding \`crt.EntityStageProgressBar\` into a plain template's MainContainer is the FALLBACK.${formTpl && !usesProgressBar ? ` ⚠ The selected form template \`${esc(formTpl)}\` has no progress bar — reconsider it against the DCM case (or plan the MainContainer fallback explicitly).` : ""}`);
+    const tplWarn = formTpl && !usesProgressBar ? ` ⚠ The selected form template \`${esc(formTpl)}\` has no progress bar — reconsider it against the DCM case (or plan the MainContainer fallback explicitly).` : "";
+    P.push(`> **Template — DCM case present:** the form page must ship a stage **progress bar**. Build it on **\`PageWithTabsAndProgressBarTemplate\`** (it ships the progress bar + the top profile island) and RE-BIND the page to the entity; hand-adding \`crt.EntityStageProgressBar\` into a plain template's MainContainer is the FALLBACK.${tplWarn}`);
   }
   // LIST PAGE — always rendered list-page-only, so the Add mini-page mapping can sit RIGHT AFTER it (the mini
   // page is the list's quick-add). The form spec (non-typed) / per-type mappings (typed) come afterwards.

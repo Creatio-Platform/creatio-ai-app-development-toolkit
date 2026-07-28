@@ -753,7 +753,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     for (const it of items.values()) {
       if (it.removed || !it.parent || !it.templateOwned) continue;
       const p = items.get(it.parent);
-      if (p && p.removed) { it.removed = true; it.removedBy = it.removedBy || p.removedBy; it.removedBySeed = p.removedBySeed; it.cascadeRemoved = true; changed = true; }
+      if (p?.removed) { it.removed = true; it.removedBy = it.removedBy || p.removedBy; it.removedBySeed = p.removedBySeed; it.cascadeRemoved = true; changed = true; }
     }
   }
 
