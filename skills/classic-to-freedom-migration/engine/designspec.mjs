@@ -585,10 +585,10 @@ export function renderPlan(result, opts = {}) {
     "### What it does",
     escBareLine(fill(pm.whatItDoes, "<FILL: 1–2 sentences, business language — what it is for and who uses it>")), // bare line → also escape a leading block marker (finding 5)
     "",
-  );
-  P.push("### On-stand signals",
+    "### On-stand signals",
     signalLine(signals.dcm, "DCM case"), signalLine(signals.processes, "Connected processes"),
-    signalLine(signals.printables, "Printables"), "");
+    signalLine(signals.printables, "Printables"), "",
+  );
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page

@@ -289,10 +289,10 @@ function makeAstEvaluator(scope, diagnostics, src) {
     if (node.operator === "-") return -v;
     return node.operator === "+" ? +v : null;
   }
-  const STATIC_TYPES = ["string", "number", "boolean"];
+  const STATIC_TYPES = new Set(["string", "number", "boolean"]);
   function evalBinary(node, path) {
     const l = evalNode(node.left, path), r = evalNode(node.right, path);
-    if (l != null && r != null && STATIC_TYPES.includes(typeof l) && STATIC_TYPES.includes(typeof r)) {
+    if (l != null && r != null && STATIC_TYPES.has(typeof l) && STATIC_TYPES.has(typeof r)) {
       switch (node.operator) { case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r; }
     }
     flag("dynamic-binary", node, path); return null;
@@ -517,7 +517,9 @@ function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? 
 
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
-  return diff.map(normalizeDiffOp).filter(op => op && op.name !== "?");
+  // pass the index explicitly rather than handing `normalizeDiffOp` straight to `.map` — the second parameter
+  // it reads IS the AST index (carried as `astIndex`), and `.map` would also feed it a third `array` argument.
+  return diff.map((op, i) => normalizeDiffOp(op, i)).filter(op => op && op.name !== "?");
 }
 
 // caption resource key: `caption.bindTo`, else a bare string, else null.
