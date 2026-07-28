@@ -532,9 +532,11 @@ export function renderPlan(result, opts = {}) {
   // which is exactly how a real Lead migration lost its whole 43-field main form). The base is suppressed ONLY
   // when EVERY type has its OWN fold. `someBindOnly` gates that below.
   const someBindOnly = typed.some((t) => t.bindOnly);
-  const sizeLine = typed.length
-    ? `- **Size:** ${typed.length} typed form${typed.length === 1 ? "" : "s"} (per-type fields, rules and details are in **Typed page mappings** below) · ${(cs.details || []).length + (cs.standardFeatures || []).length} shared details/features · ${(cs.cardActions || []).length} actions`
-    : `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`;
+  let sizeLine;
+  if (typed.length) {
+    const plural = typed.length === 1 ? "" : "s";
+    sizeLine = `- **Size:** ${typed.length} typed form${plural} (per-type fields, rules and details are in **Typed page mappings** below) · ${(cs.details || []).length + (cs.standardFeatures || []).length} shared details/features · ${(cs.cardActions || []).length} actions`;
+  } else sizeLine = `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`;
   P.push(
     "### Overview",
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
@@ -553,7 +555,7 @@ export function renderPlan(result, opts = {}) {
   // deliberately N/A), not a "check later" the build silently drops.
   const sigLine = (k, label) => {
     const s = signals[k];
-    if (!s || s.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
+    if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
     const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
     const presentNote = list ? ` — ${list}` : "";
@@ -655,7 +657,7 @@ export function renderPlan(result, opts = {}) {
         P.push("### Shared across all typed forms (inherited from the base form)", "",
           `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`);
         for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
-        for (const d of shDetails) P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${d.entity ? ` (${esc(d.entity)})` : ""}${addModeText(d.addMode)}`);
+        for (const d of shDetails) { const ent = d.entity ? ` (${esc(d.entity)})` : ""; P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${ent}${addModeText(d.addMode)}`); }
         P.push("");
       }
     }
@@ -741,7 +743,7 @@ function checklistGroups(result, opts = {}) {
   // Pages — every page this migration creates (the mini page is a page, not a footnote)
   const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
   if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
-  for (const t of typed) pages.push({ label: `Typed form \`${esc(t.schema)}\`${t.type ? ` — type "${esc(t.type)}"` : ""}${t.bindOnly ? " (bind by Type)" : ""}` });
+  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}` }); }
   if (result.miniPage?.schema) pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
   // Navigable SECTION registration — a section migration's pages are unreachable until the Freedom section is
   // registered in an app (`create-app-section`) and appears in the menu. This is a DELIVERABLE in its own right:
@@ -801,8 +803,10 @@ function checklistGroups(result, opts = {}) {
     cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
   }
   if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
-    cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } });
-    cover.push({ label: "DCM Next steps", vk: { type: "dcm-next" } });
+    cover.push(
+      { label: "DCM case progress bar", vk: { type: "dcm-bar" } },
+      { label: "DCM Next steps", vk: { type: "dcm-next" } },
+    );
   }
   G("Form — Coverage (verified)", cover);
   // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
@@ -865,15 +869,19 @@ export function renderVerify(result, opts = {}, built = {}) {
   const resolve = (vk) => {
     if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)"];
     if (vk.type === "formpage") return ops.length ? ["✅ Done", "form page built (get-page returned its components)"] : (missing++, ["❌ MISSING", "get-page returned no components for the form page"]);
-    if (vk.type === "template") return !built.parentSchemaName ? (unverified++, ["⚠ verify", "get-page `parentSchemaName` not provided — confirm the built page's template"])
-      : built.parentSchemaName === vk.exp ? ["✅ Done", `built on \`${esc(vk.exp)}\``]
-      : (unverified++, ["⚠ verify", `built on \`${esc(built.parentSchemaName)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`]);
-    if (vk.type === "mini") return built.miniPageBuilt === true ? ["✅ Done", "created on-stand"]
-      : built.miniPageBuilt === false ? (missing++, ["❌ MISSING", "NOT created — '+ New' still opens the full form"])
-      : (unverified++, ["⚠ verify", "get-page the mini schema / pass built.miniPageBuilt"]);
+    if (vk.type === "template") {
+      if (!built.parentSchemaName) { unverified++; return ["⚠ verify", "get-page `parentSchemaName` not provided — confirm the built page's template"]; }
+      if (built.parentSchemaName === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``];
+      unverified++; return ["⚠ verify", `built on \`${esc(built.parentSchemaName)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`];
+    }
+    if (vk.type === "mini") {
+      if (built.miniPageBuilt === true) return ["✅ Done", "created on-stand"];
+      if (built.miniPageBuilt === false) { missing++; return ["❌ MISSING", "NOT created — '+ New' still opens the full form"]; }
+      unverified++; return ["⚠ verify", "get-page the mini schema / pass built.miniPageBuilt"];
+    }
     if (vk.type === "fields") { const b = ops.filter((o) => FIELD_RE.test(o.type || "")).length; return b >= vk.n ? ["✅ Done", `${b} field components on the built page`] : (unverified++, ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`]); }
-    if (vk.type === "tabs") { const b = typeCount("crt.Tab"); return b >= vk.n ? ["✅ Done", `${b} crt.Tab built`] : b > 0 ? (unverified++, ["⚠ verify", `${b}/${vk.n} crt.Tab built`]) : (missing++, ["❌ MISSING", "no crt.Tab built"]); }
-    if (vk.type === "details") { const b = typeCount("crt.DataGrid"); return b >= vk.n ? ["✅ Done", `${b} crt.DataGrid built`] : b > 0 ? (unverified++, ["⚠ verify", `${b}/${vk.n} crt.DataGrid built`]) : (missing++, ["❌ MISSING", "no crt.DataGrid built"]); }
+    if (vk.type === "tabs") { const b = typeCount("crt.Tab"); if (b >= vk.n) return ["✅ Done", `${b} crt.Tab built`]; if (b > 0) { unverified++; return ["⚠ verify", `${b}/${vk.n} crt.Tab built`]; } missing++; return ["❌ MISSING", "no crt.Tab built"]; }
+    if (vk.type === "details") { const b = typeCount("crt.DataGrid"); if (b >= vk.n) return ["✅ Done", `${b} crt.DataGrid built`]; if (b > 0) { unverified++; return ["⚠ verify", `${b}/${vk.n} crt.DataGrid built`]; } missing++; return ["❌ MISSING", "no crt.DataGrid built"]; }
     if (vk.type === "feature") return hasType(vk.ftype) ? ["✅ Done", `found ${vk.ftype}`] : (missing++, [`❌ MISSING`, `NO ${vk.ftype} on the built page`]);
     if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`] : (missing++, ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``]); }
     if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built"] : (missing++, ["❌ MISSING", "no crt.NextSteps tab on the built page"]);
@@ -886,9 +894,10 @@ export function renderVerify(result, opts = {}, built = {}) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) { const [mark, ev] = resolve(r.vk); L.push(`| ${++n} | ${r.label} | ${mark} | ${esc(ev)} |`); }
   }
-  const verdict = missing > 0 ? `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING** (fix and re-verify)`
-    : unverified > 0 ? `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`
-    : `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
+  let verdict;
+  if (missing > 0) verdict = `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING** (fix and re-verify)`;
+  else if (unverified > 0) verdict = `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
+  else verdict = `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page (\`get-page\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows (logic / confirm / child / quality / placement) are surfaced for the agent — not machine-gated. ${verdict}`,
     ...L, "", `**Verdict:** ${verdict}`].join("\n");

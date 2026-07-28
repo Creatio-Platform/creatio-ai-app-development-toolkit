@@ -453,7 +453,7 @@ const migNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mj
   input: JSON.stringify({ entity: "X", schemas: [{ pkg: "P", file: "does_not_exist_zzz.js" }] }), encoding: "utf8" });
 check("migrate.mjs CLI: a missing schema file exits 1 with a clean diagnostic (no stdout, no raw stack)",
   migNoFile.status === 1 && /migrate\.mjs:/.test(migNoFile.stderr || "") && /ENOENT|no such file|cannot/i.test(migNoFile.stderr || "")
-  && !/^\s+at /m.test(migNoFile.stderr || "") && (migNoFile.stdout || "").trim() === "",
+  && !(migNoFile.stderr || "").split("\n").some((l) => l.trimStart().startsWith("at ")) && (migNoFile.stdout || "").trim() === "",
   () => ({ status: migNoFile.status, stderr: (migNoFile.stderr || "").slice(0, 160) }));
 // `--out` without a path must FAIL LOUDLY, not silently fall back to stdout (trailing) or swallow a flag.
 const okManifest = JSON.stringify({ entity: "X", schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[]};});` }] });
@@ -1645,7 +1645,7 @@ check("sanitize (Major 5): an inline HTML tag + Markdown link + newline caption 
 // entity-heading path (Major 1): entity from an untrusted body can't start a new heading line in the SPEC.
 const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("sanitize: entity with \\n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)",
+check(String.raw`sanitize: entity with \n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)`,
   !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.designSpec) && !/^\s{0,3}#{1,6}\s+OWNED/m.test(entRun.plan),
   () => (entRun.designSpec + "\n" + entRun.plan).split("\n").filter((l) => /OWNED/.test(l)));
 // entity is `esc`d (not `strip`-only): an inline HTML tag / Markdown link in the entitySchemaName must be
@@ -1810,7 +1810,7 @@ const e3 = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",parentName:"Header",propertyName:"items",values:{bindTo:"noname"}},{operation:"insert",name:"BB",parentName:"Header",propertyName:"items",values:{bindTo:"BB",visible:computeVis()}}]};});` }] }, { baseDir: FIX });
 check("E3: dynamic-property is labeled by the real field name ('BB'), not a desynced 'diff[N]', after an op is dropped",
   e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "BB")
-  && !e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && /^diff\[/.test(n.item)),
+  && !e3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item?.startsWith("diff[")),
   () => e3.changeSet.needsDecision.filter((n) => n.kind === "dynamic-property").map((n) => n.item));
 
 /* ---- T3: cover needsDecision kinds the mapper emits but no golden asserted — a regression that stops emitting
@@ -1829,7 +1829,7 @@ check("T3: a field with a bound (dynamic) 'visible' → visibility-rule decision
 // s48 — FOLD the per-field noise on a DENSE page. A classic page packing many fields into a 24-col grid collapses
 // into the narrow Freedom target with a collision on nearly every field (ASPContractData → ~950 individual ⚠).
 // The engine still relocates them; it now folds the REPORT to ONE summary per container + ONE page-level
-// `layout-density` TODO (choose the Freedom container/grid before design), and folds field-control to one summary.
+// `layout-density` prerequisite (choose the Freedom container/grid before design), and folds field-control to one summary.
 const denseOps = Array.from({ length: 40 }, (_, i) =>
   `{operation:"insert",name:"F${i}",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Col${i}",layout:{column:${(i % 4) * 6},row:${Math.floor(i / 4)},colSpan:6,rowSpan:1}}}`).join(",");
 const dense = runMigration({ entity: "X", seed: CLEAN_SEED,
@@ -1991,7 +1991,7 @@ check("typed-page: base form spec SUPPRESSED (no general mapping) — only List 
   !/^### X form page/m.test(docSecRun.plan)  // no top-level base/general form mapping for a typed entity (### heading)
   && /^### List page/m.test(docSecRun.plan)   // List page still rendered from the base section
   && /2 typed forms/.test(docFirstSize)       // the Overview (FIRST) Size line describes the typed forms…
-  && !/\d+ fields ·/.test(docFirstSize),      // …NOT the base-derived "N fields · … · 0 rules" line
+  && !docFirstSize.includes(" fields ·"),     // …NOT the base-derived "N fields · … · 0 rules" line
   () => docFirstSize);
 // a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
 // (base pageBusinessRules can be 0 while each typed form has several; the plan must show them per type).
@@ -2135,7 +2135,7 @@ const msCs = mapToFreedom(mergeHierarchy([L("C", { entity: "X", diff: [
 const ms1 = msCs.viewConfigDiff.find((o) => o.name === "W1")?.values.layoutConfig;
 const ms2 = msCs.viewConfigDiff.find((o) => o.name === "W2")?.values.layoutConfig;
 check("#3 multi-span collision: two span-2 fields on the same row don't overlap (2nd relocated) — the relocation mechanic",
-  ms1 && ms2 && ms2.colSpan === 2 && ms2.row !== ms1.row,
+  ms1 && ms2?.colSpan === 2 && ms2.row !== ms1.row,
   () => ({ W1: ms1, W2: ms2 }));
 
 // #8 grandchild embedding — a 2-level child tree EMBEDS the grandchild's spec nested (not a "map by hand" note).
@@ -2169,7 +2169,7 @@ check("typed template: Main-scope typed row names the form template (not a gener
 check("typed template: DCM present → note recommends PageWithTabsAndProgressBarTemplate (progress bar + top island) + re-bind",
   /\*\*Template:\*\*/.test(cmb.plan) && /PageWithTabsAndProgressBarTemplate/.test(cmb.plan) && /RE-BIND/i.test(cmb.plan));
 check("typed groups: field GROUPS surface in the per-type Layout Region (Tab · … › Group), not flattened to the tab",
-  /Tab · [^\n|]*›[^\n|]*\| Acc \|/.test(cmb.plan),
+  /Tab · [^\n|›]*›[^\n|]*\| Acc \|/.test(cmb.plan),
   () => cmb.plan.split("\n").filter((l) => /›/.test(l)).slice(0, 4));
 check("typed shared section: inherited base details/features are listed ONCE under 'Shared across all typed forms'",
   /### Shared across all typed forms/.test(cmb.plan) && /Attachments/.test(cmb.plan.slice(cmb.plan.indexOf("### Shared across all typed forms"), cmb.plan.indexOf("### Typed page mappings"))),
@@ -2186,10 +2186,10 @@ const mpOrder = runMigration({
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
 check("mini-page order: '### Add mini-page mapping' comes right after '### List page' and before the form spec",
-  mpOrder.plan.indexOf("### List page") >= 0
+  mpOrder.plan.includes("### List page")
   && mpOrder.plan.indexOf("### List page") < mpOrder.plan.indexOf("### Add mini-page mapping")
   && mpOrder.plan.indexOf("### Add mini-page mapping") < mpOrder.plan.indexOf("### X form page"),
-  () => mpOrder.plan.split("\n").filter((l) => /^### /.test(l)));
+  () => mpOrder.plan.split("\n").filter((l) => l.startsWith("### ")));
 
 /* ---- Plan-vs-Done checklist skeleton (complete-by-construction control table) — one row per deliverable /
    handler / ⚠ Confirm item, so the agent can't silently drop the mini page + the Logic/handlers section from
@@ -2343,10 +2343,10 @@ const noSecMp = runMigration({
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
 check("List page (section not gathered): the block still renders (not silently dropped) with a ⚠ 'Section schema not gathered', before the Add mini-page mapping",
-  noSecMp.plan.indexOf("### List page") >= 0
+  noSecMp.plan.includes("### List page")
   && /Section schema not gathered/.test(noSecMp.plan)
   && noSecMp.plan.indexOf("### List page") < noSecMp.plan.indexOf("### Add mini-page mapping"),
-  () => noSecMp.plan.split("\n").filter((l) => /^### |Section schema not gathered/.test(l)));
+  () => noSecMp.plan.split("\n").filter((l) => l.startsWith("### ") || l.includes("Section schema not gathered")));
 check("List page (section not gathered): list-columns/quick-filters lines are NOT fabricated when there is no section fold",
   !/\*\*List columns:\*\*/.test(noSecMp.plan.slice(noSecMp.plan.indexOf("### List page"), noSecMp.plan.indexOf("### Add mini-page mapping"))));
 
