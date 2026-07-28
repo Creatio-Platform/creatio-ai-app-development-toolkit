@@ -92,6 +92,242 @@ const triggerOf = (m) => {
 // so a child page's spec reads as a subsection under the parent plan's `#### Child page:` heading.
 const demoteHeadings = (md, shift = 2) => String(md).replace(/^(#{2,6}) /gm, (_m, h) => "#".repeat(Math.min(6, h.length + Math.max(0, shift))) + " ");
 
+// One Layout row per field: element · type · PDS source · intrinsic rule · additional notes.
+function fieldRow(f, regionOf) {
+  const col = strip(f.values.control);
+  const v = f.values || {};
+  const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
+  const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
+  // linkedValue: a read-only value shown from a linked record — say it in PLAIN language in the Additional
+  // cell (a human reading the plan should not have to decode "mirror" / "lookup-no-ref").
+  const linked = v.linkedValue
+    ? "Value from a linked record — bind a read-only field to the source object's column, or fill it on the source lookup's change if it must be stored"
+    : null;
+  const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
+  const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
+  return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
+}
+
+function detailRow(d, tabRegion) {
+  const depNote = d.dependency ? ` · by ${esc(d.dependency.attributePath)}` : " · ⚠ FK";
+  const src = `${esc(d.entity || "?")}${depNote}`;
+  const add = d.columns?.length ? `cols: ${d.columns.map(esc).join(" · ")}` : DASH;
+  return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), "Related list", src, DASH, add] };
+}
+
+function standardFeatureRow(s, tabRegion) {
+  const isList = s.uiShape === "list";
+  const type = isList ? "Related list" : esc(s.feature);
+  const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
+  const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
+  // the feature's domain note (e.g. Visa = Approvals, don't downgrade) must be visible HERE — the
+  // standard-feature decision is excluded from the ⚠ Confirm list, so the Layout row is where the agent sees it.
+  const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
+  const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
+  return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
+}
+
+// DCM components (placement set) are NOT in the default Freedom template — they must be ADDED, and Next
+// steps goes in a new tab next to Feed. Other widgets keep the base/native wording.
+function widgetRow(w) {
+  const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
+  let source;
+  if (w.placement) source = "⚠ ADD — not in the default Freedom template";
+  else if (w.note) source = "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
+  else if (w.base) source = "template context — provided by the Freedom template";
+  else source = "native — confirm on-stand";
+  return { region, sort: 2, cells: [esc(w.widget), "Component", source, DASH, w.note ? esc(w.note) : DASH] };
+}
+
+// Conditional card actions: Run process and Print are migrated ONLY when the stand actually has something
+// behind them, so each row carries the on-stand check. ViewOptions/Tag are native and never migrated.
+function cardActionRow(a) {
+  const name = a.replace(/Button$/, "");
+  const conditional = cardActionNote(name);
+  if (conditional) return { region: "Card actions", sort: 3, cells: [esc(name), conditional.type, DASH, DASH, conditional.note] };
+  return { region: "Card actions", sort: 3, cells: [esc(name), "Action", DASH, DASH, DASH] };
+}
+
+function cardActionNote(name) {
+  if (/process/i.test(name)) return { type: "Action",
+    // migrate the Run-process button ONLY if a process is actually connected to the entity; show HOW to check.
+    note: "⚠ Migrate ONLY if a process is connected to this section. Check on-stand: read `ProcessInModules` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) — that is what fills the \"Run process\" menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the process name. None connected ⇒ the button is NOT migrated; if some are, name each connected process in the plan. (`SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)" };
+  if (/print/i.test(name)) return { type: "Action",
+    // migrate Print ONLY if printables/reports exist for the section; show HOW to check.
+    note: "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action." };
+  if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
+  if (name === "Tag") return { type: "—", note: "Provided by the default Freedom template (tags) — nothing to migrate." };
+  return null;
+}
+
+// RV12 — image/photo components (mapper emits them in cs.images, each with its own needsDecision) were the
+// only category with no Layout row. Give them one, placed in the region their parent resolves to.
+function imageRow(im, regionOf) {
+  const src = im.generator ? `generator ${esc(im.generator)}` : "native image — confirm";
+  return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "Image", src, DASH, "⚠ wire source/upload (getSrc/onChange)"] };
+}
+
+function buildLayoutRows(cs, fields, { regionOf, tabRegion }) {
+  return [
+    ...fields.map((f) => fieldRow(f, regionOf)),
+    ...(cs.details || []).map((d) => detailRow(d, tabRegion)),
+    ...(cs.standardFeatures || []).map((s) => standardFeatureRow(s, tabRegion)),
+    ...(cs.widgets || []).map(widgetRow),
+    ...(cs.cardActions || []).map(cardActionRow),
+    ...(cs.images || []).map((im) => imageRow(im, regionOf)),
+  ];
+}
+
+// region reading order: the side profile (all islands) FIRST, then tabs, then top widgets, card actions,
+// and finally any flagged/unresolved regions — so profile info is not interleaved with tabs.
+function regionRank(r) {
+  if (r.startsWith("Side profile") || r === "Header") return 0;
+  if (r.startsWith("Tab ")) return 1;
+  if (r === "Header / top") return 2;
+  return r === "Card actions" ? 3 : 4;
+}
+
+// group by region (first-seen order), stable by `sort` then insertion within region
+function groupRowsByRegion(rows) {
+  const order = [];
+  const byRegion = new Map();
+  rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
+  const firstSeen = new Map(order.map((r, i) => [r, i]));
+  order.sort((a, b) => regionRank(a) - regionRank(b) || firstSeen.get(a) - firstSeen.get(b));
+  return { order, byRegion };
+}
+
+// Add-record mini page — resolved from list-entity-client-schemas (result.miniPage), NOT assumed from the
+// section body (which registered none even when a per-type mini page existed → a false "no mini page").
+function addRecordDescription(result) {
+  const mp = result.miniPage;
+  if (mp?.spec) return `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
+  if (mp?.cyclic) return `via mini page \`${esc(mp.schema)}\` — ↩ already mapped above (cycle); its spec appears higher in this plan`;
+  if (mp && (mp.unfolded || mp.specError)) return `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
+  if (result.miniPageNone) return "full edit page — verified on-stand: no add-record mini page";
+  if (!result.miniPageVerified) return "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
+  return "full edit page (no add-record mini page)";
+}
+
+// ---- List page (section concerns) comes FIRST — the Main-scope table lists the list page before the
+// form page, so the detailed expansions follow that same order: list page → form page → child pages. ----
+function renderListPageSection(result, section) {
+  const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns";
+  const L = ["### List page",
+    `- **Add record:** ${addRecordDescription(result)}`,
+    `- **List columns:** ${listCols}`];
+  if ((section.quickFilters || []).length) {
+    const f = section.quickFilters
+      .map((q) => {
+        const typePart = q.type ? `, ${esc(q.type)}` : "";
+        const colPart = q.column ? ` (${esc(q.column)}${typePart})` : "";
+        return `\`${esc(q.name)}\`${colPart}`;
+      })
+      .join(" · ");
+    L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
+  }
+  if ((section.sectionActions || []).length) {
+    const acts = section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ");
+    L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`);
+  }
+  if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
+  L.push("");
+  return L;
+}
+
+// Declarative page business rules — this is where a reader expects the business rules (not beside the fields).
+// One row each: field · condition · effect (+ inverse) · target. GUID conditions are flagged for on-stand
+// resolution in the ⚠ Confirm list (C2), so the condition here stays a readable attribute name.
+function pageRuleRows(cs) {
+  const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
+  return (cs.pageBusinessRules || []).map((r) => {
+    const attrs = condAttrs(r.conditions);
+    const condTrigger = (r.conditions || []).length ? "conditional" : "always";
+    const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
+    const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
+    return [esc(r.element), trigger, effect, "page business rule"];
+  });
+}
+
+// entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
+function entityFilterRows(cs) {
+  const filtBy = {};
+  for (const r of cs.entityBusinessRules || []) {
+    filtBy[r.targetAttribute] = filtBy[r.targetAttribute] || [];
+    filtBy[r.targetAttribute].push(r);
+  }
+  return Object.entries(filtBy).map(([attr, rs]) => {
+    const unresolved = rs.filter((r) => !r.complete).length;
+    const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
+    const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
+    const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
+    return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
+  });
+}
+
+// handlers — fold the set<X>Info / clear<X>Info helpers into their on<X>Change trigger row (not separate
+// rows), so the Logic table shows the meaningful behaviours, not every internal helper.
+function handlerRows(cs) {
+  const stubs = cs.handlerStubs || [];
+  const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
+  const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
+  const helpersByBase = {};
+  for (const h of stubs) {
+    const b = helperBase(h.sourceMethod);
+    if (b) { helpersByBase[b] = helpersByBase[b] || []; helpersByBase[b].push(h.sourceMethod); }
+  }
+  return stubs
+    .filter((h) => !helperBase(h.sourceMethod)) // helpers are shown folded into their trigger row
+    .map((h) => {
+      const b = triggerBase(h.sourceMethod);
+      const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].map(esc).join(", ")})` : ""; // esc each helper name at the sink — a method name from an untrusted body could carry a pipe/backtick (Major)
+      return [esc(h.sourceMethod), esc(triggerOf(h.sourceMethod)), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"];
+    });
+}
+
+// ---- Logic (behaviour): declarative business rules FIRST, then entity filters, handlers, process launch ----
+function buildLogicRows(cs) {
+  const logic = [...pageRuleRows(cs), ...entityFilterRows(cs), ...handlerRows(cs)];
+  const launch = (cs.needsDecision || []).find((n) => n.kind === "process-launch");
+  if (launch) {
+    const pn = launch.item;
+    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
+  }
+  return logic;
+}
+
+// `embedded` (rendered inside renderPlan): the plan's Overview already carries entity/template/package/
+// size, so skip this preamble to avoid duplicating it — the `### List page` / `### <entity> form page`
+// headings are the divider. Standalone (`--spec`) keeps the full header. The gate banners are
+// safety-critical, so embedded-in-plan relies on renderPlan's own top-of-plan banner instead.
+function renderSpecPreamble(result, opts, cs, fields) {
+  if (opts.embedded) return [];
+  const entity = esc(result.entity || "?");
+  const templatePart = opts.template ? ` · **Template:** ${esc(opts.template)}` : "";       // stand/user-supplied → sanitize (Major 5)
+  const packagePart = opts.targetPackage ? ` · **Package:** ${esc(opts.targetPackage)}` : "";
+  const L = [
+    `## Design spec — ${entity} (generated)`,
+    "",
+    "> Generated by `migrate.mjs --spec` from the merged Classic schemas — **present verbatim, do not",
+    "> paraphrase**. Layout = structure + contents (one table). Logic = behaviour. ⚠ = confirm before build.",
+    "",
+    `- **Entity:** ${entity}${templatePart}${packagePart}`,
+    `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`,
+  ];
+  // ⛔ HARD GATE banner (RV1/RV2): surface EVERY non-empty correctness signal, not just unresolvedParents.
+  const gate = result.gate || { blocked: false, reasons: [] };
+  if (gate.blocked) {
+    L.push("> ⛔ **HARD GATE — BLOCKED. DO NOT BUILD.** The engine found unresolved correctness signals; fix them and re-run:");
+    for (const r of gate.reasons) L.push(`> - ${esc(r)}`);
+  }
+  const structure = result.structure || { complete: true, issues: [] };
+  if (!structure.complete) {
+    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail/child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
+    for (const it of structure.issues) L.push(`> - ${esc(it)}`);
+  }
+  return L;
+}
+
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const section = result.section || null;
@@ -105,156 +341,15 @@ export function renderDesignSpec(result, opts = {}) {
   // looks for the business rules in ONE place. The Layout Rule column carries only intrinsic field state
   // (read-only mirrors / column metadata), never rule-driven state.
 
-  const L = [];
-  // `embedded` (rendered inside renderPlan): the plan's Overview already carries entity/template/package/
-  // size, so skip this preamble to avoid duplicating it — the `### List page` / `### <entity> form page`
-  // headings are the divider. Standalone (`--spec`) keeps the full header. The unresolvedParents gate is
-  // safety-critical, so it is shown in BOTH modes.
-  if (!opts.embedded) {
-    const templatePart = opts.template ? ` · **Template:** ${esc(opts.template)}` : "";       // stand/user-supplied → sanitize (Major 5)
-    const packagePart = opts.targetPackage ? ` · **Package:** ${esc(opts.targetPackage)}` : "";
-    L.push(
-      `## Design spec — ${entity} (generated)`,
-      "",
-      "> Generated by `migrate.mjs --spec` from the merged Classic schemas — **present verbatim, do not",
-      "> paraphrase**. Layout = structure + contents (one table). Logic = behaviour. ⚠ = confirm before build.",
-      "",
-      `- **Entity:** ${entity}${templatePart}${packagePart}`,
-      `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`,
-    );
-  }
-  // ⛔ HARD GATE banner (RV1/RV2): surface EVERY non-empty correctness signal, not just unresolvedParents.
-  // Standalone (--spec) prints it here; embedded-in-plan relies on renderPlan's top-of-plan banner (below).
-  const gate = result.gate || { blocked: false, reasons: [] };
-  if (!opts.embedded && gate.blocked) {
-    L.push("> ⛔ **HARD GATE — BLOCKED. DO NOT BUILD.** The engine found unresolved correctness signals; fix them and re-run:");
-    for (const r of gate.reasons) L.push(`> - ${esc(r)}`);
-  }
-  const structure = result.structure || { complete: true, issues: [] };
-  if (!opts.embedded && !structure.complete) {
-    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail/child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
-    for (const it of structure.issues) L.push(`> - ${esc(it)}`);
-  }
-  L.push("");
+  const L = [...renderSpecPreamble(result, opts, cs, fields), ""];
 
   // ---- ONE Layout table (structure + contents) ----
-  const rows = []; // { region, sort, cells:[element,type,source,rule,additional] }
-  for (const f of fields) {
-    const col = strip(f.values.control);
-    const v = f.values || {};
-    const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
-    const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
-    // linkedValue: a read-only value shown from a linked record — say it in PLAIN language in the Additional
-    // cell (a human reading the plan should not have to decode "mirror" / "lookup-no-ref").
-    const linked = v.linkedValue
-      ? "Value from a linked record — bind a read-only field to the source object's column, or fill it on the source lookup's change if it must be stored"
-      : null;
-    const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
-    const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
-    rows.push({ region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] });
-  }
-  for (const d of cs.details || []) {
-    const depNote = d.dependency ? ` · by ${esc(d.dependency.attributePath)}` : " · ⚠ FK";
-    const src = `${esc(d.entity || "?")}${depNote}`;
-    const add = d.columns?.length ? `cols: ${d.columns.map(esc).join(" · ")}` : DASH;
-    rows.push({ region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), "Related list", src, DASH, add] });
-  }
-  for (const s of cs.standardFeatures || []) {
-    const isList = s.uiShape === "list";
-    const type = isList ? "Related list" : esc(s.feature);
-    const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
-    const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
-    // the feature's domain note (e.g. Visa = Approvals, don't downgrade) must be visible HERE — the
-    // standard-feature decision is excluded from the ⚠ Confirm list, so the Layout row is where the agent sees it.
-    const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
-    const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
-    rows.push({ region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] });
-  }
-  for (const w of cs.widgets || []) {
-    // DCM components (placement set) are NOT in the default Freedom template — they must be ADDED, and Next
-    // steps goes in a new tab next to Feed. Other widgets keep the base/native wording.
-    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
-    let source;
-    if (w.placement) source = "⚠ ADD — not in the default Freedom template";
-    else if (w.note) source = "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
-    else if (w.base) source = "template context — provided by the Freedom template";
-    else source = "native — confirm on-stand";
-    rows.push({ region, sort: 2, cells: [esc(w.widget), "Component", source, DASH, w.note ? esc(w.note) : DASH] });
-  }
-  for (const a of cs.cardActions || []) {
-    const name = a.replace(/Button$/, "");
-    let type = "Action", note = DASH;
-    if (/process/i.test(name)) {
-      // migrate the Run-process button ONLY if a process is actually connected to the entity; show HOW to check.
-      note = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand: read `ProcessInModules` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) — that is what fills the \"Run process\" menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the process name. None connected ⇒ the button is NOT migrated; if some are, name each connected process in the plan. (`SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
-    } else if (/print/i.test(name)) {
-      // migrate Print ONLY if printables/reports exist for the section; show HOW to check.
-      note = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
-    } else if (name === "ViewOptions") {
-      type = "—"; note = "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action.";
-    } else if (name === "Tag") {
-      type = "—"; note = "Provided by the default Freedom template (tags) — nothing to migrate.";
-    }
-    rows.push({ region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] });
-  }
-  // RV12 — image/photo components (mapper emits them in cs.images, each with its own needsDecision) were the
-  // only category with no Layout row. Give them one, placed in the region their parent resolves to.
-  for (const im of cs.images || []) {
-    const src = im.generator ? `generator ${esc(im.generator)}` : "native image — confirm";
-    rows.push({ region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "Image", src, DASH, "⚠ wire source/upload (getSrc/onChange)"] });
-  }
-  // group by region (first-seen order), stable by `sort` then insertion within region
-  const order = [];
-  const byRegion = new Map();
-  rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
-  // region reading order: the side profile (all islands) FIRST, then tabs, then top widgets, card actions,
-  // and finally any flagged/unresolved regions — so profile info is not interleaved with tabs.
-  const regionRank = (r) => {
-    if (r.startsWith("Side profile") || r === "Header") return 0;
-    if (r.startsWith("Tab ")) return 1;
-    if (r === "Header / top") return 2;
-    if (r === "Card actions") return 3;
-    return 4;
-  };
-  const firstSeen = new Map(order.map((r, i) => [r, i]));
-  order.sort((a, b) => regionRank(a) - regionRank(b) || firstSeen.get(a) - firstSeen.get(b));
+  const rows = buildLayoutRows(cs, fields, { regionOf, tabRegion }); // { region, sort, cells:[element,type,source,rule,additional] }
+  const { order, byRegion } = groupRowsByRegion(rows);
 
   // ---- List page (section concerns) comes FIRST — the Main-scope table lists the list page before the
   // form page, so the detailed expansions follow that same order: list page → form page → child pages. ----
-  if (section) {
-    L.push("### List page");
-    // Add-record mini page — resolved from list-entity-client-schemas (result.miniPage), NOT assumed from the
-    // section body (which registered none even when a per-type mini page existed → a false "no mini page").
-    const mp = result.miniPage;
-    let addRecordDesc;
-    if (mp?.spec) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — quick-add form; its full layout is under **Add mini-page mapping** below`;
-    else if (mp?.cyclic) addRecordDesc = `via mini page \`${esc(mp.schema)}\` — ↩ already mapped above (cycle); its spec appears higher in this plan`;
-    else if (mp && (mp.unfolded || mp.specError)) addRecordDesc = `⚠ via mini page \`${esc(mp.schema)}\` — NOT folded; supply its bundle in \`manifest.miniPageSchemas\` so its layout is mapped here`;
-    else if (result.miniPageNone) addRecordDesc = "full edit page — verified on-stand: no add-record mini page";
-    else if (!result.miniPageVerified) addRecordDesc = "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
-    else addRecordDesc = "full edit page (no add-record mini page)";
-    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not in the schema (profile data) — read the section's saved columns or confirm the list-page columns";
-    L.push(
-      `- **Add record:** ${addRecordDesc}`,
-      `- **List columns:** ${listCols}`,
-    );
-    if ((section.quickFilters || []).length) {
-      const f = section.quickFilters
-        .map((q) => {
-          const typePart = q.type ? `, ${esc(q.type)}` : "";
-          const colPart = q.column ? ` (${esc(q.column)}${typePart})` : "";
-          return `\`${esc(q.name)}\`${colPart}`;
-        })
-        .join(" · ");
-      L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
-    }
-    if ((section.sectionActions || []).length) {
-      const acts = section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ");
-      L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`);
-    }
-    if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
-    L.push("");
-  }
+  if (section) L.push(...renderListPageSection(result, section));
 
   // ---- Form page — its Layout / Logic / Confirm nested under one page heading (the Main-scope form row) ----
   L.push(
@@ -269,52 +364,7 @@ export function renderDesignSpec(result, opts = {}) {
   }
   L.push("");
 
-  // ---- Logic (behaviour): declarative business rules FIRST, then entity filters, handlers, process launch ----
-  const logic = [];
-  // Declarative page business rules — this is where a reader expects the business rules (not beside the fields).
-  // One row each: field · condition · effect (+ inverse) · target. GUID conditions are flagged for on-stand
-  // resolution in the ⚠ Confirm list (C2), so the condition here stays a readable attribute name.
-  const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
-  for (const r of cs.pageBusinessRules || []) {
-    const attrs = condAttrs(r.conditions);
-    const condTrigger = (r.conditions || []).length ? "conditional" : "always";
-    const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
-    const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
-    logic.push([esc(r.element), trigger, effect, "page business rule"]);
-  }
-  // entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
-  const filtBy = {};
-  for (const r of cs.entityBusinessRules || []) {
-    filtBy[r.targetAttribute] = filtBy[r.targetAttribute] || [];
-    filtBy[r.targetAttribute].push(r);
-  }
-  for (const [attr, rs] of Object.entries(filtBy)) {
-    const unresolved = rs.filter((r) => !r.complete).length;
-    const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
-    const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
-    const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
-    logic.push([`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"]);
-  }
-  // handlers — fold the set<X>Info / clear<X>Info helpers into their on<X>Change trigger row (not separate
-  // rows), so the Logic table shows the meaningful behaviours, not every internal helper.
-  const stubs = cs.handlerStubs || [];
-  const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
-  const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
-  const helpersByBase = {};
-  for (const h of stubs) {
-    const b = helperBase(h.sourceMethod);
-    if (b) { helpersByBase[b] = helpersByBase[b] || []; helpersByBase[b].push(h.sourceMethod); }
-  }
-  for (const h of stubs) {
-    if (helperBase(h.sourceMethod)) continue; // shown folded into its trigger row
-    const b = triggerBase(h.sourceMethod);
-    const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].map(esc).join(", ")})` : ""; // esc each helper name at the sink — a method name from an untrusted body could carry a pipe/backtick (Major)
-    logic.push([esc(h.sourceMethod), esc(triggerOf(h.sourceMethod)), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"]);
-  }
-  if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
-    const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
-    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
-  }
+  const logic = buildLogicRows(cs);
   if (logic.length) {
     L.push(
       "#### Logic",
