@@ -48,6 +48,11 @@ USAGE = (
 _TOOL_CONTRACT_CACHE = {"key": None, "contracts": None}
 SCHEMA_SYNC_ALLOWED_OPERATION_TYPES = {"create-lookup", "create-entity", "update-entity"}
 
+# Wall-clock cap for the cold-start `initialize` handshake (seconds). Named so a
+# consumer (e.g. the preflight gate's watchdog) can size its own window to cover it
+# instead of mirroring a bare literal that could silently drift out of sync.
+INITIALIZE_TIMEOUT_CAP = 30
+
 
 class _HelpRequested(Exception):
     """Raised by parse_cli_request when the user passes -h or --help."""
@@ -137,12 +142,18 @@ class PersistentMcpClient:
         if self._proc is not None and self._proc.poll() is None:
             return
         clio_cmd = _build_clio_cmd()
+        # errors="replace" keeps a malformed byte from raising mid-readline and killing
+        # the read loop; callers validate payload content (e.g. the preflight's
+        # _probe_is_healthy), so a garbled/replaced response surfaces as an unusable
+        # result and is classified accordingly rather than masquerading as a crash.
         self._proc = subprocess.Popen(
             clio_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         self._next_id = 1
         self._initialized = False
@@ -181,7 +192,22 @@ class PersistentMcpClient:
                 "clientInfo": {"name": "mcp_client", "version": "1.0"}
             }
         })
-        self._send_and_receive(init_msg, init_id, min(self._timeout, 30))
+        collected = self._send_and_receive(init_msg, init_id, min(self._timeout, INITIALIZE_TIMEOUT_CAP))
+        # Only mark initialized when the handshake response actually arrived. If the child
+        # was killed mid-initialize (e.g. by the preflight watchdog) readline() returns EOF
+        # and `collected` lacks the init id — marking initialized anyway would fall through
+        # to a doomed tools/call write whose failure triggers call_mcp_tool's retry and an
+        # unsupervised re-spawn. Raising here surfaces it as a clean error instead.
+        got_response = False
+        for line in collected:
+            try:
+                if json.loads(line).get("id") == init_id:
+                    got_response = True
+                    break
+            except json.JSONDecodeError:
+                continue
+        if not got_response:
+            raise RuntimeError("clio MCP initialize did not complete (no init response received)")
         self._initialized = True
 
     def call_method(self, method, params, timeout=None, expect_tool_result=False):
@@ -272,6 +298,36 @@ def _get_shared_client():
         if _shared_client is None:
             _shared_client = PersistentMcpClient()
         return _shared_client
+
+
+def force_kill_shared_client():
+    """Lock-free, best-effort kill of the shared client's clio child process.
+
+    Intended for the watchdog-abort path: a single hung probe holds
+    ``PersistentMcpClient._lock`` inside a blocking ``readline()``, so ``close()`` (which
+    acquires the lock) would deadlock the watchdog. This captures the current process
+    reference ONCE into a local and kills that local, so it is safe to call from the
+    watchdog thread — terminating the same OS process twice is idempotent. It does not
+    synchronize with a concurrent re-spawn on a *different* call; callers that must not
+    leave a re-spawned child behind (the preflight probe) invoke the non-retrying
+    ``call_tool`` path so no retry re-spawns after the kill.
+
+    Callers outside this module must use this sanctioned API instead of reaching into
+    ``_shared_client._proc`` directly, so the private coupling lives in one place and a
+    future ``PersistentMcpClient`` refactor updates it here (not silently in a consumer).
+    """
+    client = _shared_client
+    proc = getattr(client, "_proc", None) if client is not None else None
+    if proc is None:
+        return
+    try:
+        proc.kill()
+    except OSError:
+        # Benign: the process was already reaped/exited (ProcessLookupError is an OSError
+        # subclass, so it is covered here). Anything else propagates, so an unexpected kill
+        # failure is not silently indistinguishable from the no-op case.
+        pass
+
 
 def _is_execution_error_message(message) -> bool:
     if not isinstance(message, dict):
