@@ -322,9 +322,10 @@ def force_kill_shared_client():
         return
     try:
         proc.kill()
-    except (OSError, ProcessLookupError):
-        # Benign: the process was already reaped/exited. Anything else propagates, so an
-        # unexpected kill failure is not silently indistinguishable from the no-op case.
+    except OSError:
+        # Benign: the process was already reaped/exited (ProcessLookupError is an OSError
+        # subclass, so it is covered here). Anything else propagates, so an unexpected kill
+        # failure is not silently indistinguishable from the no-op case.
         pass
 
 
