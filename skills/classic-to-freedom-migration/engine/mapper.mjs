@@ -430,31 +430,34 @@ const claimCells = (cells, c, cs, r, rs) => cellKeys(c, cs, r, rs).forEach((k) =
 // `needsDecision`/`accountedFor` — the two accumulators the caller collects — and returns the Freedom
 // container the field lands in.
 function routeFieldToContainer(f, own, ctx, needsDecision, accountedFor) {
-  const { profileRegion, islandOf, splitIslands, ensureTab, ensureGroup, ensureProfileIsland } = ctx;
-  if (own.kind === "profile") {
-    let parent = profileRegion(own);
-    // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields are
-    // migrated into the profile) so they are not mis-flagged as "produced no Freedom element".
-    for (const g of own.groups) accountedFor.add(g.name);
-    // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
-    const island = islandOf(own);
-    if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
-    return parent;
-  }
-  if (own.kind === "tab") {
-    let parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
-    // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
-    // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
-    if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
-    else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
-    return parent;
-  }
+  if (own.kind === "profile") return routeToProfile(own, ctx, accountedFor);
+  if (own.kind === "tab") return routeToTab(own, ctx, needsDecision, accountedFor);
   const parent = FLAT_FALLBACK; // parent chain unresolvable
   const why = own.why === "undefined-parent"
     ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
     : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
   needsDecision.push({ kind: "container", item: f.name || f.bindTo,
     reason: `${why} — placed in ${parent} for now` });
+  return parent;
+}
+
+function routeToProfile(own, { profileRegion, islandOf, splitIslands, ensureProfileIsland }, accountedFor) {
+  const parent = profileRegion(own);
+  // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields are
+  // migrated into the profile) so they are not mis-flagged as "produced no Freedom element".
+  for (const g of own.groups) accountedFor.add(g.name);
+  // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
+  const island = islandOf(own);
+  if (splitIslands && parent === "SideAreaProfileContainer" && island) return ensureProfileIsland(island, accountedFor);
+  return parent;
+}
+
+function routeToTab(own, { ensureTab, ensureGroup }, needsDecision, accountedFor) {
+  let parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
+  // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
+  // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
+  if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
+  else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
   return parent;
 }
 
@@ -497,7 +500,7 @@ function convertGridGeometry(cl, own, headerIsWide) {
 // coexist; only true overlaps are moved.
 // `grid` carries the caller's per-container occupancy state (usedCells/autoRow/placedCount/truncated).
 function assignGridRow(parent, col, geom, cl, grid, needsDecision) {
-  const { column, colSpan, rowSpan, gridCols } = geom;
+  const { column, colSpan, rowSpan } = geom;   // gridCols is only needed by the collision message below
   const { usedCells, autoRow, placedCount, truncatedContainers } = grid;
   // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
   // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
@@ -509,27 +512,37 @@ function assignGridRow(parent, col, geom, cl, grid, needsDecision) {
       reason: `container '${parent}' holds more than ${MAX_FIELDS_PER_CONTAINER} fields — collision relocation is bounded past this point (rows may be approximate). This is far beyond any real page; confirm the input is not malformed.` });
   }
   const explicitRow = cl.row != null ? cl.row + 1 : null;
-  let row;
-  if (explicitRow != null) {
-    row = explicitRow;
-    if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
-      const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
-      while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
-      const spanNote = rowSpan > 1 ? `, spans ${rowSpan} rows` : "";
-      needsDecision.push({ kind: "layout-collision", item: col,
-        reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${spanNote}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
-    }
-  } else {
-    let cur = autoRow[parent] || 1;
-    if (!cap) {   // past the per-container cap, skip the (bounded) relocation scan — just place at the cursor
-      const limit = cur + MAX_FIELDS_PER_CONTAINER;
-      while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
-    }
-    row = cur;
-    autoRow[parent] = cur + 1;
-  }
+  const row = explicitRow != null
+    ? placeAtExplicitRow(explicitRow, cells, geom, cap, col, needsDecision)
+    : placeAtNextFreeRow(parent, cells, geom, cap, autoRow);
   claimCells(cells, column, colSpan, row, rowSpan);
   return row;
+}
+
+// An explicit classic row is authoritative UNLESS its cell is already taken — then relocate down and flag the
+// approximation, because the 24→N collapse (or a rowSpan overlap) is what put two fields on one cell.
+function placeAtExplicitRow(explicitRow, cells, geom, cap, col, needsDecision) {
+  const { column, colSpan, rowSpan, gridCols } = geom;
+  let row = explicitRow;
+  if (cap || cellFree(cells, column, colSpan, row, rowSpan)) return row;
+  const wanted = row, limit = row + MAX_FIELDS_PER_CONTAINER;
+  while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
+  const spanNote = rowSpan > 1 ? `, spans ${rowSpan} rows` : "";
+  needsDecision.push({ kind: "layout-collision", item: col,
+    reason: `'${col}' maps onto an already-occupied Freedom grid cell (column ${column}, row ${wanted}${spanNote}) — the classic layout collapsed two fields onto overlapping cells in the ${gridCols}-col target; moved to row ${row}. Confirm the intended placement/order (or widen the container).` });
+  return row;
+}
+
+// A field with NO explicit row takes the next row not already claimed in that container.
+function placeAtNextFreeRow(parent, cells, geom, cap, autoRow) {
+  const { column, colSpan, rowSpan } = geom;
+  let cur = autoRow[parent] || 1;
+  if (!cap) {   // past the per-container cap, skip the (bounded) relocation scan — just place at the cursor
+    const limit = cur + MAX_FIELDS_PER_CONTAINER;
+    while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
+  }
+  autoRow[parent] = cur + 1;
+  return cur;
 }
 
 // The field's column, its entity metadata, the resolved Freedom control and the unique element name.
@@ -553,6 +566,67 @@ function resolveFieldElement(f, { cols, colMeta }, nameCount, needsDecision) {
   if (nameCount[col] > 1) needsDecision.push({ kind: "duplicate-binding", item: col,
     reason: `column '${col}' bound by multiple classic items — emitted as '${elName}'; confirm which to keep` });
   return { col, meta, c, elName };
+}
+
+// respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
+// → visible + a decision. A field inside a container that is itself hidden (static) or conditionally
+// shown (dynamic/rule) inherits the container's visibility — surface it so the container-level condition
+// is wired onto the Freedom field/group rather than silently dropped.
+function resolveFieldVisibility(f, own, col, needsDecision) {
+  const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
+  let vis = f.visible !== false;
+  if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
+  if (f.visible === "dynamic") needsDecision.push({ kind: "visibility-rule", item: col,
+    reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
+  if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
+    reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
+  return vis;
+}
+
+// The Freedom element's `values` block: control type, label, data-type label, and the read-only / lookup /
+// picker / multiline / tooltip flags derived from the classic item and the entity column metadata.
+function buildFieldValues({ f, col, c, meta, lbl, vis, layoutConfig, cols }, needsDecision) {
+  const values = {
+    type: c.type, control: "$" + col,
+    labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
+  };
+  // Major 4 — a column-bound field AUTO-labels from the entity column's own (localized) title, so we do NOT
+  // write an inline `label`/caption onto the page (clio rejects hardcoded page text; AGENTS.md). `titleText`
+  // is PLAN-only metadata (like `typeLabel`) so the design spec still reads the human title, not the code.
+  if (lbl != null) values.titleText = lbl;
+  // design-spec Type column: a short human data type ("Text (250)", "Lookup", "Email") + the lookup's
+  // referenced object when known — carried on the field so designspec.mjs renders it without re-deriving.
+  values.typeLabel = fieldTypeLabel(col, meta, c);
+  if (c.lookup && meta.ref) values.refSchema = meta.ref;
+  if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
+  // linkedDisplay: the classic page shows a plain scalar column via a picker (contentType 5, no ref) — a
+  // read-only VALUE FROM A LINKED RECORD, not a lookup. Keep the real data type, mark it read-only.
+  if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
+  // A field the ENTITY itself types as a lookup but with no reference schema is a genuine data anomaly —
+  // flag it so it isn't shipped as an editable ComboBox pointing nowhere.
+  if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
+    needsDecision.push({ kind: "lookup-no-ref", item: col,
+      reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
+  if (c.lookup) { values.listActions = []; values.controlActions = []; }
+  if (c.picker) values.pickerType = c.picker;
+  if (c.multiline) values.multiline = true;
+  applyFieldTooltip(values, f, col, needsDecision);
+  return values;
+}
+
+// classic `tip` and `hint` are BOTH field tooltips but DIFFERENT properties. Decouple the two effects so
+// a dynamic hint is never silently swallowed when the field already has a `tip`:
+//  • a static Resources.Strings.* hint fills the Freedom tooltip only if no tip already occupies it;
+//  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision.
+function applyFieldTooltip(values, f, col, needsDecision) {
+  if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
+  if (!f.hint) return;
+  if (f.hint.startsWith("Resources.Strings.")) {
+    if (!values.tip) values.tip = { content: "$" + f.hint };
+    return;
+  }
+  needsDecision.push({ kind: "field-hint", item: col,
+    reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
 }
 
 // fields (3-part binding: control + attribute + dataSource). Routes each payload field into its Freedom
@@ -618,7 +692,7 @@ function mapFields(ctx, containers) {
     //   wide header      -> 24 columns kept 1:1 (rare multi-column Header, flagged as a layout-type decision)
     const cl = f.layout || {};
     const geom = convertGridGeometry(cl, own, headerIsWide);
-    const { column, colSpan, rowSpan, gridCols } = geom;
+    const { column, colSpan, rowSpan } = geom;
     const row = assignGridRow(parent, col, geom, cl, grid, needsDecision);
     const layoutConfig = {
       column,
@@ -626,54 +700,10 @@ function mapFields(ctx, containers) {
       colSpan,
       rowSpan,
     };
-    // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
-    // → visible + a decision. A field inside a container that is itself hidden (static) or conditionally
-    // shown (dynamic/rule) inherits the container's visibility — surface it so the container-level condition
-    // is wired onto the Freedom field/group rather than silently dropped.
-    const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
-    let vis = f.visible !== false;
-    if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
-    if (f.visible === "dynamic") needsDecision.push({ kind: "visibility-rule", item: col,
-      reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
-    if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
-      reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
+    const vis = resolveFieldVisibility(f, own, col, needsDecision);
     const lbl = labelFor(col);
     if (lbl != null) fieldsWithTitle++;
-    const values = {
-      type: c.type, control: "$" + col,
-      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
-    };
-    // Major 4 — a column-bound field AUTO-labels from the entity column's own (localized) title, so we do NOT
-    // write an inline `label`/caption onto the page (clio rejects hardcoded page text; AGENTS.md). `titleText`
-    // is PLAN-only metadata (like `typeLabel`) so the design spec still reads the human title, not the code.
-    if (lbl != null) values.titleText = lbl;
-    // design-spec Type column: a short human data type ("Text (250)", "Lookup", "Email") + the lookup's
-    // referenced object when known — carried on the field so designspec.mjs renders it without re-deriving.
-    values.typeLabel = fieldTypeLabel(col, meta, c);
-    if (c.lookup && meta.ref) values.refSchema = meta.ref;
-    if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
-    // linkedDisplay: the classic page shows a plain scalar column via a picker (contentType 5, no ref) — a
-    // read-only VALUE FROM A LINKED RECORD, not a lookup. Keep the real data type, mark it read-only.
-    if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
-    // A field the ENTITY itself types as a lookup but with no reference schema is a genuine data anomaly —
-    // flag it so it isn't shipped as an editable ComboBox pointing nowhere.
-    if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
-      needsDecision.push({ kind: "lookup-no-ref", item: col,
-        reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
-    if (c.lookup) { values.listActions = []; values.controlActions = []; }
-    if (c.picker) values.pickerType = c.picker;
-    if (c.multiline) values.multiline = true;
-    if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
-    // classic `hint` is ALSO a field tooltip (a DIFFERENT property from `tip`). Decouple the two effects so
-    // a dynamic hint is never silently swallowed when the field already has a `tip`:
-    //  • a static Resources.Strings.* hint fills the Freedom tooltip only if no tip already occupies it;
-    //  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision.
-    if (f.hint) {
-      const staticHint = f.hint.startsWith("Resources.Strings.");
-      if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
-      else needsDecision.push({ kind: "field-hint", item: col,
-        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
-    }
+    const values = buildFieldValues({ f, col, c, meta, lbl, vis, layoutConfig, cols }, needsDecision);
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
