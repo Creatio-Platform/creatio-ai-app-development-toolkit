@@ -1,0 +1,13 @@
+{
+  "$comment": "Integrity pins for vendored third-party code. verify-vendor.mjs (run in CI, see .github/workflows/pr.yml) recomputes each file's SHA-256 and FAILS the build on any mismatch — so a tampered or drifted parser can never ship unnoticed. sha256 is computed over LF-NORMALIZED bytes, so it is immune to CRLF-vs-LF checkout differences across platforms and equals the hash of the upstream npm artifact. To re-vendor: download the pinned upstream artifact, confirm its dist file's LF-normalized SHA-256 here, then update version + sha256 together.",
+  "files": {
+    "acorn.mjs": {
+      "package": "acorn",
+      "version": "8.17.0",
+      "license": "MIT (see acorn-LICENSE.txt)",
+      "upstreamArtifact": "npm acorn-8.17.0.tgz -> package/dist/acorn.mjs",
+      "sha256": "1cbcbf252a5800e496dc505c706f309a9dd4e1789392e12963c77ae9497ff6f7",
+      "bytesLf": 232769
+    }
+  }
+}
