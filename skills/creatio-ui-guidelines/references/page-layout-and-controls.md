@@ -43,7 +43,7 @@ Jump to the section you need:
 ## Page composition
 
 - Use ready page templates where possible; they already include standard spacing and alignment.
-- **Editing an existing page: match what's already there.** Read the current page (`get-page`) and reuse its established conventions for any new element — ExpansionPanel style, input `labelPosition`, container spacing/padding/radius, widget sizes, column count. New components must look like they were part of the original design, not a different hand.
+- **Match what's already there — this page, or a reference page when this one is new.** Read the current page (`get-page`) and reuse its established conventions for any new element — ExpansionPanel style, input `labelPosition`, container spacing/padding/radius, widget sizes, column count. New components must look like they were part of the original design, not a different hand. **If the page is new/empty (a freshly created migration page) and has nothing to match, `get-page` a shipped Freedom page on the SAME template and copy those conventions from it** — a new ExpansionPanel or added container must carry the platform's spacing/padding/`borderRadius`/color, not a bare default.
 - Preserve left/right spacing around headers and consistent gaps between containers.
 - Put controls in proper containers, not directly onto a grid when alignment will break. For button groups, use flex layout and align heights.
 - Prefer a clear “island” structure on complex record pages:

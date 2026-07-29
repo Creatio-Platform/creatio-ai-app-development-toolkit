@@ -20,3 +20,17 @@ output/
 .tmp-tests/
 .serena/
 .clio-pages/
+# Classic→Freedom migration engine (migrate.mjs) I/O — the manifest + fetched Classic schema BODIES and any
+# --plan/--spec dumps. These carry stand-sourced schema/config and possibly customer captions/business-rule
+# values. The skill now writes them to a TEMP dir OUTSIDE any repo (SKILL step 4.2) and deletes them when the
+# migration completes, so they should never appear in a repo — this `scratch_*` rule is a belt-and-suspenders
+# backstop against a stray artifact. Matches files AND directories (e.g. scratch_applicant-migration/).
+# NOTE: the migration DOC set (plan.md/discovery.md/worklog.md/roadmap.md/decisions.md) is meant to be VERSIONED
+# in the client's own migration-project repo — it is intentionally NOT ignored (and its names collide with the
+# toolkit's own references/*.md, so they must never be blanket-ignored here).
+scratch_*
+
+# Classic→Freedom migration DESIGN scratch — internal self-review, POC schema bodies, design docs and the
+# architecture deck produced while building the skill. Kept on disk for reference but NOT shipped with the
+# plugin: it would bloat the client bundle and leak internal notes. Untracked via `git rm -r --cached .migration`.
+.migration/
