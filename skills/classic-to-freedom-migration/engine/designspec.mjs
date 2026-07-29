@@ -380,11 +380,15 @@ function childFormRecommendation(cs, fields, opts) {
   if (!opts.isChildPage) return [];
   const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
   const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  if (fields.length && fields.length <= 5 && !hasTabs && !nDetails)
-    return [`> **Recommendation — small child form (${fields.length} field${fields.length === 1 ? "" : "s"}, no tabs/details):** open this related-list child as an **edit mini page (\`BaseMiniPageTemplate\` — "Mini page") / modal** — a lightweight quick-add shell — rather than a full record page. Confirm the desired shell before building.`, ""];
-  if (fields.length >= 12 && !hasTabs)
-    return [`> **Recommendation — wide child form (${fields.length} fields):** build this related-list child on the **Grid page template (\`PageWithAreaFreedomTemplate\`)** — a full-width grid suits a wide record better than the narrow left-profile default. Confirm before building.`, ""];
-  return [];
+  const n = fields.length;
+  if (!n) return [];
+  // Threshold (vanislemarina rule): a related-list child with FEWER THAN 15 inputs — and flat (a mini page holds
+  // neither tabs nor related lists) → open as an edit MINI PAGE. Otherwise (>= 15 inputs, OR it has tabs/related
+  // lists) → the Grid page template. One cut at 15, no gap — every child gets a concrete template.
+  if (n < 15 && !hasTabs && !nDetails)
+    return [`> **Recommendation — small child form (${n} field${n === 1 ? "" : "s"}, < 15, flat):** open this related-list child as an **edit mini page (\`BaseMiniPageTemplate\` — "Mini page") / modal** — a lightweight quick-add shell — rather than a full record page. Confirm the desired shell before building.`, ""];
+  const why = hasTabs || nDetails ? "it has tabs / related lists" : `${n} inputs (>= 15)`;
+  return [`> **Recommendation — child form (${n} field${n === 1 ? "" : "s"}):** build this related-list child on the **Grid page template (\`PageWithAreaFreedomTemplate\`)** — ${why}, so a full-width grid suits it better than the narrow left-profile default or a mini page. Confirm before building.`, ""];
 }
 
 // Header-template recommendation: a WIDE/populated Classic Header block (the mapper's `headerLayout === "wide"`
@@ -672,7 +676,13 @@ function buildChildScopeRows(childs) {
   return childs.map((c) => {
     let target, call, label;
     if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
-      target = "Freedom record page"; call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
+      // template by field count (must AGREE with the per-child recommendation below): < 15 flat inputs → Mini page;
+      // otherwise (>= 15, or tabs/related-lists) → the Grid page template. Unknown count (unmapped real page) → generic.
+      const n = c.fieldCount;
+      target = (n == null) ? "Freedom child page"
+        : (n < 15 && !c.hasTabs && !c.nDetails) ? "Mini page (`BaseMiniPageTemplate`)"
+        : "Grid page (`PageWithAreaFreedomTemplate`)";
+      call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
     } else if (c.editPage === false || c.editable === false) {
       target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
     } else {

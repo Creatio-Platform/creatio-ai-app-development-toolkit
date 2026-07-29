@@ -236,6 +236,11 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
     c.spec = res.designSpec;
     c.mappedEntity = res.entity;
     c.resolvedFrom = key;
+    // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
+    // agree): < 15 flat inputs → Mini page; otherwise (>= 15, or tabs/related-lists) → the Grid page template.
+    c.fieldCount = (res.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+    c.hasTabs = (res.changeSet?.viewConfigDiff || []).some((o) => o?.values?.type === "crt.Tab");
+    c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
     c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
     c.grandChildren = c.childPages.length;
     c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates

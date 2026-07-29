@@ -1115,10 +1115,12 @@ check("#1 image concrete: sole IMAGELOOKUP column → crt.ImageInput value bound
   && imgBound.changeSet.viewModelConfigDiff?.[0]?.values?.Photo?.modelConfig?.path === "PDS.Photo"
   && !imgBound.changeSet.needsDecision.some((n) => n.kind === "image-column"),
   () => JSON.stringify(imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values));
-// #1 FILL: no entityColumns → column unresolved → element still emitted + a concrete image-column ⚠ (never silent drop).
-check("#1 image FILL: column unresolved → crt.ImageInput still emitted + a concrete image-column decision (bind to IMAGELOOKUP / create one)",
-  imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput")
-  && imageRowCs.changeSet.needsDecision.some((n) => n.kind === "image-column" && /IMAGELOOKUP/.test(n.reason)));
+// #1 FILL (s-vanislemarina Q2): column unresolved → crt.ImageInput STILL emitted with a `<FILL>` value + the recipe
+// on the LAYOUT row, and NO separate image-column ⚠ (that duplicated the layout row verbatim — double-surfacing).
+check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL value, and NO redundant image-column decision",
+  imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && /_value$/.test(o.values.value))
+  && !imageRowCs.changeSet.needsDecision.some((n) => n.kind === "image-column")
+  && /crt\.ImageInput/.test(imageRowCs.designSpec) && /IMAGELOOKUP/.test(imageRowCs.designSpec));
 // #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity) → value bound read-only, no ⚠.
 const imgCross = runMigration({ entity: "X", entityColumns: { Name: { type: "Text" } },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"ContactPhoto"}}]};});` }] }, { baseDir: FIX });
@@ -1273,10 +1275,10 @@ check("#7 child recursion: mapped child's design spec is NESTED in the plan (hea
   /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
 check("#7 child recursion: unverified child gets an explicit verify-child-page FILL slot (not just a row)",
   /#### Child page: ChildB[\s\S]*?<FILL: verify child page>/.test(recCs.plan));
-// #7b Main-scope hygiene: child rows get a fixed clean target (no free-text FILL that invited status prose),
-// and the meaningless "entity · details · lookups · backend → Reuse" row is gone.
-check("#7b Main scope: child rows use a fixed 'Freedom record page' target (no free-text FILL)",
-  /Rebuild \(child\) \|/.test(recCs.plan) && /\| Freedom record page \| Rebuild \(child\) \|/.test(recCs.plan)
+// #7b Main-scope hygiene: child rows get a clean target that REFLECTS the template rule (< 15 flat → Mini page;
+// else Grid page) — ChildA has 1 field → Mini page — no free-text FILL, and no misleading generic "record page".
+check("#7b Main scope: a small child (1 field) row shows the Mini page template target (not a generic 'record page')",
+  /Rebuild \(child\) \|/.test(recCs.plan) && /\| Mini page \(`BaseMiniPageTemplate`\) \| Rebuild \(child\) \|/.test(recCs.plan)
   && !/Freedom form template \/ resolve via list-pages/.test(recCs.plan));
 check("#7b Main scope: the meaningless 'entity · details · lookups · backend / Reuse' row is removed",
   !/reused as-is \| Reuse/.test(recCs.plan) && !/entity · details · lookups · backend/.test(recCs.plan));
@@ -2500,15 +2502,22 @@ const fewChild = renderDesignSpec({ entity: "Anniv", changeSet: { viewConfigDiff
   { name: "T", parentName: "Header", values: { control: "$T", type: "crt.Input" } }] } }, { isChildPage: true });
 check("#7 child page, few fields, no tabs/details → recommends the Mini page template (BaseMiniPageTemplate)",
   /Recommendation — small child form/.test(fewChild) && /BaseMiniPageTemplate/.test(fewChild));
+// #7 threshold (s-vanislemarina Q1): single cut at 15 — a flat child with < 15 inputs (7 here) → Mini page (NO gap).
 const midChild = renderDesignSpec({ entity: "Big", changeSet: { viewConfigDiff:
   Array.from({ length: 7 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
-check("#7 child page with a MIDDLE field count (7) → NO template recommendation (default stands)",
-  !/Recommendation — small child form/.test(midChild) && !/Recommendation — wide child form/.test(midChild));
-// #7b (vanislemarina review) — a WIDE child (≥12 fields, no tabs) → the Grid page template.
+check("#7 child page with 7 fields (< 15, flat) → recommends the Mini page template (no more 6-11 gap)",
+  /Recommendation — small child form/.test(midChild) && /BaseMiniPageTemplate/.test(midChild));
+// #7b — a child with >= 15 inputs → the Grid page template.
 const wideChild = renderDesignSpec({ entity: "Wide", changeSet: { viewConfigDiff:
-  Array.from({ length: 14 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
-check("#7b wide child page (≥12 fields, no tabs) → recommends the Grid page template (PageWithAreaFreedomTemplate)",
-  /Recommendation — wide child form/.test(wideChild) && /PageWithAreaFreedomTemplate/.test(wideChild));
+  Array.from({ length: 16 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
+check("#7b wide child page (>= 15 fields) → recommends the Grid page template (PageWithAreaFreedomTemplate)",
+  /Recommendation — child form/.test(wideChild) && /PageWithAreaFreedomTemplate/.test(wideChild));
+// #7c — a child < 15 inputs but WITH tabs/related lists can't be a mini page → Grid page.
+const tabbedChild = renderDesignSpec({ entity: "Tabbed", changeSet: { viewConfigDiff: [
+  { name: "F", parentName: "T", values: { control: "$F", type: "crt.Input" } },
+  { name: "T", values: { type: "crt.Tab", caption: "$Resources.Strings.T" } }] } }, { isChildPage: true });
+check("#7c child < 15 inputs but WITH tabs → Grid page (a mini page can't hold tabs)",
+  /Recommendation — child form/.test(tabbedChild) && /PageWithAreaFreedomTemplate/.test(tabbedChild) && !/small child form/.test(tabbedChild));
 // header→top-area recommendation (vanislemarina review): a form whose changeSet carries headerLayout:"wide" gets
 // the top-area template recommendation — on ANY form INCLUDING a non-child (typed/base) form (the "typed pages
 // too" requirement), and NOT on a mini page or a page with no header block.

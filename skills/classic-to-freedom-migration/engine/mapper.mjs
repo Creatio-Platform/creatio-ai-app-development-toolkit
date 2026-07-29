@@ -1138,13 +1138,12 @@ function mapImages(eff, ctx, F) {
       // binds but shows/uploads nothing (silent runtime fail), so surface it as a real decision, not a guess.
       if (!isImageLookupType(colMeta(boundCol).type)) needsDecision.push({ kind: "image-column", item: boundCol,
         reason: `image '${i.name}' would bind to '${boundCol}', which is NOT an IMAGELOOKUP (16) column — crt.ImageInput can bind ONLY an "Image link" column (references SysImage), never a binary Image or a Text URL. Create/point at an ImageLookup column, or the image shows nothing and uploads fail silently.` });
-    } else if (crossDs) {
-      // related-object photo → bind `value` through the lookup path read-only (add the related object's IMAGELOOKUP
-      // column via the lookup on this page). Concrete cross-datasource mapping, not a ⚠ — mirrors linked fields.
-    } else {
-      needsDecision.push({ kind: "image-column", item: i.name,
-        reason: `image '${i.name}' → crt.ImageInput: bind its \`value\` to the entity's IMAGELOOKUP (16) column (add it to manifest.entityColumns so it maps concretely). If the photo comes from a RELATED object (e.g. Contact.Photo on Employee), bind \`value\` through that lookup READ-ONLY. crt.ImageInput binds ONLY an "Image link" column — if none exists, create one (it cannot bind a binary Image or Text URL). A generator-computed default image (e.g. getEmployeeDefaultImageURL) has no column: use the native \`placeholderMode:"abbreviation"\` instead of porting the handler.` });
     }
+    // NB: the crossDs (related-object photo) and FILL (column unresolved) cases raise NO decision — the crt.ImageInput
+    // element is emitted either way and the LAYOUT row carries the full recipe (bind `value` to the IMAGELOOKUP column
+    // / via the lookup read-only / add it to entityColumns). A separate `[image-column]` ⚠ duplicated that row verbatim
+    // (double-surfacing, same noise the old `[image]` decision was). Only a genuinely WRONG bind — an on-entity column
+    // that is NOT IMAGELOOKUP (silent runtime fail) — remains a decision (handled above).
   }
   return { images, viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor };
 }
