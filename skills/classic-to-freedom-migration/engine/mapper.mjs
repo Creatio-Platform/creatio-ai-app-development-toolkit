@@ -61,7 +61,11 @@ const tabGridName = (tab) => `${tab}Grid`;
 // range is NOT cleanly partitioned (31 is a decimal, yet 30/32 were believed to be text), so an UNCONFIRMED code
 // is left unmapped and flagged loudly (a folded field-control decision) rather than guessed into a wrong control.
 // If another Decimal-precision code (0.01/0.001/…) surfaces on a future page, confirm it on-stand and add it here.
-const DATAVALUETYPE_CODE = { "1": "text", "4": "integer", "5": "float", "6": "money", "7": "datetime", "8": "date", "12": "boolean", "31": "float" };
+const DATAVALUETYPE_CODE = { "1": "text", "4": "integer", "5": "float", "6": "money", "7": "datetime", "8": "date", "12": "boolean", "16": "imagelookup", "31": "float" };
+// An IMAGELOOKUP column (dataValueType 16, "Image link" → references SysImage) is the ONLY column crt.ImageInput
+// can bind — NOT a binary Image, NOT a Text URL. Recognize it by normalized code or by name so an image field /
+// generator-image can be bound concretely (and a non-IMAGELOOKUP source flagged, never silently mis-bound).
+const isImageLookupType = (t) => { const s = String(t ?? "").toLowerCase(); return s === "imagelookup" || s === "image link" || s === "imagelink" || s === "16" || DATAVALUETYPE_CODE[s] === "imagelookup"; };
 // entity column dataType -> Freedom control (the DATA type decides the control).
 function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
@@ -69,6 +73,7 @@ function scalarControl(t) {
   // arrive as a numeric DataValueType code (Date "8", Money "6", Decimal "31", …) — normalized above. Genuinely
   // unknown/unconfirmed codes (18=Color, 44=URL, …) stay null → the caller flags a loud field-control decision.
   t = DATAVALUETYPE_CODE[t] || t;
+  if (t === "imagelookup") return { type: "crt.ImageInput", image: true }; // binds via `value`, not `control`
   if (t === "boolean") return { type: "crt.Checkbox" };
   if (t === "datetime") return { type: "crt.DateTimePicker", picker: "datetime" };
   if (t === "date") return { type: "crt.DateTimePicker", picker: "date" };
@@ -334,11 +339,14 @@ export function mapToFreedom(eff, opts = {}) {
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
-  // ---- image / photo components (generator-based, no bindTo) → Freedom image component ----
-  const _img = mapImages(eff);
+  // ---- image / photo components → a REAL crt.ImageInput element (view+viewModel+model diffs) ----
+  const _img = mapImages(eff, ctx, F);
   const images = _img.images;
   _img.needsDecision.forEach(d => needsDecision.push(d));
   _img.accountedFor.forEach(a => accountedFor.add(a));
+  // merge the image element's attribute + column into the field sinks so the view-model / model configs carry them.
+  Object.assign(F.attributes, _img.attributes);
+  Object.assign(F.pdsColumns, _img.pdsColumns);
 
   // ---- Moment 5: card actions / ACTIONS menu → Freedom card actions (B7) ----
   const _ca = mapCardActions(eff);
@@ -358,7 +366,7 @@ export function mapToFreedom(eff, opts = {}) {
   return {
     entity: eff.entity,
     // structural (tab + grid containers) first so field inserts resolve their parentName.
-    viewConfigDiff: [...containers.structural, ...F.viewConfigDiff],
+    viewConfigDiff: [...containers.structural, ...F.viewConfigDiff, ...(_img.viewConfigDiff || [])],
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, needsDecision,
@@ -573,7 +581,10 @@ function mapFields(ctx, containers) {
     const lbl = labelFor(col);
     if (lbl != null) fieldsWithTitle++;
     const values = {
-      type: c.type, control: "$" + col,
+      type: c.type,
+      // crt.ImageInput binds through `value`, NOT `control` (verified component contract). Every other field
+      // component binds through `control`.
+      ...(c.image ? { value: "$" + col } : { control: "$" + col }),
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
     // Major 4 — a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
@@ -620,12 +631,13 @@ function mapFields(ctx, containers) {
     const meta = colMeta(col);
     const haveCols = Object.keys(cols).length > 0;
     const missingColumn = !!f.bindTo && haveCols && !(col in cols);
-    if (missingColumn) {
-      const near = nearestColumns(col, cols);
-      const nearNote = near.length ? ` (nearest existing columns: ${near.join(", ")})` : "";
-      needsDecision.push({ kind: "virtual-field", item: col,
-        reason: `field '${col}' binds to a column that does NOT exist on the entity${nearNote}. Either it is a renamed/typo/removed column — verify the real column name on-stand — or an auto-filled companion loaded from a selected lookup by an on-change / set-info handler (e.g. Department/StaffUnit): then build it READ-ONLY on a view-model attribute and wire that handler. Do NOT drop it (dropping collapses an island to a lone field).` });
-    }
+    // A bound column NOT on the entity is (almost always) a companion value shown FROM A RELATED DATA SOURCE
+    // (e.g. Contact.Phone/Email/BirthDate on an Employee page via the Contact lookup). Freedom shows this
+    // natively — add the related data source's column through the lookup and bind the input to it READ-ONLY.
+    // So it is NOT a ⚠ assumption: it is mapped as a LINKED value on the field itself (values.linkedValue in
+    // the loop below → the designspec renders the concrete cross-datasource recipe in the layout row). We keep
+    // the nearest existing columns only as a secondary hint for the rarer renamed/typo case.
+    const nearMissing = missingColumn ? nearestColumns(col, cols) : [];
     const ctl = control(meta.type, f.contentType, meta.ref);
     if (!ctl && !missingColumn) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     const c = ctl || { type: "crt.Input" };
@@ -633,7 +645,7 @@ function mapFields(ctx, containers) {
     // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
     nameCount[col] = (nameCount[col] || 0) + 1;
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    return { col, meta, missingColumn, c, elName };
+    return { col, meta, missingColumn, nearMissing, c, elName };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
   // 24-col), assign a collision-free (span-aware) cell, and return the layoutConfig. Own function for Sonar CC 15;
@@ -718,10 +730,14 @@ function mapFields(ctx, containers) {
   };
   for (const { f, own } of resolved) {
     const parent = routeField(f, own);
-    const { col, meta, c, elName } = resolveFieldControl(f);
+    const { col, meta, c, elName, missingColumn, nearMissing } = resolveFieldControl(f);
     const layoutConfig = computeLayout(f, own, parent, col);
     const vis = fieldVisibility(f, own, col);
     const values = buildFieldValues(f, col, c, meta, vis, layoutConfig);
+    // A column not on the entity → a LINKED cross-datasource value: mark it read-only + linkedValue so the design
+    // spec maps it via the Freedom "column from a related data source" recipe (not a ⚠ assumption). Carry the
+    // nearest existing columns for the secondary renamed-column case.
+    if (missingColumn) { values.readOnly = true; values.linkedValue = true; if (nearMissing.length) values.linkedNearest = nearMissing; }
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
@@ -883,6 +899,19 @@ function mapCardActions(eff) {
 }
 
 // feature toggles, catalog-miss charts, methods → handler stubs, client removals, referenced UI modules.
+// STANDARD Creatio-classic page methods — framework lifecycle / validation-scaffolding / dialog callbacks that
+// carry no business logic to port. They are NOT surfaced in the Logic table nor as `method` decisions (they were
+// pure noise: every migration listed init/onSaved/setValidationConfig… as "imperative → review"). Only CUSTOM
+// business methods (validators, on<Field>Changed, get<X>Filter, domain helpers) remain. Applies uniformly to the
+// form, mini, typed and detail/child pages (they all fold through mapRemainingLogic). Extend as new base names
+// surface; a name here that a client OVERROTE with real logic is the rare miss — the reviewer still has the schema.
+const STANDARD_CLASSIC_METHODS = new Set([
+  "init", "onSaved", "onEntityInitialized", "setValidationConfig", "createValidator", "asyncValidate",
+  "getDefaultValues", "onGetSelectResult", "getSelectedButton", "onAnswerYes", "onAnswerNo",
+  "subscribeSandboxEvents", "initializeReferenceParametersValues", "getServiceRequest", "onSaveButtonClick",
+  "getContactCareerCollection",
+]);
+
 // Returns handlerStubs[] + its own needsDecision[].
 function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditableSchemas) {
   const needsDecision = [];
@@ -897,9 +926,12 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditabl
     if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName])) needsDecision.push({ kind: "component", item: c.key,
       reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
-  // methods -> handler stubs (judgment)
-  const handlerStubs = payloadMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
-  for (const m of payloadMethods)
+  // methods -> handler stubs (judgment). STANDARD framework/scaffolding methods are dropped — only CUSTOM business
+  // methods reach the Logic table + `method` decisions, so the plan stops listing init/onSaved/validators-config
+  // as "imperative → review" on every page.
+  const customMethods = payloadMethods.filter(m => !STANDARD_CLASSIC_METHODS.has(m.name));
+  const handlerStubs = customMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
+  for (const m of customMethods)
     needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
 
   // removals (B6) — NOT surfaced as decisions. A removed element is simply OUT of the final effective scope: a
@@ -931,6 +963,12 @@ function mapUnmappedDrop(eff, accountedFor) {
   //    child routed through it); a childless one IS surfaced, so nothing vanishes on name convention alone.
   const HARD_SCAFFOLD_RX = /(?:_gridLayout|Grid)$|^Tabs$/;
   const SOFT_STRUCT_RX = /(?:Tabs|Tab|TabContainer|ControlGroup|Group)$/;
+  // A classic primary-display label (caption `getPrimaryDisplayColumnValue`) shows the record's primary display
+  // value as a header title — the Freedom form/mini page provides this NATIVELY (its page title is bound to the
+  // entity's primary display column). So it maps to the native page title: nothing to build, and NOT an unmapped
+  // micro-widget. Treat it (and therefore its container, e.g. HeaderColumnContainer) as accounted-for — silently,
+  // with no ⚠ message.
+  const isPrimaryDisplay = (i) => /getPrimaryDisplayColumnValue/i.test(i.caption || "");
   const byName = new Map((eff.items || []).map(i => [i.name, i]));
   const parents = new Set((eff.items || []).map(i => i.parent).filter(Boolean));
   // A CONTAINER whose subtree DID produce Freedom elements is a real layout container (a profile island, a
@@ -945,7 +983,8 @@ function mapUnmappedDrop(eff, accountedFor) {
     const marked = new Set();
     for (const i of (eff.items || [])) {
       const mapped = accountedFor.has(i.name) || !!i.bindTo
-        || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP;
+        || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP
+        || isPrimaryDisplay(i); // primary-display title → native page title (accounts for its container too)
       if (!mapped) continue;
       for (let p = i.parent, guard = 0; p && !marked.has(p) && guard < 64; guard++) {
         marked.add(p);
@@ -962,6 +1001,7 @@ function mapUnmappedDrop(eff, accountedFor) {
     for (const i of (eff.items || [])) {
       if (i.templateOwned || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
       if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
+      if (isPrimaryDisplay(i)) continue; // record title → native Freedom page title; nothing to port, no ⚠
       if (hasMappedDesc.has(i.name)) continue; // real layout container — its subtree produced Freedom elements
       if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
       dropped.add(i.name);
@@ -1052,30 +1092,61 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   }
 }
 
-// image / photo components (generator-based, no bindTo) → Freedom image component.
-function mapImages(eff) {
-  const images = [], needsDecision = [], accountedFor = [];
+// A classic image/photo item (generator-based, no bindTo, or an image-named component).
+function isImageItem(i) {
+  if (i.templateOwned) return false; // a base-template Photo/Logo is layout context, not client payload
+  const genImg = i.generator && /image/i.test(i.generator);
+  const nameImg = !i.bindTo && i.itemType !== VIEW_ITEM_TYPE.DETAIL && i.itemType !== VIEW_ITEM_TYPE.CONTROL_GROUP && !i.isTab
+    && (/^(?:Photo|Image|Logo|Avatar|Thumbnail|Picture)\d*$/i.test(i.name) || /(?:Photo|Logo|Avatar|Thumbnail|Picture)$/.test(i.name));
+  return !!(genImg || nameImg);
+}
+
+// image / photo components → a REAL crt.ImageInput element in the ChangeSet (not just a plan row). Emits the
+// three diffs a field needs — view (crt.ImageInput, bound through `value`, NOT `control`), viewModel attribute,
+// model column — so the agent BUILDS it and `--verify` counts it (the old side-channel `cs.images` rendered a
+// plan row but nothing to build → the image silently never got added). Placement reuses the field router's owner
+// resolution + profile region. Binding target = the entity's IMAGELOOKUP (16) column (the only type crt.ImageInput
+// can bind): an explicit generator-config column > the SOLE IMAGELOOKUP column on the entity > a `<FILL>` slot with
+// the concrete recipe. A related-object photo (Contact.Photo on Employee) is the cross-datasource case (§#3): the
+// column is not on THIS entity → bind `value` through the lookup path, read-only (same pattern as a linked field).
+function mapImages(eff, ctx, F) {
+  const { index, profileAnchors, cols, colMeta } = ctx;
+  const images = [], viewConfigDiff = [], attributes = {}, pdsColumns = {}, needsDecision = [], accountedFor = [];
+  // the entity's IMAGELOOKUP column(s) — the usual binding target (Contact.Photo / Account.Logo). Exactly one ⇒
+  // safe to auto-bind; zero or many ⇒ leave a FILL (don't guess which, don't invent a non-existent column).
+  const imageLookupCols = Object.keys(cols || {}).filter((c) => isImageLookupType(colMeta(c).type));
+  const soleImageCol = imageLookupCols.length === 1 ? imageLookupCols[0] : null;
   for (const i of (eff.items || [])) {
-    // RV11 — (a) skip template-owned items: a base-template Photo/Logo is layout context, not client payload
-    // (it triggered a spurious `image` decision on every migration built on that template). (b) the no-
-    // generator fallback recognised only bare Photo/Image/Logo — broaden to Avatar/Thumbnail/Picture and to
-    // *-suffixed names (CompanyLogo/UserAvatar), while still excluding structural containers/tabs/details.
-    if (i.templateOwned) continue;
-    const genImg = i.generator && /image/i.test(i.generator);
-    const nameImg = !i.bindTo && i.itemType !== VIEW_ITEM_TYPE.DETAIL && i.itemType !== VIEW_ITEM_TYPE.CONTROL_GROUP && !i.isTab
-      && (/^(?:Photo|Image|Logo|Avatar|Thumbnail|Picture)\d*$/i.test(i.name) || /(?:Photo|Logo|Avatar|Thumbnail|Picture)$/.test(i.name));
-    if (!genImg && !nameImg) continue;
+    if (!isImageItem(i)) continue;
     accountedFor.push(i.name);
-    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent });
-    // An image/photo is a NORMAL element — it already renders as an Image row in the Layout table (mapped to a
-    // Freedom image component bound to the image column). It is NOT a decision: pushing a per-image `⚠ Confirm`
-    // ("wire getSrc/onChange handlers") duplicated the layout row and dressed a plain column-bound image up as
-    // custom imperative work — that "wire the handlers" language is classic-generator vocabulary, not Freedom
-    // (a Freedom image field binds to the column declaratively). So we emit NO needsDecision here; the layout
-    // row carries the mapping. (A genuinely computed image with a custom source handler is surfaced through the
-    // normal handler-stub / logic path, named — not as a blanket image warning.)
+    // placement: route to the owner's Freedom region (a photo lives in the profile island in the vast majority of
+    // pages; a tab-placed image or an unresolved parent falls back to the general container — flagged by review).
+    const own = i.parent ? resolveOwner(i.parent, index, profileAnchors) : { kind: "unresolved" };
+    const parentName = own.kind === "profile" ? F.profileRegion(own) : FLAT_FALLBACK;
+    // binding column: explicit config column (i.imageColumn / i.bindTo) > sole entity IMAGELOOKUP > FILL.
+    const boundCol = i.imageColumn || i.bindTo || soleImageCol || null;
+    const onEntity = !!boundCol && !!(cols && boundCol in cols);
+    const crossDs = !!boundCol && !onEntity; // §#3 — column is on a RELATED object (via a lookup), not this entity
+    const attr = boundCol || `${i.name}_value`;
+    const values = { type: "crt.ImageInput", value: "$" + attr, size: "large", borderRadius: "medium", positioning: "cover", readOnly: crossDs };
+    viewConfigDiff.push({ operation: "insert", name: i.name, parentName, propertyName: "items", values });
+    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !boundCol });
+    if (boundCol && onEntity) {
+      attributes[attr] = { modelConfig: { path: "PDS." + boundCol } };
+      pdsColumns[boundCol] = { path: boundCol };
+      // validate the source TYPE: crt.ImageInput binds ONLY an IMAGELOOKUP column — a binary Image / Text URL
+      // binds but shows/uploads nothing (silent runtime fail), so surface it as a real decision, not a guess.
+      if (!isImageLookupType(colMeta(boundCol).type)) needsDecision.push({ kind: "image-column", item: boundCol,
+        reason: `image '${i.name}' would bind to '${boundCol}', which is NOT an IMAGELOOKUP (16) column — crt.ImageInput can bind ONLY an "Image link" column (references SysImage), never a binary Image or a Text URL. Create/point at an ImageLookup column, or the image shows nothing and uploads fail silently.` });
+    } else if (crossDs) {
+      // related-object photo → bind `value` through the lookup path read-only (add the related object's IMAGELOOKUP
+      // column via the lookup on this page). Concrete cross-datasource mapping, not a ⚠ — mirrors linked fields.
+    } else {
+      needsDecision.push({ kind: "image-column", item: i.name,
+        reason: `image '${i.name}' → crt.ImageInput: bind its \`value\` to the entity's IMAGELOOKUP (16) column (add it to manifest.entityColumns so it maps concretely). If the photo comes from a RELATED object (e.g. Contact.Photo on Employee), bind \`value\` through that lookup READ-ONLY. crt.ImageInput binds ONLY an "Image link" column — if none exists, create one (it cannot bind a binary Image or Text URL). A generator-computed default image (e.g. getEmployeeDefaultImageURL) has no column: use the native \`placeholderMode:"abbreviation"\` instead of porting the handler.` });
+    }
   }
-  return { images, needsDecision, accountedFor };
+  return { images, viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor };
 }
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).

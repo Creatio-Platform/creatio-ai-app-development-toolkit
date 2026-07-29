@@ -420,6 +420,13 @@ check("unmapped-component: a container wrapping a MAPPED field (InfoBlock) is NO
   !contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "InfoBlock"));
 check("unmapped-component: a container whose WHOLE subtree maps to nothing (SlaWrap) IS still surfaced",
   contCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaWrap"));
+// review (s-vanislemarina #2): a primary-display label (caption getPrimaryDisplayColumnValue) = the record title,
+// provided NATIVELY by the Freedom page title → NOT an unmapped micro-widget, and no ⚠ message. Its container
+// (HeaderColumnContainer) is spared too.
+const pdTitleCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
+  di({ name: "HeaderColumnContainer", parentName: "Header", propertyName: "items", caption: "getPrimaryDisplayColumnValue" })] })]));
+check("primary-display: a getPrimaryDisplayColumnValue label/container is NOT flagged unmapped-component (maps to the native page title)",
+  !pdTitleCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "HeaderColumnContainer"));
 const umTpl = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "CF", parentName: "Header", propertyName: "items", bindTo: "CF" })] })],
   { seedTemplate: [L("Base", { entity: "X", diff: [di({ name: "BaseLabel", parentName: "Header", propertyName: "items", caption: "x" })] })] }));
 check("unmapped-component: template-owned items are NOT flagged (payload = client content only, F9)",
@@ -660,10 +667,15 @@ const vfCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
   di({ name: "Dept",    parentName: "Header", propertyName: "items", bindTo: "Department" }),   // not an X column → auto-filled
 ] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } } }); // Department NOT supplied
-check("virtual-field: a field whose column is not on the entity → virtual-field decision (build read-only + on-change handler), not dropped",
-  vfCs.needsDecision.some(n => n.kind === "virtual-field" && n.item === "Department" && /view-model attribute/i.test(n.reason) && /do NOT drop/i.test(n.reason))
-  && !vfCs.needsDecision.some(n => n.kind === "virtual-field" && n.item === "InternalRequest"),  // the real column is NOT flagged
-  () => vfCs.needsDecision.filter(n => n.kind === "virtual-field").map(n => n.item));
+// review (s-vanislemarina #4): a field whose column is NOT on the entity is a LINKED cross-datasource value —
+// mapped as a read-only `linkedValue` on the field (Freedom shows a related data source's column via the lookup),
+// NOT a ⚠ virtual-field assumption. The real column stays a normal field.
+check("linked cross-datasource: missing column → read-only linkedValue field (not a ⚠ virtual-field), real column stays normal",
+  vfCs.viewConfigDiff.find(o => o.name === "Department")?.values.linkedValue === true
+  && vfCs.viewConfigDiff.find(o => o.name === "Department")?.values.readOnly === true
+  && !vfCs.needsDecision.some(n => n.kind === "virtual-field")
+  && !vfCs.viewConfigDiff.find(o => o.name === "InternalRequest")?.values.linkedValue,
+  () => JSON.stringify(vfCs.viewConfigDiff.map(o => ({ n: o.name, lv: o.values.linkedValue }))));
 check("virtual-field: NOT flagged when entityColumns is absent (no basis to judge)",
   !mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "Dept", parentName: "Header", propertyName: "items", bindTo: "Department" })] })])).needsDecision.some(n => n.kind === "virtual-field"));
 
@@ -694,6 +706,17 @@ check("design-spec: Confirm section present (⚠ worklist)",
 // Carries ≥5 methods so it clears the KIND-AGNOSTIC skeletal gate (a real fetched base chain has 150+; the gate
 // blocks a broken/near-empty fetch of < 5 methods).
 const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){},getActions:function(){},onSaved:function(){},setColumns:function(){},loadValues:function(){},onRender:function(){}}};});' }];
+// review (s-vanislemarina #3): STANDARD Creatio-classic framework methods are NOT surfaced as handlers or `method`
+// decisions; only CUSTOM business methods are. Applies via mapRemainingLogic → covers form/mini/typed/detail pages.
+const stdMethRun = runMigration({ entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",methods:{init:function(){},onSaved:function(){},setValidationConfig:function(){},createValidator:function(){},validateCareerPeriod:function(){},getRoleDetailFilter:function(){}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+const stdMeth = stdMethRun.changeSet;
+check("#3 standard methods: init/onSaved/setValidationConfig/createValidator are NOT handler stubs nor `method` decisions",
+  !stdMeth.handlerStubs.some(h => ["init", "onSaved", "setValidationConfig", "createValidator"].includes(h.sourceMethod))
+  && !stdMeth.needsDecision.some(n => n.kind === "method" && ["init", "onSaved", "setValidationConfig", "createValidator"].includes(n.item)),
+  () => stdMeth.handlerStubs.map(h => h.sourceMethod));
+check("#3 custom methods: validateCareerPeriod / getRoleDetailFilter DO get handler stubs (real business logic kept)",
+  stdMeth.handlerStubs.some(h => h.sourceMethod === "validateCareerPeriod") && stdMeth.handlerStubs.some(h => h.sourceMethod === "getRoleDetailFilter"));
 const SU_SCHEMAS = [
   { pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") },
   { pkg: "SupportService", file: path.join(FIX, "supportunitemployee/SupportService.js") }];
@@ -1072,14 +1095,39 @@ const linkedCs = runMigration({ entity: "X", entityColumns: { Email: { type: "Te
 check("linked-value: Text column shown via a picker (contentType 5, no ref) keeps its real type (Email/Phone), not a false Lookup",
   /Email \| Email \|/.test(linkedCs.designSpec) && /MobilePhone \| Phone \|/.test(linkedCs.designSpec)
   && !/lookup, no ref/i.test(linkedCs.designSpec));
-check("linked-value: renders read-only + a plain-language 'Value from a linked record' note (no jargon, no lookup-no-ref flag)",
-  /Value from a linked record/.test(linkedCs.designSpec)
+check("linked-value: renders read-only + the cross-datasource recipe note (no jargon, no lookup-no-ref flag)",
+  /Linked value from a RELATED data source/.test(linkedCs.designSpec)
   && !linkedCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && (n.item === "Email" || n.item === "MobilePhone")));
-// RV12 — an image/photo component gets its own Layout row (it had a decision but no row before)
+// RV12 / review (s-vanislemarina #1) — an image/photo component is emitted as a REAL crt.ImageInput ELEMENT in
+// viewConfigDiff (bound via `value`, not `control`), not just a plan row — so the agent builds it and --verify
+// counts it. It also renders a crt.ImageInput Layout row.
 const imageRowCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
-check("RV12: image/photo component appears as an 'Image' row in the Layout table",
-  imageRowCs.changeSet.images.some((i) => i.classic === "Photo") && /\| Photo \| Image \|/.test(imageRowCs.designSpec));
+check("#1 image: emitted as a real crt.ImageInput element in viewConfigDiff (value-binding, not control) + a Layout row",
+  imageRowCs.changeSet.images.some((i) => i.classic === "Photo")
+  && imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && typeof o.values.value === "string" && o.values.control === undefined)
+  && /\| Photo \| crt\.ImageInput \|/.test(imageRowCs.designSpec));
+// #1 concrete: a sole IMAGELOOKUP (16) column on the entity → crt.ImageInput `value` bound to it + attribute declared, no ⚠.
+const imgBound = runMigration({ entity: "X", entityColumns: { Photo: { type: "ImageLookup" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("#1 image concrete: sole IMAGELOOKUP column → crt.ImageInput value bound to it, attribute declared, no image-column ⚠",
+  imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.value === "$Photo"
+  && imgBound.changeSet.viewModelConfigDiff?.[0]?.values?.Photo?.modelConfig?.path === "PDS.Photo"
+  && !imgBound.changeSet.needsDecision.some((n) => n.kind === "image-column"),
+  () => JSON.stringify(imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values));
+// #1 FILL: no entityColumns → column unresolved → element still emitted + a concrete image-column ⚠ (never silent drop).
+check("#1 image FILL: column unresolved → crt.ImageInput still emitted + a concrete image-column decision (bind to IMAGELOOKUP / create one)",
+  imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput")
+  && imageRowCs.changeSet.needsDecision.some((n) => n.kind === "image-column" && /IMAGELOOKUP/.test(n.reason)));
+// #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity) → value bound read-only, no ⚠.
+const imgCross = runMigration({ entity: "X", entityColumns: { Name: { type: "Text" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"ContactPhoto"}}]};});` }] }, { baseDir: FIX });
+check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput value bound read-only, no image-column ⚠",
+  imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.value === "$ContactPhoto"
+  && imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.readOnly === true
+  && imgCross.changeSet.images.some((i) => i.classic === "Photo" && i.crossDs === true)
+  && !imgCross.changeSet.needsDecision.some((n) => n.kind === "image-column"),
+  () => JSON.stringify(imgCross.changeSet.images));
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
@@ -1668,17 +1716,18 @@ const reasonPayload = "<img src=x onerror=alert(1)> ](javascript:alert(1))";
 const reasonRun = runMigration({ entity: "X", seed: CLEAN_SEED, entityColumns: { Real: { type: "Text" } },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"V",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:${JSON.stringify(reasonPayload)}}}]};});` }],
 }, { baseDir: FIX });
-const confirmLines = reasonRun.designSpec.split("\n").filter((l) => /virtual-field/.test(l));
-check("#5: a virtual-field reason IS emitted embedding the stand-derived bindTo (path exercised)",
-  reasonRun.changeSet.needsDecision.some((n) => n.kind === "virtual-field") && confirmLines.length > 0);
-check("#5: the injected HTML tag + Markdown link inside the reason are NEUTRALIZED in the ⚠ Confirm list (no live <img>/link)",
-  confirmLines.length > 0 && confirmLines.every((l) => !/<img/.test(l) && !/\]\(javascript/.test(l))
-  && /&lt;img/.test(reasonRun.designSpec) && /\]\\\(javascript/.test(reasonRun.designSpec),
-  () => confirmLines);
-// guard: `esc` (not `strip`) on reason must NOT mangle engine-authored prose — the reason still reads normally.
-check("#5: engine-authored reason prose is preserved (no stray HTML entities from esc over plain text)",
-  reasonRun.changeSet.needsDecision.some((n) => n.kind === "virtual-field" && /binds to a column that does NOT exist on the entity/.test(n.reason))
-  && !/&lt;X&gt;/.test(reasonRun.designSpec));
+// The hostile bindTo now reaches the LAYOUT row of the linked cross-datasource field (Source `PDS.<col>` + label),
+// not a virtual-field reason. Same sink principle: every stand-derived token is `esc`d before it lands in the plan.
+const specAll = reasonRun.designSpec + "\n" + reasonRun.plan;
+check("#5: the stand-derived bindTo reaches the rendered spec (path exercised)",
+  /&lt;img/.test(specAll)); // its neutralized form is present ⇒ the hostile token WAS rendered (and escaped)
+check("#5: the injected HTML tag + Markdown link are NEUTRALIZED in the rendered spec/plan (no live <img>/link)",
+  !/<img/.test(specAll) && !/\]\(javascript/.test(specAll) && /&lt;img/.test(specAll),
+  () => specAll.split("\n").filter((l) => /img|javascript/.test(l)));
+// guard: the field IS mapped as a linked cross-datasource value (not dropped), and engine prose is intact.
+check("#5: the missing-column field is mapped as a linked value (recipe prose preserved, entity name not over-escaped)",
+  reasonRun.changeSet.viewConfigDiff.some((o) => o.values?.linkedValue === true)
+  && /Linked value from a RELATED data source/.test(reasonRun.designSpec) && !/&lt;X&gt;/.test(reasonRun.designSpec));
 
 // determinism (#11) — the same manifest must produce byte-identical output on repeat runs (no dependence on
 // Map/object iteration nondeterminism). Compare full JSON of two independent runs of a rich manifest.
@@ -2210,8 +2259,10 @@ check("Plan-vs-Done checklist: produced as a SEPARATE artifact (result.checklist
 check("Plan-vs-Done checklist: has a Pages row for the MINI PAGE (a built page can't be left off the control table)",
   /Mini page `XMiniPage`/.test(ck),
   () => ck.split("\n").filter((l) => /Mini page/.test(l)));
-check("Plan-vs-Done checklist: ONE row per handler (init/onSaved/onContactChange) — not folded into loose prose",
-  /Handler — `init`/.test(ck) && /Handler — `onSaved`/.test(ck) && /Handler — `onContactChange`/.test(ck),
+// review (s-vanislemarina #3): STANDARD framework methods (init/onSaved) are NOT surfaced as handlers — only the
+// CUSTOM business method (onContactChange) gets a handler row.
+check("Plan-vs-Done checklist: ONE row per CUSTOM handler (onContactChange); standard init/onSaved are NOT listed",
+  /Handler — `onContactChange`/.test(ck) && !/Handler — `init`/.test(ck) && !/Handler — `onSaved`/.test(ck),
   () => ck.split("\n").filter((l) => /Handler —/.test(l)));
 check("Plan-vs-Done checklist: business rules FOLDED to a count row (not one row each)",
   /Business rules × \d+/.test(ck) && !/\| \d+ \| Business rule \|/.test(ck));

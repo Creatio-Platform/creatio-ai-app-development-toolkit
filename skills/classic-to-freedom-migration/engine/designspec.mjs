@@ -135,7 +135,8 @@ function rowsForFields(fields, regionOf) {
     const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
     const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
     const linked = v.linkedValue
-      ? "Value from a linked record — bind a read-only field to the source object's column, or fill it on the source lookup's change if it must be stored"
+      ? "Linked value from a RELATED data source (column is not on this entity) — in Freedom show it natively: add the related object's column through the lookup on this page and bind this input to `<Lookup>.<column>` READ-ONLY (do NOT rebuild it as a plain entity field, wire a manual on-change handler only if it must be STORED, and do NOT drop it — dropping collapses an island to a lone field)"
+        + (Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if instead a renamed/removed column, nearest existing: ${v.linkedNearest.map(esc).join(", ")}` : "")
       : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
@@ -223,8 +224,15 @@ function rowsForCardActions(cardActions, result, opts) {
 }
 function rowsForImages(images, regionOf) {
   return (images || []).map((im) => {
-    const src = im.generator ? `generator ${esc(im.generator)}` : "image column";
-    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "Image", src, DASH, "→ Freedom image component (bind to the image column)"] };
+    // Source = the resolved IMAGELOOKUP column when known; a related-object photo shows its lookup path; a FILL
+    // slot when the column could not be resolved. The mapper emits a real crt.ImageInput either way.
+    const src = im.column ? (im.crossDs ? `\`${esc(im.column)}\` (related object — via lookup)` : `\`${esc(im.column)}\``) : "`<FILL: image column>`";
+    const note = im.crossDs
+      ? "→ `crt.ImageInput`, `value` bound through the lookup READ-ONLY (related-object photo); must be an IMAGELOOKUP column"
+      : im.column
+        ? "→ `crt.ImageInput` bound via `value` to this IMAGELOOKUP column"
+        : "→ `crt.ImageInput` — bind `value` to the entity's IMAGELOOKUP (16) column (add it to `entityColumns`); if the photo is from a related object bind through its lookup read-only; if none exists, create an ImageLookup column";
+    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
   });
 }
 
@@ -821,6 +829,8 @@ function buildCoverageRows(cs, pm, result) {
   const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields } });
+  const expImages = (cs.images || []).length;
+  if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };
@@ -933,6 +943,7 @@ function resolveStructuralVk(vk, ctx) {
 }
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") { const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length; return b >= vk.n ? ["✅ Done", `${b} field components on the built page`, "ok"] : ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`, "unverified"]; }
+  if (vk.type === "image") { const b = ctx.typeCount("crt.ImageInput"); return b >= vk.n ? ["✅ Done", `${b} crt.ImageInput built`, "ok"] : b > 0 ? ["⚠ verify", `${b}/${vk.n} crt.ImageInput built`, "unverified"] : ["❌ MISSING", "no crt.ImageInput on the built page — the image field was not added", "missing"]; }
   const noun = vk.type === "tabs" ? "crt.Tab" : "crt.DataGrid"; // tabs | details
   const b = ctx.typeCount(noun);
   if (b >= vk.n) return ["✅ Done", `${b} ${noun} built`, "ok"];
