@@ -684,10 +684,10 @@ export function renderPlan(result, opts = {}) {
   // filled value (esc → single inert line, pipe-escaped) so a value like `X\n## INJECTED` cannot inject a new
   // heading/row into the plan. The `<FILL: …>` placeholder is a literal and needs no escaping.
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
+  // Title, then the ⛔ top-of-plan gate/structure/planMeta/signals banners (first thing the reader sees — a
+  // blocked plan is NOT approvable) — one combined push (Sonar S7778). Entity already esc'd above (esc ⊇ strip).
   const P = [];
-  P.push(`## ${entity} — Classic → Freedom UI`, ""); // entity already esc'd above (esc ⊇ strip)
-  // ⛔ Top-of-plan gate/structure/planMeta/signals banners — first thing the reader sees; a blocked plan is NOT approvable.
-  P.push(...renderPlanBanners(result, opts));
+  P.push(`## ${entity} — Classic → Freedom UI`, "", ...renderPlanBanners(result, opts));
   const signals = opts.signals || {}; // used by the On-stand signals section below
   // A TYPED entity has NO single form deliverable — each per-type page is its own form (fields/rules/details
   // live THERE, in the mappings below). The base fold's counts (often 8 fields · 0 rules) describe only the
@@ -730,7 +730,7 @@ export function renderPlan(result, opts = {}) {
   // for this entity ALREADY exists (`planMeta.freedomExists`). Reconcile is an agent step — read the existing
   // page with clio `get-page`, diff the engine's design onto it, apply via `update-page` (never a duplicate);
   // see `./references/existing-freedom-reconcile.md`. Default is Rebuild (safe for the tested custom-section case).
-  const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
+  // (The Call value — Rebuild / Update (reconcile) — is derived inside buildScopeRows from `pm.freedomExists`.)
   // A TYPED entity has NO single form deliverable — every record opens a per-type page, so the per-type forms
   // (rows below) ARE the deliverables and the base `<entity> form page` is only their shared parent/seed (not
   // a separate form). A non-typed entity keeps its one form-page row. (`typed` computed above for the Size line.)
