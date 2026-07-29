@@ -57,7 +57,7 @@ The control panel. Anyone opening the folder reads this first.
 - links to all other documents
 
 ### discovery.md — the facts
-Read-only findings from runtime and repository discovery.
+Read-only findings from runtime discovery.
 - package/application inventory: sections, pages, details, mini pages, entities, owning app, maintainer, lock/editability
 - classification of every Classic schema: **own section/page** vs **replacing/extension schema**
 - dependency graph: which pages depend on which entities, details, and backend schemas

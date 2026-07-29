@@ -35,7 +35,6 @@ Record the evidence used and any gaps.
 | Source | Status | Evidence | Risk |
 | --- | --- | --- | --- |
 | Creatio runtime metadata | Available / Missing / Partial |  |  |
-| Local repository | Available / Missing / Partial |  |  |
 | Existing Freedom UI artifacts | Found / Not found / Partial |  |  |
 | Package ownership/editability | Editable / Locked / Unknown / Partial |  |  |
 | Classic schema coverage | All schemas read / Partial / Top-only | list schemas read (base→top) | items from unread schemas are INFERRED |
