@@ -185,7 +185,9 @@ const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:pro
 
 // Walk a member chain to the value it lands on, mirroring the vm proxy graph: a known enum member resolves
 // to its number; everything else collapses to null (exactly what the proxies did). Never flags — vm→null too.
-function resolveMemberValue(node, scope) {
+// Walk a member chain down to its base, collecting the property names (outermost last). Returns null when any
+// link is unreadable statically: a computed index (`x[i]`) resolves to a proxy → null under the vm too.
+function memberChain(node) {
   const path = [];
   let cur = node;
   while (cur?.type === "MemberExpression") {
@@ -197,27 +199,33 @@ function resolveMemberValue(node, scope) {
     path.unshift(name);
     cur = cur.object;
   }
+  return { path, base: cur };
+}
+
+// Which resolver state the chain's base identifier starts in: `this`, the framework root, or an opaque proxy.
+function baseTag(cur, scope) {
+  if (cur?.type === "ThisExpression") return "this";
+  if (cur?.type !== "Identifier") return null;
+  // param shadows global; the AMD `terrasoft` dep param resolves like the global
+  if (scope.has(cur.name)) return { brm: "brm", terrasoft: "terrasoft" }[scope.get(cur.name).kind] || "proxy";
+  return cur.name === "Terrasoft" ? "terrasoft" : "proxy";
+}
+
+function resolveMemberValue(node, scope) {
+  const chain = memberChain(node);
+  if (!chain) return null;
+  const { path } = chain;
+  let cur = chain.base;
   // If the base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
   // `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
   let guard = 0;
-  while (cur?.type === "Identifier" && scope.has(cur.name) && scope.get(cur.name).kind === "memberAlias" && guard++ < 20) {
-    let a = scope.get(cur.name).node, seg = [];
-    while (a?.type === "MemberExpression") {
-      if (a.computed) return null;
-      const litNm = a.property.type === "Literal" ? String(a.property.value) : null;
-      const nm = a.property.type === "Identifier" ? a.property.name : litNm;
-      if (nm == null) return null;
-      seg.unshift(nm); a = a.object;
-    }
-    path.unshift(...seg); cur = a;
+  while (cur?.type === "Identifier" && scope.get(cur.name)?.kind === "memberAlias" && guard++ < 20) {
+    const aliased = memberChain(scope.get(cur.name).node);
+    if (!aliased) return null;
+    path.unshift(...aliased.path); cur = aliased.base;
   }
-  let tag;
-  if (cur?.type === "ThisExpression") tag = "this";
-  else if (cur?.type === "Identifier") {
-    if (scope.has(cur.name)) { const k = scope.get(cur.name).kind; tag = { brm: "brm", terrasoft: "terrasoft" }[k] || "proxy"; } // param shadows global; the AMD `terrasoft` dep param resolves like the global
-    else if (cur.name === "Terrasoft") tag = "terrasoft";
-    else tag = "proxy";
-  } else return null;
+  let tag = baseTag(cur, scope);
+  if (tag == null) return null;
   for (const k of path) {
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) return k in enumTable ? enumTable[k] : null; // terminal: the next key indexes the enum table
@@ -243,68 +251,76 @@ function makeAstEvaluator(scope, diagnostics, src) {
       case "TemplateLiteral":
         if (node.expressions.length === 0) return node.quasis.map(q => q.value.cooked).join("");
         flag("dynamic-template", node, path); return null;
-      case "ObjectExpression": {
-        const out = {};
-        for (const p of node.properties) {
-          if (p.type === "SpreadElement") { flag("spread-in-object", p, path); continue; }
-          if (p.computed) { flag("computed-key", p, path); continue; }
-          const key = p.key.type === "Identifier" ? p.key.name : String(p.key.value);
-          out[key] = evalNode(p.value, [...path, key]);
-        }
-        return out;
-      }
-      case "ArrayExpression":
-        return node.elements.map((el, i) => {
-          // A sparse hole (`[ , {…}]`) previously returned null with NO diagnostic, then crashed downstream when
-          // normalizeDiff read `.index` off it. Flag it (structural if it sits on `diff`/`details`) so the gate
-          // blocks with a real reason instead of a raw TypeError, and the null slot is skipped by consumers.
-          if (!el) { flag("sparse-hole", node, [...path, i]); return null; }
-          if (el.type === "SpreadElement") { flag("spread-in-array", el, path); return null; }
-          return evalNode(el, [...path, i]);
-        });
-      case "MemberExpression": {
-        const v = resolveMemberValue(node, scope);
-        // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
-        // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
-        // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
-        if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
-        return v;
-      }
+      case "ObjectExpression": return evalObject(node, path);
+      case "ArrayExpression": return evalArray(node, path);
+      case "MemberExpression": return evalMember(node, path);
       case "FunctionExpression":
       case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
-      case "Identifier":
-        if (node.name === "undefined") return undefined;
-        if (scope.has(node.name)) {
-          const m = scope.get(node.name);
-          if (m.kind === "value") return m.value;
-          if (m.kind === "node") return evalNode(m.node, path); // lazy alias: evaluate at the REFERENCE path with the real sink
-          return null; // proxy / BusinessRuleModule param — not a static value
-        }
-        flag("unresolved-identifier", node, path); return null;
-      case "UnaryExpression": {
-        const v = evalNode(node.argument, path);
-        if (node.operator === "-" && typeof v === "number") return -v;
-        if (node.operator === "+" && typeof v === "number") return +v;
-        if (node.operator === "!") return !v;
-        return null;
-      }
-      case "BinaryExpression": {
-        const l = evalNode(node.left, path), r = evalNode(node.right, path);
-        if (l != null && r != null && ["string", "number", "boolean"].includes(typeof l) && ["string", "number", "boolean"].includes(typeof r)) {
-          switch (node.operator) { case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r; }
-        }
-        flag("dynamic-binary", node, path); return null;
-      }
-      case "ConditionalExpression": {
-        const t = evalNode(node.test, path);
-        if (typeof t === "boolean") return evalNode(t ? node.consequent : node.alternate, path);
-        flag("dynamic-conditional", node, path); return null;
-      }
+      case "Identifier": return evalIdentifier(node, path);
+      case "UnaryExpression": return evalUnary(node, path);
+      case "BinaryExpression": return evalBinary(node, path);
+      case "ConditionalExpression": return evalConditional(node, path);
       case "CallExpression": flag("dynamic-call", node, path); return null;
       case "NewExpression": flag("dynamic-new", node, path); return null;
       case "ThisExpression": return null;
       default: flag("unhandled:" + node.type, node, path); return null;
     }
+  }
+  function evalObject(node, path) {
+    const out = {};
+    for (const p of node.properties) {
+      if (p.type === "SpreadElement") { flag("spread-in-object", p, path); continue; }
+      if (p.computed) { flag("computed-key", p, path); continue; }
+      const key = p.key.type === "Identifier" ? p.key.name : String(p.key.value);
+      out[key] = evalNode(p.value, [...path, key]);
+    }
+    return out;
+  }
+  function evalArray(node, path) {
+    return node.elements.map((el, i) => {
+      // A sparse hole (`[ , {…}]`) previously returned null with NO diagnostic, then crashed downstream when
+      // normalizeDiff read `.index` off it. Flag it (structural if it sits on `diff`/`details`) so the gate
+      // blocks with a real reason instead of a raw TypeError, and the null slot is skipped by consumers.
+      if (!el) { flag("sparse-hole", node, [...path, i]); return null; }
+      if (el.type === "SpreadElement") { flag("spread-in-array", el, path); return null; }
+      return evalNode(el, [...path, i]);
+    });
+  }
+  function evalMember(node, path) {
+    const v = resolveMemberValue(node, scope);
+    // E2 fail-loud: a member access whose base is a LOCAL object/array alias (`var cfg={…}; return {diff: cfg.items}`)
+    // is not something resolveMemberValue can descend (it only walks the framework-enum automaton), so it collapses
+    // to null SILENTLY — an empty structural value that would otherwise pass the gate green. Flag it so it surfaces.
+    if (v == null) { const b = memberBase(node); if (b && scope.get(b)?.kind === "node") flag("member-on-local-object", node, path); }
+    return v;
+  }
+  function evalIdentifier(node, path) {
+    if (node.name === "undefined") return undefined;
+    if (!scope.has(node.name)) { flag("unresolved-identifier", node, path); return null; }
+    const m = scope.get(node.name);
+    if (m.kind === "value") return m.value;
+    if (m.kind === "node") return evalNode(m.node, path); // lazy alias: evaluate at the REFERENCE path with the real sink
+    return null; // proxy / BusinessRuleModule param — not a static value
+  }
+  function evalUnary(node, path) {
+    const v = evalNode(node.argument, path);
+    if (node.operator === "!") return !v;
+    if (typeof v !== "number") return null;
+    if (node.operator === "-") return -v;
+    return node.operator === "+" ? +v : null;
+  }
+  const STATIC_TYPES = new Set(["string", "number", "boolean"]);
+  function evalBinary(node, path) {
+    const l = evalNode(node.left, path), r = evalNode(node.right, path);
+    if (l != null && r != null && STATIC_TYPES.has(typeof l) && STATIC_TYPES.has(typeof r)) {
+      switch (node.operator) { case "+": return l + r; case "-": return l - r; case "*": return l * r; case "/": return l / r; }
+    }
+    flag("dynamic-binary", node, path); return null;
+  }
+  function evalConditional(node, path) {
+    const t = evalNode(node.test, path);
+    if (typeof t === "boolean") return evalNode(t ? node.consequent : node.alternate, path);
+    flag("dynamic-conditional", node, path); return null;
   }
   return evalNode;
 }
@@ -315,6 +331,18 @@ function findDefineCall(ast) {
         && st.expression.callee.type === "Identifier" && st.expression.callee.name === "define")
       return st.expression;
   return null;
+}
+
+// Record ONE top-level `var`/`const` declarator into the scope: a literal → its value; an array/object
+// initializer → a LAZY node (resolved at its reference site with the real diagnostics sink, so a dynamic
+// construct inside is flagged there, not silently dropped); an enum-object member alias
+// (`var vt = Terrasoft.core.enums.ViewItemType`) → its chain, so `vt.GridLayout` still resolves. Anything
+// else is left unbound (→ proxy/null downstream).
+function bindDeclaration(d, scope) {
+  if (d.id.type !== "Identifier" || !d.init) return;
+  if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
+  else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "node", node: d.init });
+  else if (d.init.type === "MemberExpression") scope.set(d.id.name, { kind: "memberAlias", node: d.init });
 }
 
 function buildAstScope(factory, amdDeps, src) {
@@ -341,14 +369,7 @@ function buildAstScope(factory, amdDeps, src) {
   const body = factory.body?.type === "BlockStatement" ? factory.body.body : [];
   for (const st of body)
     if (st.type === "VariableDeclaration")
-      for (const d of st.declarations) {
-        if (d.id.type !== "Identifier" || !d.init) continue;
-        if (d.init.type === "Literal") { if (!(d.init.value instanceof RegExp)) scope.set(d.id.name, { kind: "value", value: d.init.value }); }
-        else if (d.init.type === "ArrayExpression" || d.init.type === "ObjectExpression") scope.set(d.id.name, { kind: "node", node: d.init });
-        // an enum-object alias (`var vt = Terrasoft.core.enums.ViewItemType`) — remembered so `vt.GridLayout`
-        // resolves via the alias chain instead of silently collapsing to null (a mis-classified container).
-        else if (d.init.type === "MemberExpression") scope.set(d.id.name, { kind: "memberAlias", node: d.init });
-      }
+      for (const d of st.declarations) bindDeclaration(d, scope);
   return scope;
 }
 
@@ -429,36 +450,41 @@ function extractFnBody(src, name) {
   for (const re of openers) {
     const m = re.exec(src);
     if (!m) continue;
-    const open = m.index + m[0].length - 1; // index of the opening {
-    let depth = 0;
-    // brace-count, but SKIP string literals and line/block comments so a `{`/`}` inside them is not counted
-    // (fixes mis-scoped getActions / section-action / column scans). Regex literals with braces stay a rare
-    // unhandled edge — acceptable for these hint-only text scans. A hand-advanced index (a while loop, not a
-    // for-counter) because comment/string spans jump `j` forward past whole regions in one step.
-    let j = open;
-    while (j < src.length) {
-      const c = src[j], c2 = src[j + 1];
-      if (c === "/" && c2 === "/") {                       // line comment → skip to the newline
-        const nl = src.indexOf("\n", j);
-        if (nl < 0) return src.slice(open + 1);
-        j = nl + 1; continue;
-      }
-      if (c === "/" && c2 === "*") {                       // block comment → skip past the closing */
-        const e = src.indexOf("*/", j + 2);
-        j = e < 0 ? src.length : e + 2; continue;
-      }
-      if (c === '"' || c === "'" || c === "`") {           // string literal → skip to the matching quote
-        j++;
-        while (j < src.length && src[j] !== c) { if (src[j] === "\\") { j++; } j++; }
-        j++; continue;
-      }
-      if (c === "{") depth++;
-      else if (c === "}" && --depth === 0) return src.slice(open + 1, j);
-      j++;
-    }
-    return src.slice(open + 1); // unbalanced source — return the remainder defensively
+    return sliceBracedBody(src, m.index + m[0].length - 1); // from the index of the opening {
   }
   return "";
+}
+
+// The `{ … }` block starting at `open`, brace-counted but SKIPPING string literals and line/block comments so
+// a `{`/`}` inside them is not counted (fixes mis-scoped getActions / section-action / column scans). Regex
+// literals with braces stay a rare unhandled edge — acceptable for these hint-only text scans. A hand-advanced
+// index (a while loop, not a for-counter) because comment/string spans jump `j` past whole regions in one step.
+// An unbalanced source returns the remainder defensively rather than "".
+function sliceBracedBody(src, open) {
+  let depth = 0, j = open;
+  while (j < src.length) {
+    const c = src[j], c2 = src[j + 1];
+    if (c === "/" && (c2 === "/" || c2 === "*")) {
+      const skipped = skipComment(src, j);
+      if (skipped == null) return src.slice(open + 1);   // unterminated line comment — nothing left to scan
+      j = skipped; continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { j = skipStringLiteral(src, j); continue; }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return src.slice(open + 1, j);
+    j++;
+  }
+  return src.slice(open + 1); // unbalanced source — return the remainder defensively
+}
+
+// Index just past the comment starting at `j`. null when a line comment runs to EOF with no newline.
+function skipComment(src, j) {
+  if (src[j + 1] === "/") {                              // line comment → skip to the newline
+    const nl = src.indexOf("\n", j);
+    return nl < 0 ? null : nl + 1;
+  }
+  const e = src.indexOf("*/", j + 2);                    // block comment → skip past the closing */
+  return e < 0 ? src.length : e + 2;
 }
 
 // The source text of each top-level entry object inside the first `filters: [ … ]` array of `body` (a
@@ -469,77 +495,109 @@ function fixedFilterObjects(body) {
   const m = /filters\s*:\s*\[/.exec(body);
   if (!m) return [];
   const objs = [];
-  let i = m.index + m[0].length, bracket = 1, brace = 0, start = -1;
-  while (i < body.length && bracket > 0) {
+  const depth = { bracket: 1, brace: 0, start: -1 };
+  let i = m.index + m[0].length;
+  while (i < body.length && depth.bracket > 0) {
     const c = body[i];
-    if (c === '"' || c === "'" || c === "`") { const q = c; i++; while (i < body.length && body[i] !== q) { i += body[i] === "\\" ? 2 : 1; } i++; continue; }
-    if (c === "[") bracket++;
-    else if (c === "]") bracket--;
-    else if (c === "{") { if (brace === 0) { start = i; } brace++; }
-    else if (c === "}") { if (--brace === 0 && start >= 0) { objs.push(body.slice(start, i + 1)); start = -1; } }
+    if (c === '"' || c === "'" || c === "`") { i = skipStringLiteral(body, i); continue; }
+    trackFilterDepth(c, i, depth, body, objs);
     i++;
   }
   return objs;
 }
 
+// One character of the depth walk: brackets bound the `filters` array, braces bound each entry object, and a
+// brace returning to depth 0 closes an entry — its source text is pushed to `objs`.
+function trackFilterDepth(c, i, depth, body, objs) {
+  if (c === "[") depth.bracket++;
+  else if (c === "]") depth.bracket--;
+  else if (c === "{") { if (depth.brace === 0) { depth.start = i; } depth.brace++; }
+  else if (c === "}" && --depth.brace === 0 && depth.start >= 0) {
+    objs.push(body.slice(depth.start, i + 1));
+    depth.start = -1;
+  }
+}
+
+// Index just past the string literal opening at `body[i]`, so a brace/bracket inside a literal is never
+// counted by the depth walk above. Escapes consume two characters.
+function skipStringLiteral(body, i) {
+  const quote = body[i];
+  let j = i + 1;
+  while (j < body.length && body[j] !== quote) { j += body[j] === "\\" ? 2 : 1; }
+  return j + 1;
+}
+
 const isNum = (v) => typeof v === "number";
 const isStr = (v) => typeof v === "string";
+// `x` when it is a string / number, else null — the normalizers below apply this to nearly every field, and
+// as a named helper each application costs no cognitive complexity in the caller.
+const strOrNull = (v) => (isStr(v) ? v : null);
+const numOrNull = (v) => (isNum(v) ? v : null);
 function safeKeys(o) { return o && typeof o === "object" ? Object.keys(o).filter(k => typeof k === "string") : []; }
 function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? o : {}; }
 
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
-  return diff.map((op, i) => {
-    // A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
-    // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
-    // null-safe filter at the end drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried on
-    // every surviving op so the dynamic-property reporter (migrate.mjs) can match a `diff.<i>.values.*`
-    // diagnostic to its element by that index instead of by array position — which drifts once any op is
-    // dropped here (null slot or nameless "?"), the label-desync the reporter otherwise hit.
-    if (op == null || typeof op !== "object") return null;
-    const v = op.values && typeof op.values === "object" ? op.values : {};
-    // caption resource key: `caption.bindTo`, else a bare string, else null.
-    const captionStr = isStr(v.caption) ? v.caption : null;
-    const caption = v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : captionStr;
-    // field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
-    let hint = null;
-    if (isStr(v.hint?.bindTo)) hint = v.hint.bindTo;
-    else if (isStr(v.hint?.content?.bindTo)) hint = v.hint.content.bindTo;
-    else if (isStr(v.hint)) hint = v.hint;
-    // visibility: static false / a dynamic expression (bind/rule) / true; null = this op didn't set it.
-    const visibleDynamic = v.visible && typeof v.visible === "object" ? "dynamic" : null;
-    const visible = typeof v.visible === "boolean" ? v.visible : visibleDynamic;
-    const opIndex = isNum(op.index) ? op.index : null; // diff-op index fallback (RV5, used for `order` below)
-    return {
-      operation: isStr(op.operation) ? op.operation : "?",
-      name: isStr(op.name) ? op.name : "?",
-      parentName: isStr(op.parentName) ? op.parentName : null,
-      propertyName: isStr(op.propertyName) ? op.propertyName : null,
-      index: isNum(op.index) ? op.index : null,
-      bindTo: isStr(v.bindTo) ? v.bindTo : null,
-      itemType: isNum(v.itemType) ? v.itemType : null,      // 0 grid,2 detail,15 group
-      contentType: isNum(v.contentType) ? v.contentType : null,
-      isTab: op.propertyName === "tabs",
-      hasCaption: !!(v.caption),
-      // caption resource key (tab/group/detail label) — carried so the real caption is shown for
-      // cross-check instead of only a synthesized placeholder.
-      caption,
-      // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
-      // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
-      order: v && isNum(v.order) ? v.order : opIndex,
-      // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
-      // (e.g. a wide 3-column header) instead of inventing a single narrow column.
-      layout: normalizeLayout(v.layout),
-      // tooltip resource key (classic `tip.content.bindTo = "Resources.Strings.XTip"`) — carried to the
-      // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
-      // recognising non-field components the mapper otherwise drops.
-      tip: v.tip?.content && isStr(v.tip.content.bindTo) ? v.tip.content.bindTo : null,
-      hint,
-      generator: isStr(v.generator) ? v.generator : null,
-      visible,
-      astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
-    };
-  }).filter(op => op && op.name !== "?");
+  // pass the index explicitly rather than handing `normalizeDiffOp` straight to `.map` — the second parameter
+  // it reads IS the AST index (carried as `astIndex`), and `.map` would also feed it a third `array` argument.
+  return diff.map((op, i) => normalizeDiffOp(op, i)).filter(op => op && op.name !== "?");
+}
+
+// caption resource key: `caption.bindTo`, else a bare string, else null.
+const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
+
+// field help/tooltip — accept `hint.bindTo`, `hint.content.bindTo`, or a bare string.
+function hintKey(v) {
+  if (isStr(v.hint?.bindTo)) return v.hint.bindTo;
+  if (isStr(v.hint?.content?.bindTo)) return v.hint.content.bindTo;
+  return strOrNull(v.hint);
+}
+
+// visibility: static false / a dynamic expression (bind/rule) / true; null = this op didn't set it.
+function visibility(v) {
+  if (typeof v.visible === "boolean") return v.visible;
+  return v.visible && typeof v.visible === "object" ? "dynamic" : null;
+}
+
+// A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
+// straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
+// null-safe filter in normalizeDiff drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried
+// on every surviving op so the dynamic-property reporter (migrate.mjs) can match a `diff.<i>.values.*`
+// diagnostic to its element by that index instead of by array position — which drifts once any op is
+// dropped here (null slot or nameless "?"), the label-desync the reporter otherwise hit.
+function normalizeDiffOp(op, i) {
+  if (op == null || typeof op !== "object") return null;
+  const v = plainObj(op.values);
+  const opIndex = numOrNull(op.index); // diff-op index fallback (RV5, used for `order` below)
+  return {
+    operation: isStr(op.operation) ? op.operation : "?",
+    name: isStr(op.name) ? op.name : "?",
+    parentName: strOrNull(op.parentName),
+    propertyName: strOrNull(op.propertyName),
+    index: opIndex,
+    bindTo: strOrNull(v.bindTo),
+    itemType: numOrNull(v.itemType),      // 0 grid,2 detail,15 group
+    contentType: numOrNull(v.contentType),
+    isTab: op.propertyName === "tabs",
+    hasCaption: !!(v.caption),
+    // caption resource key (tab/group/detail label) — carried so the real caption is shown for
+    // cross-check instead of only a synthesized placeholder.
+    caption: captionKey(v),
+    // RV5 — real fixtures often set the diff-op `index` (position in the parent) WITHOUT `values.order`;
+    // fall back to `index` so such items keep their intended position instead of collapsing to order:null.
+    order: isNum(v.order) ? v.order : opIndex,
+    // classic grid coordinates — preserved so the mapper reproduces the real multi-column layout
+    // (e.g. a wide 3-column header) instead of inventing a single narrow column.
+    layout: normalizeLayout(v.layout),
+    // tooltip resource key (classic `tip.content.bindTo = "Resources.Strings.XTip"`) — carried to the
+    // Freedom field so hints aren't lost; and the component `generator` (image/photo etc.) for
+    // recognising non-field components the mapper otherwise drops.
+    tip: v.tip?.content && isStr(v.tip.content.bindTo) ? v.tip.content.bindTo : null,
+    hint: hintKey(v),
+    generator: strOrNull(v.generator),
+    visible: visibility(v),
+    astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
+  };
 }
 
 function normalizeLayout(l) {
@@ -551,13 +609,13 @@ function normalizeLayout(l) {
 
 function normalizeDetails(d) {
   const out = {};
-  if (d && typeof d === "object") for (const k of Object.keys(d)) {
-    const e = d[k] || {};
-    const f = e.filter && typeof e.filter === "object" ? e.filter : {};
-    out[k] = { schemaName: isStr(e.schemaName) ? e.schemaName : null,
-               entitySchemaName: isStr(e.entitySchemaName) ? e.entitySchemaName : null,
-               detailColumn: isStr(f.detailColumn) ? f.detailColumn : null,
-               masterColumn: isStr(f.masterColumn) ? f.masterColumn : null };
+  for (const k of safeKeys(d)) {
+    const e = plainObj(d[k]);
+    const f = plainObj(e.filter);
+    out[k] = { schemaName: strOrNull(e.schemaName),
+               entitySchemaName: strOrNull(e.entitySchemaName),
+               detailColumn: strOrNull(f.detailColumn),
+               masterColumn: strOrNull(f.masterColumn) };
   }
   return out;
 }
@@ -616,6 +674,116 @@ function makeItem(op, seed, pkg) {
   };
 }
 
+// diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
+function replayDiffOp(op, items, { seed, pkg }, warnings) {
+  const cur = items.get(op.name);
+  if (op.operation === "insert") { items.set(op.name, makeItem(op, seed, pkg)); return; }
+  if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
+  if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
+  if (op.operation === "remove") return replayRemove(op, cur, items, { seed, pkg }, warnings);
+}
+
+// patch in place; carry contentType/itemType too — a later schema can introduce a control hint
+// (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
+function replayMerge(op, cur, items, { seed, pkg }, warnings) {
+  if (!cur) {
+    // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
+    // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
+    // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
+    items.set(op.name, makeItem(op, seed, pkg));
+    warnings.push({ op: "merge", name: op.name, schema: pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
+    return;
+  }
+  for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
+}
+
+// classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
+// spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
+// e.g. Product's IsArchive/"Inactive" checkbox).
+function replayMove(op, cur, { seed, pkg }, warnings) {
+  if (!cur) {
+    warnings.push({ op: "move", name: op.name, schema: pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
+    return;
+  }
+  if (op.parentName) { cur.parent = op.parentName; }
+  // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
+  // (previously only the parent was updated, so a pure reorder silently kept the old position).
+  if (op.order != null) { cur.order = op.order; }
+  if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
+  cur.provenance.push(pkg);
+  if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
+}
+
+// removedBySeed: a template-internal remove (base template dropping a base element) is context,
+// not a client B6 decision — the mapper filters it out like every other template-only element.
+function replayRemove(op, cur, items, { seed, pkg }, warnings) {
+  if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
+  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
+  warnings.push({ op: "remove", name: op.name, schema: pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+}
+
+// businessRules + legacy rules (merge by attribute::ruleKey)
+function mergeRuleBlocks(L, seed, rules) {
+  for (const [sys, block] of [["businessRules", L.businessRules], ["rules", L.rules]]) {
+    for (const attr of Object.keys(block || {})) {
+      const ar = block[attr]; if (!ar || typeof ar !== "object") continue;
+      for (const key of Object.keys(ar)) {
+        const id = `${attr}::${key}`;
+        const rec = normalizeRule(ar[key] || {}, { attr, key, sys, seed, pkg: L.pkg });
+        if (rules.has(id)) { const p = rules.get(id); rec.provenance = [...p.provenance, L.pkg]; rec.schemaTouched = p.schemaTouched || !seed; }
+        rules.set(id, rec);
+      }
+    }
+  }
+}
+
+function normalizeRule(r, { attr, key, sys, seed, pkg }) {
+  return {
+    attr, key, system: sys,
+    // guard: only decode when numeric (after enum seeding legacy rules are numbers too);
+    // a still-non-numeric value is genuinely symbolic/unknown -> flagged, never silently "0".
+    ruleType: isNum(r.ruleType) ? (RULE_TYPE[r.ruleType] ?? String(r.ruleType)) : "symbolic",
+    property: isNum(r.property) ? (PROP[r.property] ?? String(r.property)) : null,
+    conditions: sanitizeConditions(r.conditions),
+    filterColumn: strOrNull(r.baseAttributePatch),
+    comparison: numOrNull(r.comparisonType),
+    value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
+    dataValueType: numOrNull(r.dataValueType),
+    enabled: r.enabled !== false, removed: r.removed === true,
+    provenance: [pkg], schemaTouched: !seed,
+  };
+}
+
+function mergeDetails(L, seed, details) {
+  for (const k of Object.keys(L.details)) {
+    const prev = details.get(k);
+    const rec = { key: k, ...L.details[k], provenance: [L.pkg], schemaTouched: !seed };
+    if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
+    details.set(k, rec);
+  }
+}
+
+// methods (override stack) — track whether any schema schema contributed
+function mergeMethods(L, seed, methods) {
+  for (const m of L.methods) {
+    const prev = methods.get(m);
+    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed });
+  }
+}
+
+// modules (widgets/charts) — merge by key
+function mergeModules(L, seed, components) {
+  for (const c of L.modules || []) {
+    const prev = components.get(c.key);
+    const rec = { ...c, provenance: [L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed };
+    if (prev) rec.provenance = [...prev.provenance, L.pkg];
+    components.set(c.key, rec);
+  }
+}
+
 export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
@@ -642,95 +810,14 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
   for (const { L, seed } of tagged) {
-    // diff replay
     for (const op of L.diff) {
       if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      const cur = items.get(op.name);
-      if (op.operation === "insert") {
-        items.set(op.name, makeItem(op, seed, L.pkg));
-      } else if (op.operation === "merge") {
-        // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
-        // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
-        if (cur) {
-          for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
-          for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
-          cur.provenance.push(L.pkg);
-          if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
-        }
-        else {
-          // merge onto an item no lower schema defined: record a stub with the SAME shape as an insert
-          // (RV4 — carry layout/tip/hint/generator/visible/caption too, so a `visible:false`/tip/caption on
-          // this first merge-definition isn't silently dropped). templateOwned marks the first def's origin.
-          items.set(op.name, makeItem(op, seed, L.pkg));
-          warnings.push({ op: "merge", name: op.name, schema: L.pkg, hint: "merge onto an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1)" });
-        }
-      } else if (op.operation === "move") {
-        // classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
-        // spot. So a move onto a tombstoned item RESURRECTS it (else a displayed field silently vanishes,
-        // e.g. Product's IsArchive/"Inactive" checkbox).
-        if (cur) {
-          if (op.parentName) { cur.parent = op.parentName; }
-          // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
-          // (previously only the parent was updated, so a pure reorder silently kept the old position).
-          if (op.order != null) { cur.order = op.order; }
-          if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
-          cur.provenance.push(L.pkg);
-          if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
-        } else {
-          warnings.push({ op: "move", name: op.name, schema: L.pkg, hint: `move to '${op.parentName}' but the item was never defined — move dropped; check base seed (F2) / schema order (F1)` });
-        }
-      } else if (op.operation === "remove") {
-        // removedBySeed: a template-internal remove (base template dropping a base element) is context,
-        // not a client B6 decision — the mapper filters it out like every other template-only element.
-        if (cur) { cur.removed = true; cur.removedBy = L.pkg; cur.removedBySeed = seed; }
-        else {
-          items.set(op.name, { name: op.name, removed: true, removedBy: L.pkg, removedBySeed: seed, provenance: [L.pkg] });
-          warnings.push({ op: "remove", name: op.name, schema: L.pkg, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
-        }
-      }
+      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
     }
-    // businessRules + legacy rules (merge by attribute::ruleKey)
-    for (const [sys, block] of [["businessRules", L.businessRules], ["rules", L.rules]]) {
-      for (const attr of Object.keys(block || {})) {
-        const ar = block[attr]; if (!ar || typeof ar !== "object") continue;
-        for (const key of Object.keys(ar)) {
-          const r = ar[key] || {};
-          const id = `${attr}::${key}`;
-          const rec = {
-            attr, key, system: sys,
-            // guard: only decode when numeric (after enum seeding legacy rules are numbers too);
-            // a still-non-numeric value is genuinely symbolic/unknown -> flagged, never silently "0".
-            ruleType: typeof r.ruleType === "number" ? (RULE_TYPE[r.ruleType] ?? String(r.ruleType)) : "symbolic",
-            property: typeof r.property === "number" ? (PROP[r.property] ?? String(r.property)) : null,
-            conditions: sanitizeConditions(r.conditions),
-            filterColumn: isStr(r.baseAttributePatch) ? r.baseAttributePatch : null,
-            comparison: typeof r.comparisonType === "number" ? r.comparisonType : null,
-            value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
-            dataValueType: typeof r.dataValueType === "number" ? r.dataValueType : null,
-            enabled: r.enabled !== false, removed: r.removed === true,
-            provenance: [L.pkg], schemaTouched: !seed,
-          };
-          if (rules.has(id)) { const p = rules.get(id); rec.provenance = [...p.provenance, L.pkg]; rec.schemaTouched = p.schemaTouched || !seed; }
-          rules.set(id, rec);
-        }
-      }
-    }
-    // details
-    for (const k of Object.keys(L.details)) {
-      const prev = details.get(k);
-      const rec = { key: k, ...L.details[k], provenance: [L.pkg], schemaTouched: !seed };
-      if (prev) { rec.provenance = [...prev.provenance, L.pkg]; rec.schemaTouched = prev.schemaTouched || !seed; }
-      details.set(k, rec);
-    }
-    // methods (override stack) — track whether any schema schema contributed
-    for (const m of L.methods) { const prev = methods.get(m); methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed }); }
-    // modules (widgets/charts) — merge by key
-    for (const c of L.modules || []) {
-      const prev = components.get(c.key);
-      const rec = { ...c, provenance: [L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed };
-      if (prev) rec.provenance = [...prev.provenance, L.pkg];
-      components.set(c.key, rec);
-    }
+    mergeRuleBlocks(L, seed, rules);
+    mergeDetails(L, seed, details);
+    mergeMethods(L, seed, methods);
+    mergeModules(L, seed, components);
   }
 
   // CASCADE REMOVE (runtime parity). In Classic, removing a container removes its WHOLE SUBTREE. The diff replay
