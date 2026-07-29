@@ -1,0 +1,1219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Classic &rarr; Freedom Migration &mdash; Flow &amp; Engine</title>
+<style>html{color-scheme:light dark}body{margin:0;background:var(--ground,#E9EDF2)}@media (prefers-color-scheme:dark){body{background:var(--ground,#0E1620)}}</style>
+</head>
+<body>
+
+<style>
+  :root {
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Roboto Mono", Consolas, monospace;
+
+    /* light — cool slate ground, teal payload accent, muted indigo for template/context */
+    --ground: #E9EDF2;
+    --surface: #FFFFFF;
+    --surface-2: #F2F5F9;
+    --ink: #15202C;
+    --muted: #55677B;
+    --faint: #8697AA;
+    --line: #D2DBE5;
+    --line-strong: #B7C4D3;
+    --accent: #0C8F7E;      /* payload / Freedom / go */
+    --accent-ink: #0A6E61;
+    --source: #7681A6;      /* template / context */
+    --warn: #A9701A;        /* needs-decision */
+    --stop: #BE443A;        /* gate blocked */
+    --shadow: 0 1px 2px rgba(21,32,44,.05), 0 8px 24px rgba(21,32,44,.06);
+    --shadow-lift: 0 2px 4px rgba(21,32,44,.06), 0 14px 40px rgba(21,32,44,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0E1620;
+      --surface: #161F2A;
+      --surface-2: #1B2632;
+      --ink: #E6EDF4;
+      --muted: #92A3B4;
+      --faint: #62748A;
+      --line: #253340;
+      --line-strong: #334657;
+      --accent: #2DD4BC;
+      --accent-ink: #5FE1CE;
+      --source: #9AA4C6;
+      --warn: #E0A93C;
+      --stop: #E56A5D;
+      --shadow: 0 1px 2px rgba(0,0,0,.30), 0 10px 30px rgba(0,0,0,.35);
+      --shadow-lift: 0 2px 6px rgba(0,0,0,.35), 0 18px 48px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #E9EDF2; --surface: #FFFFFF; --surface-2: #F2F5F9;
+    --ink: #15202C; --muted: #55677B; --faint: #8697AA;
+    --line: #D2DBE5; --line-strong: #B7C4D3;
+    --accent: #0C8F7E; --accent-ink: #0A6E61; --source: #7681A6;
+    --warn: #A9701A; --stop: #BE443A;
+    --shadow: 0 1px 2px rgba(21,32,44,.05), 0 8px 24px rgba(21,32,44,.06);
+    --shadow-lift: 0 2px 4px rgba(21,32,44,.06), 0 14px 40px rgba(21,32,44,.10);
+  }
+  :root[data-theme="dark"] {
+    --ground: #0E1620; --surface: #161F2A; --surface-2: #1B2632;
+    --ink: #E6EDF4; --muted: #92A3B4; --faint: #62748A;
+    --line: #253340; --line-strong: #334657;
+    --accent: #2DD4BC; --accent-ink: #5FE1CE; --source: #9AA4C6;
+    --warn: #E0A93C; --stop: #E56A5D;
+    --shadow: 0 1px 2px rgba(0,0,0,.30), 0 10px 30px rgba(0,0,0,.35);
+    --shadow-lift: 0 2px 6px rgba(0,0,0,.35), 0 18px 48px rgba(0,0,0,.45);
+  }
+
+  .mig { box-sizing: border-box; }
+  .mig *, .mig *::before, .mig *::after { box-sizing: inherit; }
+
+  .mig {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    font-size: 16px;
+    padding: clamp(20px, 4vw, 56px) clamp(16px, 4vw, 40px) 72px;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  .measure { max-width: 68ch; }
+
+  .mig a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  .mig a:hover { border-bottom-color: var(--accent); }
+  .mig a:focus-visible, .mig .stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+  /* ---- type ---- */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 26px; height: 1px; background: var(--accent); display: inline-block; }
+
+  h1.title {
+    font-size: clamp(30px, 5.2vw, 52px);
+    line-height: 1.04;
+    letter-spacing: -.025em;
+    font-weight: 720;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h1.title .arrow { color: var(--accent); font-weight: 620; }
+  .dek {
+    margin: 20px 0 0;
+    font-size: clamp(16px, 1.9vw, 19px);
+    color: var(--muted);
+    max-width: 60ch;
+    text-wrap: pretty;
+  }
+  .meta {
+    margin-top: 26px;
+    display: flex; flex-wrap: wrap; gap: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .meta .pill {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .meta .pill b { color: var(--muted); font-weight: 600; }
+
+  /* ---- table of contents ---- */
+  .toc {
+    margin-top: 40px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 20px 22px 22px;
+  }
+  .toc-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 14px;
+  }
+  .toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    column-count: 2;
+    column-gap: 28px;
+  }
+  .toc-list li { break-inside: avoid; }
+  .toc-list a {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 8px;
+    color: var(--ink);
+    text-decoration: none;
+    transition: background .14s ease, color .14s ease;
+  }
+  .toc-list a:hover { background: var(--surface-2); color: var(--accent-ink); }
+  .toc-list a .ti {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    flex: 0 0 auto;
+    min-width: 20px;
+    font-variant-numeric: tabular-nums;
+  }
+  .toc-list a .tt { font-size: 14.5px; font-weight: 560; letter-spacing: -.005em; text-wrap: balance; }
+  .toc-list a:hover .tt { color: var(--accent-ink); }
+  @media (max-width: 620px) { .toc-list { column-count: 1; } }
+
+  section.block { margin-top: clamp(48px, 7vw, 88px); }
+  section.block { scroll-margin-top: 20px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .sec-idx { font-family: var(--font-mono); font-size: 13px; color: var(--accent-ink); font-weight: 600; }
+  h2 {
+    font-size: clamp(21px, 3vw, 28px);
+    letter-spacing: -.015em;
+    font-weight: 680;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .sec-sub { color: var(--muted); margin: 8px 0 26px; max-width: 66ch; }
+  h3 { font-size: 17px; font-weight: 660; margin: 0 0 4px; letter-spacing: -.01em; }
+
+  code, .mono { font-family: var(--font-mono); font-size: .88em; }
+  .measure code, p code, li code, td code {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    padding: .06em .38em;
+    border-radius: 5px;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  /* ---- big idea callout ---- */
+  .idea {
+    margin-top: 30px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .idea .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 20px 18px;
+    box-shadow: var(--shadow);
+  }
+  .idea .k { font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; color: var(--accent-ink); margin-bottom: 8px; }
+  .idea .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .idea .card b { color: var(--ink); font-weight: 640; }
+
+  /* ---- workflow flow ---- */
+  .phase-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 28px 0 16px; display: flex; align-items: center; gap: 10px; }
+  .phase-label .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .phase-label.build .dot { background: var(--warn); }
+  .flow { display: flex; flex-direction: column; }
+  .step { display: flex; gap: 16px; }
+  .step .rail { flex: 0 0 32px; display: flex; flex-direction: column; align-items: center; }
+  .step .num { width: 32px; height: 32px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink); font-family: var(--font-mono); font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow); flex: 0 0 auto; }
+  .step .line { flex: 1 1 auto; width: 2px; background: var(--line); margin: 4px 0; min-height: 12px; }
+  .step:last-child .line { display: none; }
+  .step .body { flex: 1 1 auto; padding: 3px 0 20px; }
+  .step .body h3 { margin: 0 8px 0 0; display: inline; font-size: 16px; }
+  .step .body p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  .t2 { font-family: var(--font-mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--faint); white-space: nowrap; vertical-align: middle; }
+  .t2.ro { color: var(--source); border-color: color-mix(in srgb, var(--source) 42%, transparent); }
+  .t2.eng { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .t2.mut { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .t2.trg { color: var(--muted); border-color: var(--line-strong); }
+  .t2.ref { color: var(--faint); border-style: dashed; }
+  .step.gate .num { background: var(--stop); border-color: var(--stop); color: #fff; }
+  .step.gate .body { background: color-mix(in srgb, var(--stop) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--stop) 35%, transparent); border-radius: 10px; padding: 13px 16px; margin-bottom: 8px; }
+  .step.gate .body h3 { color: var(--stop); display: block; margin: 0; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 11px; }
+  .tools::before { content: "\21B3"; color: var(--faint); font-family: var(--font-mono); font-size: 12px; margin-right: 2px; }
+  .tc { font-family: var(--font-mono); font-size: 10.5px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .tc.run { border-style: dashed; border-color: var(--line-strong); color: var(--source); background: transparent; }
+  .tc.eng { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-ink); font-weight: 600; }
+  .tool-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: -6px 0 26px; font-size: 12.5px; color: var(--muted); }
+  .tool-legend .li { display: flex; align-items: center; gap: 7px; }
+  .tool-legend .li code { font-family: var(--font-mono); font-size: .9em; }
+
+  /* ---- BPMN swimlane ---- */
+  .sub-label { font-size: 18px; font-weight: 680; letter-spacing: -.01em; margin: 42px 0 3px; }
+  .sub-note { color: var(--muted); font-size: 14px; margin: 0 0 18px; max-width: 66ch; }
+  /* frame + zoom toolbar */
+  .bpmn-figure { margin: 6px 0 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+  .bpmn-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 12px 9px 16px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .bpmn-bar-title { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .bpmn-ctrls { display: flex; align-items: center; gap: 6px; }
+  .zbtn { font-family: var(--font-mono); font-size: 14px; line-height: 1; min-width: 30px; height: 28px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }
+  .zbtn:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border-color: var(--accent); color: var(--accent-ink); }
+  .zbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .zbtn.wide { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+  .zoom-pct { font-family: var(--font-mono); font-size: 12px; color: var(--muted); min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
+  .zbtn[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border-color: var(--accent); color: var(--accent-ink); }
+  .bpmn-viewport { overflow: auto; max-height: 640px; padding: 14px; }
+  .bpmn-viewport.pannable { cursor: grab; }
+  .bpmn-viewport.grabbing { cursor: grabbing; user-select: none; }
+  /* break out of the 1000px reading column to span the full page width */
+  .bpmn-figure.wide { margin-left: calc(50% - 50vw + 12px); margin-right: calc(50% - 50vw + 12px); }
+  .bpmn-figure.wide .bpmn-viewport { max-height: min(760px, 78vh); }
+  .bpmn-figure:fullscreen { border: 0; border-radius: 0; margin: 0; display: flex; flex-direction: column; background: var(--ground); }
+  .bpmn-figure:fullscreen .bpmn-viewport { max-height: none; flex: 1 1 auto; display: flex; align-items: center; justify-content: center; }
+  .bpmn-figure:fullscreen .bpmn { flex: 0 0 auto; margin: auto; }
+  .bpmn-cap { margin: 0; padding: 11px 16px 13px; border-top: 1px solid var(--line); background: var(--surface-2); font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+
+  /* diagram body */
+  .bpmn { width: 100%; min-width: 1080px; height: auto; display: block; font-family: var(--font-sans); }
+  .bpmn .pool { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+  .bpmn .lane { fill: var(--surface); }
+  .bpmn .lane.alt { fill: var(--surface-2); }
+  .bpmn .lane.eng { fill: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+  .bpmn .lane-band { fill: var(--surface-2); }
+  .bpmn .lane-div { stroke: var(--line); stroke-width: 1; }
+  .bpmn .lane-label { fill: var(--muted); font-family: var(--font-mono); font-size: 12.5px; letter-spacing: .14em; text-transform: uppercase; }
+  .bpmn .phase { stroke: none; }
+  .bpmn .phase.plan { fill: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .bpmn .phase.build { fill: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .bpmn .phase-txt { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .bpmn .phase-txt.plan { fill: var(--accent-ink); }
+  .bpmn .phase-txt.build { fill: var(--warn); }
+  .bpmn .divider { stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 5 6; }
+  .bpmn .task { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; filter: url(#bp-sh); }
+  .bpmn .task.eng { stroke: color-mix(in srgb, var(--accent) 65%, var(--line-strong)); fill: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+  .bpmn .task-label { fill: var(--ink); font-size: 15.5px; font-weight: 620; }
+  .bpmn .task-sub { fill: var(--muted); font-size: 11.5px; font-weight: 500; }
+  .bpmn .ic { color: var(--faint); }
+  .bpmn .ic.eng { color: var(--accent-ink); }
+  .bpmn .gw { fill: var(--surface); stroke: var(--warn); stroke-width: 1.75; filter: url(#bp-sh); }
+  .bpmn .gw-x { stroke: var(--warn); stroke-width: 2; stroke-linecap: round; }
+  .bpmn .gw-label { fill: var(--warn); font-family: var(--font-mono); font-size: 13px; }
+  .bpmn .ev { fill: var(--surface); filter: url(#bp-sh); }
+  .bpmn .ev-start { stroke: var(--accent); stroke-width: 2.5; }
+  .bpmn .ev-end { stroke: var(--accent); stroke-width: 4.5; }
+  .bpmn .ev-label { fill: var(--muted); font-size: 12.5px; }
+  .bpmn .flow { fill: none; stroke: var(--muted); stroke-width: 1.75; stroke-linejoin: round; }
+  .bpmn .flow.loop { stroke: var(--warn); stroke-dasharray: 6 4; }
+  .bpmn .standpool { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.5; }
+  .bpmn .stand-label { fill: var(--muted); font-family: var(--font-mono); font-size: 13.5px; letter-spacing: .04em; }
+  .bpmn .stand-label .strong { fill: var(--ink); font-weight: 700; }
+  .bpmn .msg { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 5 5; }
+  .bpmn .msg-lab { fill: var(--faint); font-family: var(--font-mono); font-size: 11.5px; }
+  .bpmn .msg-lab.w { fill: var(--warn); }
+  .bpmn .msdot { fill: var(--surface); stroke: var(--faint); stroke-width: 1.2; }
+  .bpmn .mshead { fill: var(--surface); stroke: var(--faint); stroke-width: 1.2; }
+  .bpmn .flab { font-family: var(--font-mono); font-size: 12.5px; fill: var(--muted); }
+  .bpmn .flab.yes { fill: var(--accent-ink); }
+  .bpmn .flab.no { fill: var(--warn); }
+  .bpmn .ah { fill: var(--muted); }
+  .bpmn .ahL { fill: var(--warn); }
+  .bpmn .bstep { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1; }
+  .bpmn .bstep-txt { fill: var(--accent-ink); font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
+  .bpmn .mi { stroke: var(--faint); stroke-width: 2; stroke-linecap: round; fill: none; }
+
+  /* ---- pipeline (hero diagram) ---- */
+  .diagram-scroll { overflow-x: auto; padding-bottom: 6px; }
+  .pipeline {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    min-width: min-content;
+    margin-top: 6px;
+  }
+  .stage {
+    flex: 1 1 0;
+    min-width: 150px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 16px 15px;
+    box-shadow: var(--shadow);
+    position: relative;
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  }
+  .stage:hover { transform: translateY(-3px); box-shadow: var(--shadow-lift); border-color: var(--line-strong); }
+  .stage .n { font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
+  .stage .file { font-family: var(--font-mono); font-size: 10.5px; color: var(--accent-ink); float: right; }
+  .stage .nm { font-size: 16px; font-weight: 680; margin: 10px 0 2px; letter-spacing: -.01em; }
+  .stage .fn { font-family: var(--font-mono); font-size: 11.5px; color: var(--source); margin-bottom: 9px; word-break: break-word; }
+  .stage .did { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+  .conn { flex: 0 0 30px; display: flex; align-items: center; justify-content: center; color: var(--line-strong); }
+  .conn svg { width: 22px; height: 22px; }
+
+  /* ---- engine I/O table ---- */
+  .io-scroll { overflow-x: auto; margin-top: 8px; }
+  .iotbl { width: 100%; min-width: 640px; border-collapse: separate; border-spacing: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .iotbl th, .iotbl td { text-align: left; padding: 12px 18px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13.5px; line-height: 1.5; }
+  .iotbl thead th { background: var(--surface-2); font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .iotbl tbody td { background: var(--surface); }
+  .iotbl tbody tr:last-child td { border-bottom: 0; }
+  .iotbl .st { white-space: nowrap; font-weight: 640; color: var(--ink); }
+  .iotbl .st .n { font-family: var(--font-mono); color: var(--accent-ink); font-size: 12px; margin-right: 8px; }
+  .iotbl .st .fn { display: block; font-family: var(--font-mono); font-size: 10.5px; color: var(--source); font-weight: 400; margin-top: 4px; }
+  .iotbl td.tin { color: var(--muted); }
+  .iotbl td.tout { color: var(--ink); }
+  .iotbl .pay { color: var(--accent-ink); font-weight: 600; }
+  .iotbl .stop { color: var(--stop); font-weight: 600; }
+  .iotbl .sep { color: var(--faint); }
+  .iotbl .ex { margin-top: 9px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface-2); }
+  .iotbl td.tout .ex { border-color: color-mix(in srgb, var(--accent) 26%, var(--line)); }
+  .iotbl .ex .k { display: flex; align-items: center; gap: 7px; padding: 5px 11px; background: color-mix(in srgb, var(--ink) 5%, var(--surface-2)); border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .iotbl .ex .k::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); flex: 0 0 auto; }
+  .iotbl td.tout .ex .k { color: var(--accent-ink); }
+  .iotbl td.tout .ex .k::before { background: var(--accent); }
+  .iotbl .ex pre { margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7; color: var(--muted); white-space: pre-wrap; word-break: break-word; tab-size: 2; }
+  .iotbl .ex .jk { color: var(--source); }
+  .iotbl .ex .js { color: var(--accent-ink); }
+  .iotbl .ex .jn { color: var(--warn); }
+  .iotbl .ex .cm { color: var(--faint); font-style: italic; }
+  .iotbl .ex table.exmini { width: calc(100% - 22px); margin: 10px 11px; border-collapse: collapse; table-layout: fixed; font-family: var(--font-mono); font-size: 10px; line-height: 1.4; }
+  .iotbl .ex table.exmini th, .iotbl .ex table.exmini td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; color: var(--muted); word-break: break-word; }
+  .iotbl .ex table.exmini th { color: var(--faint); background: color-mix(in srgb, var(--ink) 6%, var(--surface-2)); font-weight: 600; }
+  .iotbl .ex table.exmini td.hl { color: var(--accent-ink); }
+
+  /* ---- real ChangeSet disclosure ---- */
+  .csx { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); overflow: hidden; }
+  .csx > summary { cursor: pointer; list-style: none; padding: 13px 18px; font-size: 14px; font-weight: 640; color: var(--ink); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .csx > summary::-webkit-details-marker { display: none; }
+  .csx > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+  .csx > summary .chev { color: var(--faint); transition: transform .15s ease; flex: 0 0 auto; }
+  .csx[open] > summary .chev { transform: rotate(90deg); }
+  .csx > summary .sx-tag { font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; color: var(--source); margin-left: auto; }
+  .csx .sx-body { border-top: 1px solid var(--line); background: var(--surface-2); overflow-x: auto; }
+  .csx pre { margin: 0; padding: 14px 16px; font-family: var(--font-mono); font-size: 11px; line-height: 1.65; color: var(--muted); white-space: pre; }
+  .csx .jk { color: var(--source); }
+  .csx .js { color: var(--accent-ink); }
+  .csx .jn { color: var(--warn); }
+  .csx .cm { color: var(--faint); font-style: italic; }
+  @media (prefers-reduced-motion: reduce) { .csx[open] > summary .chev { transition: none; } }
+
+  /* ---- generic card grid ---- */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+  .panel p { color: var(--muted); margin: 0 0 10px; font-size: 14.5px; }
+  .panel p:last-child { margin-bottom: 0; }
+  .panel b { color: var(--ink); font-weight: 640; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .grid2 .span2 { grid-column: 1 / -1; }
+  .trap { display: flex; flex-direction: column; gap: 9px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line); }
+  .trap .row { display: flex; gap: 10px; align-items: baseline; font-size: 13px; line-height: 1.5; }
+  .trap .who { flex: 0 0 auto; min-width: 96px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .trap .bad { color: var(--muted); }
+  .trap .bad .who { color: var(--stop); }
+  .trap .good { color: var(--ink); }
+  .trap .good .who { color: var(--accent-ink); }
+  .trap b { color: inherit; font-weight: 680; }
+  .trap code { background: var(--surface-2); border: 1px solid var(--line); padding: .03em .34em; border-radius: 5px; white-space: nowrap; }
+
+  /* ---- provenance centerpiece ---- */
+  .prov {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: clamp(20px, 3vw, 30px);
+    box-shadow: var(--shadow);
+    margin-top: 8px;
+  }
+  .prov-scroll { overflow-x: auto; }
+  .track { display: flex; align-items: center; gap: 12px; min-width: 560px; padding: 6px 0; }
+  .track + .track { margin-top: 14px; }
+  .node {
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.35;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    flex: 1 1 0;
+  }
+  .node .lbl { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); display: block; margin-bottom: 4px; }
+  .node .val { color: var(--ink); font-weight: 560; }
+  .node .val code { font-family: var(--font-mono); font-size: .86em; background: var(--surface-2); border: 1px solid var(--line); padding: .04em .34em; border-radius: 4px; white-space: nowrap; }
+  .tagline { display: block; margin-top: 8px; font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--faint); text-transform: none; letter-spacing: 0; }
+  .tagline code { border: 0 !important; background: transparent !important; padding: 0 !important; }
+  .track.ctx .tagline code { color: var(--source); }
+  .track.pay .tagline code { color: var(--accent-ink); }
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .to { flex: 0 0 auto; color: var(--line-strong); display: flex; align-items: center; }
+  .to svg { width: 20px; height: 20px; }
+
+  .track.ctx .tag { background: color-mix(in srgb, var(--source) 16%, transparent); color: var(--source); border: 1px solid color-mix(in srgb, var(--source) 40%, transparent); }
+  .track.ctx .node.end { border-color: color-mix(in srgb, var(--source) 40%, transparent); }
+  .track.pay .tag { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-ink); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+  .track.pay .node.end { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 7%, var(--surface-2)); }
+  .track.pay .node.end .val { color: var(--accent-ink); font-weight: 640; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+  .legend .item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
+  .sw.ctx { background: var(--source); }
+  .sw.pay { background: var(--accent); }
+  .sw.dec { background: var(--warn); }
+  .track.dec .tagline code { color: var(--warn); }
+  .track.dec .node.end { border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 7%, var(--surface-2)); }
+  .track.dec .node.end .val { color: var(--warn); font-weight: 620; }
+  /* filtered-page example */
+  .filtered { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .filtered .fl-h { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin: 0 0 13px; }
+  .filtered-scroll { overflow-x: auto; }
+  .filtered table { width: 100%; min-width: 480px; border-collapse: collapse; }
+  .filtered th, .filtered td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .filtered thead th { font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .filtered tbody tr:last-child td { border-bottom: 0; }
+  .filtered .el { font-family: var(--font-mono); font-size: 12px; color: var(--ink); white-space: nowrap; }
+  .filtered .org { color: var(--muted); font-size: 12.5px; }
+  .oc { display: inline-flex; align-items: center; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .oc.ctx { color: var(--source); border: 1px solid color-mix(in srgb, var(--source) 40%, transparent); background: color-mix(in srgb, var(--source) 12%, transparent); }
+  .oc.pay { color: var(--accent-ink); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .oc.dec { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+  /* ---- gates ---- */
+  .gate-group + .gate-group { margin-top: 22px; }
+  .gg-label { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+  .gg-label .fam { font-family: var(--font-mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+  .gg-label .fam::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ggc, var(--line-strong)); }
+  .gg-label .q { color: var(--muted); font-size: 13.5px; }
+  .gg-stop { --ggc: var(--stop); }
+  .gg-warn { --ggc: var(--warn); }
+  .gates { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 8px; }
+  .gates.one { grid-template-columns: 1fr; }
+  .gates.three { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .gate {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px 18px 22px;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  .gate::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--gcol, var(--accent)); }
+  .gate .top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .gate h3 { margin: 0; }
+  .gate .field { font-family: var(--font-mono); font-size: 11.5px; color: var(--gcol, var(--accent-ink)); white-space: nowrap; }
+  .gate .when { color: var(--muted); font-size: 13.5px; margin: 8px 0 0; }
+  .gate .when b { color: var(--ink); font-weight: 620; }
+
+  hr.rule { border: 0; border-top: 1px solid var(--line); margin: 0; }
+
+  footer.foot { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+  footer.foot .mono { color: var(--muted); }
+
+  /* ---- responsive ---- */
+  @media (max-width: 720px) {
+    .idea { grid-template-columns: 1fr; }
+    .grid2, .gates { grid-template-columns: 1fr; }
+    .pipeline { flex-direction: column; align-items: stretch; }
+    .conn { flex-basis: 30px; transform: rotate(90deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mig *, .mig *::before, .mig *::after { transition: none !important; animation: none !important; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .fade { opacity: 0; transform: translateY(10px); animation: rise .6s cubic-bezier(.2,.7,.2,1) forwards; }
+    @keyframes rise { to { opacity: 1; transform: none; } }
+  }
+</style>
+
+<div class="mig">
+<div class="wrap">
+
+  <header class="fade">
+    <p class="eyebrow">Migration engine · internals</p>
+    <h1 class="title">Classic UI <span class="arrow">&rarr;</span> Freedom UI</h1>
+    <p class="dek">The end-to-end flow &mdash; from the moment a user asks to migrate a custom Classic app, through the deterministic engine, to an approved and validated Freedom&nbsp;build.</p>
+    <div class="meta">
+      <span class="pill"><b>skill</b>&nbsp; classic-to-freedom-migration</span>
+      <span class="pill"><b>engine</b>&nbsp; engine.mjs · mapper.mjs · migrate.mjs · designspec.mjs</span>
+      <span class="pill"><b>runtime</b>&nbsp; pure Node, no stand</span>
+    </div>
+  </header>
+
+  <!-- TABLE OF CONTENTS -->
+  <nav class="toc fade" aria-label="Contents">
+    <p class="toc-label">On this page</p>
+    <ol class="toc-list">
+      <li><a href="#s00"><span class="ti">00</span><span class="tt">The contract in one line</span></a></li>
+      <li><a href="#s01"><span class="ti">01</span><span class="tt">The workflow &mdash; request to migrated app</span></a></li>
+      <li><a href="#s02"><span class="ti">02</span><span class="tt">The pipeline &mdash; inside steps 6&ndash;7</span></a></li>
+      <li><a href="#s03"><span class="ti">03</span><span class="tt">What each stage gets right &mdash; and the agent alone gets wrong</span></a></li>
+      <li><a href="#s04"><span class="ti">04</span><span class="tt">What gets built, what's just context</span></a></li>
+      <li><a href="#s05"><span class="ti">05</span><span class="tt">Four checks before a plan can be shown</span></a></li>
+    </ol>
+  </nav>
+
+  <!-- BIG IDEA -->
+  <section class="block" id="s00">
+    <div class="sec-head"><span class="sec-idx">00</span><h2>The contract in one line</h2></div>
+    <p class="sec-sub measure">The engine owns the mechanical 80% &mdash; merge the chain, map to Freedom, render the plan. The agent owns the judgment 20% &mdash; feed complete inputs, resolve the worklist. Nothing is built before the plan is approved.</p>
+    <div class="idea">
+      <div class="card">
+        <div class="k">deterministic 80%</div>
+        <p><b>The engine does it.</b> Same inputs in &rarr; same effective page, ChangeSet, and plan out. No eyeballing the schema merge.</p>
+      </div>
+      <div class="card">
+        <div class="k">judgment 20%</div>
+        <p><b>You do it.</b> Everything mechanical it can't decide lands in <code>needsDecision[]</code> &mdash; the worklist you resolve.</p>
+      </div>
+      <div class="card">
+        <div class="k">approval-gated</div>
+        <p><b>Stop before build.</b> Four readiness checks must be green, then a human approves the written plan.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORKFLOW -->
+  <section class="block" id="s01">
+    <div class="sec-head"><span class="sec-idx">01</span><h2>The workflow &mdash; request to migrated app</h2></div>
+    <p class="sec-sub measure">The outer loop the coding agent runs for a whole custom Classic app. The BPMN below shows the process <b>shape</b> &mdash; who acts, where it branches, and the two loops. The annotated step list beneath it carries the <b>detail</b>: what each step does and the clio tools it runs.</p>
+
+    <figure class="bpmn-figure" id="bpmnFig">
+      <div class="bpmn-bar">
+        <span class="bpmn-bar-title">BPMN &middot; migration workflow</span>
+        <span class="bpmn-ctrls">
+          <button type="button" class="zbtn" data-z="out" aria-label="Zoom out" title="Zoom out">&minus;</button>
+          <output class="zoom-pct" aria-live="polite">100%</output>
+          <button type="button" class="zbtn" data-z="in" aria-label="Zoom in" title="Zoom in">+</button>
+          <button type="button" class="zbtn wide" data-z="fit" title="Fit to width">Fit</button>
+          <button type="button" class="zbtn wide" data-z="widen" title="Span the full page width" aria-pressed="false">Full width</button>
+          <button type="button" class="zbtn wide" data-z="full" title="Open full screen" hidden>Full screen</button>
+        </span>
+      </div>
+      <div class="bpmn-viewport">
+      <svg class="bpmn" viewBox="0 0 2300 694" role="img" aria-labelledby="bpmnTitle bpmnDesc">
+        <title id="bpmnTitle">BPMN swimlane &mdash; Classic to Freedom migration workflow</title>
+        <desc id="bpmnDesc">Three lanes. User starts the request and later reviews the plan at an approval gateway; the rejected path loops back to the Coding Agent's manifest-assembly task. Coding Agent determines scope, classifies and places, assembles the per-page manifest, and after approval resolves the confirm worklist, builds the pages, and validates. Engine reconstructs the effective page and writes the plan, once per page; the gates gateway sits after the plan write &mdash; a blocked run still writes the file &mdash; and its blocked path loops back to manifest assembly. A black-box pool represents the Creatio stand reached only through clio; message flows connect it to Coding Agent tasks only, since the Engine runs offline. Numbered badges on tasks match the step list below the diagram; triple-bar markers mean the task runs once per page.</desc>
+        <defs>
+          <marker id="ah" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="13" viewBox="0 0 10 10" refX="8.5" refY="5" orient="auto"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="ahL" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="13" viewBox="0 0 10 10" refX="8.5" refY="5" orient="auto"><path class="ahL" d="M0,0 L10,5 L0,10 z"/></marker>
+          <filter id="bp-sh" x="-25%" y="-25%" width="150%" height="150%"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#0B1622" flood-opacity="0.18"/></filter>
+          <marker id="ms" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" viewBox="0 0 10 10" refX="5" refY="5" orient="auto"><circle class="msdot" cx="5" cy="5" r="3"/></marker>
+          <marker id="me" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="13" viewBox="0 0 10 10" refX="8.5" refY="5" orient="auto"><path class="mshead" d="M0.8,1.2 L9,5 L0.8,8.8 z"/></marker>
+        </defs>
+
+        <!-- phase bands -->
+        <rect class="phase plan" x="8" y="6" width="1556" height="24" rx="5"/>
+        <rect class="phase build" x="1568" y="6" width="722" height="24" rx="5"/>
+        <text class="phase-txt plan" x="786" y="23" text-anchor="middle">Plan &mdash; read-only, nothing is created on the stand</text>
+        <text class="phase-txt build" x="1929" y="23" text-anchor="middle">Build &mdash; after approval</text>
+
+        <!-- lanes -->
+        <rect class="lane" x="8" y="40" width="2282" height="176"/>
+        <rect class="lane alt" x="8" y="216" width="2282" height="176"/>
+        <rect class="lane eng" x="8" y="392" width="2282" height="194"/>
+        <rect class="lane-band" x="8" y="40" width="50" height="546"/>
+        <line class="lane-div" x1="58" y1="40" x2="58" y2="586"/>
+        <line class="lane-div" x1="8" y1="216" x2="2290" y2="216"/>
+        <line class="lane-div" x1="8" y1="392" x2="2290" y2="392"/>
+        <line class="divider" x1="1566" y1="40" x2="1566" y2="586"/>
+        <rect class="pool" x="8" y="40" width="2282" height="546" rx="6"/>
+        <text class="lane-label" transform="translate(36 128) rotate(-90)" text-anchor="middle">User</text>
+        <text class="lane-label" transform="translate(36 304) rotate(-90)" text-anchor="middle">Coding Agent</text>
+        <text class="lane-label" transform="translate(36 489) rotate(-90)" text-anchor="middle">Engine</text>
+
+        <!-- sequence flows (drawn before nodes so the nodes cover the tips) -->
+        <path class="flow" d="M110,155 H130 V305 H150" marker-end="url(#ah)"/>
+        <path class="flow" d="M322,305 H352" marker-end="url(#ah)"/>
+        <path class="flow" d="M524,305 H554" marker-end="url(#ah)"/>
+        <path class="flow" d="M726,305 H856 V444" marker-end="url(#ah)"/>
+        <path class="flow" d="M942,487 H972" marker-end="url(#ah)"/>
+        <path class="flow" d="M1144,487 H1186" marker-end="url(#ah)"/>
+        <path class="flow" d="M1246,487 H1376 V198" marker-end="url(#ah)"/>
+        <path class="flow loop" d="M1216,517 V552 H614 V348" marker-end="url(#ahL)"/>
+        <path class="flow" d="M1462,155 H1492" marker-end="url(#ah)"/>
+        <path class="flow" d="M1552,155 H1682 V262" marker-end="url(#ah)"/>
+        <path class="flow loop" d="M1522,123 V76 H640 V262" marker-end="url(#ahL)"/>
+        <path class="flow" d="M1768,305 H1798" marker-end="url(#ah)"/>
+        <path class="flow" d="M1970,305 H2000" marker-end="url(#ah)"/>
+        <path class="flow" d="M2172,305 H2222" marker-end="url(#ah)"/>
+
+        <!-- flow labels -->
+        <text class="flab yes" x="1300" y="479" text-anchor="middle">yes</text>
+        <text class="flab no" x="930" y="544" text-anchor="middle">blocked &rarr; add the missing inputs to the manifest, re-run</text>
+        <text class="flab yes" x="1608" y="146" text-anchor="middle">approved</text>
+        <text class="flab no" x="1090" y="68" text-anchor="middle">rejected &rarr; revise inputs, re-run the engine</text>
+
+        <!-- start event -->
+        <circle class="ev ev-start" cx="92" cy="155" r="18"/>
+        <text class="ev-label" x="92" y="191" text-anchor="middle"><tspan x="92">Migrate custom</tspan><tspan x="92" dy="14">Classic app</tspan></text>
+
+        <!-- coding-agent planning tasks -->
+        <rect class="task" x="150" y="262" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="160" y="272" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="171" y="285" text-anchor="middle">2</text>
+        <text class="task-label" x="236" y="302" text-anchor="middle">Determine scope</text>
+        <text class="task-sub" x="236" y="322" text-anchor="middle">by what the user named</text>
+        <rect class="task" x="352" y="262" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="362" y="272" width="34" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="379" y="285" text-anchor="middle">3&ndash;5</text>
+        <text class="task-label" x="438" y="296" text-anchor="middle"><tspan x="438">Classify,</tspan><tspan x="438" dy="15">discover, place</tspan></text>
+        <text class="task-sub" x="438" y="328" text-anchor="middle">targets &middot; metadata &middot; package</text>
+        <rect class="task" x="554" y="262" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="564" y="272" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="575" y="285" text-anchor="middle">6</text>
+        <text class="task-label" x="640" y="302" text-anchor="middle">Assemble manifest</text>
+        <text class="task-sub" x="640" y="322" text-anchor="middle">page sources + signals</text>
+
+        <!-- engine: reconstruct (per page) -->
+        <rect class="task eng" x="770" y="444" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="780" y="454" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="791" y="467" text-anchor="middle">6</text>
+        <text class="task-label" x="856" y="476" text-anchor="middle"><tspan x="856">Reconstruct the</tspan><tspan x="856" dy="15">effective page</tspan></text>
+        <text class="task-sub" x="856" y="506" text-anchor="middle">merge every schema layer</text>
+        <path class="mi" d="M850,514V524M856,514V524M862,514V524"/>
+
+        <!-- engine: write plan (a blocked run still writes the file, stamped do-not-present) -->
+        <rect class="task eng" x="972" y="444" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="982" y="454" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="993" y="467" text-anchor="middle">7</text>
+        <text class="task-label" x="1058" y="476" text-anchor="middle"><tspan x="1058">Map to Freedom,</tspan><tspan x="1058" dy="15">write the plan</tspan></text>
+        <text class="task-sub" x="1058" y="506" text-anchor="middle">plan.md + both gates</text>
+        <path class="mi" d="M1052,514V524M1058,514V524M1064,514V524"/>
+
+        <!-- gateway: engine gates, checked on the run that wrote the plan -->
+        <polygon class="gw" points="1216,457 1246,487 1216,517 1186,487"/>
+        <path class="gw-x" d="M1207,478l18,18M1207,496l18,-18"/>
+        <text class="gw-label" x="1216" y="436" text-anchor="middle">Gates green?</text>
+
+        <!-- user: review + approval gateway -->
+        <rect class="task" x="1290" y="112" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="1300" y="122" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="1311" y="135" text-anchor="middle">8</text>
+        <text class="task-label" x="1376" y="152" text-anchor="middle">Review the plan</text>
+        <text class="task-sub" x="1376" y="172" text-anchor="middle">human approval gate</text>
+        <polygon class="gw" points="1522,123 1552,155 1522,187 1492,155"/>
+        <path class="gw-x" d="M1513,146l18,18M1513,164l18,-18"/>
+        <text class="gw-label" x="1522" y="205" text-anchor="middle">Approved?</text>
+
+        <!-- coding-agent build tasks -->
+        <rect class="task" x="1596" y="262" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="1606" y="272" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="1617" y="285" text-anchor="middle">9</text>
+        <text class="task-label" x="1682" y="302" text-anchor="middle">Resolve &#9888; worklist</text>
+        <text class="task-sub" x="1682" y="322" text-anchor="middle">build preflight, on-stand</text>
+        <rect class="task" x="1798" y="262" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="1808" y="272" width="22" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="1819" y="285" text-anchor="middle">9</text>
+        <text class="task-label" x="1884" y="302" text-anchor="middle">Build the pages</text>
+        <text class="task-sub" x="1884" y="322" text-anchor="middle">deepest pages first</text>
+        <path class="mi" d="M1878,332V342M1884,332V342M1890,332V342"/>
+        <rect class="task" x="2000" y="262" width="172" height="86" rx="10"/>
+        <rect class="bstep" x="2010" y="272" width="26" height="17" rx="8.5"/>
+        <text class="bstep-txt" x="2023" y="285" text-anchor="middle">10</text>
+        <text class="task-label" x="2086" y="302" text-anchor="middle">Validate &amp; hand off</text>
+        <text class="task-sub" x="2086" y="322" text-anchor="middle">render, test, report</text>
+        <path class="mi" d="M2080,332V342M2086,332V342M2092,332V342"/>
+
+        <!-- external system: the Creatio stand, reached only through clio (black-box pool) -->
+        <rect class="standpool" x="8" y="620" width="2282" height="54" rx="6"/>
+        <text class="stand-label" x="1149" y="652" text-anchor="middle"><tspan class="strong">Clio MCP</tspan> &mdash; every read and write on the Creatio stand goes through it</text>
+        <path class="msg" d="M236,348 V620" marker-start="url(#ms)" marker-end="url(#me)"/>
+        <path class="msg" d="M438,348 V620" marker-start="url(#ms)" marker-end="url(#me)"/>
+        <path class="msg" d="M666,348 V620" marker-start="url(#ms)" marker-end="url(#me)"/>
+        <path class="msg" d="M1682,348 V620" marker-start="url(#ms)" marker-end="url(#me)"/>
+        <path class="msg" d="M1884,348 V620" marker-start="url(#ms)" marker-end="url(#me)"/>
+        <path class="msg" d="M2086,348 V620" marker-start="url(#ms)" marker-end="url(#me)"/>
+        <text class="msg-lab" x="245" y="608">reads</text>
+        <text class="msg-lab" x="447" y="608">reads</text>
+        <text class="msg-lab" x="675" y="608">reads</text>
+        <text class="msg-lab" x="1691" y="608">reads</text>
+        <text class="msg-lab w" x="1893" y="608">writes</text>
+        <text class="msg-lab" x="2095" y="608">reads &middot; builds</text>
+
+        <!-- end event -->
+        <circle class="ev ev-end" cx="2240" cy="305" r="18"/>
+        <text class="ev-label" x="2240" y="341" text-anchor="middle"><tspan x="2240">Freedom build</tspan><tspan x="2240" dy="14">validated</tspan></text>
+      </svg>
+      </div>
+      <figcaption class="bpmn-cap">
+        <span>&#9670; exclusive gateway</span>
+        <span>amber dashed = rework loop</span>
+        <span>grey dashed = clio call &mdash; the Engine lane makes none</span>
+        <span>numbered badge = step in the list below</span>
+        <span>||| = runs once per page</span>
+        <span>&#9711; start &middot; &#9673; end</span>
+      </figcaption>
+    </figure>
+
+    <h3 class="sub-label">Step detail &amp; tooling</h3>
+    <p class="sub-note">The same ten steps, expanded &mdash; the numbers match the badges in the BPMN above. Each step is tagged read-only / engine / mutates, annotated with the clio tools and engine script it runs, and carries a <code>skill &sect;N</code> tag pointing at the corresponding workflow step in SKILL.md (the skill numbers its steps 0&ndash;8).</p>
+
+    <div class="tool-legend">
+      <span class="li"><span class="tc">tool</span> resident &mdash; called directly</span>
+      <span class="li"><span class="tc run">tool</span> non-resident &mdash; via <code>clio-run</code>, args from <code>get-tool-contract</code></span>
+      <span class="li"><span class="tc eng">migrate.mjs</span> the toolkit engine script</span>
+    </div>
+
+    <div class="phase-label"><span class="dot"></span> Phase 1 &middot; Plan &mdash; read-only, nothing is created on the stand</div>
+    <div class="flow">
+      <div class="step">
+        <div class="rail"><div class="num">1</div><div class="line"></div></div>
+        <div class="body"><h3>User asks the CA to migrate a custom Classic UI app</h3> <span class="t2 trg">trigger</span><p>The starting point: a package or application name, a section URL, or simply &ldquo;migrate everything.&rdquo;</p></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">2</div><div class="line"></div></div>
+        <div class="body"><h3>Determine scope</h3> <span class="t2 ro">read-only</span> <span class="t2 ref">skill &sect;0</span><p><b>Scope follows what the user named</b>, in one of three modes: one section or page &rarr; <b>single-section</b> (migrate just that target + its direct dependencies; the rest of the package is untouched); a package or app, or &ldquo;migrate everything&rdquo; &rarr; <b>whole-package</b> (inventory the whole package, order by dependency); a Classic section that already has a Freedom page &rarr; <b>reconcile</b> the client's delta onto it. A single section stays single-section even when it belongs to an app. The example below follows the whole-package case &mdash; so it lists everything the app contains and records what depends on what.</p><div class="tools"><span class="tc">list-packages</span><span class="tc">list-apps</span><span class="tc">get-app-info</span><span class="tc">list-app-sections</span></div></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">3</div><div class="line"></div></div>
+        <div class="body"><h3>Resolve targets &amp; classify every schema</h3> <span class="t2 ro">read-only</span> <span class="t2 ref">skill &sect;1</span><p>Enumerate sections, pages, details, entities. Then classify each schema: one the app <b>owns</b> becomes a new Freedom page; a <b>replacing</b> schema layered over an OOTB page becomes a delta on that existing page &mdash; never a duplicate section.</p><div class="tools"><span class="tc">list-pages</span><span class="tc">get-page</span><span class="tc run">list-entity-client-schemas</span><span class="tc run">get-client-unit-schema</span></div></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">4</div><div class="line"></div></div>
+        <div class="body"><h3>Discover metadata</h3> <span class="t2 ro">read-only</span> <span class="t2 ref">skill &sect;2</span><p>Runtime metadata through clio MCP &mdash; pages, entities, the replacing-schema chain, referenced C#/SQL schemas, and the Freedom templates and components available. Reads only; the stand is untouched.</p><div class="tools"><span class="tc run">get-schema</span><span class="tc run">get-sql-schema</span><span class="tc">get-component-info</span><span class="tc run">list-page-templates</span></div></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">5</div><div class="line"></div></div>
+        <div class="body"><h3>Decide package placement &mdash; once</h3> <span class="t2 ro">read-only</span> <span class="t2 ref">skill &sect;3</span><p>Where can Freedom artifacts safely live: an editable package, a replacing package, or a new app. Decide once and reuse it for the whole application.</p><div class="tools"><span class="tc">list-packages</span><span class="tc">list-apps</span><span class="tc">get-app-info</span></div></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">6</div><div class="line"></div></div>
+        <div class="body"><h3>Reconstruct the effective page &mdash; run the engine</h3> <span class="t2 ro">read-only</span> <span class="t2 eng">engine</span> <span class="t2 ref">skill &sect;4</span><p>Per page: assemble the manifest (clio page sources + your inputs), run <code>migrate.mjs</code>, and clear both engine gates. This is the pipeline detailed in <a href="#s02">&sect;02 &middot; The pipeline</a>.</p><div class="tools"><span class="tc run">get-classic-page-sources</span><span class="tc">get-entity-schema-properties</span><span class="tc run">list-entity-client-schemas</span><span class="tc run">ESQ / SQL / OData read</span><span class="tc eng">node migrate.mjs</span></div></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">7</div><div class="line"></div></div>
+        <div class="body"><h3>Map to Freedom &middot; write the plan</h3> <span class="t2 ro">read-only</span> <span class="t2 eng">engine</span> <span class="t2 ref">skill &sect;5&ndash;6</span><p>The engine writes a <code>plan.md</code> per page; <code>roadmap.md</code> indexes them in dependency order. Here you resolve the gate <code>issues[]</code> &mdash; missing details, unresolved children, unchecked signals &mdash; and re-run until both gates clear. The &#9888; Confirm worklist itself waits for the build preflight (step 9).</p><div class="tools"><span class="tc">get-component-info</span><span class="tc eng">migrate.mjs --spec</span><span class="tc eng">migrate.mjs --plan --out</span></div></div>
+      </div>
+      <div class="step gate">
+        <div class="rail"><div class="num">8</div><div class="line"></div></div>
+        <div class="body"><h3>&#9940; Present the plan &rarr; wait for explicit approval</h3><p>The hard stop. Nothing is created before this. The plan presented is the engine's file, verbatim &mdash; never hand-assembled. Whole-package scope: the plan is <code>roadmap.md</code> plus one engine-written <code>plan.md</code> per page &mdash; never one hand-merged document.</p></div>
+      </div>
+    </div>
+
+    <div class="phase-label build"><span class="dot"></span> Phase 2 &middot; Build &mdash; only after approval</div>
+    <div class="flow">
+      <div class="step">
+        <div class="rail"><div class="num">9</div><div class="line"></div></div>
+        <div class="body"><h3>Implement the approved plan</h3> <span class="t2 mut">mutates</span> <span class="t2 ref">skill &sect;7</span><p><b>Build preflight first:</b> every &#9888; Confirm item is resolved with its on-stand query and the answer recorded &mdash; the judgment 20% &mdash; before any artifact is created. Then one section at a time, in dependency order, <b>deepest pages first</b>, working up the tree: a related list's Add/Edit opens the child entity's own form, so that form must exist before the related list that opens it. (This is about the page tree &mdash; a section's own list and form pages are one unit, built together.) Native features built as themselves; the <code>creatio-ui-guidelines</code> review is a done-gate on every page, its evidence recorded in <code>worklog.md</code>.</p><div class="tools"><span class="tc run">create-page</span><span class="tc">get-page</span><span class="tc">validate-page</span><span class="tc run">business-rule creators</span><span class="tc run">update-client-unit-schema</span><span class="tc">get-component-info</span><span class="tc">browser render</span></div></div>
+      </div>
+      <div class="step">
+        <div class="rail"><div class="num">10</div><div class="line"></div></div>
+        <div class="body"><h3>Validate &amp; hand off</h3> <span class="t2 mut">mutates</span> <span class="t2 ref">skill &sect;8</span><p>Schema &rarr; build &rarr; render in the browser &rarr; E2E, per page. End with a Plan-vs-Done table; delete the temporary inputs, keep <code>plan.md</code> and <code>worklog.md</code>.</p><div class="tools"><span class="tc">validate-page</span><span class="tc">package build</span><span class="tc">unit tests</span><span class="tc">browser render</span><span class="tc">E2E</span></div></div>
+      </div>
+    </div>
+
+    <h3 class="sub-label">The documents a migration writes</h3>
+    <p class="sub-note">The steps above name files in passing &mdash; here's the whole set in one place: what each is, when it's written, and for which scope. Full layout: <code>references/migration-documentation.md</code>.</p>
+    <div class="io-scroll">
+      <table class="iotbl">
+        <thead>
+          <tr><th style="width:18%">Document</th><th style="width:22%">Written at</th><th style="width:18%">Scope</th><th style="width:42%">What's in it</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>discovery.md</code></td><td>steps 3&ndash;4</td><td>whole-package</td><td>the inventory + dependency graph of the app</td></tr>
+          <tr><td><code>plan.md</code></td><td>step 7 &mdash; engine <code>--out</code></td><td>both</td><td>the plan you approve, one per page, presented verbatim</td></tr>
+          <tr><td><code>roadmap.md</code></td><td>step 7</td><td>whole-package</td><td>index over the per-page plans, in dependency order</td></tr>
+          <tr><td><code>decisions.md</code></td><td>at approval &amp; on any scope change</td><td>whole-package</td><td>recorded decisions and re-approvals</td></tr>
+          <tr><td><code>worklog.md</code></td><td>steps 9&ndash;10</td><td>both</td><td>per-artifact progress + runtime read-back evidence</td></tr>
+          <tr><td><code>README.md</code></td><td>throughout</td><td>whole-package</td><td>status dashboard &mdash; read first each session</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- PIPELINE -->
+  <section class="block" id="s02">
+    <div class="sec-head"><span class="sec-idx">02</span><h2>The pipeline &mdash; inside steps 6&ndash;7</h2></div>
+    <p class="sec-sub measure">Zooming into the engine: steps 6&ndash;7 are one transformation in five stages. Each row is a stage &mdash; its <b>input</b> and its <b>output</b>, where each stage's output is the next stage's input. The <code>e.g.</code> lines trace one real field &mdash; Contact's <b>Mobile phone</b> &mdash; through the stages (row 04's example is a child page, which a scalar field doesn't have).</p>
+    <div class="io-scroll">
+      <table class="iotbl">
+        <thead>
+          <tr><th style="width:22%">Stage</th><th style="width:39%">Input</th><th style="width:39%">Output</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="st"><span class="n">01</span>Parse<span class="fn">engine.mjs · parseSchema()</span></td>
+            <td class="tin">the raw manifest &mdash; each schema-layer body (base&rarr;top) + the parent-template seed, as <code>define(&hellip;)</code> source text
+              <div class="ex"><span class="k">source · Classic diff</span><pre>&hellip;return {
+  <span class="jk">"diff"</span>: [{
+    <span class="jk">"operation"</span>: <span class="js">"insert"</span>,
+    <span class="jk">"name"</span>: <span class="js">"MobilePhone"</span>,
+    <span class="jk">"parentName"</span>: <span class="js">"GeneralInfoBlock"</span>,
+    <span class="jk">"values"</span>: { <span class="jk">"bindTo"</span>: <span class="js">"MobilePhone"</span> }
+  }]
+}</pre></div>
+            </td>
+            <td class="tout">per-layer objects <span class="sep">(</span>diff · businessRules · details · methods · features · quickFilters<span class="sep">)</span> · astDiagnostics for anything unresolved
+              <div class="ex"><span class="k">parsed object</span><pre>{
+  <span class="jk">diff</span>: [{ <span class="jk">operation</span>: <span class="js">"insert"</span>, <span class="jk">name</span>: <span class="js">"MobilePhone"</span>, &hellip; }],
+  <span class="jk">methods</span>: [<span class="js">"onSaved"</span>]
+}</pre></div>
+            </td>
+          </tr>
+          <tr>
+            <td class="st"><span class="n">02</span>Merge<span class="fn">engine.mjs · mergeHierarchy()</span></td>
+            <td class="tin">the parsed layers, seed first
+              <div class="ex"><span class="k">two parsed layers</span><pre><span class="cm">// base layer + client layer,</span>
+<span class="cm">// both touching "MobilePhone"</span></pre></div>
+            </td>
+            <td class="tout">one effective page <span class="sep">(</span>items · fields · tabs · details · rules · methods<span class="sep">)</span> + provenance <span class="sep">(</span>templateOwned / schemaTouched<span class="sep">)</span> · warnings · seedQuality
+              <div class="ex"><span class="k">effective field</span><pre>{
+  <span class="jk">name</span>: <span class="js">"MobilePhone"</span>,
+  <span class="jk">bindTo</span>: <span class="js">"MobilePhone"</span>,
+  <span class="jk">parent</span>: <span class="js">"GeneralInfoTab"</span>,
+  <span class="jk">templateOwned</span>: <span class="jn">false</span>,
+  <span class="jk">schemaTouched</span>: <span class="jn">true</span>
+}</pre></div>
+            </td>
+          </tr>
+          <tr>
+            <td class="st"><span class="n">03</span>Map<span class="fn">mapper.mjs · mapToFreedom()</span></td>
+            <td class="tin">the effective page + entity columns / titles / resources
+              <div class="ex"><span class="k">effective field + column</span><pre><span class="cm">// field "MobilePhone"</span>
+<span class="cm">// contentType: text · tab "GeneralInfoTab"</span></pre></div>
+            </td>
+            <td class="tout">Freedom ChangeSet <span class="sep">(</span>viewConfigDiff · business rules · details · standardFeatures · widgets · cardActions<span class="sep">)</span> · <span class="pay">needsDecision[]</span> &mdash; the judgment 20%
+              <div class="ex"><span class="k">viewConfigDiff item</span><pre>{
+  <span class="jk">type</span>: <span class="js">"crt.Input"</span>,
+  <span class="jk">bindTo</span>: <span class="js">"$MobilePhone"</span>,
+  <span class="jk">label</span>: <span class="js">"Mobile phone"</span>
+}</pre></div>
+            </td>
+          </tr>
+          <tr>
+            <td class="st"><span class="n">04</span>Recurse<span class="fn">migrate.mjs · runMigration()</span></td>
+            <td class="tin">the child / typed / mini page schemas (nested manifests)
+              <div class="ex"><span class="k">nested manifest</span><pre>{
+  <span class="jk">childPageSchemas</span>: {
+    <span class="js">"AddressDetailPage"</span>: { &hellip; }
+  }
+}</pre></div>
+            </td>
+            <td class="tout">page-tree result &mdash; parent + every nested ChangeSet folded in · <code>gate</code> (correctness) + <code>structure</code> (completeness)
+              <div class="ex"><span class="k">folded result</span><pre>{
+  <span class="jk">details</span>: [{ <span class="jk">page</span>: <span class="js">"AddressDetailPage"</span>, &hellip; }],
+  <span class="jk">structure</span>: { <span class="jk">complete</span>: <span class="jn">true</span> }
+}</pre></div>
+            </td>
+          </tr>
+          <tr>
+            <td class="st"><span class="n">05</span>Gate &amp; render<span class="fn">designspec.mjs · renderPlan()</span></td>
+            <td class="tin">the assembled tree + planMeta + signals
+              <div class="ex"><span class="k">changeSet + planMeta</span><pre>{
+  <span class="jk">planMeta</span>: {
+    <span class="jk">entity</span>: <span class="js">"Contact"</span>,
+    <span class="jk">formTemplate</span>: <span class="js">"&hellip;"</span>
+  }
+}</pre></div>
+            </td>
+            <td class="tout"><code>plan.md</code> &mdash; Layout · Logic · &#9888; Confirm, present verbatim &nbsp;<span class="sep">— or —</span>&nbsp; <span class="stop">&#9940; blocked</span> (exit 2, stamped &ldquo;do not present&rdquo;)
+              <div class="ex"><span class="k">plan.md · Layout row</span><table class="exmini"><thead><tr><th>Region</th><th>Element</th><th>Type</th><th>Source</th></tr></thead><tbody><tr><td>Tab · General info</td><td class="hl">Mobile phone</td><td>Phone</td><td>PDS.MobilePhone</td></tr></tbody></table></div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub measure" style="margin-top:26px">The rows above show one item per stage. Here is a <b>whole</b> ChangeSet &mdash; the engine's output run verbatim on a fixture page (<code>SupportUnit</code>, two Classic layers merged), lightly trimmed:</p>
+    <details class="csx">
+      <summary><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg> Show a real ChangeSet <span class="sx-tag">node migrate.mjs &middot; SupportUnit fixture</span></summary>
+      <div class="sx-body"><pre><span class="cm">// real output &mdash; mapToFreedom() on the SupportUnit fixture (2 layers merged)</span>
+<span class="cm">// 12 viewConfigDiff &middot; 2 entityBusinessRules &middot; 2 pageBusinessRules &middot; 3 details &middot; 14 needsDecision</span>
+{
+  <span class="jk">"viewConfigDiff"</span>: [
+    { <span class="jk">"name"</span>: <span class="js">"ScheduleTab"</span>, <span class="jk">"parentName"</span>: <span class="js">"Tabs"</span>,
+      <span class="jk">"values"</span>: { <span class="jk">"type"</span>: <span class="js">"crt.Tab"</span>, <span class="jk">"caption"</span>: <span class="js">"$Resources.Strings.ScheduleTabCaption"</span> } },
+    { <span class="jk">"name"</span>: <span class="js">"ParentSupportUnit"</span>, <span class="jk">"parentName"</span>: <span class="js">"SideAreaProfileContainer"</span>,
+      <span class="jk">"values"</span>: { <span class="jk">"type"</span>: <span class="js">"crt.ComboBox"</span>, <span class="jk">"control"</span>: <span class="js">"$ParentSupportUnit"</span>, <span class="jk">"typeLabel"</span>: <span class="js">"Lookup"</span>,
+                  <span class="jk">"layoutConfig"</span>: { <span class="jk">"column"</span>: <span class="jn">1</span>, <span class="jk">"row"</span>: <span class="jn">1</span>, <span class="jk">"colSpan"</span>: <span class="jn">1</span> } } },
+    { <span class="jk">"name"</span>: <span class="js">"Active"</span>, <span class="jk">"values"</span>: { <span class="jk">"type"</span>: <span class="js">"crt.Checkbox"</span>, <span class="jk">"control"</span>: <span class="js">"$Active"</span>, <span class="jk">"typeLabel"</span>: <span class="js">"Boolean"</span> } }
+    <span class="cm">// + 9 more field / tab inserts</span>
+  ],
+  <span class="jk">"entityBusinessRules"</span>: [
+    { <span class="jk">"action"</span>: <span class="js">"apply-static-filter"</span>, <span class="jk">"targetAttribute"</span>: <span class="js">"ParentSupportUnit"</span>,
+      <span class="jk">"filter"</span>: { <span class="jk">"columnPath"</span>: <span class="js">"SupportUnitType"</span>, <span class="jk">"comparisonType"</span>: <span class="jn">3</span>, <span class="jk">"value"</span>: <span class="js">"grp-1"</span> },
+      <span class="jk">"complete"</span>: <span class="jn">true</span>, <span class="jk">"provenance"</span>: [<span class="js">"SupportCalendar"</span>] }
+    <span class="cm">// + SupportWorkingDayType</span>
+  ],
+  <span class="jk">"pageBusinessRules"</span>: [
+    { <span class="jk">"action"</span>: <span class="js">"make-required"</span>, <span class="jk">"element"</span>: <span class="js">"Contact"</span>, <span class="jk">"inverseAction"</span>: <span class="js">"make-optional"</span>,
+      <span class="jk">"conditions"</span>: [{ <span class="jk">"comparison"</span>: <span class="jn">1</span>, <span class="jk">"left"</span>: { <span class="jk">"attribute"</span>: <span class="js">"Contact"</span> } }] }
+    <span class="cm">// + Calendar</span>
+  ],
+  <span class="jk">"details"</span>: [
+    { <span class="jk">"composite"</span>: <span class="js">"Expanded list"</span>, <span class="jk">"entity"</span>: <span class="js">"SupportSchedule"</span>, <span class="jk">"detailSchema"</span>: <span class="js">"SupportScheduleEmployeeDetail"</span>,
+      <span class="jk">"tab"</span>: <span class="js">"ScheduleTab"</span>, <span class="jk">"dependency"</span>: { <span class="jk">"attributePath"</span>: <span class="js">"SupportUnit"</span>, <span class="jk">"relationPath"</span>: <span class="js">"PDS.Id"</span> },
+      <span class="jk">"actions"</span>: <span class="js">"unresolved"</span> }
+    <span class="cm">// + 2 more (HistoryTab)</span>
+  ],
+  <span class="jk">"needsDecision"</span>: [                                   <span class="cm">// the judgment 20% &mdash; 14 items</span>
+    { <span class="jk">"kind"</span>: <span class="js">"tab-caption"</span>,        <span class="jk">"item"</span>: <span class="js">"ScheduleTab"</span>,      <span class="jk">"reason"</span>: <span class="js">"unresolved resource key &mdash; pass manifest.resources…"</span> },
+    { <span class="jk">"kind"</span>: <span class="js">"detail-editpage"</span>,    <span class="jk">"item"</span>: <span class="js">"SupportSchedule"</span>, <span class="jk">"reason"</span>: <span class="js">"opens the SupportSchedule form on add/edit &mdash; a SEPARATE migration…"</span> },
+    { <span class="jk">"kind"</span>: <span class="js">"component"</span>,          <span class="jk">"item"</span>: <span class="js">"KpiChart"</span>,        <span class="jk">"reason"</span>: <span class="js">"module 'CardWidgetModule' (chart/widget) &mdash; propose closest Freedom component…"</span> },
+    { <span class="jk">"kind"</span>: <span class="js">"unmapped-component"</span>, <span class="jk">"item"</span>: <span class="js">"ESNTab"</span>,          <span class="jk">"reason"</span>: <span class="js">"produced no Freedom element &mdash; non-standard UI…"</span> }
+    <span class="cm">// + 10 more (field-labels, detail-editability, method 'setName', …)</span>
+  ]
+}</pre></div>
+    </details>
+  </section>
+
+  <!-- STAGE DETAIL -->
+  <section class="block" id="s03">
+    <div class="sec-head"><span class="sec-idx">03</span><h2>What each stage gets right &mdash; and the agent alone gets wrong</h2></div>
+    <p class="sec-sub measure"><a href="#s02">The pipeline above (&sect;02)</a> shows <em>what</em> flows through each stage. This section is <em>why the engine exists</em>. Each card states the stage's rule, then contrasts two ways to do the work: <span style="color:var(--stop);font-weight:640">&#10007; agent, no engine</span> &mdash; the coding agent reconstructing the page by reading and merging the schema layers by hand, which is where it goes wrong &mdash; versus <span style="color:var(--accent-ink);font-weight:640">&#10003; agent + engine</span>, the same agent running the deterministic engine, which produces the correct result.</p>
+    <div class="grid2">
+      <div class="panel">
+        <h3>01 · Parse &mdash; read the object, never run it</h3>
+        <p>A page is a <code>define([&hellip;], function(){ return { diff, details, businessRules } })</code>. The engine lifts that returned object from the <b>AST</b> and evaluates it statically.</p>
+        <div class="trap">
+          <div class="row bad"><span class="who">&#10007; agent, no engine</span><span>evals the body &mdash; one fetched off a live stand can escape via <code>define.constructor.constructor("return process")()</code>.</span></div>
+          <div class="row good"><span class="who">&#10003; agent + engine</span><span>reads the body statically &mdash; nothing executes; anything unresolvable (a call, a spread) is left <code>null</code> and logged to <code>astDiagnostics</code>, never guessed.</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>02 · Merge &mdash; the effective page, not one layer</h3>
+        <p>A Classic page is never one file. The parent template is seeded <b>first</b>, then the client's layers replay <code>insert</code>/<code>merge</code>/<code>move</code>/<code>remove</code> on top, base&rarr;top.</p>
+        <div class="trap">
+          <div class="row bad"><span class="who">&#10007; agent, no engine</span><span>reads the top schema's empty <code>diff</code> and reports &ldquo;no layout / no rules&rdquo;; drops an item that was removed <em>then</em> moved.</span></div>
+          <div class="row good"><span class="who">&#10003; agent + engine</span><span>folds the whole chain: a <code>move</code> onto a removed item <b>resurrects</b> it; a skeleton seed with no <code>getActions</code> is caught as <code>looksSkeletal</code>.</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>03 · Map &mdash; Freedom shapes, by data type</h3>
+        <p>Every Classic control is routed by its <b>ancestry</b> and reshaped for Freedom &mdash; never copied across verbatim.</p>
+        <div class="trap">
+          <div class="row bad"><span class="who">&#10007; agent, no engine</span><span>dumps the 24-col grid as-is (it overflows); calls Activities a &ldquo;Timeline&rdquo;; picks the control from the Classic hint.</span></div>
+          <div class="row good"><span class="who">&#10003; agent + engine</span><span>rebuilds the grid as 1-/2-col, routes each field to its island or tab, picks the control from the <b>data type</b>; a Visa &rarr; Approvals (two components).</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>04 · Recurse &mdash; the whole page tree</h3>
+        <p><code>runMigration()</code> calls itself for each related list's child edit page, each typed per-type page, and the add-record mini page &mdash; cycle-guarded, not depth-capped.</p>
+        <div class="trap">
+          <div class="row bad"><span class="who">&#10007; agent, no engine</span><span>migrates the top page and defers &ldquo;child pages later&rdquo; &mdash; the miss that shipped 1 of 4 typed forms.</span></div>
+          <div class="row good"><span class="who">&#10003; agent + engine</span><span>folds every child / typed / mini spec in; a blocked or incomplete child <b>bubbles up and blocks the parent</b> &mdash; no broken child hides in a green plan.</span></div>
+        </div>
+      </div>
+      <div class="panel span2">
+        <h3>05 · Gate &amp; render &mdash; a blocked plan can't pass as approved</h3>
+        <p>The render is <b>gated</b>. If any readiness check is red, <code>renderPlan()</code> still writes the <code>--out</code> file &mdash; but stamps it <span style="color:var(--stop);font-weight:640">&#9940; do not present</span> and exits <code>2</code>, so a half-ready plan is never mistaken for an approved one. The four checks it runs &rarr; <a href="#s05">section 05</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROVENANCE CENTERPIECE -->
+  <section class="block" id="s04">
+    <div class="sec-head"><span class="sec-idx">04</span><h2>What gets built, what's just context</h2></div>
+    <p class="sec-sub measure">The engine is fed the client's page <b>plus every base template it inherits from</b> &mdash; it needs the base to know which tab or panel each field sits in. But it must not rebuild the base parts: the Freedom template already provides them. So it tags each element by <b>who defined it</b> and <b>whether a client layer touched it</b> &mdash; which yields <b>three</b> outcomes, not two.</p>
+    <div class="prov">
+      <div class="prov-scroll">
+        <div class="track ctx">
+          <div class="node"><span class="lbl">base defined it · no client layer touched it</span><span class="val">e.g. the <code>Tabs</code> container, the Feed tab, the Run-process action</span></div>
+          <div class="to" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+          <div class="node end"><span class="lbl">so the engine</span><span class="val"><b>Context.</b> Dropped from the plan &mdash; Freedom's template already provides it; kept only to route the client's fields. <span class="tagline"><code>fromTemplate</code> · untouched</span></span></div>
+        </div>
+        <div class="track pay">
+          <div class="node"><span class="lbl">a client layer authored it</span><span class="val">a new field, a business rule, or a group the client inserted or moved</span></div>
+          <div class="to" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+          <div class="node end"><span class="lbl">so the engine</span><span class="val"><b>Payload.</b> Becomes a real Layout / Logic row in the plan. <span class="tagline"><code>schemaTouched</code> · client insert</span></span></div>
+        </div>
+        <div class="track dec">
+          <div class="node"><span class="lbl">base defined it · a client layer reconfigured it</span><span class="val">a base field the client hid, moved, or re-bound</span></div>
+          <div class="to" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+          <div class="node end"><span class="lbl">so the engine</span><span class="val"><b>Decision.</b> Not rebuilt, not dropped &mdash; surfaced as a <code>base-field-override</code> in <code>needsDecision[]</code>, so the client's change is re-applied onto the Freedom base field, never shipped as the bare default. <span class="tagline"><code>templateOwned</code> + <code>schemaTouched</code></span></span></div>
+        </div>
+      </div>
+      <div class="legend">
+        <div class="item"><span class="sw ctx"></span> Context &rarr; skip it, Freedom already provides it.</div>
+        <div class="item"><span class="sw pay"></span> Payload &rarr; the customization the migration must carry.</div>
+        <div class="item"><span class="sw dec"></span> Decision &rarr; a base element the client changed &mdash; re-apply, don't drop.</div>
+      </div>
+      <div class="filtered">
+        <p class="fl-h">One page, filtered &rarr; what actually reaches the plan</p>
+        <div class="filtered-scroll">
+          <table>
+            <thead><tr><th style="width:34%">Element</th><th style="width:40%">Where it came from</th><th style="width:26%">Outcome</th></tr></thead>
+            <tbody>
+              <tr><td class="el">Tabs</td><td class="org">base template</td><td><span class="oc ctx">context</span></td></tr>
+              <tr><td class="el">ESN / Feed tab</td><td class="org">base template</td><td><span class="oc ctx">context</span></td></tr>
+              <tr><td class="el">ProcessButton</td><td class="org">base template · Run process</td><td><span class="oc ctx">context</span></td></tr>
+              <tr><td class="el">UsrPriority</td><td class="org">client inserted</td><td><span class="oc pay">payload</span></td></tr>
+              <tr><td class="el">General-info group</td><td class="org">client re-ordered</td><td><span class="oc pay">payload</span></td></tr>
+              <tr><td class="el">Owner</td><td class="org">base field · client set read-only</td><td><span class="oc dec">decision</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <p class="sec-sub measure" style="margin-top:20px">That's the payoff: the engine can take the whole base-template chain &mdash; which it needs to place fields and carry inherited actions &mdash; without the plan drowning in framework noise, <b>and</b> without a client tweak that sits on a base field silently vanishing.</p>
+  </section>
+
+  <!-- GATES -->
+  <section class="block" id="s05">
+    <div class="sec-head"><span class="sec-idx">05</span><h2>Four checks before a plan can be shown</h2></div>
+    <p class="sec-sub measure">Before the engine hands you a plan to present, it runs four checks. Fail any one and it still writes the file &mdash; but stamps it &ldquo;do not present&rdquo; and exits <code>2</code>, so a half-ready plan can&rsquo;t be mistaken for one ready to approve. The four fall into <b>two families</b>:</p>
+
+    <div class="gate-group">
+      <p class="gg-label gg-stop"><span class="fam">Correctness</span> <span class="q">&mdash; is the merge sound?</span></p>
+      <div class="gates one">
+        <div class="gate" style="--gcol: var(--stop)">
+          <div class="top"><h3>Did the layers merge cleanly?</h3><span class="field">gate.blocked</span></div>
+          <p class="when">Red until every schema was readable, the real base template was supplied (not a stand-in stub), no edit pointed at an element that doesn&rsquo;t exist, and every sub-page passed this same check. In short: did the layers fold into one coherent page?</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="gate-group">
+      <p class="gg-label gg-warn"><span class="fam">Completeness</span> <span class="q">&mdash; did you give me everything?</span></p>
+      <div class="gates three">
+        <div class="gate" style="--gcol: var(--warn)">
+          <div class="top"><h3>Did you supply every part?</h3><span class="field">structure.complete</span></div>
+          <p class="when">Red until every piece the plan needs is in hand: each detail&rsquo;s schema, each related list&rsquo;s child form, each per-type form, and the quick-add mini page. A page can merge cleanly and still be incomplete if one sub-page is missing.</p>
+        </div>
+        <div class="gate" style="--gcol: var(--warn)">
+          <div class="top"><h3>Is the summary filled in?</h3><span class="field">planMetaMissing</span></div>
+          <p class="when">Red while any <code>&lt;FILL:&hellip;&gt;</code> placeholder is left in the plan&rsquo;s Overview or Main scope. You supply the real values in <code>planMeta</code> and re-run &mdash; you never type them into the file by hand.</p>
+        </div>
+        <div class="gate" style="--gcol: var(--warn)">
+          <div class="top"><h3>Did you check the live app?</h3><span class="field">signalsMissing</span></div>
+          <p class="when">Red until three things only the running app can answer are looked up and written down: the case stages (DCM), any connected processes, and any print reports. &ldquo;Checked &mdash; found none&rdquo; counts; &ldquo;didn&rsquo;t check&rdquo; does not.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="sec-sub measure" style="margin-top:22px">The distinction is the point: a plan can be perfectly sound yet still miss the parts, summary, or live-app answers a person needs to approve it &mdash; so completeness is three separate checks, never folded into &ldquo;did it merge.&rdquo;</p>
+  </section>
+
+  <hr class="rule" style="margin-top:64px">
+  <footer class="foot">
+    <p>Source of truth: the <span class="mono">classic-to-freedom-migration</span> skill and its engine &mdash; <span class="mono">SKILL.md</span>, <span class="mono">engine.mjs</span>, <span class="mono">mapper.mjs</span>, <span class="mono">migrate.mjs</span>. This page is a reference explainer, not the spec; when this page and the engine disagree, the engine wins.</p>
+  </footer>
+
+</div>
+</div>
+
+<script>
+(function () {
+  var fig = document.getElementById("bpmnFig");
+  if (!fig) return;
+  var svg = fig.querySelector("svg.bpmn");
+  var vp = fig.querySelector(".bpmn-viewport");
+  var pct = fig.querySelector(".zoom-pct");
+  var fsBtn = fig.querySelector('[data-z="full"]');
+  var BASE = 2300, BASE_H = 694, MIN = 0.3, MAX = 4, PAD = 28;
+  var scale = null; // null = fit to the available width
+  var lastPx = -1;
+
+  function clamp(s) { return Math.max(MIN, Math.min(MAX, s)); }
+  // Fit fills whatever room the figure has — it is NOT capped at 100%, otherwise
+  // full-width and full-screen would leave the diagram small in a huge container.
+  function fitScale() {
+    var w = vp.clientWidth - PAD;
+    if (w <= 0) return 1;
+    var s = w / BASE;
+    // only constrain by height where the height is actually bounded (full screen);
+    // in normal flow the viewport height follows the content, which would feed back.
+    if (document.fullscreenElement) {
+      var h = vp.clientHeight - PAD;
+      if (h > 0) s = Math.min(s, h / BASE_H);
+    }
+    return clamp(s);
+  }
+  function render() {
+    var s = scale === null ? fitScale() : scale;
+    var px = Math.round(BASE * s);
+    svg.style.minWidth = "0";
+    if (px !== lastPx) { svg.style.width = px + "px"; lastPx = px; } // no-op writes would loop the observer
+    pct.textContent = Math.round(s * 100) + "%";
+    vp.classList.toggle("pannable", vp.scrollWidth > vp.clientWidth + 1 || vp.scrollHeight > vp.clientHeight + 1);
+  }
+  function zoom(factor) {
+    var cur = scale === null ? fitScale() : scale;
+    scale = Math.min(MAX, Math.max(MIN, cur * factor));
+    render();
+  }
+
+  fig.querySelectorAll(".zbtn").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var k = b.getAttribute("data-z");
+      if (k === "in") zoom(1.3);
+      else if (k === "out") zoom(1 / 1.3);
+      else if (k === "fit") { scale = null; render(); }
+      else if (k === "widen") {
+        var on = fig.classList.toggle("wide");
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.textContent = on ? "Narrow" : "Full width";
+        scale = null; // re-fit into the new width — that is the point of widening
+        requestAnimationFrame(render);
+      }
+      else if (k === "full") {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (fig.requestFullscreen) fig.requestFullscreen().catch(function () {});
+      }
+    });
+  });
+
+  // only offer full screen where the embedding context actually allows it
+  if (document.fullscreenEnabled && fsBtn) fsBtn.hidden = false;
+  document.addEventListener("fullscreenchange", function () {
+    if (fsBtn) fsBtn.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen";
+    scale = null; // re-fit into (or back out of) the new viewport
+    setTimeout(render, 60);
+  });
+
+  // drag to pan once the diagram overflows its viewport
+  var dragging = false, ox = 0, oy = 0, sl = 0, st = 0;
+  vp.addEventListener("pointerdown", function (e) {
+    if (!vp.classList.contains("pannable") || e.button !== 0) return;
+    dragging = true; ox = e.clientX; oy = e.clientY; sl = vp.scrollLeft; st = vp.scrollTop;
+    vp.classList.add("grabbing");
+    try { vp.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  vp.addEventListener("pointermove", function (e) {
+    if (!dragging) return;
+    vp.scrollLeft = sl - (e.clientX - ox);
+    vp.scrollTop = st - (e.clientY - oy);
+  });
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false; vp.classList.remove("grabbing");
+    try { vp.releasePointerCapture(e.pointerId); } catch (err) {}
+  }
+  vp.addEventListener("pointerup", endDrag);
+  vp.addEventListener("pointercancel", endDrag);
+
+  if (window.ResizeObserver) new ResizeObserver(function () { render(); }).observe(vp);
+  render();
+})();
+</script>
+
+</body>
+</html>
