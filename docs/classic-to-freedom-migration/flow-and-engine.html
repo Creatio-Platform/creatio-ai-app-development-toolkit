@@ -68,10 +68,10 @@
     --shadow-lift: 0 2px 6px rgba(0,0,0,.35), 0 18px 48px rgba(0,0,0,.45);
   }
 
-  .mig { box-sizing: border-box; }
   .mig *, .mig *::before, .mig *::after { box-sizing: inherit; }
 
   .mig {
+    box-sizing: border-box;
     background: var(--ground);
     color: var(--ink);
     font-family: var(--font-sans);
@@ -180,8 +180,7 @@
   .toc-list a:hover .tt { color: var(--accent-ink); }
   @media (max-width: 620px) { .toc-list { column-count: 1; } }
 
-  section.block { margin-top: clamp(48px, 7vw, 88px); }
-  section.block { scroll-margin-top: 20px; }
+  section.block { margin-top: clamp(48px, 7vw, 88px); scroll-margin-top: 20px; }
   .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
   .sec-idx { font-family: var(--font-mono); font-size: 13px; color: var(--accent-ink); font-weight: 600; }
   h2 {
@@ -350,7 +349,7 @@
   .stage .n { font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
   .stage .file { font-family: var(--font-mono); font-size: 10.5px; color: var(--accent-ink); float: right; }
   .stage .nm { font-size: 16px; font-weight: 680; margin: 10px 0 2px; letter-spacing: -.01em; }
-  .stage .fn { font-family: var(--font-mono); font-size: 11.5px; color: var(--source); margin-bottom: 9px; word-break: break-word; }
+  .stage .fn { font-family: var(--font-mono); font-size: 11.5px; color: var(--source); margin-bottom: 9px; overflow-wrap: break-word; }
   .stage .did { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
   .conn { flex: 0 0 30px; display: flex; align-items: center; justify-content: center; color: var(--line-strong); }
   .conn svg { width: 22px; height: 22px; }
@@ -376,13 +375,13 @@
   .iotbl .ex .k::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); flex: 0 0 auto; }
   .iotbl td.tout .ex .k { color: var(--accent-ink); }
   .iotbl td.tout .ex .k::before { background: var(--accent); }
-  .iotbl .ex pre { margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7; color: var(--muted); white-space: pre-wrap; word-break: break-word; tab-size: 2; }
+  .iotbl .ex pre { margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.7; color: var(--muted); white-space: pre-wrap; overflow-wrap: break-word; tab-size: 2; }
   .iotbl .ex .jk { color: var(--source); }
   .iotbl .ex .js { color: var(--accent-ink); }
   .iotbl .ex .jn { color: var(--warn); }
   .iotbl .ex .cm { color: var(--faint); font-style: italic; }
   .iotbl .ex table.exmini { width: calc(100% - 22px); margin: 10px 11px; border-collapse: collapse; table-layout: fixed; font-family: var(--font-mono); font-size: 10px; line-height: 1.4; }
-  .iotbl .ex table.exmini th, .iotbl .ex table.exmini td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; color: var(--muted); word-break: break-word; }
+  .iotbl .ex table.exmini th, .iotbl .ex table.exmini td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; color: var(--muted); overflow-wrap: break-word; }
   .iotbl .ex table.exmini th { color: var(--faint); background: color-mix(in srgb, var(--ink) 6%, var(--surface-2)); font-weight: 600; }
   .iotbl .ex table.exmini td.hl { color: var(--accent-ink); }
 
@@ -1163,7 +1162,7 @@
 
   fig.querySelectorAll(".zbtn").forEach(function (b) {
     b.addEventListener("click", function () {
-      var k = b.getAttribute("data-z");
+      var k = b.dataset.z;
       if (k === "in") zoom(1.3);
       else if (k === "out") zoom(1 / 1.3);
       else if (k === "fit") { scale = null; render(); }
