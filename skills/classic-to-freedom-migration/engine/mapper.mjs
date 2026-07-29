@@ -377,6 +377,8 @@ export function mapToFreedom(eff, opts = {}) {
     // base (template-provided) fields a client schema reconfigured (hide/move) — CONCRETE overrides to APPLY
     // onto the template's field (the build does not re-create base fields), not a decision to confirm.
     baseFieldOverrides,
+    // "wide" ⇒ the Classic page has a populated Header block → recommend the top-area Freedom template.
+    headerLayout: F.headerLayout,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
     // referenced UI modules pulled via define() deps — rendered UI outside the page-schema migration unit.
@@ -747,7 +749,10 @@ function mapFields(ctx, containers) {
   // agent to pass get-entity-schema-properties column titles so labels read like the classic page, not raw codes.
   if (payloadFields.length && fieldsWithTitle === 0) needsDecision.push({ kind: "field-labels", item: "(all fields)",
     reason: `field labels are shown as column codes — no titles were supplied. Pass the entity's column titles (from get-entity-schema-properties) as manifest.columnTitles so labels read like the classic page (e.g. MobilePhone → "Mobile phone", ExpertiseLevel → "Specialist expertise level")` });
-  return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion };
+  // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
+  // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
+  // header elements land in TopAreaProfileContainer rather than being crammed into the narrow left profile.
+  return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion, headerLayout: headerIsWide ? "wide" : null };
 }
 
 // details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by

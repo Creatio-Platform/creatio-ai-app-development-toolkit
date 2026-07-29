@@ -108,6 +108,8 @@ check("F3/layout: WIDE Header → full-width header grid, not the narrow profile
   parentOf("Number") === "HeaderContainer" && parentOf("Owner") === "HeaderContainer");
 check("F3/layout: wide-header flagged (layout-type) + HeaderContainer built",
   co.needsDecision.some(n => n.kind === "layout-type") && !!vop("HeaderContainer"));
+check("headerLayout: a WIDE Header block sets result.headerLayout = 'wide' (drives the top-area template recommendation)",
+  co.headerLayout === "wide");
 check("F3/layout: classic multi-column coords preserved (Owner at Freedom column > 1)",
   vop("Owner")?.values.layoutConfig.column > 1);
 check("F3/features: Approvals(Visa)/Attachments(Files)/Activities are standard features, NOT generic details",
@@ -2445,12 +2447,32 @@ check("#1 mini page: form section titled 'Mini page (quick-add)', not '### X for
 const fewChild = renderDesignSpec({ entity: "Anniv", changeSet: { viewConfigDiff: [
   { name: "D", parentName: "Header", values: { control: "$D", type: "crt.DateTimePicker" } },
   { name: "T", parentName: "Header", values: { control: "$T", type: "crt.Input" } }] } }, { isChildPage: true });
-check("#7 child page, few fields, no tabs/details → recommends an edit mini page / modal",
-  /Recommendation — small child form/.test(fewChild) && /mini page \/ modal/.test(fewChild));
-const bigChild = renderDesignSpec({ entity: "Big", changeSet: { viewConfigDiff:
+check("#7 child page, few fields, no tabs/details → recommends the Mini page template (BaseMiniPageTemplate)",
+  /Recommendation — small child form/.test(fewChild) && /BaseMiniPageTemplate/.test(fewChild));
+const midChild = renderDesignSpec({ entity: "Big", changeSet: { viewConfigDiff:
   Array.from({ length: 7 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
-check("#7 child page with MANY fields → NO small-form recommendation (no false modal nudge)",
-  !/Recommendation — small child form/.test(bigChild));
+check("#7 child page with a MIDDLE field count (7) → NO template recommendation (default stands)",
+  !/Recommendation — small child form/.test(midChild) && !/Recommendation — wide child form/.test(midChild));
+// #7b (vanislemarina review) — a WIDE child (≥12 fields, no tabs) → the Grid page template.
+const wideChild = renderDesignSpec({ entity: "Wide", changeSet: { viewConfigDiff:
+  Array.from({ length: 14 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
+check("#7b wide child page (≥12 fields, no tabs) → recommends the Grid page template (PageWithAreaFreedomTemplate)",
+  /Recommendation — wide child form/.test(wideChild) && /PageWithAreaFreedomTemplate/.test(wideChild));
+// header→top-area recommendation (vanislemarina review): a form whose changeSet carries headerLayout:"wide" gets
+// the top-area template recommendation — on ANY form INCLUDING a non-child (typed/base) form (the "typed pages
+// too" requirement), and NOT on a mini page or a page with no header block.
+const hdrBase = renderDesignSpec({ entity: "H", changeSet: { headerLayout: "wide", viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
+check("header→top-area: a NON-child (typed/base) form with headerLayout:'wide' recommends the top-area template + TopAreaProfileContainer",
+  /Template recommendation — header elements present/.test(hdrBase) && /PageWithTopAreaAndTabsFreedomTemplate/.test(hdrBase) && /TopAreaProfileContainer/.test(hdrBase));
+const hdrMini = renderDesignSpec({ entity: "H", changeSet: { headerLayout: "wide", viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, { isMiniPage: true });
+check("header→top-area: NOT recommended on a mini page (no template choice there)",
+  !/Template recommendation — header elements present/.test(hdrMini));
+const hdrNone = renderDesignSpec({ entity: "H", changeSet: { viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
+check("header→top-area: NOT recommended when headerLayout is absent (standard left-profile page)",
+  !/Template recommendation — header elements present/.test(hdrNone));
 const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: [
   { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }] } }, {});
 check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",

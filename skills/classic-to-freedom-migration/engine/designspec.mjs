@@ -365,14 +365,28 @@ function orderRegions(rows) {
   return { order, byRegion };
 }
 
-// Child-page recommendation: a small, flat related-list child (≤5 fields, no tabs/details) is better opened as an
-// edit mini page / modal than rebuilt as a full record page. Returns the lines (empty otherwise). Extracted for CC.
+// Child-page template recommendation, keyed off input count (the vanislemarina-review rule): a SMALL flat child
+// (≤5 fields, no tabs/details) → the Mini page template; a WIDE child (≥12 fields, no tabs) → the Grid page
+// template. Between the two, the default form template stands. Applies to related-list child pages only.
 function childFormRecommendation(cs, fields, opts) {
   if (!opts.isChildPage) return [];
   const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
   const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  if (!(fields.length && fields.length <= 5 && !hasTabs && !nDetails)) return [];
-  return [`> **Recommendation — small child form (${fields.length} field${fields.length === 1 ? "" : "s"}, no tabs/details):** consider opening this related-list child as an **edit mini page / modal** (a lightweight add/edit shell) rather than a full record page, or pick a lighter form template. Confirm the desired shell before building.`, ""];
+  if (fields.length && fields.length <= 5 && !hasTabs && !nDetails)
+    return [`> **Recommendation — small child form (${fields.length} field${fields.length === 1 ? "" : "s"}, no tabs/details):** open this related-list child as an **edit mini page (\`BaseMiniPageTemplate\` — "Mini page") / modal** — a lightweight quick-add shell — rather than a full record page. Confirm the desired shell before building.`, ""];
+  if (fields.length >= 12 && !hasTabs)
+    return [`> **Recommendation — wide child form (${fields.length} fields):** build this related-list child on the **Grid page template (\`PageWithAreaFreedomTemplate\`)** — a full-width grid suits a wide record better than the narrow left-profile default. Confirm before building.`, ""];
+  return [];
+}
+
+// Header-template recommendation: a WIDE/populated Classic Header block (the mapper's `headerLayout === "wide"`
+// signal) means the Freedom target should be the top-area template so the header elements land in
+// TopAreaProfileContainer, not the narrow left profile. Applies to ANY form — base record page, each TYPED
+// per-type page, and each child page (a mini page has no such choice). This is the engine surfacing the
+// header→template rule the same way `signals.dcm` surfaces the progress-bar template.
+function headerTemplateRecommendation(cs, opts) {
+  if (opts.isMiniPage || cs.headerLayout !== "wide") return [];
+  return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds already surfaced in Layout /
@@ -491,7 +505,7 @@ export function renderDesignSpec(result, opts = {}) {
 
   // ---- Child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist (GENUINE open
   // decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed) ----
-  L.push(...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs));
+  L.push(...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs));
 
   return L.join("\n");
 }
