@@ -489,12 +489,9 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("");
   }
 
-  // ---- Child page with FEW fields → recommend a lighter shell (edit mini page / modal) — child pages only ----
-  L.push(...childFormRecommendation(cs, fields, opts));
-
-  // ---- Confirm before I build (the ⚠ worklist) — GENUINE open decisions only; kinds already surfaced in
-  // Layout / Logic / Child-pages are not re-listed (that duplication is the noise the plan structure removed) ----
-  L.push(...renderConfirmWorklist(cs));
+  // ---- Child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist (GENUINE open
+  // decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed) ----
+  L.push(...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs));
 
   return L.join("\n");
 }
@@ -627,7 +624,11 @@ function buildSizeLine(typed, cs, fields) {
 }
 
 // Main-scope table rows: list page + (form page | shared base) + one row per typed form. Extracted for Sonar CC 15.
-function buildScopeRows(pm, opts, entity, typed, someBindOnly, mainCall, formTpl, fill) {
+// mainCall / someBindOnly / formTpl are recomputed here (rather than passed) to stay under Sonar's parameter limit.
+function buildScopeRows(pm, opts, entity, typed, fill) {
+  const mainCall = pm.freedomExists ? "Update (reconcile)" : "Rebuild";
+  const someBindOnly = typed.some((t) => t.bindOnly);
+  const formTpl = pm.formTemplate || opts.template || null;
   const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
   if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
@@ -736,35 +737,36 @@ export function renderPlan(result, opts = {}) {
   // The Freedom form template every per-type form uses (from planMeta.formTemplate / manifest.template). Shown
   // on each typed row so the template mandate is not lost (it used to live only on the suppressed base row).
   const formTpl = pm.formTemplate || opts.template || null;
-  const scopeRows = buildScopeRows(pm, opts, entity, typed, someBindOnly, mainCall, formTpl, fill);
+  const scopeRows = buildScopeRows(pm, opts, entity, typed, fill);
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  P.push(...buildChildScopeRows(childs));
-  P.push("");
+  P.push(...buildChildScopeRows(childs), "");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
   // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
   // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
   // is the FALLBACK. This steer applies to BOTH typed and NON-typed pages (it used to be typed-only, so a
   // non-typed DCM page silently kept whatever plain form template the agent picked).
-  P.push(...renderTemplateBanner(result, entity, typed, someBindOnly, formTpl));
-  // LIST PAGE first (so the Add mini-page mapping sits right after it), then the form / per-type mappings.
-  P.push("", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "");
-  P.push(...renderMiniPageMapping(result));
+  // Template banner, then the LIST PAGE first (so the Add mini-page mapping sits right after it), then the
+  // add-mini-page mapping — one combined push (Sonar S7778); the form / per-type mappings follow below.
+  P.push(
+    ...renderTemplateBanner(result, entity, typed, someBindOnly, formTpl),
+    "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
+    ...renderMiniPageMapping(result),
+  );
   if (!typed.length) P.push("", renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), ""); // NON-TYPED single form
   else P.push(...renderTypedMappings(result, opts, entity, cs, typed, someBindOnly));
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
   // Generated inline when the agent supplied the child's schema (childPageSchemas); otherwise a FILL slot
   // that keeps the mapping a REQUIRED, visible deliverable rather than a table row the agent treats as done.
-  P.push(...renderChildMappings(childs));
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push("> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/Confirm · Child page mappings).");
   return P.join("\n");
 }
 

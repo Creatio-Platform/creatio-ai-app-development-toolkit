@@ -364,7 +364,8 @@ function analyzeSectionChain(sectionSchemas) {
 // carries {body|file}. Missing body ⇒ empty text + a stub parse. Extracted from parseDetailSchemas for Sonar CC 15.
 function resolveDetailBody(name, e, bodyOf) {
   const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-  const body = hasBody ? (typeof e === "string" ? e : bodyOf(e)) : "";
+  let body = "";
+  if (hasBody) body = typeof e === "string" ? e : bodyOf(e);
   const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
   return { body, p };
 }

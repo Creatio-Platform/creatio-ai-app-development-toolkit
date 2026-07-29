@@ -559,7 +559,10 @@ function mapFields(ctx, containers) {
   const applyHintTip = (values, f, col) => {
     if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
     if (!f.hint) return;
-    if (f.hint.startsWith("Resources.Strings.")) { if (!values.tip) values.tip = { content: "$" + f.hint }; return; }
+    if (f.hint.startsWith("Resources.Strings.")) {
+      if (!values.tip) values.tip = { content: "$" + f.hint };
+      return;
+    }
     needsDecision.push({ kind: "field-hint", item: col,
       reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
   };
@@ -654,7 +657,9 @@ function mapFields(ctx, containers) {
   };
 
   // Auto-flow row: place at the next free row, scanning down (bounded by MAX_FIELDS_PER_CONTAINER).
-  const autoFlowRow = (parent, column, colSpan, rowSpan, cap, cells) => {
+  // `geom` = { column, colSpan, rowSpan, gridCols } from gridGeometry (bundled to stay under Sonar's param limit).
+  const autoFlowRow = (parent, geom, cap, cells) => {
+    const { column, colSpan, rowSpan } = geom;
     let cur = autoRow[parent] || 1;
     if (!cap) { const limit = cur + MAX_FIELDS_PER_CONTAINER; while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++; }
     autoRow[parent] = cur + 1;
@@ -663,7 +668,8 @@ function mapFields(ctx, containers) {
 
   // Explicit classic row: honor it, but if the 24→N collapse (or a rowSpan overlap) dropped this onto an
   // occupied cell, scan down to the next free row and fold the bump into one per-container collision summary.
-  const explicitRowResolve = (explicitRow, parent, column, colSpan, rowSpan, gridCols, col, cap, cells) => {
+  const explicitRowResolve = (explicitRow, parent, geom, col, cap, cells) => {
+    const { column, colSpan, rowSpan, gridCols } = geom;
     let row = explicitRow;
     if (cap || cellFree(cells, column, colSpan, row, rowSpan)) return row;
     const limit = row + MAX_FIELDS_PER_CONTAINER;
@@ -679,6 +685,7 @@ function mapFields(ctx, containers) {
     const { column, colSpan, gridCols } = gridGeometry(cl, own);
     // rowSpan is clamped the same way (a hostile 1e9 would OOM the 2-D walk).
     const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
+    const geom = { column, colSpan, rowSpan, gridCols };
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
     const cap = (placedCount[parent] = (placedCount[parent] || 0) + 1) > MAX_FIELDS_PER_CONTAINER; // relocation scan bound
     if (cap && !truncatedContainers.has(parent)) {
@@ -688,8 +695,8 @@ function mapFields(ctx, containers) {
     }
     const explicitRow = cl.row != null ? cl.row + 1 : null;
     const row = explicitRow == null
-      ? autoFlowRow(parent, column, colSpan, rowSpan, cap, cells)
-      : explicitRowResolve(explicitRow, parent, column, colSpan, rowSpan, gridCols, col, cap, cells);
+      ? autoFlowRow(parent, geom, cap, cells)
+      : explicitRowResolve(explicitRow, parent, geom, col, cap, cells);
     claimCells(cells, column, colSpan, row, rowSpan);
     return { column, row, colSpan, rowSpan };
   };
