@@ -538,6 +538,32 @@ function mapFields(ctx, containers) {
   const splitIslands = distinctProfileIslands.size > 1;
   // Build the Freedom field `values` object (its own function so mapFields stays under Sonar CC 15 — S3776).
   // Closes over needsDecision/cols and bumps fieldsWithTitle; returns the values to insert.
+  // Apply column-type-derived flags (lookup ref/actions, read-only, linked display, picker, multiline) to a
+  // field's values object. Split out of buildFieldValues for Sonar CC 15; mutates values + needsDecision.
+  const applyFieldTypeMeta = (values, col, c, meta) => {
+    if (c.lookup && meta.ref) values.refSchema = meta.ref;
+    if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
+    // linkedDisplay: a plain scalar shown via a picker (contentType 5, no ref) — a read-only value from a linked record.
+    if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
+    if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
+      needsDecision.push({ kind: "lookup-no-ref", item: col,
+        reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
+    if (c.lookup) { values.listActions = []; values.controlActions = []; }
+    if (c.picker) values.pickerType = c.picker;
+    if (c.multiline) values.multiline = true;
+  };
+
+  // Resolve the field's tooltip from classic `tip` (resource key) and `hint`. A static Resources.Strings.* hint
+  // fills the tooltip only if none already; a dynamic hint (bound to a computed method) is surfaced as a decision.
+  // Split out of buildFieldValues for Sonar CC 15; mutates values + needsDecision.
+  const applyHintTip = (values, f, col) => {
+    if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
+    if (!f.hint) return;
+    if (f.hint.startsWith("Resources.Strings.")) { if (!values.tip) values.tip = { content: "$" + f.hint }; return; }
+    needsDecision.push({ kind: "field-hint", item: col,
+      reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
+  };
+
   const buildFieldValues = (f, col, c, meta, vis, layoutConfig) => {
     const lbl = labelFor(col);
     if (lbl != null) fieldsWithTitle++;
@@ -549,47 +575,32 @@ function mapFields(ctx, containers) {
     // an inline label/caption (clio rejects hardcoded page text). `titleText`/`typeLabel` are PLAN-only metadata.
     if (lbl != null) values.titleText = lbl;
     values.typeLabel = fieldTypeLabel(col, meta, c);
-    if (c.lookup && meta.ref) values.refSchema = meta.ref;
-    if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
-    // linkedDisplay: a plain scalar shown via a picker (contentType 5, no ref) — a read-only value from a linked record.
-    if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
-    if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
-      needsDecision.push({ kind: "lookup-no-ref", item: col,
-        reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
-    if (c.lookup) { values.listActions = []; values.controlActions = []; }
-    if (c.picker) values.pickerType = c.picker;
-    if (c.multiline) values.multiline = true;
-    if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
-    // classic `hint` is ALSO a tooltip (distinct from `tip`): a static Resources.Strings.* hint fills the tooltip
-    // only if none already; a dynamic hint (bound to a computed method) is ALWAYS surfaced as a decision.
-    if (f.hint) {
-      const staticHint = f.hint.startsWith("Resources.Strings.");
-      if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
-      else needsDecision.push({ kind: "field-hint", item: col,
-        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
-    }
+    applyFieldTypeMeta(values, col, c, meta);
+    applyHintTip(values, f, col);
     return values;
   };
   // Route a field to its Freedom container by ancestry (own function so mapFields stays under Sonar CC 15).
   // Mutates accountedFor/needsDecision via closure; returns the parent container name.
+  const routeProfileField = (own) => {
+    let parent = profileRegion(own);
+    // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields migrate
+    // into the profile) so they are not mis-flagged as "produced no Freedom element".
+    for (const g of own.groups) accountedFor.add(g.name);
+    // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
+    const island = islandOf(own);
+    if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
+    return parent;
+  };
+  const routeTabField = (own) => {
+    let parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
+    // C5: rebuild each client-owned tab's classic group as ExpansionPanel/GridContainer, nested; base tabs stay flat.
+    if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
+    else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
+    return parent;
+  };
   const routeField = (f, own) => {
-    if (own.kind === "profile") {
-      let parent = profileRegion(own);
-      // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields migrate
-      // into the profile) so they are not mis-flagged as "produced no Freedom element".
-      for (const g of own.groups) accountedFor.add(g.name);
-      // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
-      const island = islandOf(own);
-      if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
-      return parent;
-    }
-    if (own.kind === "tab") {
-      let parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
-      // C5: rebuild each client-owned tab's classic group as ExpansionPanel/GridContainer, nested; base tabs stay flat.
-      if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
-      else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
-      return parent;
-    }
+    if (own.kind === "profile") return routeProfileField(own);
+    if (own.kind === "tab") return routeTabField(own);
     const why = own.why === "undefined-parent"
       ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
       : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
@@ -622,8 +633,10 @@ function mapFields(ctx, containers) {
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
   // 24-col), assign a collision-free (span-aware) cell, and return the layoutConfig. Own function for Sonar CC 15;
   // mutates the per-container grid state (usedCells/placedCount/autoRow/truncatedContainers) + collisionByContainer.
-  const computeLayout = (f, own, parent, col) => {
-    const cl = f.layout || {};
+  // Grid geometry: map a classic field's (column/colSpan) onto the Freedom target grid (1/2/24 cols),
+  // clamped to the grid's right edge so a full-width field in col 2 (or an over-wide header) can't claim a
+  // phantom column and overflow. Split out of computeLayout for Sonar CC 15.
+  const gridGeometry = (cl, own) => {
     const profileGridCols = (own.via === "Header" && headerIsWide) ? 24 : 1;
     const gridCols = own.kind === "profile" ? profileGridCols : 2;
     let column, colSpan;
@@ -635,10 +648,36 @@ function mapFields(ctx, containers) {
       column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
       colSpan = cl.colSpan != null ? cl.colSpan : 24;
     }
-    // Clamp column/span to the grid's right edge so a full-width field in col 2 (or an over-wide header) can't
-    // claim a phantom column and overflow. rowSpan is clamped the same way (a hostile 1e9 would OOM the 2-D walk).
     column = Math.min(Math.max(1, column), gridCols);
     colSpan = Math.max(1, Math.min(colSpan, gridCols - column + 1));
+    return { column, colSpan, gridCols };
+  };
+
+  // Auto-flow row: place at the next free row, scanning down (bounded by MAX_FIELDS_PER_CONTAINER).
+  const autoFlowRow = (parent, column, colSpan, rowSpan, cap, cells) => {
+    let cur = autoRow[parent] || 1;
+    if (!cap) { const limit = cur + MAX_FIELDS_PER_CONTAINER; while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++; }
+    autoRow[parent] = cur + 1;
+    return cur;
+  };
+
+  // Explicit classic row: honor it, but if the 24→N collapse (or a rowSpan overlap) dropped this onto an
+  // occupied cell, scan down to the next free row and fold the bump into one per-container collision summary.
+  const explicitRowResolve = (explicitRow, parent, column, colSpan, rowSpan, gridCols, col, cap, cells) => {
+    let row = explicitRow;
+    if (cap || cellFree(cells, column, colSpan, row, rowSpan)) return row;
+    const limit = row + MAX_FIELDS_PER_CONTAINER;
+    while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
+    let cc = collisionByContainer.get(parent);
+    if (!cc) { cc = { count: 0, gridCols, sample: [] }; collisionByContainer.set(parent, cc); }
+    cc.count++; if (cc.sample.length < 6) cc.sample.push(col);
+    return row;
+  };
+
+  const computeLayout = (f, own, parent, col) => {
+    const cl = f.layout || {};
+    const { column, colSpan, gridCols } = gridGeometry(cl, own);
+    // rowSpan is clamped the same way (a hostile 1e9 would OOM the 2-D walk).
     const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
     const cap = (placedCount[parent] = (placedCount[parent] || 0) + 1) > MAX_FIELDS_PER_CONTAINER; // relocation scan bound
@@ -648,22 +687,9 @@ function mapFields(ctx, containers) {
         reason: `container '${parent}' holds more than ${MAX_FIELDS_PER_CONTAINER} fields — collision relocation is bounded past this point (rows may be approximate). This is far beyond any real page; confirm the input is not malformed.` });
     }
     const explicitRow = cl.row != null ? cl.row + 1 : null;
-    let row;
-    if (explicitRow != null) {
-      row = explicitRow;
-      if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or rowSpan overlap) dropped this onto an occupied cell
-        const limit = row + MAX_FIELDS_PER_CONTAINER;
-        while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
-        let cc = collisionByContainer.get(parent);   // folded into one summary per container after the loop
-        if (!cc) { cc = { count: 0, gridCols, sample: [] }; collisionByContainer.set(parent, cc); }
-        cc.count++; if (cc.sample.length < 6) cc.sample.push(col);
-      }
-    } else {
-      let cur = autoRow[parent] || 1;
-      if (!cap) { const limit = cur + MAX_FIELDS_PER_CONTAINER; while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++; }
-      row = cur;
-      autoRow[parent] = cur + 1;
-    }
+    const row = explicitRow == null
+      ? autoFlowRow(parent, column, colSpan, rowSpan, cap, cells)
+      : explicitRowResolve(explicitRow, parent, column, colSpan, rowSpan, gridCols, col, cap, cells);
     claimCells(cells, column, colSpan, row, rowSpan);
     return { column, row, colSpan, rowSpan };
   };
@@ -729,15 +755,20 @@ function mapDetails(ctx, containers, profileRegion) {
   // Resolve each placement first, then collapse by signature, KEEPING the entry whose parent resolves to
   // a tab (the real placement) and dropping the phantom.
   const detailSig = (d) => [d.schemaName, d.entitySchemaName, d.detailColumn, d.masterColumn].join("|");
-  const bySig = new Map();
-  for (const d of payloadDetails) {
-    accountedFor.add(d.key); if (d.schemaName) accountedFor.add(d.schemaName);
-    // place the detail in its owning TAB (ancestry-resolved), preserving order.
+  // place the detail in its owning TAB (ancestry-resolved), preserving order. Own fn for Sonar CC 15.
+  const resolvePlacement = (d) => {
     const own = d.parent ? resolveOwner(d.parent, index, profileAnchors) : { kind: "unresolved" };
     const profileTab = own.kind === "profile" ? profileRegion(own) : null;
     const tab = own.kind === "tab" ? own.tab : profileTab;
-    const cur = bySig.get(detailSig(d));
-    if (!cur) bySig.set(detailSig(d), { d, tab, own });
+    return { own, tab };
+  };
+  const bySig = new Map();
+  for (const d of payloadDetails) {
+    accountedFor.add(d.key); if (d.schemaName) accountedFor.add(d.schemaName);
+    const { own, tab } = resolvePlacement(d);
+    const sig = detailSig(d);
+    const cur = bySig.get(sig);
+    if (!cur) bySig.set(sig, { d, tab, own });
     else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; cur.own = own; } // prefer a resolved placement
     else if (!cur.d.caption && d.caption) cur.d = { ...cur.d, caption: d.caption }; // else keep first, backfill caption on a COPY (don't mutate the shared input detail — mapToFreedom stays pure)
   }
@@ -798,20 +829,22 @@ function mapDetails(ctx, containers, profileRegion) {
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
     });
   };
-  for (const { d, tab, own } of bySig.values()) {
+  // Emit ONE deduped placement: a standard feature (A3 analog) or a rebuilt custom detail. Own fn for Sonar CC 15.
+  const emitDetail = ({ d, tab, own }) => {
     // Ensure the OWNING tab is emitted as a container so a tab holding ONLY details is still built (+ caption).
     if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
     const { feat, featByEntity } = matchDetailFeature(d, dentity);
-    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); continue; }
+    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); return; }
     // detail TITLE: resolved page-caption resource → the detail's own title → a plain caption → null.
     const resolvedDcap = d.caption ? resolveText(d.caption) : null;
     const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
     const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
     flagDetailIssues(d, dinfo, dentity, tab, detailTitle);
     buildCustomDetail(d, dinfo, dentity, tab, detailTitle);
-  }
+  };
+  for (const entry of bySig.values()) emitDetail(entry);
   return { details, standardFeatures, needsDecision, accountedFor };
 }
 

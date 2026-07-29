@@ -66,6 +66,13 @@ function regionResolver(viewConfigDiff, resources = {}) {
   // (minus the `Container` suffix) when no captioned group is found, so the 2 islands don't collapse to one flat
   // "Side profile" (which dropped the island distinction from the Layout table).
   const islandLabel = (name) => esc(String(name).replace(/Container$/, ""));
+  // Side profile Region label: keep the (possibly uncaptioned) island distinct so >1 island doesn't collapse.
+  const profileRegionLabel = (group, prev) => {
+    const island = group || (prev ? islandLabel(prev) : null);
+    return island ? `Side profile › ${island}` : "Side profile";
+  };
+  // Tab Region label, with the nearest captioned group appended when present.
+  const tabRegionLabel = (o, group) => group ? `Tab · ${label(o)} › ${group}` : `Tab · ${label(o)}`;
   return (parentName) => {
     // `group` = the nearest CAPTIONED ancestor container (a real field group like "Sender" / "Additional
     // delivery info") between the field and its tab/profile. Surfacing it keeps the Region column showing the
@@ -74,10 +81,7 @@ function regionResolver(viewConfigDiff, resources = {}) {
     // island still resolves to its own container identity.
     let p = parentName, hops = 0, group = null, prev = null;
     while (p && hops++ < 64) {
-      if (p === "SideAreaProfileContainer") {
-        const island = group || (prev ? islandLabel(prev) : null);
-        return island ? `Side profile › ${island}` : "Side profile";
-      }
+      if (p === "SideAreaProfileContainer") return profileRegionLabel(group, prev);
       if (p === "HeaderContainer") return "Header";
       // (removed a legacy hardcode that mapped `GeneralInfoTabContainer` → "⚠ fallback (unresolved)" — it dates
       // from when that container was a catch-all with no real tab. The mapper now emits it as a proper `crt.Tab`
@@ -86,7 +90,7 @@ function regionResolver(viewConfigDiff, resources = {}) {
       // fields as unresolved on every page that has this tab.)
       const o = byName.get(p);
       if (!o) return esc(p);
-      if (o.values?.type === "crt.Tab") return group ? `Tab · ${label(o)} › ${group}` : `Tab · ${label(o)}`;
+      if (o.values?.type === "crt.Tab") return tabRegionLabel(o, group);
       // nearest captioned group wins (a hex-hash noise key is dropped — still surfaced as a [group-caption] ⚠).
       if (group == null) group = captionGroupLabel(o, resources);
       prev = p;
@@ -183,27 +187,29 @@ const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this sectio
 const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
 // The Additional-cell note for a Print / Run-process card action: concrete when the on-stand signal is resolved,
 // the how-to fallback otherwise, a short "no section-level menu" on a child page. Own fn for Sonar CC 15.
+// The Run-process card action note: not-applicable on a child page, else driven by the on-stand `processes`
+// signal (connected+named / connected / none / unresolved how-to). Extracted for Sonar CC 15.
+function processActionNote(result, opts, sigList) {
+  if (opts.isChildPage) return { type: "Action", note: "Child edit page — no section-level Run-process menu; migrate only if THIS child page's own ACTIONS had a run-process (confirm), else not applicable." };
+  const sp = result.signals?.processes;
+  if (sp?.resolved !== true) return { type: "Action", note: PROCESS_HOWTO };
+  if (!sp.present) return { type: "Action", note: "**Not migrated** — no process connected to this section (checked `ProcessInModules` on-stand)." };
+  const namePart = sigList(sp) ? `: ${sigList(sp)}` : " (name unresolved — resolve via `VwSysProcess` by Id)";
+  return { type: "Action", note: `Connected process${namePart} → wire as a Freedom **Run process** card action.` };
+}
+// The Print card action note: same shape as processActionNote, driven by the `printables` signal. Extracted for CC.
+function printActionNote(result, opts, sigList) {
+  if (opts.isChildPage) return { type: "Action", note: "Child edit page — no section-level Print menu; migrate only if THIS child page's own ACTIONS had a printable (confirm), else not applicable." };
+  const spr = result.signals?.printables;
+  if (spr?.resolved !== true) return { type: "Action", note: PRINT_HOWTO };
+  if (!spr.present) return { type: "Action", note: "**Not migrated** — no printables/reports for this section (checked `SysModuleReport` on-stand)." };
+  const namePart = sigList(spr) ? `: ${sigList(spr)}` : "s present";
+  return { type: "Action", note: `Printable${namePart} → wire as the Freedom **print** action.` };
+}
 function cardActionNote(name, result, opts) {
-  const sigOf = (k) => result.signals?.[k];
   const sigList = (s) => (s?.cases || s?.items || s?.names || []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", ");
-  if (/process/i.test(name)) {
-    if (opts.isChildPage) return { type: "Action", note: "Child edit page — no section-level Run-process menu; migrate only if THIS child page's own ACTIONS had a run-process (confirm), else not applicable." };
-    const sp = sigOf("processes");
-    if (sp?.resolved === true) {
-      if (sp.present) { const namePart = sigList(sp) ? `: ${sigList(sp)}` : " (name unresolved — resolve via `VwSysProcess` by Id)"; return { type: "Action", note: `Connected process${namePart} → wire as a Freedom **Run process** card action.` }; }
-      return { type: "Action", note: "**Not migrated** — no process connected to this section (checked `ProcessInModules` on-stand)." };
-    }
-    return { type: "Action", note: PROCESS_HOWTO };
-  }
-  if (/print/i.test(name)) {
-    if (opts.isChildPage) return { type: "Action", note: "Child edit page — no section-level Print menu; migrate only if THIS child page's own ACTIONS had a printable (confirm), else not applicable." };
-    const spr = sigOf("printables");
-    if (spr?.resolved === true) {
-      if (spr.present) { const namePart = sigList(spr) ? `: ${sigList(spr)}` : "s present"; return { type: "Action", note: `Printable${namePart} → wire as the Freedom **print** action.` }; }
-      return { type: "Action", note: "**Not migrated** — no printables/reports for this section (checked `SysModuleReport` on-stand)." };
-    }
-    return { type: "Action", note: PRINT_HOWTO };
-  }
+  if (/process/i.test(name)) return processActionNote(result, opts, sigList);
+  if (/print/i.test(name)) return printActionNote(result, opts, sigList);
   if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
   if (name === "Tag") return { type: "—", note: "Provided by the default Freedom template (tags) — nothing to migrate." };
   return { type: "Action", note: DASH };
@@ -222,40 +228,47 @@ function rowsForImages(images, regionOf) {
   });
 }
 
-// Build the Logic-table rows (declarative page rules → entity/lookup filters → handlers → process launch).
-// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
-function buildLogicRows(cs) {
-  const logic = [];
+// Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
+function pageRuleRows(cs) {
   const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
-  for (const r of cs.pageBusinessRules || []) {
+  return (cs.pageBusinessRules || []).map((r) => {
     const attrs = condAttrs(r.conditions);
     const condTrigger = (r.conditions || []).length ? "conditional" : "always";
     const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
-    logic.push([esc(r.element), trigger, effect, "page business rule"]);
-  }
-  // entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
+    return [esc(r.element), trigger, effect, "page business rule"];
+  });
+}
+// entity/lookup filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
+function entityFilterRows(cs) {
   const filtBy = {};
   for (const r of cs.entityBusinessRules || []) { filtBy[r.targetAttribute] ||= []; filtBy[r.targetAttribute].push(r); }
-  for (const [attr, rs] of Object.entries(filtBy)) {
+  return Object.entries(filtBy).map(([attr, rs]) => {
     const unresolved = rs.filter((r) => !r.complete).length;
     const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
     const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
     const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
-    logic.push([`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"]);
-  }
-  // handlers — fold set<X>Info / clear<X>Info helpers into their on<X>Change trigger row.
+    return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
+  });
+}
+// handlers — fold set<X>Info / clear<X>Info helpers into their on<X>Change trigger row. Extracted for Sonar CC 15.
+function handlerRows(cs) {
   const stubs = cs.handlerStubs || [];
   const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
   const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
   const helpersByBase = {};
   for (const h of stubs) { const b = helperBase(h.sourceMethod); if (b) { helpersByBase[b] ||= []; helpersByBase[b].push(h.sourceMethod); } }
-  for (const h of stubs) {
-    if (helperBase(h.sourceMethod)) continue; // shown folded into its trigger row
+  return stubs.filter((h) => !helperBase(h.sourceMethod)).map((h) => { // helpers shown folded into their trigger row
     const b = triggerBase(h.sourceMethod);
     const extra = b && helpersByBase[b] ? ` (+ ${helpersByBase[b].map(esc).join(", ")})` : ""; // esc each helper name at the sink (untrusted body)
-    logic.push([esc(h.sourceMethod), esc(triggerOf(h.sourceMethod)), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"]);
-  }
+    return [esc(h.sourceMethod), esc(triggerOf(h.sourceMethod)), `imperative (${esc(h.category)})${extra} — review`, "request handler / converter / virtual attr"];
+  });
+}
+
+// Build the Logic-table rows (declarative page rules → entity/lookup filters → handlers → process launch).
+// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
+function buildLogicRows(cs) {
+  const logic = [...pageRuleRows(cs), ...entityFilterRows(cs), ...handlerRows(cs)];
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
     logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
@@ -297,24 +310,10 @@ function renderListPageBlock(result, section) {
   return L;
 }
 
-export function renderDesignSpec(result, opts = {}) {
-  const cs = result.changeSet || {};
-  const section = result.section || null;
-  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize `<`/`>`/backtick/`](` so a hostile entitySchemaName can't inject into the title headings it feeds
-  const vcd = cs.viewConfigDiff || [];
-  const regionOf = regionResolver(vcd, cs.resources || {}); // pass the resource map so a resolved tab caption shows its text, not the $Resources key
-  const tabRegion = (tab) => regionOf(tab);
-  const fields = vcd.filter(isField);
-
-  // Declarative page business rules render in the LOGIC table (below), NOT in the Layout Rule column — a reader
-  // looks for the business rules in ONE place. The Layout Rule column carries only intrinsic field state
-  // (read-only mirrors / column metadata), never rule-driven state.
-
+// Standalone (non-embedded) spec header: title + Entity/Size preamble, plus the ⛔ HARD-GATE / STRUCTURE banners
+// (shown here only when standalone; embedded-in-plan relies on renderPlan's banner). Extracted for Sonar CC 15.
+function renderSpecHeader(result, opts, entity, fields, cs) {
   const L = [];
-  // `embedded` (rendered inside renderPlan): the plan's Overview already carries entity/template/package/
-  // size, so skip this preamble to avoid duplicating it — the `### List page` / `### <entity> form page`
-  // headings are the divider. Standalone (`--spec`) keeps the full header. The unresolvedParents gate is
-  // safety-critical, so it is shown in BOTH modes.
   if (!opts.embedded) {
     const templatePart = opts.template ? ` · **Template:** ${esc(opts.template)}` : "";       // stand/user-supplied → sanitize (Major 5)
     const packagePart = opts.targetPackage ? ` · **Package:** ${esc(opts.targetPackage)}` : "";
@@ -328,8 +327,6 @@ export function renderDesignSpec(result, opts = {}) {
       `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`,
     );
   }
-  // ⛔ HARD GATE banner (RV1/RV2): surface EVERY non-empty correctness signal, not just unresolvedParents.
-  // Standalone (--spec) prints it here; embedded-in-plan relies on renderPlan's top-of-plan banner (below).
   const gate = result.gate || { blocked: false, reasons: [] };
   if (!opts.embedded && gate.blocked) {
     L.push("> ⛔ **HARD GATE — BLOCKED. DO NOT BUILD.** The engine found unresolved correctness signals; fix them and re-run:");
@@ -341,6 +338,78 @@ export function renderDesignSpec(result, opts = {}) {
     for (const it of structure.issues) L.push(`> - ${esc(it)}`);
   }
   L.push("");
+  return L;
+}
+
+// A SECTION migration when the section chain folded, OR a mini page / section schema is named even though the
+// chain wasn't gathered (bundle returned sectionLayerCount:0). A MINI page is never a section. Extracted for CC.
+function isSectionScope(result, section, opts) {
+  return !!((section || result.miniPage || opts.planMeta?.sectionSchema) && !opts.isMiniPage);
+}
+
+// Group the Layout rows by region (first-seen order) then rank regions: side profile / header FIRST, then tabs,
+// top widgets, card actions, and finally flagged/unresolved. Returns { order, byRegion }. Extracted for CC.
+function orderRegions(rows) {
+  const order = [];
+  const byRegion = new Map();
+  rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
+  const regionRank = (r) => {
+    if (r.startsWith("Side profile") || r === "Header") return 0;
+    if (r.startsWith("Tab ")) return 1;
+    if (r === "Header / top") return 2;
+    if (r === "Card actions") return 3;
+    return 4;
+  };
+  const firstSeen = new Map(order.map((r, i) => [r, i]));
+  order.sort((a, b) => regionRank(a) - regionRank(b) || firstSeen.get(a) - firstSeen.get(b));
+  return { order, byRegion };
+}
+
+// Child-page recommendation: a small, flat related-list child (≤5 fields, no tabs/details) is better opened as an
+// edit mini page / modal than rebuilt as a full record page. Returns the lines (empty otherwise). Extracted for CC.
+function childFormRecommendation(cs, fields, opts) {
+  if (!opts.isChildPage) return [];
+  const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
+  const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+  if (!(fields.length && fields.length <= 5 && !hasTabs && !nDetails)) return [];
+  return [`> **Recommendation — small child form (${fields.length} field${fields.length === 1 ? "" : "s"}, no tabs/details):** consider opening this related-list child as an **edit mini page / modal** (a lightweight add/edit shell) rather than a full record page, or pick a lighter form template. Confirm the desired shell before building.`, ""];
+}
+
+// The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds already surfaced in Layout /
+// Logic / Child-pages are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines. Extracted for CC.
+function renderConfirmWorklist(cs) {
+  // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
+  // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
+  // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
+  // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
+  // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
+  const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
+  const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
+  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
+  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
+  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
+  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
+    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
+  if (!confirm.length) return [];
+  return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+}
+
+export function renderDesignSpec(result, opts = {}) {
+  const cs = result.changeSet || {};
+  const section = result.section || null;
+  const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize `<`/`>`/backtick/`](` so a hostile entitySchemaName can't inject into the title headings it feeds
+  const vcd = cs.viewConfigDiff || [];
+  const regionOf = regionResolver(vcd, cs.resources || {}); // pass the resource map so a resolved tab caption shows its text, not the $Resources key
+  const tabRegion = (tab) => regionOf(tab);
+  const fields = vcd.filter(isField);
+
+  // Declarative page business rules render in the LOGIC table (below), NOT in the Layout Rule column — a reader
+  // looks for the business rules in ONE place. The Layout Rule column carries only intrinsic field state
+  // (read-only mirrors / column metadata), never rule-driven state.
+  // `embedded` (rendered inside renderPlan) skips the standalone title/preamble to avoid duplicating renderPlan's
+  // Overview; the ⛔ gate/structure banners are safety-critical and shown in BOTH modes (see renderSpecHeader).
+  const L = renderSpecHeader(result, opts, entity, fields, cs);
 
   // ---- ONE Layout table (structure + contents) — one row-builder per element category (see helpers above) ----
   const rows = [
@@ -351,21 +420,8 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages(cs.images, regionOf),
   ];
-  // group by region (first-seen order), stable by `sort` then insertion within region
-  const order = [];
-  const byRegion = new Map();
-  rows.forEach((r, i) => { if (!byRegion.has(r.region)) { byRegion.set(r.region, []); order.push(r.region); } byRegion.get(r.region).push({ ...r, i }); });
-  // region reading order: the side profile (all islands) FIRST, then tabs, then top widgets, card actions,
-  // and finally any flagged/unresolved regions — so profile info is not interleaved with tabs.
-  const regionRank = (r) => {
-    if (r.startsWith("Side profile") || r === "Header") return 0;
-    if (r.startsWith("Tab ")) return 1;
-    if (r === "Header / top") return 2;
-    if (r === "Card actions") return 3;
-    return 4;
-  };
-  const firstSeen = new Map(order.map((r, i) => [r, i]));
-  order.sort((a, b) => regionRank(a) - regionRank(b) || firstSeen.get(a) - firstSeen.get(b));
+  // group by region (first-seen order), then reading order: side profile FIRST, tabs, widgets, actions, flagged.
+  const { order, byRegion } = orderRegions(rows);
 
   // ---- List page (section concerns) comes FIRST — the Main-scope table lists the list page before the
   // form page, so the detailed expansions follow that same order: list page → form page → child pages. ----
@@ -380,7 +436,7 @@ export function renderDesignSpec(result, opts = {}) {
   // suppress the List-page block entirely (rendering one gave the mini fold a spurious "##### List page" with a
   // misleading "no add-record mini page" line — a mini page inside a mini page).
   // A MINI page is NOT a section (no list page). List page renders for a section migration only, not formOnly.
-  const isSectionMigration = (section || result.miniPage || opts.planMeta?.sectionSchema) && !opts.isMiniPage;
+  const isSectionMigration = isSectionScope(result, section, opts);
   if (isSectionMigration && !opts.formOnly) L.push(...renderListPageBlock(result, section));
 
   // TYPED entity: the base fold is NOT a deliverable — it only supplies the List page (section concerns) and
@@ -433,47 +489,12 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("");
   }
 
-  // ---- Child page with FEW fields → recommend a lighter shell. A related-list child that is a small, flat
-  // edit form (a handful of fields, no tabs, no nested details) is better opened as an edit MINI PAGE / modal
-  // than rebuilt as a full record page — less chrome, faster add/edit inline from the parent list. Surface it as
-  // a recommendation on the child's own spec (only for child pages, so the top-level record page is untouched).
-  if (opts.isChildPage) {
-    const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
-    const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-    if (fields.length && fields.length <= 5 && !hasTabs && !nDetails) {
-      L.push(`> **Recommendation — small child form (${fields.length} field${fields.length === 1 ? "" : "s"}, no tabs/details):** consider opening this related-list child as an **edit mini page / modal** (a lightweight add/edit shell) rather than a full record page, or pick a lighter form template. Confirm the desired shell before building.`, "");
-    }
-  }
+  // ---- Child page with FEW fields → recommend a lighter shell (edit mini page / modal) — child pages only ----
+  L.push(...childFormRecommendation(cs, fields, opts));
 
-  // ---- Confirm before I build (the ⚠ worklist) — the agent appends discovery risks/gaps here ----
-  // Only the GENUINE open decisions. Kinds already surfaced in Layout (standard-feature / widget /
-  // card-action), in Logic (method / process-launch) or in the Child-pages table (detail-editpage) are
-  // NOT re-listed here — that duplication is exactly the noise the plan structure was meant to remove.
-  const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
-  const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
-  // (container/field names, captions, bound hints — e.g. `container '${parent}' holds …`), all attacker-chosen
-  // on a hostile stand. `strip` alone collapses newlines but leaves `<`/`>`/backtick/`](` live, so a container
-  // named `<img onerror=…>` or `[x](javascript:…)` would inject into the plan the agent presents verbatim.
-  // `esc` also neutralizes those. Whole-string `esc` (rather than escaping each stand token at its mapper sink)
-  // is deliberate: it is omission-proof — no interpolated token can be missed — and the engine-authored parts of
-  // every `reason:` are plain prose (audited: none contain `<`/`>`/backtick/`|`/`](` as literal output), so `esc`
-  // has nothing engine-authored to mangle. Keep new reasons that way (put any code identifier or angle-bracketed
-  // token in `item`, which is likewise `esc`d) so this stays true.
-  // Removals are NOT a worklist item — a removed element is simply out of the final effective scope (the mapper
-  // no longer emits `removal` decisions; a fresh Freedom rebuild builds the alive set, so there is nothing to
-  // "remove"). Every remaining decision is a genuine open item.
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
-  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
-  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
-  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
-    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
-  if (confirm.length) {
-    L.push(`#### ⚠ Confirm before I build (${confirm.length})`);
-    for (const line of confirm) L.push(line);
-    L.push("");
-  }
+  // ---- Confirm before I build (the ⚠ worklist) — GENUINE open decisions only; kinds already surfaced in
+  // Layout / Logic / Child-pages are not re-listed (that duplication is the noise the plan structure removed) ----
+  L.push(...renderConfirmWorklist(cs));
 
   return L.join("\n");
 }
@@ -560,22 +581,24 @@ function renderTemplateBanner(result, entity, typed, someBindOnly, formTpl) {
 }
 // Typed-entity form section: the shared base form (bind-only) OR the shared details/features list (all own-fold),
 // then the FULL per-type form spec for each typed page. Own fn for Sonar CC 15. Returns the lines to push.
-function renderTypedMappings(result, opts, entity, cs, typed, someBindOnly) {
-  const P = [];
-  if (someBindOnly) {
-    P.push("### Shared form (base) — bind-only type(s) bind to this by Type", "",
-      renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), "");
-  } else {
-    const shFeatures = cs.standardFeatures || [], shDetails = cs.details || [];
-    if (shFeatures.length || shDetails.length) {
-      P.push("### Shared across all typed forms (inherited from the base form)", "",
-        `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`);
-      for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
-      for (const d of shDetails) { const ent = d.entity ? ` (${esc(d.entity)})` : ""; P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${ent}${addModeText(d.addMode)}`); }
-      P.push("");
-    }
-  }
-  P.push("### Typed page mappings", "");
+// Typed-entity shared context: the shared base form (bind-only types reuse it) OR — when every type owns its fold
+// — the shared details/features list built once on the base. Returns the lines. Extracted for Sonar CC 15.
+function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
+  if (someBindOnly) return ["### Shared form (base) — bind-only type(s) bind to this by Type", "",
+    renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), ""];
+  const shFeatures = cs.standardFeatures || [], shDetails = cs.details || [];
+  if (!(shFeatures.length || shDetails.length)) return [];
+  const P = ["### Shared across all typed forms (inherited from the base form)", "",
+    `> On the base \`${esc(entity)}\` form and therefore on EVERY per-type form — build these ONCE on the shared base (the per-type sections below add only each type's own fields/groups/details):`];
+  for (const f of shFeatures) P.push(`- **${esc(f.feature || f.caption || f.name || String(f))}** — standard feature`);
+  for (const d of shDetails) { const ent = d.entity ? ` (${esc(d.entity)})` : ""; P.push(`- **${esc(d.caption || d.detailSchema || d.entity || "detail")}** — related list${ent}${addModeText(d.addMode)}`); }
+  P.push("");
+  return P;
+}
+// The FULL per-type form spec for each typed page (bind-only / cyclic / folded spec / parse-error / unresolved).
+// Returns the lines. Extracted for Sonar CC 15.
+function renderTypedPageRows(typed) {
+  const P = ["### Typed page mappings", ""];
   for (const t of typed) {
     const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
     P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
@@ -587,6 +610,64 @@ function renderTypedMappings(result, opts, entity, cs, typed, someBindOnly) {
     P.push("");
   }
   return P;
+}
+function renderTypedMappings(result, opts, entity, cs, typed, someBindOnly) {
+  return [...renderTypedSharedBlock(result, opts, entity, cs, someBindOnly), ...renderTypedPageRows(typed)];
+}
+
+// The Overview **Size:** line. A TYPED entity has no single form deliverable (per-type fields/rules live in the
+// mappings below), so it summarizes by typed-form count; a non-typed entity reports fields/details/rules/actions.
+function buildSizeLine(typed, cs, fields) {
+  const dcf = (cs.details || []).length + (cs.standardFeatures || []).length;
+  if (typed.length) {
+    const plural = typed.length === 1 ? "" : "s";
+    return `- **Size:** ${typed.length} typed form${plural} (per-type fields, rules and details are in **Typed page mappings** below) · ${dcf} shared details/features · ${(cs.cardActions || []).length} actions`;
+  }
+  return `- **Size:** ${fields.length} fields · ${dcf} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`;
+}
+
+// Main-scope table rows: list page + (form page | shared base) + one row per typed form. Extracted for Sonar CC 15.
+function buildScopeRows(pm, opts, entity, typed, someBindOnly, mainCall, formTpl, fill) {
+  const rows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
+  if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
+  else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
+  for (const t of typed) {
+    const typeSuffix = t.type ? ` — type "${esc(t.type)}"` : "";
+    const cls = `${esc(t.schema)}${typeSuffix} (typed form)`;
+    let tgt;
+    if (t.bindOnly) tgt = "bind shared form by Type";
+    else if (formTpl) tgt = esc(formTpl);
+    else tgt = "<FILL: Freedom form template>";
+    rows.push(`| ${cls} | ${tgt} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
+  }
+  return rows;
+}
+
+// Child edit pages belong in Main scope too — each related list's child entity opens its OWN form on add/edit.
+// Honest label by resolution state (mapped/real page → Rebuild; verified-none/view-only → Reuse; else ⚠ resolve).
+function buildChildScopeRows(childs) {
+  return childs.map((c) => {
+    let target, call, label;
+    if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
+      target = "Freedom record page"; call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
+    } else if (c.editPage === false || c.editable === false) {
+      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
+    } else {
+      target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
+    }
+    return `| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`;
+  });
+}
+
+// The "Add mini-page mapping" block (folded mini-page spec, or a ⚠ parse-error note). Empty when no mini page.
+function renderMiniPageMapping(result) {
+  const mp = result.miniPage;
+  if (!mp || !(mp.spec || mp.specError)) return [];
+  const lines = ["### Add mini-page mapping", "", `#### Mini page: ${esc(mp.schema)}`];
+  if (mp.spec) lines.push("", demoteHeadings(mp.spec, 2));
+  else lines.push(`> ⚠ mini-page bundle supplied but failed to parse: ${esc(mp.specError)} — fix and re-run.`);
+  lines.push("");
+  return lines;
 }
 
 export function renderPlan(result, opts = {}) {
@@ -616,11 +697,7 @@ export function renderPlan(result, opts = {}) {
   // which is exactly how a real Lead migration lost its whole 43-field main form). The base is suppressed ONLY
   // when EVERY type has its OWN fold. `someBindOnly` gates that below.
   const someBindOnly = typed.some((t) => t.bindOnly);
-  let sizeLine;
-  if (typed.length) {
-    const plural = typed.length === 1 ? "" : "s";
-    sizeLine = `- **Size:** ${typed.length} typed form${plural} (per-type fields, rules and details are in **Typed page mappings** below) · ${(cs.details || []).length + (cs.standardFeatures || []).length} shared details/features · ${(cs.cardActions || []).length} actions`;
-  } else sizeLine = `- **Size:** ${fields.length} fields · ${(cs.details || []).length + (cs.standardFeatures || []).length} details/features · ${(cs.pageBusinessRules || []).length} rules · ${(cs.cardActions || []).length} actions`;
+  const sizeLine = buildSizeLine(typed, cs, fields);
   P.push(
     "### Overview",
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
@@ -659,36 +736,14 @@ export function renderPlan(result, opts = {}) {
   // The Freedom form template every per-type form uses (from planMeta.formTemplate / manifest.template). Shown
   // on each typed row so the template mandate is not lost (it used to live only on the suppressed base row).
   const formTpl = pm.formTemplate || opts.template || null;
-  const scopeRows = [`| ${fill(pm.sectionSchema, "<FILL: section schema>")} (list page) | ${fill(pm.listTemplate, "<FILL: Freedom list template>")} | ${mainCall} |`];
-  if (!typed.length) scopeRows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
-  else if (someBindOnly) scopeRows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
-  for (const t of typed) {
-    const typeSuffix = t.type ? ` — type "${esc(t.type)}"` : "";
-    const cls = `${esc(t.schema)}${typeSuffix} (typed form)`;
-    let tgt;
-    if (t.bindOnly) tgt = "bind shared form by Type";
-    else tgt = formTpl ? esc(formTpl) : "<FILL: Freedom form template>";
-    scopeRows.push(`| ${cls} | ${tgt} | ${t.bindOnly ? "Bind (per-type)" : "Rebuild (per-type)"} |`);
-  }
+  const scopeRows = buildScopeRows(pm, opts, entity, typed, someBindOnly, mainCall, formTpl, fill);
   P.push("### Main scope", "| Classic | Freedom target | Call |", "| --- | --- | --- |", ...scopeRows);
   if (pm.freedomExists) P.push("> **Reconcile:** a Freedom page for this entity already exists — do NOT create a duplicate. Read it with `get-page`, apply the design below as a customization delta (added/modified/removed-hidden), and save with `update-page`. Procedure: `./references/existing-freedom-reconcile.md`.");
   // child edit pages belong in Main scope too — each related list's child entity opens its OWN form on
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  for (const c of childs) {
-    // Honest label by resolution state — never assert "Rebuild (child)" for a child we have not resolved:
-    //   mapped, or a real edit page is named -> Rebuild (child); verified-none / view-only -> Reuse; else -> ⚠ resolve.
-    let target, call, label;
-    if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
-      target = "Freedom record page"; call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
-    } else if (c.editPage === false || c.editable === false) {
-      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
-    } else {
-      target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
-    }
-    P.push(`| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`);
-  }
+  P.push(...buildChildScopeRows(childs));
   P.push("");
   if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
@@ -699,12 +754,7 @@ export function renderPlan(result, opts = {}) {
   P.push(...renderTemplateBanner(result, entity, typed, someBindOnly, formTpl));
   // LIST PAGE first (so the Add mini-page mapping sits right after it), then the form / per-type mappings.
   P.push("", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "");
-  if (result.miniPage && (result.miniPage.spec || result.miniPage.specError)) {
-    P.push("### Add mini-page mapping", "", `#### Mini page: ${esc(result.miniPage.schema)}`);
-    if (result.miniPage.spec) P.push("", demoteHeadings(result.miniPage.spec, 2));
-    else P.push(`> ⚠ mini-page bundle supplied but failed to parse: ${esc(result.miniPage.specError)} — fix and re-run.`);
-    P.push("");
-  }
+  P.push(...renderMiniPageMapping(result));
   if (!typed.length) P.push("", renderDesignSpec(result, { ...opts, embedded: true, formOnly: true }), ""); // NON-TYPED single form
   else P.push(...renderTypedMappings(result, opts, entity, cs, typed, someBindOnly));
   // Child page mappings — one real design spec per related-list child page (the mapping the listing lacked).
@@ -768,6 +818,25 @@ function buildCoverageRows(cs, pm, result) {
   }
   return cover;
 }
+// Pages checklist group — every page this migration creates (mini page is a page, not a footnote) plus the
+// navigable-SECTION registration deliverable (one real run created pages but never registered the section, and a
+// hand-built summary silently dropped it). Returns the rows. Extracted for Sonar CC 15.
+function buildPageRows(result, opts, pm, typed, fill) {
+  const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
+  if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
+  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}` }); }
+  if (result.miniPage?.schema) pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
+  if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it" });
+  return pages;
+}
+// List-page contents checklist rows (columns / quick filters / section actions). Returns the rows. Extracted for CC.
+function buildListItems(pm, section, result) {
+  if (!(pm.sectionSchema || section || result.miniPage)) return [];
+  const items = [{ label: "List columns" }];
+  if ((section?.quickFilters || []).length) items.push({ label: `Quick filters (${section.quickFilters.length})` });
+  if ((section?.sectionActions || []).length) items.push({ label: `Section actions (${section.sectionActions.length})` });
+  return items;
+}
 function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
@@ -776,26 +845,9 @@ function checklistGroups(result, opts = {}) {
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
   const groups = [];
   const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push({ title, rows: r }); };
-  // Pages — every page this migration creates (the mini page is a page, not a footnote)
-  const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
-  if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}` }); }
-  if (result.miniPage?.schema) pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
-  // Navigable SECTION registration — a section migration's pages are unreachable until the Freedom section is
-  // registered in an app (`create-app-section`) and appears in the menu. This is a DELIVERABLE in its own right:
-  // one real run created the list + form pages but never registered the section, and — because a hand-built
-  // summary had no row for it — it was silently dropped until the user caught it. Surface it so it can't vanish.
-  if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it" });
-  G("Pages", pages);
-  // List page contents
+  G("Pages", buildPageRows(result, opts, pm, typed, fill));
   const section = result.section || null;
-  const listItems = [];
-  if (pm.sectionSchema || section || result.miniPage) {
-    listItems.push({ label: "List columns" });
-    if ((section?.quickFilters || []).length) listItems.push({ label: `Quick filters (${section.quickFilters.length})` });
-    if ((section?.sectionActions || []).length) listItems.push({ label: `Section actions (${section.sectionActions.length})` });
-  }
-  G("List page", listItems);
+  G("List page", buildListItems(pm, section, result));
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));

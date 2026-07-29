@@ -784,6 +784,38 @@ function mergeModules(L, seed, components) {
   }
 }
 
+// Replay each tagged schema (seed-template first, then the page's own schemas) into the merge stores: diff ops
+// into `items`, and the keyed rule/detail/method/module blocks into their maps. Extracted for Sonar CC 15.
+function replayTagged(tagged, stores, warnings) {
+  const { items, rules, details, methods, components } = stores;
+  for (const { L, seed } of tagged) {
+    for (const op of L.diff) {
+      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
+      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
+    }
+    mergeRuleBlocks(L, seed, rules);
+    mergeDetails(L, seed, details);
+    mergeMethods(L, seed, methods);
+    mergeModules(L, seed, components);
+  }
+}
+
+// CASCADE REMOVE (runtime parity): in Classic, removing a container removes its WHOLE SUBTREE. Propagate the
+// removal DOWN — an item whose parent is a TOMBSTONED (transitively) item is itself removed. Sweep ONLY
+// `templateOwned` (base) orphans through a parent that EXISTS and is `removed`; a genuinely-absent parent (seed
+// gap F2) and CLIENT-authored orphans are left to surface as unresolvedParents. Fixpoint over the item set (a
+// removed container's removed child can in turn orphan ITS children). Extracted from mergeHierarchy for Sonar CC 15.
+function cascadeRemove(items) {
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const it of items.values()) {
+      if (it.removed || !it.parent || !it.templateOwned) continue;
+      const p = items.get(it.parent);
+      if (p?.removed) { it.removed = true; it.removedBy = it.removedBy || p.removedBy; it.removedBySeed = p.removedBySeed; it.cascadeRemoved = true; changed = true; }
+    }
+  }
+}
+
 export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
@@ -809,40 +841,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   ];
   const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
-  for (const { L, seed } of tagged) {
-    for (const op of L.diff) {
-      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
-    }
-    mergeRuleBlocks(L, seed, rules);
-    mergeDetails(L, seed, details);
-    mergeMethods(L, seed, methods);
-    mergeModules(L, seed, components);
-  }
-
-  // CASCADE REMOVE (runtime parity). In Classic, removing a container removes its WHOLE SUBTREE. The diff replay
-  // above tombstones only the explicitly-`remove`d item, leaving its still-alive children pointing at a removed
-  // parent — which then surfaced as false `unresolvedParents` and HARD-BLOCKED legitimate remove+re-layout pages
-  // (a heavily-layered page removes base containers to re-lay-out; the base children dangled). Propagate the
-  // removal DOWN: an item whose parent is a TOMBSTONED item (transitively) is itself removed, exactly as the
-  // runtime drops the subtree. Two guards keep this precise:
-  //   • cascade ONLY through a parent that EXISTS and is `removed` — a parent that was NEVER defined (absent) is a
-  //     genuine seed gap (F2) and MUST still surface as unresolvedParents, so we do NOT sweep its children.
-  //   • a child re-parented by a later `move` carries its NEW parent, so it is swept only if that new parent is
-  //     itself removed — a move into an ALIVE container legitimately keeps the child.
-  //   • sweep ONLY `templateOwned` (base) orphans — base chrome the runtime drops with its container. A
-  //     CLIENT-authored orphan (a block/detail the client put under a since-removed container) is NOT masked: it
-  //     still surfaces as unresolvedParents so the agent decides where it goes (silently dropping client content
-  //     is the worse failure — e.g. Contract's client `ContractSumBlock` under a removed `ContractSumGroup`).
-  // Fixpoint over the item set (a removed container's removed child can in turn orphan ITS children).
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const it of items.values()) {
-      if (it.removed || !it.parent || !it.templateOwned) continue;
-      const p = items.get(it.parent);
-      if (p?.removed) { it.removed = true; it.removedBy = it.removedBy || p.removedBy; it.removedBySeed = p.removedBySeed; it.cascadeRemoved = true; changed = true; }
-    }
-  }
+  replayTagged(tagged, { items, rules, details, methods, components }, warnings);
+  // Propagate container removals down the subtree (runtime parity) — see cascadeRemove. This clears the false
+  // `unresolvedParents` that HARD-BLOCKED legitimate remove+re-layout pages (base children of a removed container).
+  cascadeRemove(items);
 
   const alive = [...items.values()].filter(i => !i.removed);
   // cascade-removed items are structural cleanup (a removed container's subtree), NOT a client B6 decision — keep

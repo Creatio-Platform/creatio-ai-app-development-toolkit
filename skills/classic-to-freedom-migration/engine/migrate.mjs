@@ -156,23 +156,36 @@ function miniPageIssue(miniPage, miniPageVerified) {
 
 // ⛔ STRUCTURE VALIDATOR — INPUT-completeness of the MANIFEST (distinct from the correctness `gate`). Pure:
 // returns { complete, issues }. Extracted from runMigration to keep it under Sonar CC 15 (S3776).
-function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited }) {
-  const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
-  const issues = [];
+// A NON-typed Rebuild form that folded to ZERO fields is a HOLLOW page (section / edit page didn't resolve) →
+// hard BLOCK. TOP-LEVEL only (visited.size===0); nested folds have their own 0-field handling. Reconcile exempt.
+// Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
+function hollowFormIssue(changeSet, typedPages, manifest, visited) {
+  if (typedPages.length || visited.size !== 0 || manifest.planMeta?.freedomExists) return null;
+  const mainFields = (changeSet.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+  if (mainFields !== 0) return null;
+  return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
+}
+
+// Each mapped detail whose schema wasn't fetched into manifest.detailSchemas is unresolved (columns + child edit
+// page). Returns one issue string per such detail. Extracted from validateStructure for Sonar CC 15.
+function detailSchemaIssues(changeSet, suppliedDetailKeys) {
+  const out = [];
   for (const d of (changeSet.details || [])) {
     if (d.detailSchema && !suppliedDetailKeys.has(d.detailSchema)) {
       const entityNote = d.entity ? ` (${d.entity})` : "";
-      issues.push(`detail '${d.detailSchema}'${entityNote}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
+      out.push(`detail '${d.detailSchema}'${entityNote}: fetch its schema into manifest.detailSchemas — columns and child edit page unresolved`);
     }
   }
+  return out;
+}
+
+function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited }) {
+  const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
+  const issues = [...detailSchemaIssues(changeSet, suppliedDetailKeys)];
+  const hollow = hollowFormIssue(changeSet, typedPages, manifest, visited);
+  if (hollow) issues.push(hollow);
   for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
   for (const t of typedPages) { const issue = typedPageIssue(t); if (issue) issues.push(issue); }
-  // A NON-typed Rebuild form that folded to ZERO fields is a HOLLOW page (section / edit page didn't resolve) →
-  // hard BLOCK. TOP-LEVEL only (visited.size===0); nested folds have their own 0-field handling. Reconcile exempt.
-  if (!typedPages.length && visited.size === 0 && !manifest.planMeta?.freedomExists) {
-    const mainFields = (changeSet.viewConfigDiff || []).filter((o) => o?.values?.control).length;
-    if (mainFields === 0) issues.push(`form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`);
-  }
   if (section) { const issue = miniPageIssue(miniPage, miniPageVerified); if (issue) issues.push(issue); }
   return { complete: issues.length === 0, issues };
 }
@@ -282,19 +295,26 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
 // Attach each detail's ADD/EDIT MECHANISM (lookup / service / inline-editable grid) to the mapped detail and
 // raise a `detail-add-mechanism` decision, so the Freedom rebuild reproduces the real add flow. Extracted from
 // runMigration to keep it under Sonar CC 15 (S3776); mutates changeSet.
+// Human-readable phrases for a detail's add/edit mechanism (lookup / service / inline-editable grid / custom
+// add-card). Returns the phrases; extracted from attachDetailAddModes for Sonar CC 15.
+function describeAddMode(am) {
+  const parts = [];
+  if (am.lookup) parts.push("ADDS via a lookup (pick existing record(s))");
+  if (am.service) parts.push(`calls service \`${am.service}${am.method ? "." + am.method : ""}\` to link/insert`);
+  if (am.editableGrid) {
+    const colsNote = am.editableColumns?.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : "";
+    parts.push(`is an INLINE-EDITABLE grid${colsNote}`);
+  }
+  if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
+  return parts;
+}
+
 function attachDetailAddModes(changeSet, detailSchemas) {
   for (const d of (changeSet.details || [])) {
     const am = detailSchemas[d.detailSchema]?.addMode;
     if (!am) continue;
     d.addMode = am;
-    const parts = [];
-    if (am.lookup) parts.push("ADDS via a lookup (pick existing record(s))");
-    if (am.service) parts.push(`calls service \`${am.service}${am.method ? "." + am.method : ""}\` to link/insert`);
-    if (am.editableGrid) {
-      const colsNote = am.editableColumns?.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : "";
-      parts.push(`is an INLINE-EDITABLE grid${colsNote}`);
-    }
-    if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
+    const parts = describeAddMode(am);
     changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: d.caption || d.detailSchema || d.entity,
       reason: `Detail '${d.caption || d.detailSchema || d.entity}' is NOT a plain related list — it ${parts.join("; ")}. Reproduce this on Freedom with a CUSTOM add request-handler (open the lookup, then create the link records / call the service) — not a default add-new. If it calls a service, VERIFY that service is deployed on-stand (else port its logic to a process/service). If inline-editable, confirm the Freedom list supports inline edit for those columns via get-component-info.` });
   }
@@ -340,13 +360,36 @@ function analyzeSectionChain(sectionSchemas) {
 // Parse each supplied detail-schema body (#11(ii)/B2) → { entity, columns, title, editPage, editable, addMode … }
 // per detail, so the mapper can resolve auto-named (SchemaNDetail) details, show related-list columns, and
 // reproduce the real add/edit mechanism. Extracted from runMigration to keep it under Sonar CC 15 (S3776).
+// Resolve a detail-schema entry to its body text + parsed schema. A string entry IS the body; an object entry
+// carries {body|file}. Missing body ⇒ empty text + a stub parse. Extracted from parseDetailSchemas for Sonar CC 15.
+function resolveDetailBody(name, e, bodyOf) {
+  const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
+  const body = hasBody ? (typeof e === "string" ? e : bodyOf(e)) : "";
+  const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
+  return { body, p };
+}
+
+// ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
+// backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the Freedom
+// rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
+// default add-new). DETECT them from the body's methods (text-scan — method bodies are imperative, not statically
+// eval'd); returns the mechanism descriptor or null for a plain list. Extracted for Sonar CC 15.
+function detectAddMode(body) {
+  const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
+  const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
+  const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b/.test(body);
+  const editableGrid = /\bConfigurationGrid\b|ConfigurationGridUtilities|getEditableGridRowViewModelClassName|getCellControlsConfig/.test(body);
+  const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
+  const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
+  const openCardOverridden = /openCardByMode\s*:/.test(body);
+  if (!(lookup || svcM || editableGrid || openCardOverridden)) return null;
+  return { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null, openCardOverridden };
+}
+
 function parseDetailSchemas(manifest, bodyOf) {
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
-    const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-    let body = "";
-    if (hasBody) body = typeof e === "string" ? e : bodyOf(e);
-    const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
+    const { body, p } = resolveDetailBody(name, e, bodyOf);
     // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
     // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages).
     const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(body);
@@ -355,29 +398,15 @@ function parseDetailSchemas(manifest, bodyOf) {
     const eObj = (e && typeof e === "object") ? e : {};
     const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
     const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
-    // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing),
-    // call a backend SERVICE to link/insert, and/or be an INLINE-EDITABLE grid. These are custom behaviours the
-    // Freedom rebuild must reproduce (a request handler that opens the lookup then creates links / calls the
-    // service — NOT a default add-new), so DETECT them from the body's methods and surface them (below), instead
-    // of the plan guessing "plain related list". Text-scan (method bodies are imperative — not statically eval'd).
-    const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
-    const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
-    const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b/.test(body);
-    const editableGrid = /\bConfigurationGrid\b|ConfigurationGridUtilities|getEditableGridRowViewModelClassName|getCellControlsConfig/.test(body);
-    const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
-    const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
-    const openCardOverridden = /openCardByMode\s*:/.test(body);
-    const addMode = (lookup || svcM || editableGrid || openCardOverridden)
-      ? { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null, openCardOverridden }
-      : null;
+    const parsedEntity = (p.entitySchemaName && p.entitySchemaName !== "?") ? p.entitySchemaName : null;
     detailSchemas[name] = {
-      entity: eObj.entity || (p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null),
+      entity: eObj.entity || parsedEntity,
       columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
       title: eObj.title || null, // human detail title (from its resources)
       editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
       editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
       editableVerified: ("editable" in eObj),
-      addMode, // custom add/edit mechanism (lookup / service / inline-editable grid), or null for a plain list
+      addMode: detectAddMode(body), // custom add/edit mechanism (lookup / service / inline-editable grid), or null
       error: p.error || null,
       astDiagnostics: p.astDiagnostics || [],
     };
