@@ -162,11 +162,34 @@ background will be generated or not.
 ## Fonts — after the background
 
 Optional. Ask whether to change the font (default is Montserrat), then whether to use one
-family for everything or separate families for headings and body. Fonts come from Google Fonts.
-Confirm the chosen font actually exists in Google Fonts before using it; if it does not, suggest
-a similar Google font or ask the user for another. (If you cannot verify existence, a wrong name
-is not fatal — the app falls back to a plain system font and the theme still works — but prefer
-to resolve it now rather than ship the wrong font silently.)
+family for everything or separate families for headings and body.
+
+Check each requested family against Google Fonts **before** building, so the conversation happens up
+front and the theme is built once instead of built, warned about, and built again. Fetch
+`https://fonts.google.com/metadata/fonts/<Family>`: 200 means the family is published on Google Fonts,
+404 means it is not. Names there are case-sensitive, so try the correct capitalisation before
+concluding anything — "Roboto" resolves where "roboto" returns 404. Note that neither this check nor
+clio's tells you which weights the family ships; that stays yours to confirm, since a family offering
+only one weight renders the heavier ones as the nearest available fallback.
+- Published on Google Fonts — go ahead and build; the theme downloads it as a web font.
+- Not published — say so and offer a Google font instead. If the user still wants that family, treat it
+  as a locally installed font and stop for an explicit confirmation; do not decide this for them. Tell
+  them plainly that the theme will show the font only on machines where it is already installed, and
+  that everywhere else the text falls back to a generic face, so a serif or monospace choice lands on
+  sans-serif. Once they confirm, build with the family passed as the heading or body font exactly as you
+  would for a Google font **and** additionally listed in build-theme's `local-font-families`: the font
+  parameters apply the family, while `local-font-families` only suppresses the download for it. A family
+  listed in `local-font-families` alone applies nothing — the theme keeps its default font.
+- Could not be checked (no network, blocked host) — say so instead of guessing, and ask the user whether
+  it is a Google font or a locally installed one.
+
+build-theme runs the same check and is the authority. Read its warnings even when your own check said a
+family was fine: if it reports a family missing or unverifiable, relay that and settle it with the user
+before going on — your check may have used a different spelling, or reached the network differently. What
+you must not do is quietly drop a warning the user has not already settled with you. A family passed to
+`local-font-families` is never warned about at all, so a confirmation you already have needs no second
+round: build once with the flag and there is nothing left to relay. Never hand-author an `@import` for a
+font, and never pass `local-font-families` without the user's explicit confirmation.
 
 ## Theme name — after fonts
 
