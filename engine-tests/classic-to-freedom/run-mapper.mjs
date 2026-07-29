@@ -1839,6 +1839,16 @@ check("Blocker: a client override of a BASE field (visible/layout) is surfaced a
 const boUntouched = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "MyF", parentName: "Header", propertyName: "items", bindTo: "MyF" })] })], { seedTemplate: [boSeed] }));
 check("Blocker: an UNTOUCHED base field is NOT flagged (only client-reconfigured base fields surface)",
   !(boUntouched.baseFieldOverrides || []).length);
+// Variant B (s-vanislemarina §2): the SAME base field folded as a CHILD page is BUILT (its content — a mini/grid
+// child target ships no entity fields) with NO override list; the main fold above suppresses it. Framework chrome
+// (templateOwned, NO bindTo) stays suppressed for the child too.
+const boSeedChrome = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }), di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" }), di({ name: "ChromeItem", parentName: "Header", propertyName: "items" })], methods: ["init", "getActions"] });
+const childBo = mapToFreedom(mergeHierarchy([boClient], { seedTemplate: [boSeedChrome] }), { isChildPage: true });
+check("Variant B: a CHILD page BUILDS its base entity-bound field (BaseCol) as a real element, with NO base-field-override list",
+  childBo.viewConfigDiff.some((o) => o.name === "BaseCol" && o.values?.control === "$BaseCol") && (childBo.baseFieldOverrides || []).length === 0,
+  () => JSON.stringify({ built: childBo.viewConfigDiff.map(o => o.name), overrides: childBo.baseFieldOverrides }));
+check("Variant B: framework chrome (templateOwned, NO bindTo) is STILL suppressed on a child",
+  !childBo.viewConfigDiff.some((o) => o.name === "ChromeItem"));
 
 // Major 2 — a REAL child edit page must require mapping even when add-record is hidden (editable heuristic).
 const m2Body = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"ChildDetail",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;

@@ -280,14 +280,25 @@ export function mapToFreedom(eff, opts = {}) {
   // tree (index below) still uses ALL items so base containers resolve. `baseContextExcluded` reports
   // the counts so the exclusion is transparent, not silent.
   const notTpl = (x) => !x.fromTemplate;                          // keyed categories + removals
-  const payloadFields = eff.fields.filter(f => !f.templateOwned); // diff-items: by INSERT origin (C6)
+  // F9: the MAIN / TYPED record pages migrate only the CLIENT layer — the chosen Freedom form template already
+  // ships the base fields, so `templateOwned` fields are context, not payload. A CHILD edit page is different:
+  // it is rebuilt as its OWN page on a mini / grid template that ships NO entity fields, so the child's base-page
+  // fields (entity-column-bound, defined in the child's base `*Page` that lands in the seed chain) ARE its content
+  // and MUST be built + counted (else a standard child folds to 0 fields and the template threshold undercounts).
+  // Framework chrome (templateOwned but NOT column-bound — BaseModulePageV2/BasePageV2 containers/actions) stays
+  // suppressed for children too. (Vanislemarina review §2 / Variant B.)
+  const isChildPage = !!opts.isChildPage;
+  const isContentField = (f) => !f.templateOwned || (isChildPage && !!f.bindTo);
+  const payloadFields = eff.fields.filter(isContentField);
   // A base (template-owned) field a CLIENT schema RECONFIGURED (hid / moved / re-laid-out it) is excluded from
   // the payload as template context, so its client override would silently vanish. This is NOT a decision to
   // punt — the delta is KNOWN, so emit it as a CONCRETE applied override (what to change on the existing base
   // field). The build just applies it; the parallel-analog build does not re-create the field, it modifies the
   // template's copy. Only when the change can't be read concretely does `change` fall back to "reconfigured".
+  // For a CHILD page these base fields are now built inline (isContentField above), so there is NO separate
+  // override list — the reconfiguration rides the built field.
   const baseFieldOverrides = [];
-  for (const f of eff.fields.filter(f => f.templateOwned && f.schemaTouched)) {
+  if (!isChildPage) for (const f of eff.fields.filter(f => f.templateOwned && f.schemaTouched)) {
     const hidden = f.visible === false;
     const lay = f.layout || null;
     const parts = [];

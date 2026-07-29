@@ -393,11 +393,13 @@ function childFormRecommendation(cs, fields, opts) {
 
 // Header-template recommendation: a WIDE/populated Classic Header block (the mapper's `headerLayout === "wide"`
 // signal) means the Freedom target should be the top-area template so the header elements land in
-// TopAreaProfileContainer, not the narrow left profile. Applies to ANY form — base record page, each TYPED
-// per-type page, and each child page (a mini page has no such choice). This is the engine surfacing the
-// header→template rule the same way `signals.dcm` surfaces the progress-bar template.
+// TopAreaProfileContainer, not the narrow left profile. Applies to the base record page and each TYPED per-type
+// page. NOT to a mini page (no such choice) and NOT to a CHILD edit page: a child's template is decided by the
+// field-count rule (childFormRecommendation → Mini vs Grid), and a top-area-template steer there both conflicts
+// with that (a mini page has no header area) and mis-fires on a flat child whose fields merely sit in a Header
+// container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
 function headerTemplateRecommendation(cs, opts) {
-  if (opts.isMiniPage || cs.headerLayout !== "wide") return [];
+  if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
   return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 

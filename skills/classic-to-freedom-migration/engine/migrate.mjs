@@ -454,6 +454,7 @@ export function runMigration(manifest, opts = {}) {
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
+    isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: manifest.signals || {},          // on-stand signals (dcm/…) — gate DCM widget emission on the resolved case
   });
   attachDetailAddModes(changeSet, detailSchemas);
