@@ -536,38 +536,72 @@ function mapFields(ctx, containers) {
     .filter(r => r.own.kind === "profile" && !(r.own.via === "Header" && headerIsWide))
     .map(r => islandOf(r.own)).filter(Boolean));
   const splitIslands = distinctProfileIslands.size > 1;
-  for (const { f, own } of resolved) {
-    // F3: route by ancestry (climb the item tree) instead of only recognising Profile/Header.
-    let parent;
+  // Build the Freedom field `values` object (its own function so mapFields stays under Sonar CC 15 — S3776).
+  // Closes over needsDecision/cols and bumps fieldsWithTitle; returns the values to insert.
+  const buildFieldValues = (f, col, c, meta, vis, layoutConfig) => {
+    const lbl = labelFor(col);
+    if (lbl != null) fieldsWithTitle++;
+    const values = {
+      type: c.type, control: "$" + col,
+      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
+    };
+    // Major 4 — a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
+    // an inline label/caption (clio rejects hardcoded page text). `titleText`/`typeLabel` are PLAN-only metadata.
+    if (lbl != null) values.titleText = lbl;
+    values.typeLabel = fieldTypeLabel(col, meta, c);
+    if (c.lookup && meta.ref) values.refSchema = meta.ref;
+    if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
+    // linkedDisplay: a plain scalar shown via a picker (contentType 5, no ref) — a read-only value from a linked record.
+    if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
+    if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
+      needsDecision.push({ kind: "lookup-no-ref", item: col,
+        reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
+    if (c.lookup) { values.listActions = []; values.controlActions = []; }
+    if (c.picker) values.pickerType = c.picker;
+    if (c.multiline) values.multiline = true;
+    if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
+    // classic `hint` is ALSO a tooltip (distinct from `tip`): a static Resources.Strings.* hint fills the tooltip
+    // only if none already; a dynamic hint (bound to a computed method) is ALWAYS surfaced as a decision.
+    if (f.hint) {
+      const staticHint = f.hint.startsWith("Resources.Strings.");
+      if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
+      else needsDecision.push({ kind: "field-hint", item: col,
+        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
+    }
+    return values;
+  };
+  // Route a field to its Freedom container by ancestry (own function so mapFields stays under Sonar CC 15).
+  // Mutates accountedFor/needsDecision via closure; returns the parent container name.
+  const routeField = (f, own) => {
     if (own.kind === "profile") {
-      parent = profileRegion(own);
-      // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields are
-      // migrated into the profile) so they are not mis-flagged as "produced no Freedom element".
+      let parent = profileRegion(own);
+      // island/group wrappers between the field and the profile anchor are ACCOUNTED FOR (their fields migrate
+      // into the profile) so they are not mis-flagged as "produced no Freedom element".
       for (const g of own.groups) accountedFor.add(g.name);
       // #9b: with >1 island, route this field into its OWN island container (built once), preserving the split.
       const island = islandOf(own);
       if (splitIslands && parent === "SideAreaProfileContainer" && island) parent = ensureProfileIsland(island, accountedFor);
-    } else if (own.kind === "tab") {
-      parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
-      // C5 build-out: rebuild each classic group as ExpansionPanel/GridContainer, nested, and route the
-      // field into the innermost. Only for client-owned tabs; base tabs stay flat (base-tab-placement).
+      return parent;
+    }
+    if (own.kind === "tab") {
+      let parent = ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
+      // C5: rebuild each client-owned tab's classic group as ExpansionPanel/GridContainer, nested; base tabs stay flat.
       if (!own.tabTemplateOwned) for (const g of own.groups) parent = ensureGroup(g, parent, needsDecision, accountedFor);
       else for (const g of own.groups) accountedFor.add(g.name); // base-tab groups: known, not rebuilt
-    } else {
-      parent = FLAT_FALLBACK; // parent chain unresolvable
-      const why = own.why === "undefined-parent"
-        ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
-        : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
-      needsDecision.push({ kind: "container", item: f.name || f.bindTo,
-        reason: `${why} — placed in ${parent} for now` });
+      return parent;
     }
+    const why = own.why === "undefined-parent"
+      ? `classic container '${own.parent}' is not defined by any schema or template — seed the base template (F2) so it resolves`
+      : `classic container '${f.parent}' is defined but its parent chain never reaches a profile/tab anchor (climbed to the page root) — the base-template seed is incomplete/wrong (F2): seed the real parent template so the profile/tab it nests in is present, or confirm the target tab/group`;
+    needsDecision.push({ kind: "container", item: f.name || f.bindTo, reason: `${why} — placed in ${FLAT_FALLBACK} for now` });
+    return FLAT_FALLBACK; // parent chain unresolvable
+  };
+  // Resolve a field's column, control type and unique element name (own function for Sonar CC 15). Splits the two
+  // unresolved-control causes: a MISSING bound column → virtual-field decision naming nearest columns; a resolved
+  // column whose TYPE didn't map → folded field-control summary. Mutates needsDecision/fieldControlCols/nameCount.
+  const resolveFieldControl = (f) => {
     const col = f.bindTo || f.name || "Field";
     const meta = colMeta(col);
-    // Two DISTINCT, previously-conflated causes of an unresolved control — split so the plan reads clearly:
-    //  (b) the bound COLUMN does not exist on the entity (a renamed/typo/removed column, or an auto-filled lookup
-    //      companion) → its OWN decision naming the nearest real columns. NOT also flagged as field-control.
-    //  (a) the column EXISTS (or no entityColumns were supplied to check) but its TYPE didn't resolve to a control
-    //      → the folded `field-control` summary below.
     const haveCols = Object.keys(cols).length > 0;
     const missingColumn = !!f.bindTo && haveCols && !(col in cols);
     if (missingColumn) {
@@ -579,48 +613,33 @@ function mapFields(ctx, containers) {
     const ctl = control(meta.type, f.contentType, meta.ref);
     if (!ctl && !missingColumn) fieldControlCols.push(col);   // (a) only — a missing column is NOT double-flagged
     const c = ctl || { type: "crt.Input" };
-    // #4: unique element name derived from the column; two classic items on one column -> _2, _3 + flag.
+    // #4: unique element name derived from the column; the same column bound by several classic items → col, col_2,
+    // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
     nameCount[col] = (nameCount[col] || 0) + 1;
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
-    // NOTE: the same column bound by several classic items (emitted as `col`, `col_2`, `col_3` so none is dropped)
-    // is a NORMAL configurator pattern — the same field placed on the canvas more than once. It is resolved at
-    // page-design time, not a migration defect, so it raises NO decision (only the unique naming is applied).
-    // Convert the classic 24-col grid coordinates (0-based) into the TARGET Freedom grid, rather than dumping
-    // them verbatim into a native container (which overflows and breaks the layout). Target grid width:
-    //   profile island  -> 1 column  (every field full-width, stacked)
-    //   tab / group      -> 2 columns (classic left half -> col 1, right half -> col 2; full-width -> span 2)
-    //   wide header      -> 24 columns kept 1:1 (rare multi-column Header, flagged as a layout-type decision)
+    return { col, meta, missingColumn, c, elName };
+  };
+  // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
+  // 24-col), assign a collision-free (span-aware) cell, and return the layoutConfig. Own function for Sonar CC 15;
+  // mutates the per-container grid state (usedCells/placedCount/autoRow/truncatedContainers) + collisionByContainer.
+  const computeLayout = (f, own, parent, col) => {
     const cl = f.layout || {};
     const profileGridCols = (own.via === "Header" && headerIsWide) ? 24 : 1;
     const gridCols = own.kind === "profile" ? profileGridCols : 2;
     let column, colSpan;
-    if (gridCols === 1) {
-      column = 1; colSpan = 1;
-    } else if (gridCols === 2) {
+    if (gridCols === 1) { column = 1; colSpan = 1; }
+    else if (gridCols === 2) {
       column = (cl.column ?? 0) >= 12 ? 2 : 1;      // classic right half (col >= 12) -> Freedom column 2
       colSpan = (cl.colSpan ?? 24) >= 24 ? 2 : 1;   // classic full-width -> span both columns, else one
     } else {
       column = cl.column != null ? cl.column + 1 : 1; // wide header: preserve the classic 24-col grid 1:1
       colSpan = cl.colSpan != null ? cl.colSpan : 24;
     }
-    // Clamp the span to the grid's right edge: a field at column C can span at most (gridCols - C + 1) columns.
-    // Without this a full-width classic field landing in Freedom column 2 (or an over-wide header span) would
-    // claim a phantom column and overflow the container. column is already 1-based and ≤ gridCols here.
+    // Clamp column/span to the grid's right edge so a full-width field in col 2 (or an over-wide header) can't
+    // claim a phantom column and overflow. rowSpan is clamped the same way (a hostile 1e9 would OOM the 2-D walk).
     column = Math.min(Math.max(1, column), gridCols);
     colSpan = Math.max(1, Math.min(colSpan, gridCols - column + 1));
-    // Grid-cell assignment (R9 + collision) — the target Freedom grid is coarser than the classic 24-col one,
-    // so two classic columns can collapse onto the SAME Freedom (column,row) cell (e.g. col0/span6 and
-    // col6/span6 both → column 1). Track occupied cells (span-aware) per container: an explicit classic row is
-    // authoritative UNLESS its cell is already taken (then relocate down + flag the approximation); an auto
-    // field takes the next free cell. Fields in different columns of the same row (the intended 2-up layout)
-    // coexist; only true overlaps are moved.
-    // Clamp rowSpan the same way colSpan is clamped above: it flows into a span-aware 2-D occupancy walk
-    // (`Array.from({length: rowSpan})`), so an unclamped hostile `layout:{rowSpan:1e9}` would OOM / RangeError
-    // the CLI — defeating this file's own hostile-input hardening and the "runMigration does NOT throw" contract.
-    // Real rowSpans are 1–3; bound to [1, MAX_FIELDS_PER_CONTAINER] so malformed input degrades cleanly.
     const rowSpan = Math.max(1, Math.min(cl.rowSpan ?? 1, MAX_FIELDS_PER_CONTAINER));
-    // Occupancy is a full 2-D matrix (span-aware in BOTH axes): a colSpan spans columns AND a rowSpan spans
-    // rows, so a Tall(rowSpan:2) field at row 1 also owns row 2 — a later field at row 2 must not overlap it.
     const cells = usedCells[parent] || (usedCells[parent] = new Set());
     const cap = (placedCount[parent] = (placedCount[parent] || 0) + 1) > MAX_FIELDS_PER_CONTAINER; // relocation scan bound
     if (cap && !truncatedContainers.has(parent)) {
@@ -632,7 +651,7 @@ function mapFields(ctx, containers) {
     let row;
     if (explicitRow != null) {
       row = explicitRow;
-      if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or a rowSpan overlap) dropped this field onto an occupied cell
+      if (!cap && !cellFree(cells, column, colSpan, row, rowSpan)) {  // 24→N collapse (or rowSpan overlap) dropped this onto an occupied cell
         const limit = row + MAX_FIELDS_PER_CONTAINER;
         while (row < limit && !cellFree(cells, column, colSpan, row, rowSpan)) row++;
         let cc = collisionByContainer.get(parent);   // folded into one summary per container after the loop
@@ -641,71 +660,33 @@ function mapFields(ctx, containers) {
       }
     } else {
       let cur = autoRow[parent] || 1;
-      if (!cap) {   // past the per-container cap, skip the (bounded) relocation scan — just place at the cursor
-        const limit = cur + MAX_FIELDS_PER_CONTAINER;
-        while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++;   // skip cells already taken in this column/row span
-      }
+      if (!cap) { const limit = cur + MAX_FIELDS_PER_CONTAINER; while (cur < limit && !cellFree(cells, column, colSpan, cur, rowSpan)) cur++; }
       row = cur;
       autoRow[parent] = cur + 1;
     }
     claimCells(cells, column, colSpan, row, rowSpan);
-    const layoutConfig = {
-      column,
-      row,
-      colSpan,
-      rowSpan,
-    };
-    // respect classic visibility instead of hardcoding true: static false → hidden; dynamic (bound/rule)
-    // → visible + a decision. A field inside a container that is itself hidden (static) or conditionally
-    // shown (dynamic/rule) inherits the container's visibility — surface it so the container-level condition
-    // is wired onto the Freedom field/group rather than silently dropped.
-    const hiddenAncestor = (own.groups || []).find(g => g.visible === false || g.visible === "dynamic");
+    return { column, row, colSpan, rowSpan };
+  };
+  // Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
+  // too) and surface the dynamic-visibility / ancestor-visibility decisions. Own function for Sonar CC 15.
+  const fieldVisibility = (f, own, col) => {
+    const hiddenAncestor = (own.groups || []).find((g) => g.visible === false || g.visible === "dynamic");
     let vis = f.visible !== false;
     if (hiddenAncestor?.visible === false) vis = false; // inherits a statically-hidden ancestor
-    // On a MINI PAGE every add-mode field is dynamically shown/hidden BY THE ADD-MODE MECHANISM (not a business
-    // rule) — flagging each as a visibility-rule was pure noise (7 identical ⚠ on a quick-add form). Skip it for
-    // mini pages; on a real form a dynamic-visibility field IS a rule worth confirming.
+    // On a MINI PAGE every add-mode field is shown/hidden BY THE ADD-MODE MECHANISM (not a rule) — flagging each
+    // as a visibility-rule was pure noise; skip for mini pages. On a real form a dynamic field IS worth confirming.
     if (f.visible === "dynamic" && !ctx.isMiniPage) needsDecision.push({ kind: "visibility-rule", item: col,
       reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
     if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
       reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
-    const lbl = labelFor(col);
-    if (lbl != null) fieldsWithTitle++;
-    const values = {
-      type: c.type, control: "$" + col,
-      labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
-    };
-    // Major 4 — a column-bound field AUTO-labels from the entity column's own (localized) title, so we do NOT
-    // write an inline `label`/caption onto the page (clio rejects hardcoded page text; AGENTS.md). `titleText`
-    // is PLAN-only metadata (like `typeLabel`) so the design spec still reads the human title, not the code.
-    if (lbl != null) values.titleText = lbl;
-    // design-spec Type column: a short human data type ("Text (250)", "Lookup", "Email") + the lookup's
-    // referenced object when known — carried on the field so designspec.mjs renders it without re-deriving.
-    values.typeLabel = fieldTypeLabel(col, meta, c);
-    if (c.lookup && meta.ref) values.refSchema = meta.ref;
-    if (meta.readOnly) values.readOnly = true; // explicit read-only from column metadata (mirrors/virtual)
-    // linkedDisplay: the classic page shows a plain scalar column via a picker (contentType 5, no ref) — a
-    // read-only VALUE FROM A LINKED RECORD, not a lookup. Keep the real data type, mark it read-only.
-    if (c.linkedDisplay) { values.readOnly = true; values.linkedValue = true; }
-    // A field the ENTITY itself types as a lookup but with no reference schema is a genuine data anomaly —
-    // flag it so it isn't shipped as an editable ComboBox pointing nowhere.
-    if (c.lookup && !meta.ref && cols[col] && typeof cols[col] === "object")
-      needsDecision.push({ kind: "lookup-no-ref", item: col,
-        reason: `'${col}' is typed as a lookup but its entity column has no reference schema — verify the target object.` });
-    if (c.lookup) { values.listActions = []; values.controlActions = []; }
-    if (c.picker) values.pickerType = c.picker;
-    if (c.multiline) values.multiline = true;
-    if (f.tip) values.tip = { content: "$" + f.tip }; // carry the classic tooltip resource key
-    // classic `hint` is ALSO a field tooltip (a DIFFERENT property from `tip`). Decouple the two effects so
-    // a dynamic hint is never silently swallowed when the field already has a `tip`:
-    //  • a static Resources.Strings.* hint fills the Freedom tooltip only if no tip already occupies it;
-    //  • a dynamic hint (bound to a computed method) is ALWAYS surfaced as a field-hint decision.
-    if (f.hint) {
-      const staticHint = f.hint.startsWith("Resources.Strings.");
-      if (staticHint) { if (!values.tip) values.tip = { content: "$" + f.hint }; }
-      else needsDecision.push({ kind: "field-hint", item: col,
-        reason: `field '${col}' tooltip is a dynamic hint bound to '${f.hint}' (computed, not a static resource)${values.tip ? " and competes with a static tip already mapped" : ""} — wire the Freedom tooltip via a handler/converter` });
-    }
+    return vis;
+  };
+  for (const { f, own } of resolved) {
+    const parent = routeField(f, own);
+    const { col, meta, c, elName } = resolveFieldControl(f);
+    const layoutConfig = computeLayout(f, own, parent, col);
+    const vis = fieldVisibility(f, own, col);
+    const values = buildFieldValues(f, col, c, meta, vis, layoutConfig);
     viewConfigDiff.push({ operation: "insert", name: elName, values, parentName: parent, propertyName: "items" });
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
@@ -760,39 +741,29 @@ function mapDetails(ctx, containers, profileRegion) {
     else if (cur.tab == null && tab != null) { cur.d = d; cur.tab = tab; cur.own = own; } // prefer a resolved placement
     else if (!cur.d.caption && d.caption) cur.d = { ...cur.d, caption: d.caption }; // else keep first, backfill caption on a COPY (don't mutate the shared input detail — mapToFreedom stays pure)
   }
-  for (const { d, tab, own } of bySig.values()) {
-    // Ensure the OWNING tab is emitted as a container so the related list / feature has a home AND its
-    // caption resolves — a tab holding ONLY details would otherwise never be built (ensureTab is
-    // otherwise reached only from field routing).
-    if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
-    // #11(ii)/B2 — the detail's OWN schema (when passed in manifest.detailSchemas) gives its real child
-    // entity + list columns, resolving even an auto-named SchemaNDetail.
-    const dinfo = detailSchemas[d.schemaName];
-    const dentity = d.entitySchemaName || dinfo?.entity || null;
-    // A standard feature is recognised by the detail SCHEMA name (matchFeature), OR — when the schema
-    // carries an auto-generated placeholder name (SchemaNDetail) that hides it — by its file-storage
-    // ENTITY (`*File`, which always backs the Attachments detail). Entity-inferred matches are flagged
-    // as inferred so the reviewer confirms it is Attachments and not a business detail (#11).
+  // A standard Creatio feature is recognised by the detail SCHEMA name, OR (when auto-named SchemaNDetail hides
+  // it) by its file-storage ENTITY (*File → Attachments) / ContactCommunication. Own fn for Sonar CC 15.
+  const matchDetailFeature = (d, dentity) => {
     let feat = matchFeature(d.schemaName), featByEntity = false;
     if (!feat && (dentity || "").endsWith("File")) { feat = FEATURE_CATALOG.FileDetailV2; featByEntity = true; }
     if (!feat && dentity === "ContactCommunication") { feat = FEATURE_CATALOG.ContactCommunicationDetail; featByEntity = true; }
-    if (feat) {
-      // Moment 2/3: this is a standard Creatio feature — replace with its Freedom analog, don't rebuild.
-      standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
-      const featWhat = featByEntity
-        ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the`
-        : `classic '${d.schemaName}' is the`;
-      const featProvided = feat.templateProvided
-        ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
-        : "; confirm the exact Freedom component + wiring";
-      const featInferred = featByEntity ? ` — inferred from the entity name; confirm this is ${feat.feature} and not a business detail` : "";
-      const featNote = feat.note ? ` — ${feat.note}` : "";
-      needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
-        reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
-      continue;
-    }
-    // #11(ii): an auto-generated detail name (SchemaNDetail) is RESOLVED once its own schema is supplied
-    // (real entity + columns known). Only flag detail-unresolved when the schema was NOT provided.
+    return { feat, featByEntity };
+  };
+  // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
+  const emitStandardFeature = (d, dentity, tab, feat, featByEntity) => {
+    standardFeatures.push({ feature: feat.feature, freedom: feat.freedom, classicDetail: d.schemaName, entity: dentity, tab, templateProvided: !!feat.templateProvided, inferredFromEntity: featByEntity, uiShape: feat.uiShape || "list", note: feat.note || null });
+    const featWhat = featByEntity ? `detail over the entity '${dentity}' (classic schema '${d.schemaName}') is the` : `classic '${d.schemaName}' is the`;
+    const featProvided = feat.templateProvided
+      ? " — ALREADY provided by most Freedom form templates; account for it / merge onto the existing component, do NOT create a new one"
+      : "; confirm the exact Freedom component + wiring";
+    const featInferred = featByEntity ? ` — inferred from the entity name; confirm this is ${feat.feature} and not a business detail` : "";
+    const featNote = feat.note ? ` — ${feat.note}` : "";
+    needsDecision.push({ kind: "standard-feature", item: d.schemaName || dentity,
+      reason: `${featWhat} ${feat.feature} feature → use ${feat.freedom} (A3 replacement, NOT a generic detail)${featProvided}${featInferred}${featNote}` });
+  };
+  // The decisions a genuine (non-feature) related list raises: unresolved name, unplaced tab, undeterminable
+  // editability, its SEPARATE child edit-page migration, and an unresolved caption. Own fn for Sonar CC 15.
+  const flagDetailIssues = (d, dinfo, dentity, tab, detailTitle) => {
     if (/^Schema\d+Detail$/.test(d.schemaName || "") && !dinfo) {
       const childEntityNote = dentity ? ` (child entity '${dentity}')` : "";
       needsDecision.push({ kind: "detail-unresolved", item: d.schemaName,
@@ -800,34 +771,17 @@ function mapDetails(ctx, containers, profileRegion) {
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
-    // editability (view-only vs add/edit/delete) lives in the detail's OWN config, NOT on the master. When that
-    // config IS supplied (dinfo — the bundle gathers detailSchemas automatically), it is RESOLVED, not punted:
-    // an editable grid (addMode.editableGrid) → inline add/edit/delete; an explicit view-only flag → view/attach
-    // only; otherwise the standard related-list behaviour (add/edit/delete via the child edit page, already
-    // surfaced as detail-editpage). Only when the detail schema was NOT bundled is it genuinely undeterminable —
-    // flag it THEN (and point at the fix), instead of emitting an identical "confirm editability" line on every
-    // detail whose config we already have.
+    // editability lives in the detail's OWN config: when bundled (dinfo) it's resolved from the grid config;
+    // only flag when the schema was NOT bundled (genuinely undeterminable).
     if (!dinfo) needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
       reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-page-sources gathers these) so editability resolves from the detail's grid config, or confirm view-only vs add/edit/delete.` });
-    // a related list opens the CHILD entity's record form on add/edit — that Freedom edit page (and mini
-    // page, if the classic detail used one) is a SEPARATE migration, not covered by migrating this master
-    // page. Surface it so it isn't silently skipped.
     needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
       reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
-    // caption fidelity (#15/#13): a resource-key caption is RESOLVED from manifest.resources to the real
-    // localized string — never invented. If unresolved (no resources supplied), keep the key and flag it.
-    const resolvedDcap = d.caption ? resolveText(d.caption) : null;
-    const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
-    // detail TITLE: resolved page-caption resource → the detail's own title (manifest.detailSchemas.title)
-    // → a plain caption → null. Flag only when it stays an unresolved resource key.
-    const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
     if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
       reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
-    // EDITABLE-GRID detail (ENG-93929): the classic detail edits rows INLINE (`ConfigurationGridGenerator` —
-    // detected as addMode.editableGrid). Emit it as an EDITABLE list, not a read-only Expanded list, so the
-    // inline-edit behaviour is not lost. Concept-level only: the Freedom target is `crt.DataGrid` with
-    // `features.editable.enable: true` — but the concrete property key is RESOLVED via get-component-info at
-    // build (version-scoped), so we carry the intent + editable columns, not a hard-coded crt key.
+  };
+  // Build the emitted detail record (Expanded / inline-Editable list) — ENG-93929 editable-grid intent + columns.
+  const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle) => {
     const am = dinfo?.addMode;
     const editable = am?.editableGrid
       ? { columns: am.editableColumns?.length ? am.editableColumns : null,
@@ -837,12 +791,26 @@ function mapDetails(ctx, containers, profileRegion) {
     details.push({
       composite: editable ? "Editable list" : "Expanded list", entity: dentity, detailSchema: d.schemaName,
       caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
-      columns: dinfo?.columns?.length ? dinfo.columns : null, // #11(ii) — the related-list columns, when the detail schema was supplied
-      editable, // ENG-93929 — non-null ⇒ build an inline-editable list (features.editable.enable), carrying these editable columns
+      columns: dinfo?.columns?.length ? dinfo.columns : null,
+      editable,
       dependency: d.detailColumn ? { attributePath: d.detailColumn, relationPath: "PDS." + (d.masterColumn || "Id") } : null,
       actions: "unresolved",
       note: d.detailColumn ? null : "child FK (detailColumn) not in details block — resolve from detail schema",
     });
+  };
+  for (const { d, tab, own } of bySig.values()) {
+    // Ensure the OWNING tab is emitted as a container so a tab holding ONLY details is still built (+ caption).
+    if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
+    const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
+    const dentity = d.entitySchemaName || dinfo?.entity || null;
+    const { feat, featByEntity } = matchDetailFeature(d, dentity);
+    if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); continue; }
+    // detail TITLE: resolved page-caption resource → the detail's own title → a plain caption → null.
+    const resolvedDcap = d.caption ? resolveText(d.caption) : null;
+    const plainDcap = d.caption && !d.caption.startsWith("Resources.Strings.") ? d.caption : null;
+    const detailTitle = resolvedDcap ?? dinfo?.title ?? plainDcap ?? null;
+    flagDetailIssues(d, dinfo, dentity, tab, detailTitle);
+    buildCustomDetail(d, dinfo, dentity, tab, detailTitle);
   }
   return { details, standardFeatures, needsDecision, accountedFor };
 }
@@ -926,28 +894,36 @@ function mapUnmappedDrop(eff, accountedFor) {
   // false "port manually or drop" for a block whose fields/image were already migrated. Mark every ancestor of
   // an accounted-for item as "has a mapped descendant" and never surface it. The genuine SLA-timer case — a
   // container whose ENTIRE subtree mapped to nothing — has no accounted descendant, so it still surfaces.
-  const hasMappedDesc = new Set();
-  for (const i of (eff.items || [])) {
-    const mapped = accountedFor.has(i.name) || !!i.bindTo
-      || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP;
-    if (!mapped) continue;
-    for (let p = i.parent, guard = 0; p && !hasMappedDesc.has(p) && guard < 64; guard++) {
-      hasMappedDesc.add(p);
-      p = byName.get(p)?.parent;
+  // Mark every ancestor of a mapped item as "has a mapped descendant" (own fn for Sonar CC 15) — a container
+  // whose subtree produced Freedom elements is a real layout container, never an unmapped micro-widget.
+  const markMappedAncestors = () => {
+    const marked = new Set();
+    for (const i of (eff.items || [])) {
+      const mapped = accountedFor.has(i.name) || !!i.bindTo
+        || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP;
+      if (!mapped) continue;
+      for (let p = i.parent, guard = 0; p && !marked.has(p) && guard < 64; guard++) {
+        marked.add(p);
+        p = byName.get(p)?.parent;
+      }
     }
-  }
-  const dropped = new Set();
-  for (const i of (eff.items || [])) {
-    // A template-owned item is layout/chrome the Freedom template already provides — skip it, INCLUDING its
-    // standard buttons (SaveEdit/CancelEdit/CloseMiniPage/QueueItem…). Flagging those as "unmapped" was pure
-    // noise on every page (the template ships them) — only a CUSTOM (non-template) button with no mapping is a
-    // real gap worth surfacing.
-    if (i.templateOwned || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
-    if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
-    if (hasMappedDesc.has(i.name)) continue; // real layout container — its subtree produced Freedom elements
-    if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
-    dropped.add(i.name);
-  }
+    return marked;
+  };
+  const hasMappedDesc = markMappedAncestors();
+  // Collect the alive CLIENT-authored items the mapper produced nothing for (skip template chrome, mapped
+  // containers and structural scaffolding). Own fn for Sonar CC 15.
+  const collectDropped = () => {
+    const dropped = new Set();
+    for (const i of (eff.items || [])) {
+      if (i.templateOwned || i.bindTo || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP || i.isTab) continue;
+      if (accountedFor.has(i.name) || HARD_SCAFFOLD_RX.test(i.name)) continue;
+      if (hasMappedDesc.has(i.name)) continue; // real layout container — its subtree produced Freedom elements
+      if (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name)) continue; // structural container (has children)
+      dropped.add(i.name);
+    }
+    return dropped;
+  };
+  const dropped = collectDropped();
   // Flag only the ROOT of each dropped subtree (whose parent is not itself dropped) → ONE decision per
   // block, not one per leaf: the SLA timer surfaces as a single "port this block" item, not six.
   for (const i of (eff.items || [])) {
@@ -1012,8 +988,14 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // CONCRETE line naming each lookup and its filter column(s). The engine already captured the filter column, so
   // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
-  const incompleteFilters = entityBusinessRules.filter((r) => !r.complete);
-  if (incompleteFilters.length) {
+  foldIncompleteFilters();
+  return { pageBusinessRules, entityBusinessRules, needsDecision };
+
+  // FOLD incomplete FILTRATIONs (dynamic / column-reference lookup filters, no static constant) into ONE concrete
+  // line naming each lookup + its filter column(s). Own fn for Sonar CC 15; closes over entityBusinessRules/needsDecision.
+  function foldIncompleteFilters() {
+    const incompleteFilters = entityBusinessRules.filter((r) => !r.complete);
+    if (!incompleteFilters.length) return;
     const byTarget = new Map();
     for (const r of incompleteFilters) {
       if (!byTarget.has(r.targetAttribute)) byTarget.set(r.targetAttribute, new Set());
@@ -1023,7 +1005,6 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
     needsDecision.push({ kind: "entity-filter", item: `(${byTarget.size} lookup${byTarget.size === 1 ? "" : "s"})`,
       reason: `${byTarget.size} lookup field(s) carry a DYNAMIC / column-reference classic filter (restrict the dropdown by a related column, no static constant) — reproduce each as a Freedom lookup filter (filter the lookup by the named column via a business rule / data-source filter): ${parts.join(", ")}. Confirm each comparison.` });
   }
-  return { pageBusinessRules, entityBusinessRules, needsDecision };
 }
 
 // image / photo components (generator-based, no bindTo) → Freedom image component.
@@ -1086,29 +1067,28 @@ function mapWidgets(eff, opts = {}) {
   };
   // `base` = the widget's source is base-template chrome (templateOwned / fromTemplate); `evident` = a classic
   // layer contributed it (self/ancestor). A base widget with no classic evidence is inherited chrome → skip.
+  // Emit ONE widget def (gate on evidence, dedup, split chrome vs real, build the decision). Own fn for Sonar CC 15.
+  const emitOneWidget = (w, classic, base, classicEvident) => {
+    if (seenWidget.has(w.widget)) return;
+    // GATE: a base-chrome widget emits only with real evidence it belongs to THIS page. DCM never lives in the
+    // page body on a case-driven page, so it also accepts the resolved on-stand signal.
+    if (w.signal === "dcm") { if (!dcmPresent && !classicEvident) return; }
+    else if (!classicEvident) return;
+    seenWidget.add(w.widget);
+    // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
+    if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+    let tail;
+    if (w.note) tail = ` — ${w.note}`;
+    else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    else tail = "; confirm the Freedom component";
+    needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
+  };
   const addWidget = (defs, classic, base, evident) => {
     if (!defs) return;
     accountedFor.push(classic);
     const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
-    for (const w of (Array.isArray(defs) ? defs : [defs])) {
-      if (seenWidget.has(w.widget)) continue;
-      // GATE: a base-chrome widget emits only with real evidence it belongs to THIS page. DCM never lives in the
-      // page body on a case-driven page (Applicant), so it also accepts the resolved on-stand signal; a classic
-      // page that DOES embed the dashboard module in its body still emits it via classic evidence.
-      if (w.signal === "dcm") { if (!dcmPresent && !classicEvident) continue; }
-      else if (!classicEvident) continue;
-      seenWidget.add(w.widget);
-      // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited base-template
-      // scaffolding, not page content — hide them from the design spec instead of hardcoding an "ignore" per run.
-      if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); continue; }
-      widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
-      // a widget with its own note (DCM) carries that note; otherwise fall back to the base/native wording.
-      let tail;
-      if (w.note) tail = ` — ${w.note}`;
-      else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
-      else tail = "; confirm the Freedom component";
-      needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
-    }
+    for (const w of (Array.isArray(defs) ? defs : [defs])) emitOneWidget(w, classic, base, classicEvident);
   };
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
