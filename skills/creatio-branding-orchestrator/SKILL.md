@@ -199,8 +199,9 @@ base (-500) colors (primary, secondary, accent, success, error) — each rendere
 swatch, not bare hex — any non-default font(s), and the theme name, plus a brief reminder of any
 color the user chose to keep despite a low-contrast warning. The recap must also state plainly
 whether the logos will be changed (and from which files) or left as they are, and whether a
-palette-matched background will be generated or not;
-show full stops or other detail only if asked. If the user wants to change something, return to
+palette-matched background will be generated or not, and name the package the new branding data
+will be added to — choosing that package and passing it to the tools is owned by clio's branding
+guidance (`get-guidance name="branding"`); show full stops or other detail only if asked. If the user wants to change something, return to
 the relevant block (primary / secondary / accent / success / error / logo / background / font /
 name) and re-present the summary.
 
@@ -219,6 +220,14 @@ assets unchanged and say so. The concrete tool mechanics live in clio's branding
 (`get-guidance name="branding"`) — follow it to write the logos and to set the recolored SVG as
 the shell background. Skipped logos or a declined background mean the corresponding apply simply
 does not happen.
+
+Close the flow by telling the user which package the branding data was added to. The logo and
+background applies name it themselves — relay the `package` field (and any `skipped` entries)
+from their results. If the theme was created without an explicit package, it landed in the
+environment's current package; resolve its name with two resident read-only clio calls: read the
+`CurrentPackageId` system setting with `get-sys-setting` (it returns the package UId), then call
+`list-packages` and locally match that UId to a row, taking its `Name`. Show the user the package
+name, never the raw UId, and never guess it.
 
 A theme has two independent levels of visibility — keep them distinct and never fold one into the
 other:
