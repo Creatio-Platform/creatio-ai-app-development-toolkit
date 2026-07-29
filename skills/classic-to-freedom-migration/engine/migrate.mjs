@@ -180,9 +180,11 @@ function validateStructure({ manifest, changeSet, childPages, typedPages, sectio
 // Normalize manifest.typedPages ([name | {schema,type,…}]) → [{schema,…}] and raise the typed-page decision.
 // Extracted from runMigration to keep it under Sonar CC 15.
 function normalizeTypedPages(manifest, changeSet) {
-  const typedPages = (manifest.typedPages || [])
-    .map((t) => (typeof t === "string" ? { schema: t } : ((t && typeof t === "object") ? t : null)))
-    .filter((t) => t?.schema);
+  const toTyped = (t) => {
+    if (typeof t === "string") return { schema: t };
+    return (t && typeof t === "object") ? t : null;
+  };
+  const typedPages = (manifest.typedPages || []).map(toTyped).filter((t) => t?.schema);
   if (typedPages.length) {
     changeSet.needsDecision.push({
       kind: "typed-page",

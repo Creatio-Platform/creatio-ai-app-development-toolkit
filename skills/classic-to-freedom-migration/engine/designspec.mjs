@@ -236,7 +236,7 @@ function buildLogicRows(cs) {
   }
   // entity filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
   const filtBy = {};
-  for (const r of cs.entityBusinessRules || []) { (filtBy[r.targetAttribute] = filtBy[r.targetAttribute] || []).push(r); }
+  for (const r of cs.entityBusinessRules || []) { filtBy[r.targetAttribute] ||= []; filtBy[r.targetAttribute].push(r); }
   for (const [attr, rs] of Object.entries(filtBy)) {
     const unresolved = rs.filter((r) => !r.complete).length;
     const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
@@ -249,7 +249,7 @@ function buildLogicRows(cs) {
   const helperBase = (m) => { const mt = /^(?:set|clear)(.+?)Info$/.exec(m); return mt ? mt[1] : null; };
   const triggerBase = (m) => { const mt = /^on(.+?)Chang/.exec(m); return mt ? mt[1] : null; };
   const helpersByBase = {};
-  for (const h of stubs) { const b = helperBase(h.sourceMethod); if (b) (helpersByBase[b] = helpersByBase[b] || []).push(h.sourceMethod); }
+  for (const h of stubs) { const b = helperBase(h.sourceMethod); if (b) { helpersByBase[b] ||= []; helpersByBase[b].push(h.sourceMethod); } }
   for (const h of stubs) {
     if (helperBase(h.sourceMethod)) continue; // shown folded into its trigger row
     const b = triggerBase(h.sourceMethod);
@@ -290,7 +290,7 @@ function renderListPageBlock(result, section) {
       }).join(" · ");
       L.push(`- **Quick filters:** ${f} — rebuild as the Freedom list-page filter / quick-filter controls (do NOT drop the registry filter bar)`);
     }
-    if ((section.sectionActions || []).length) L.push(`- **Section actions:** ${section.sectionActions.map((a) => `\`${esc(a)}\``).join(" · ")} — migrate as Freedom list-page actions`);
+    if ((section.sectionActions || []).length) { const acts = section.sectionActions.map((a) => "`" + esc(a) + "`").join(" · "); L.push(`- **Section actions:** ${acts} — migrate as Freedom list-page actions`); }
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
   L.push("");
