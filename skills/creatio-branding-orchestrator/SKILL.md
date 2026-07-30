@@ -143,7 +143,7 @@ background will be generated or not.
 - Templates live in `./references/backgrounds/` — five SVG templates whose color slots are marked
   with palette tokens. Always use the primary template (`background-1.svg`). Use another template
   only when the user asks to regenerate the background; take the next unused template per
-  regenerate request. When all five have been shown, say so and ask which one to reuse.
+  regenerate request. When all five have been used, say so and ask which one to reuse.
 - Recolor by textual substitution only — replace each palette token in the template with the
   real stop value fetched from clio's palette tool, following the token mechanics in
   `./references/branding-assets.md`. Never invent, adjust, or interpolate a color yourself.
@@ -179,6 +179,10 @@ hard limit and returns a clear error if the name is too long, which you relay.
 
 - Ask at most one question at a time.
 - Never show a color as a bare hex string — render the actual color as a swatch (see The palette conversation and Build and apply for when and how).
+- The logos and the background are the opposite: never render them in the conversation by
+  default — no image previews when offering, extracting, generating, or recapping them.
+  Describe them in words instead (source and file name for a logo; template and palette stops
+  for the background). Render one only when the user explicitly asks to see it.
 - Handle changes of mind gracefully — if the user revisits an earlier choice, re-run the
   affected step through the color tool and continue; don't force a fixed script.
 - Intake, palette, logo, background, and font steps are not approval gates. The logo-extraction
