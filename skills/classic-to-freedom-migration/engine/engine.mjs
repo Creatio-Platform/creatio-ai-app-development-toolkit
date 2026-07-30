@@ -1,26 +1,43 @@
 // Merge engine. Pure Node module, no Creatio/stand dependency.
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance.
-import { parse as acornParse } from "./vendor/acorn.mjs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkVendorIntegrity } from "./verify-vendor.mjs";
 
-// Runtime supply-chain gate. parseSchema feeds UNTRUSTED classic bodies to the vendored acorn parser (the AST
-// route is chosen over `vm` precisely to deny RCE from a hostile body) — but vendor/ integrity was verified ONLY
-// in CI, so a local/offline `node migrate.mjs …` or a fork/clone without CI parsed with whatever acorn.mjs was on
-// disk, tampered or not. Verify it against the pinned provenance before the FIRST parse. Lazy + memoized (once per
-// process) at the PARSE surface — NOT a top-level throw: that fails closed but with a huge blast radius (every
-// importer — mapper, designspec, all goldens — would die at import on any integrity hiccup, e.g. a legitimate
-// re-vendor before the pin is bumped). Gating here fails closed only for code that actually parses hostile input.
-let __vendorOk = null;
+// Runtime supply-chain gate. parseSchema feeds UNTRUSTED classic bodies to the vendored acorn parser (the AST route
+// is chosen over `vm` precisely to deny RCE from a hostile body). CRITICAL: the parser is NOT statically imported —
+// a static top-level `import … from "./vendor/acorn.mjs"` is HOISTED and EVALUATED before any module code, so a
+// tampered file's module-level payload would run at import time, BEFORE the check. Instead `getAcornParse()` loads
+// acorn LAZILY, via `createRequire` (synchronous `require(esm)`, Node >= 22.12), and ONLY AFTER
+// `ensureVendorIntegrity()` has passed — so a tampered/drifted `acorn.mjs` is caught and the throw happens BEFORE
+// its bytes are ever evaluated. This closes the import-time vector while keeping the whole parse pipeline synchronous
+// (a dynamic `import()` would have forced parseSchema — and everything above it — to become async).
+//
+// The check itself: verify vendor/ against the pinned provenance before the FIRST parse. Lazy + memoized at the
+// PARSE surface — NOT a top-level throw (that fails closed but every importer — mapper, designspec, all goldens —
+// would die at import on any integrity hiccup, e.g. a legitimate re-vendor before the pin is bumped). Memoize the
+// CHECK RESULT and throw on EVERY call when it failed — never fail open (a prior version stored `false` and threw
+// only on the first call, so a caller that caught parse #1 then parsed #2..N on the tampered parser silently).
+let __vendorCheck = null;
 function ensureVendorIntegrity() {
-  if (__vendorOk === null) {
-    const r = checkVendorIntegrity(path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor"));
-    __vendorOk = r.ok;
-    if (!r.ok) throw new Error("classic-to-freedom engine: vendored parser integrity check FAILED — refusing to parse untrusted input:\n" + r.failures.join("\n"));
-  }
-  return __vendorOk;
+  if (__vendorCheck === null) __vendorCheck = checkVendorIntegrity(path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor"));
+  if (!__vendorCheck.ok) throw new Error("classic-to-freedom engine: vendored parser integrity check FAILED — refusing to parse untrusted input:\n" + __vendorCheck.failures.join("\n"));
+  return true;
+}
+
+// Lazily load the vendored acorn's `parse` — AFTER the integrity check, so a tampered module's top-level code never
+// runs. `require(esm)` (Node >= 22.12) loads the pinned ESM `acorn.mjs` synchronously (no top-level await in it),
+// keeping parseSchema sync. Memoized: the check + require run once per process.
+let __acornParse = null;
+function getAcornParse() {
+  if (__acornParse) return __acornParse;
+  ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
+  const acorn = createRequire(import.meta.url)("./vendor/acorn.mjs");
+  if (typeof acorn.parse !== "function") throw new Error("classic-to-freedom engine: vendored acorn has no `parse` export");
+  __acornParse = acorn.parse;
+  return __acornParse;
 }
 
 // Build the parse RESULT from the extracted schema object `s` (+ text-scanned signals from `src`).
@@ -389,7 +406,7 @@ function findFactoryReturn(factory) {
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
 export function parseSchema(src, pkg) {
-  ensureVendorIntegrity(); // supply-chain gate — verify the vendored parser before feeding it untrusted input
+  const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   const astDiagnostics = [];
   let ast;
   try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }

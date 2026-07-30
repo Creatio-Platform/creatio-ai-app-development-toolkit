@@ -134,9 +134,11 @@ function rowsForFields(fields, regionOf) {
     const v = f.values || {};
     const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
     const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
+    // COMPACT per-field marker — the full cross-datasource recipe is printed ONCE under the Layout table (see
+    // `linkedFieldsNote`), not repeated verbatim on every linked field (it was ~5× the same paragraph on a page).
     const linked = v.linkedValue
-      ? "Linked value from a RELATED data source (column is not on this entity) — in Freedom show it natively: add the related object's column through the lookup on this page and bind this input to `<Lookup>.<column>` READ-ONLY (do NOT rebuild it as a plain entity field, wire a manual on-change handler only if it must be STORED, and do NOT drop it — dropping collapses an island to a lone field)"
-        + (Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if instead a renamed/removed column, nearest existing: ${v.linkedNearest.map(esc).join(", ")}` : "")
+      ? "↳ linked (read-only) — bind via the lookup (recipe below)"
+        + (Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "")
       : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
@@ -373,19 +375,23 @@ function orderRegions(rows) {
   return { order, byRegion };
 }
 
-// Child-page template recommendation, keyed off input count (the vanislemarina-review rule): a SMALL flat child
-// (≤5 fields, no tabs/details) → the Mini page template; a WIDE child (≥12 fields, no tabs) → the Grid page
-// template. Between the two, the default form template stands. Applies to related-list child pages only.
+// The ONE child-page template rule (vanislemarina review), shared by the recommendation banner and the Main-scope
+// row so they can't drift: a related-list child with FEWER THAN 15 inputs AND flat (no tabs, no related lists) →
+// "mini"; otherwise (>= 15 inputs, OR it has tabs/related lists) → "grid". `n === 0` → null (nothing to recommend).
+// Single cut at 15, no gap.
+function childTemplateChoice(n, hasTabs, nDetails) {
+  if (!n) return null;
+  return (n < 15 && !hasTabs && !nDetails) ? "mini" : "grid";
+}
+// Child-page template recommendation banner. Applies to related-list child pages only.
 function childFormRecommendation(cs, fields, opts) {
   if (!opts.isChildPage) return [];
   const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
   const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   const n = fields.length;
-  if (!n) return [];
-  // Threshold (vanislemarina rule): a related-list child with FEWER THAN 15 inputs — and flat (a mini page holds
-  // neither tabs nor related lists) → open as an edit MINI PAGE. Otherwise (>= 15 inputs, OR it has tabs/related
-  // lists) → the Grid page template. One cut at 15, no gap — every child gets a concrete template.
-  if (n < 15 && !hasTabs && !nDetails)
+  const choice = childTemplateChoice(n, hasTabs, nDetails);
+  if (!choice) return [];
+  if (choice === "mini")
     return [`> **Recommendation — small child form (${n} field${n === 1 ? "" : "s"}, < 15, flat):** open this related-list child as an **edit mini page (\`BaseMiniPageTemplate\` — "Mini page") / modal** — a lightweight quick-add shell — rather than a full record page. Confirm the desired shell before building.`, ""];
   const why = hasTabs || nDetails ? "it has tabs / related lists" : `${n} inputs (>= 15)`;
   return [`> **Recommendation — child form (${n} field${n === 1 ? "" : "s"}):** build this related-list child on the **Grid page template (\`PageWithAreaFreedomTemplate\`)** — ${why}, so a full-width grid suits it better than the narrow left-profile default or a mini page. Confirm before building.`, ""];
@@ -489,6 +495,11 @@ export function renderDesignSpec(result, opts = {}) {
     for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
   }
   L.push("");
+  // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
+  // paragraph in every linked field's Additional cell.
+  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
+    L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+  }
 
   // ---- Logic (behaviour): declarative business rules FIRST, then entity filters, handlers, process launch ----
   const logic = buildLogicRows(cs);
@@ -678,12 +689,12 @@ function buildChildScopeRows(childs) {
   return childs.map((c) => {
     let target, call, label;
     if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
-      // template by field count (must AGREE with the per-child recommendation below): < 15 flat inputs → Mini page;
-      // otherwise (>= 15, or tabs/related-lists) → the Grid page template. Unknown count (unmapped real page) → generic.
-      const n = c.fieldCount;
-      target = (n == null) ? "Freedom child page"
-        : (n < 15 && !c.hasTabs && !c.nDetails) ? "Mini page (`BaseMiniPageTemplate`)"
-        : "Grid page (`PageWithAreaFreedomTemplate`)";
+      // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
+      // recommendation banner. Unknown count (unmapped real page) → generic.
+      const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
+      target = choice === "mini" ? "Mini page (`BaseMiniPageTemplate`)"
+        : choice === "grid" ? "Grid page (`PageWithAreaFreedomTemplate`)"
+        : "Freedom child page";
       call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
     } else if (c.editPage === false || c.editable === false) {
       target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
@@ -753,9 +764,14 @@ export function renderPlan(result, opts = {}) {
     const s = signals[k];
     if (s?.resolved !== true) return `- **${label}:** ⚠ not resolved — run the on-stand check`;
     if (!s.present) return `- **${label}:** none (checked on-stand → not migrated)`;
-    const list = (s.cases || s.items || s.names || []).map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
+    const items = (s.cases || s.items || s.names || []);
+    const list = items.map((x) => esc(typeof x === "string" ? x : (x?.name || x?.caption) || "")).filter(Boolean).join(", ");
     const presentNote = list ? ` — ${list}` : "";
-    return `- **${label}:** present${presentNote} → build it`;
+    // A DCM object often has SEVERAL case versions (active + previous, e.g. Recruiting_v11 / Recruiting_v1). Only the
+    // ACTIVE/published one drives the progress bar + Next steps at runtime, and both widgets auto-populate from it —
+    // don't hand-author stages/steps or wire a specific version.
+    const multiDcm = k === "dcm" && items.length > 1 ? " (multiple case versions — use the ACTIVE/published one; the progress bar + Next steps auto-populate from it, do not hand-author stages)" : "";
+    return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
   P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
@@ -970,7 +986,7 @@ function resolveComponentVk(vk, ctx) {
   return hasType("crt.Button") ? ["✅ Done", "a crt.Button is present — confirm it triggers the action", "ok"] : ["⚠ verify", "no crt.Button found — confirm the action", "unverified"]; // card
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
-const VK_COUNT = new Set(["fields", "tabs", "details"]);
+const VK_COUNT = new Set(["fields", "tabs", "details", "image"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
 function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];

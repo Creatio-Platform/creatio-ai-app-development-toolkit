@@ -785,6 +785,20 @@ function mapFields(ctx, containers) {
 // details: STANDARD features (A3 → Freedom analog) vs genuine custom details (Expanded list). Dedups by
 // signature, ensures the owning tab exists (via the shared container builder), and resolves titles/columns
 // from manifest.detailSchemas. Returns details[]/standardFeatures[] + its needsDecision[]/accountedFor[].
+// A bundled detail's inline-editable-grid config (dinfo.addMode.editableGrid) → the `editable` shape the design
+// spec renders ("Editable list" + how to enable it); any other detail → null (a standard Expanded list whose
+// add/edit/delete rides the child edit page). Extracted from buildCustomDetail so the new-logic doesn't pile onto
+// mapDetails' cognitive complexity (Sonar S3776) and can carry its own golden.
+function detectDetailAddMechanism(dinfo) {
+  const am = dinfo?.addMode;
+  if (!am?.editableGrid) return null;
+  return {
+    columns: am.editableColumns?.length ? am.editableColumns : null,
+    enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
+    addVia: am.lookup ? "add existing via lookup" : null,
+  };
+}
+
 function mapDetails(ctx, containers, profileRegion) {
   const { index, profileAnchors, detailSchemas, resolveText, payloadDetails } = ctx;
   const { ensureTab } = containers;
@@ -841,10 +855,12 @@ function mapDetails(ctx, containers, profileRegion) {
     }
     if (!tab) needsDecision.push({ kind: "detail-placement", item: d.schemaName || d.key,
       reason: `could not resolve which tab detail '${d.key}' belongs to (parent '${d.parent || "?"}' unresolved) — confirm target tab` });
-    // editability lives in the detail's OWN config: when bundled (dinfo) it's resolved from the grid config;
-    // only flag when the schema was NOT bundled (genuinely undeterminable).
+    // editability lives in the detail's OWN config. When bundled (dinfo), the INLINE-EDITABLE-GRID case is read
+    // from the grid config (buildCustomDetail → `editable`); any other bundled detail is a standard related list
+    // whose add/edit/delete happens through the child EDIT PAGE (surfaced next as `detail-editpage`), so there is
+    // nothing extra to decide. Only a detail whose schema was NOT bundled is genuinely undeterminable — flag THAT.
     if (!dinfo) needsDecision.push({ kind: "detail-editability", item: d.schemaName || d.key,
-      reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-page-sources gathers these) so editability resolves from the detail's grid config, or confirm view-only vs add/edit/delete.` });
+      reason: `allowed detail actions (view-only vs add/edit/delete) can't be read — the detail's own schema was not bundled. Pass it via manifest.detailSchemas["${d.schemaName || d.key}"] (get-classic-page-sources gathers these); an inline-editable grid then resolves from its grid config, otherwise it defaults to standard add/edit/delete via the child edit page. Or confirm view-only.` });
     needsDecision.push({ kind: "detail-editpage", item: dentity || d.schemaName || d.key,
       reason: `related list '${d.schemaName || d.key}' opens the '${dentity || "child entity"}' record form on add/edit — that Freedom edit page (and mini page, if the classic detail used one) is a SEPARATE migration: ensure a Freedom form for '${dentity || "the child entity"}' exists, or migrate it as a follow-on page` });
     if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
@@ -852,12 +868,7 @@ function mapDetails(ctx, containers, profileRegion) {
   };
   // Build the emitted detail record (Expanded / inline-Editable list) — ENG-93929 editable-grid intent + columns.
   const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle) => {
-    const am = dinfo?.addMode;
-    const editable = am?.editableGrid
-      ? { columns: am.editableColumns?.length ? am.editableColumns : null,
-          enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
-          addVia: am.lookup ? "add existing via lookup" : null }
-      : null;
+    const editable = detectDetailAddMechanism(dinfo);
     details.push({
       composite: editable ? "Editable list" : "Expanded list", entity: dentity, detailSchema: d.schemaName,
       caption: detailTitle, tab, order: d.order ?? null, dataSourceScope: "viewElement",
@@ -1131,13 +1142,22 @@ function mapImages(eff, ctx, F) {
     if (!isImageItem(i)) continue;
     accountedFor.push(i.name);
     // placement: route to the owner's Freedom region (a photo lives in the profile island in the vast majority of
-    // pages; a tab-placed image or an unresolved parent falls back to the general container — flagged by review).
+    // pages). A tab-placed image or an unresolved parent falls back to the general container — and, unlike a
+    // profile image, that IS a genuine placement gap, so surface a decision (the old "flagged by review" comment
+    // emitted nothing — a silent misplacement).
     const own = i.parent ? resolveOwner(i.parent, index, profileAnchors) : { kind: "unresolved" };
     const parentName = own.kind === "profile" ? F.profileRegion(own) : FLAT_FALLBACK;
+    if (own.kind !== "profile") needsDecision.push({ kind: "image-placement", item: i.name,
+      reason: `image '${i.name}' does not resolve to the side profile (owner: ${own.kind === "tab" ? `tab '${own.tab}'` : "unresolved parent"}) — placed in ${FLAT_FALLBACK} as a fallback. Confirm its target container (a photo usually belongs in the profile island; a tab-placed image keeps its tab).` });
     // binding column: explicit config column (i.imageColumn / i.bindTo) > sole entity IMAGELOOKUP > FILL.
     const boundCol = i.imageColumn || i.bindTo || soleImageCol || null;
-    const onEntity = !!boundCol && !!(cols && boundCol in cols);
-    const crossDs = !!boundCol && !onEntity; // §#3 — column is on a RELATED object (via a lookup), not this entity
+    // Mirror the field path's guard (haveCols): with NO entityColumns supplied we have no basis to say "not on the
+    // entity", so we must NOT misclassify an explicit-column image as read-only cross-datasource (that emitted it
+    // unbound + non-editable with no model column). Only treat it as cross-datasource when columns ARE known and
+    // the column is absent from them.
+    const haveCols = Object.keys(cols || {}).length > 0;
+    const onEntity = !!boundCol && (!haveCols || boundCol in cols);
+    const crossDs = !!boundCol && haveCols && !(boundCol in cols); // §#3 — column is on a RELATED object (via a lookup), not this entity
     const attr = boundCol || `${i.name}_value`;
     const values = { type: "crt.ImageInput", value: "$" + attr, size: "large", borderRadius: "medium", positioning: "cover", readOnly: crossDs };
     viewConfigDiff.push({ operation: "insert", name: i.name, parentName, propertyName: "items", values });

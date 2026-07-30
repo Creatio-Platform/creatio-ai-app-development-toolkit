@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1095,8 +1095,10 @@ const linkedCs = runMigration({ entity: "X", entityColumns: { Email: { type: "Te
 check("linked-value: Text column shown via a picker (contentType 5, no ref) keeps its real type (Email/Phone), not a false Lookup",
   /Email \| Email \|/.test(linkedCs.designSpec) && /MobilePhone \| Phone \|/.test(linkedCs.designSpec)
   && !/lookup, no ref/i.test(linkedCs.designSpec));
-check("linked-value: renders read-only + the cross-datasource recipe note (no jargon, no lookup-no-ref flag)",
-  /Linked value from a RELATED data source/.test(linkedCs.designSpec)
+check("linked-value: compact `↳ linked` per-field marker + the cross-datasource recipe printed ONCE (folded, no per-field repetition, no lookup-no-ref flag)",
+  /↳ linked \(read-only\)/.test(linkedCs.designSpec)
+  && /`↳ linked` fields \(read-only, cross-datasource\)/.test(linkedCs.designSpec)
+  && (linkedCs.designSpec.match(/bind the input to `<Lookup>\.<column>` READ-ONLY/g) || []).length === 1
   && !linkedCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && (n.item === "Email" || n.item === "MobilePhone")));
 // RV12 / review (s-vanislemarina #1) — an image/photo component is emitted as a REAL crt.ImageInput ELEMENT in
 // viewConfigDiff (bound via `value`, not `control`), not just a plan row — so the agent builds it and --verify
@@ -1130,6 +1132,31 @@ check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput val
   && imgCross.changeSet.images.some((i) => i.classic === "Photo" && i.crossDs === true)
   && !imgCross.changeSet.needsDecision.some((n) => n.kind === "image-column"),
   () => JSON.stringify(imgCross.changeSet.images));
+// review (PR#58 MEDIUM): with NO entityColumns supplied, an explicit-column image must NOT be misclassified as
+// read-only cross-datasource — mirror the field path's haveCols guard (treat as on-entity when columns unknown).
+const imgNoCols = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"PhotoId"}}]};});` }] }, { baseDir: FIX });
+const imgNoColsEl = imgNoCols.changeSet.viewConfigDiff.find((o) => o.name === "Photo");
+check("#image haveCols: explicit-column image + NO entityColumns → bound on-entity ($PhotoId, NOT read-only cross-datasource) + attribute registered",
+  imgNoColsEl?.values.value === "$PhotoId" && imgNoColsEl?.values.readOnly === false
+  && imgNoCols.changeSet.viewModelConfigDiff?.[0]?.values?.PhotoId?.modelConfig?.path === "PDS.PhotoId"
+  && imgNoCols.changeSet.images.some((i) => i.classic === "Photo" && !i.crossDs),
+  () => JSON.stringify({ el: imgNoColsEl?.values, imgs: imgNoCols.changeSet.images }));
+// review (PR#58 LOW): a tab-placed / unresolved-parent image now RAISES an image-placement decision (was a silent
+// fallback with a comment that claimed "flagged by review" but emitted nothing).
+const imgTab = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"Photo",parentName:"T",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen"}}]};});` }] }, { baseDir: FIX });
+check("#image-placement: a non-profile (tab) image raises an image-placement decision (no silent flat-fallback)",
+  imgTab.changeSet.needsDecision.some((n) => n.kind === "image-placement"));
+// review (PR#58 HIGH): --verify must HARD-FAIL when an expected image field ships NO crt.ImageInput. VK_COUNT now
+// routes "image" to the count resolver; previously the ❌ MISSING branch was DEAD (image fell to a soft ⚠).
+const imgVerifyResult = { changeSet: { viewConfigDiff: [], images: [{ classic: "Photo", column: "Photo" }], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+const imgVerifyMissing = renderVerify(imgVerifyResult, {}, { ops: [{ name: "F", type: "crt.Input" }] });
+check("#verify image: an expected image field with NO crt.ImageInput built → ❌ MISSING + NOT complete (hard gate, not a soft ⚠)",
+  imgVerifyMissing.complete === false && imgVerifyMissing.missing >= 1 && /Image field[\s\S]*?❌ MISSING/.test(imgVerifyMissing.markdown));
+const imgVerifyOk = renderVerify(imgVerifyResult, {}, { ops: [{ name: "Photo", type: "crt.ImageInput" }] });
+check("#verify image: crt.ImageInput present on the built page → image row ✅ Done",
+  /Image field[\s\S]*?✅ Done/.test(imgVerifyOk.markdown));
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
@@ -1727,9 +1754,9 @@ check("#5: the injected HTML tag + Markdown link are NEUTRALIZED in the rendered
   !/<img/.test(specAll) && !/\]\(javascript/.test(specAll) && /&lt;img/.test(specAll),
   () => specAll.split("\n").filter((l) => /img|javascript/.test(l)));
 // guard: the field IS mapped as a linked cross-datasource value (not dropped), and engine prose is intact.
-check("#5: the missing-column field is mapped as a linked value (recipe prose preserved, entity name not over-escaped)",
+check("#5: the missing-column field is mapped as a linked value (recipe footnote preserved, entity name not over-escaped)",
   reasonRun.changeSet.viewConfigDiff.some((o) => o.values?.linkedValue === true)
-  && /Linked value from a RELATED data source/.test(reasonRun.designSpec) && !/&lt;X&gt;/.test(reasonRun.designSpec));
+  && /`↳ linked` fields \(read-only, cross-datasource\)/.test(reasonRun.designSpec) && !/&lt;X&gt;/.test(reasonRun.designSpec));
 
 // determinism (#11) — the same manifest must produce byte-identical output on repeat runs (no dependence on
 // Map/object iteration nondeterminism). Compare full JSON of two independent runs of a rich manifest.
@@ -1756,6 +1783,16 @@ const engineSrcs = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs")).
 const bareAcorn = engineSrcs.filter((f) => /\bfrom\s+["']acorn["']/.test(fs.readFileSync(f, "utf8")));
 check("vendor-integrity: no engine source imports acorn by BARE specifier (only ./vendor/acorn.mjs is allowed — else the pin is bypassed)",
   bareAcorn.length === 0, () => bareAcorn.map((f) => path.basename(f)));
+// Import-time RCE guard (PR #58): engine.mjs must NOT STATICALLY import the vendored parser — a hoisted
+// `import … from "./vendor/acorn…"` evaluates the (possibly tampered) module BEFORE the integrity check runs, so
+// a top-level payload would fire regardless of the gate. The parser is loaded LAZILY via createRequire inside
+// getAcornParse(), only AFTER ensureVendorIntegrity() passes — so a tampered bundle throws before its bytes run.
+const engineSrc = fs.readFileSync(path.join(ENGINE_DIR, "engine.mjs"), "utf8");
+check("vendor-integrity: engine.mjs loads the parser LAZILY (no static hoisted vendor import) — closes the import-time payload vector",
+  !/^\s*import\b[^\n]*\bfrom\s+["'][^"']*vendor\/acorn/m.test(engineSrc)
+  && /createRequire\(import\.meta\.url\)\(\s*["']\.\/vendor\/acorn\.mjs["']\s*\)/.test(engineSrc)
+  && engineSrc.indexOf("ensureVendorIntegrity()") < engineSrc.indexOf('createRequire(import.meta.url)("./vendor/acorn.mjs")'),
+  () => ({ hasStaticImport: /^\s*import\b[^\n]*vendor\/acorn/m.test(engineSrc) }));
 // NEGATIVE paths — the gate's whole point is FAILING on a tampered/absent bundle. verify-vendor.mjs takes an
 // optional vendor-dir arg so we can point it at a temp fixture without touching the real bundle. Cover every
 // exit-1 branch (mismatch / missing file / empty manifest / unreadable manifest) — a green-only test proves nothing.
@@ -2486,6 +2523,53 @@ check("detail add-mechanism: each raised as a decision + rendered in the plan (c
   dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
   && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
   () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+// review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
+// (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
+// "attach existing" grid button, fixes the list filters) is NOW detected. It was invisible to detectAddMode before
+// (no openLookup/service/editable-grid signal), so the agent had to hand-note it.
+const attachBody = `define("VacDetail",[],function(){return{entitySchemaName:"InternalRequest",diff:[{"operation":"remove","name":"AddTypedRecordButton"}],methods:{addRecordOperationsMenuItems:Terrasoft.emptyFn,getFilters:function(){this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Category",C.HRService);this.Terrasoft.createColumnFilterWithParameter(this.Terrasoft.ComparisonType.EQUAL,"Type",C.Closing);this.Terrasoft.createColumnInFilterWithParameters("Status",[C.InProgress]);},addGridOperationsMenuItems:function(m){m.addItem(this.getAttachBtn());},getAttachBtn:function(){return this.getButtonMenuItem({Caption:{"bindTo":"Resources.Strings.AttachRequestToApplicant"},Click:{"bindTo":"attachRequestToApplicant"}});}}};});`;
+const attachRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"VacDetail",entitySchemaName:"InternalRequest",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  detailSchemas: { VacDetail: { body: attachBody, editPage: false } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+const vacDetail = attachRun.changeSet.details.find((d) => d.detailSchema === "VacDetail");
+check("#11 detail add-mechanism: add-disabled + custom grid action (attachRequestToApplicant) + fixed filters (Category/Type/Status) detected",
+  vacDetail?.addMode?.addDisabled === true && vacDetail?.addMode?.customAction === true
+  && vacDetail?.addMode?.actionMethod === "attachRequestToApplicant"
+  && vacDetail?.addMode?.fixedFilters === true
+  && ["Category", "Type", "Status"].every((c) => (vacDetail.addMode.filterCols || []).includes(c)),
+  () => vacDetail?.addMode);
+check("#11 detail add-mechanism: rendered as a decision — add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns",
+  /add-new DISABLED/.test(attachRun.plan) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(attachRun.plan) && /FIXED list filters on Category, Type, Status/.test(attachRun.plan));
+// review (Applicant #12, verified on-stand): a system-maintained detail (stage history) is read-only via
+// `getAddRecordButtonVisible: return false` — declared in the BASE replacing layer (HRApplicant), NOT the client
+// top override (WorkHrBase). Supplying the detail's full replacing CHAIN (bodies:[base→top]) lets the engine scan
+// the layer UNION and detect it; the top layer alone (Classic schemas are read per-layer, not merged) misses it.
+const roBaseLayer = `define("StageDetail",[],function(){return{entitySchemaName:"RecruitmentInStage",methods:{getAddRecordButtonVisible:function(){return false;},addRecordOperationsMenuItems:function(m){m.addItem(this.getEditRecordMenuItem());}}};});`;
+const roTopLayer = `define("StageDetail",[],function(){return{methods:{getGridDataColumns:function(){var c=this.callParent(arguments);delete c.StartDate;return c;}}};});`;
+const roPageBody = `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"StageDetail",entitySchemaName:"RecruitmentInStage",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;
+const roChain = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
+  detailSchemas: { StageDetail: { bodies: [roBaseLayer, roTopLayer], editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
+const roDetail = roChain.changeSet.details.find((d) => d.detailSchema === "StageDetail");
+check("#12 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → add-new DISABLED",
+  roDetail?.addMode?.addDisabled === true && /add-new DISABLED/.test(roChain.plan),
+  () => roDetail?.addMode);
+const roTopOnly = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
+  detailSchemas: { StageDetail: { body: roTopLayer, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
+const roTopDetail = roTopOnly.changeSet.details.find((d) => d.detailSchema === "StageDetail");
+check("#12 control: the TOP layer ALONE (base not supplied) does NOT detect the read-only signal — the chain union is what surfaces it",
+  !(roTopDetail?.addMode && roTopDetail.addMode.addDisabled));
+// review (Applicant #13): a DCM object with SEVERAL case versions → the On-stand signals line advises using the
+// ACTIVE/published one (both widgets auto-populate); a single case gets no such note.
+const dcmEmpty = { entity: "X", changeSet: { viewConfigDiff: [], details: [], standardFeatures: [], cardActions: [], needsDecision: [] } };
+const dcmMulti = renderPlan(dcmEmpty, { signals: { dcm: { resolved: true, present: true, cases: ["Recruiting_v11", "Recruiting_v1"] } } });
+check("#13 DCM: multiple case versions → advise using the ACTIVE/published one (auto-populated)",
+  /multiple case versions — use the ACTIVE\/published one/.test(dcmMulti));
+const dcmOne = renderPlan(dcmEmpty, { signals: { dcm: { resolved: true, present: true, cases: ["Recruiting_v11"] } } });
+check("#13 DCM: a single case version → NO multi-version note",
+  !/multiple case versions/.test(dcmOne));
 // ENG-93929 EMISSION: an editable-grid detail is emitted as an EDITABLE list (not a read-only Expanded list),
 // carrying the editable columns + the concept-level enable directive (`features.editable.enable`, resolved via
 // get-component-info at build). A lookup+service detail WITHOUT an editable grid stays a read-only list.

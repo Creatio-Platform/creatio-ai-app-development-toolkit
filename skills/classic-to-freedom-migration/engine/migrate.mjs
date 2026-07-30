@@ -304,12 +304,15 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
 // add-card). Returns the phrases; extracted from attachDetailAddModes for Sonar CC 15.
 function describeAddMode(am) {
   const parts = [];
+  if (am.addDisabled) parts.push("has add-new DISABLED (read-only / attach-only — no default add button)");
+  if (am.customAction) parts.push(`exposes a CUSTOM grid action${am.actionMethod ? ` (\`${am.actionMethod}\`)` : ""} — reproduce it as a custom detail action (e.g. attach an existing record), NOT a default add-new`);
   if (am.lookup) parts.push("ADDS via a lookup (pick existing record(s))");
   if (am.service) parts.push(`calls service \`${am.service}${am.method ? "." + am.method : ""}\` to link/insert`);
   if (am.editableGrid) {
     const colsNote = am.editableColumns?.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : "";
     parts.push(`is an INLINE-EDITABLE grid${colsNote}`);
   }
+  if (am.fixedFilters) parts.push(`applies FIXED list filters${am.filterCols?.length ? ` on ${am.filterCols.join(", ")}` : ""} — reproduce as a Freedom data-source / business-rule filter`);
   if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
   return parts;
 }
@@ -368,11 +371,18 @@ function analyzeSectionChain(sectionSchemas) {
 // Resolve a detail-schema entry to its body text + parsed schema. A string entry IS the body; an object entry
 // carries {body|file}. Missing body ⇒ empty text + a stub parse. Extracted from parseDetailSchemas for Sonar CC 15.
 function resolveDetailBody(name, e, bodyOf) {
-  const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-  let body = "";
-  if (hasBody) body = typeof e === "string" ? e : bodyOf(e);
-  const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
-  return { body, p };
+  // A detail may be supplied as a SINGLE body (a string, or {body|file}) OR as its full Classic REPLACING CHAIN
+  // ({bodies:[base…top]}, each a string or {body|file}). Classic replacing schemas are NOT merged server-side
+  // (unlike Freedom's full-hierarchy fold), so a signal declared in a BASE layer — e.g. `getAddRecordButtonVisible:
+  // return false` in the HRApplicant base of a stage-history detail — is invisible in the top override the client
+  // authored. Text-scans (view-only / add-mechanism) therefore run over the UNION of all layers; structure
+  // (entity/columns/diff) parses the TOP (most-derived) layer.
+  const layerText = (x) => typeof x === "string" ? x : (x && (x.body != null || x.file) ? bodyOf(x) : "");
+  const layers = (e && Array.isArray(e.bodies)) ? e.bodies.map(layerText).filter(Boolean) : [layerText(e)].filter(Boolean);
+  const body = layers.length ? layers[layers.length - 1] : ""; // TOP = last (bodies are base→top)
+  const scanText = layers.join("\n");                            // UNION of all layers, for the text-scans
+  const p = layers.length ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
+  return { body, scanText, p };
 }
 
 // ADD/EDIT MECHANISM — a detail is often NOT a plain related list: it may ADD via a LOOKUP (pick existing), call a
@@ -388,19 +398,41 @@ function detectAddMode(body) {
   const ecM = /enabledColum\w*\s*=\s*\[([^\]]*)\]/.exec(body); // getCellControlsConfig's editable-column allow-list
   const editableColumns = ecM ? [...ecM[1].matchAll(/["']([A-Za-z]\w+)["']/g)].map((x) => x[1]) : [];
   const openCardOverridden = /openCardByMode\s*:/.test(body);
-  if (!(lookup || svcM || editableGrid || openCardOverridden)) return null;
-  return { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null, openCardOverridden };
+  // Add-new DISABLED — a read-only / attach-only related list. Classic idioms: the add button forced invisible
+  // (`getAddRecordButtonVisible … return false` / `addRecordButtonVisible: false` — the system-maintained
+  // stage-history pattern, declared in the BASE replacing layer), the add-record menu emptied
+  // (`addRecordOperationsMenuItems: Terrasoft.emptyFn`), or the add button removed in the diff (`remove … AddTypedRecordButton`).
+  const addDisabled = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body)
+    || /["']?addRecordButtonVisible["']?\s*:\s*false/.test(body)
+    || /addRecordOperationsMenuItems\s*:\s*(?:Terrasoft\.)?emptyFn/.test(body)
+    || /["']operation["']\s*:\s*["']remove["'][\s\S]{0,120}?AddTypedRecordButton/.test(body);
+  // A CUSTOM grid action (e.g. "attach existing") added via addGridOperationsMenuItems → getButtonMenuItem. Capture
+  // the Click handler name — that's the custom add/attach flow the Freedom rebuild must reproduce.
+  const customAction = /addGridOperationsMenuItems\s*:/.test(body) && /getButtonMenuItem\s*\(/.test(body);
+  const clickM = customAction ? /getButtonMenuItem\s*\(\s*\{[\s\S]{0,200}?Click\s*:\s*\{[^}]*bindTo["']\s*:\s*["'](\w+)["']/.exec(body) : null;
+  // FIXED list filters — a getFilters override adding column filters. Capture the directly-filtered columns
+  // (ComparisonType.<X>, "Col" and createColumnInFilterWithParameters("Col", …)).
+  const fixedFilters = /\bgetFilters\s*:/.test(body) && /createColumn(?:In)?Filter\w*/.test(body);
+  const filterCols = fixedFilters ? [...new Set([
+    ...[...body.matchAll(/ComparisonType\.\w+\s*,\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
+    ...[...body.matchAll(/createColumnInFilterWithParameters\s*\(\s*["']([A-Za-z]\w+)["']/g)].map((x) => x[1]),
+  ])] : [];
+  if (!(lookup || svcM || editableGrid || openCardOverridden || addDisabled || customAction || fixedFilters)) return null;
+  return { lookup, editableGrid, editableColumns, service: svcM ? svcM[1] : null, method: methM ? methM[1] : null,
+    openCardOverridden, addDisabled, customAction, actionMethod: clickM ? clickM[1] : null, fixedFilters, filterCols };
 }
 
 function parseDetailSchemas(manifest, bodyOf) {
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
-    const { body, p } = resolveDetailBody(name, e, bodyOf);
+    const { body, scanText, p } = resolveDetailBody(name, e, bodyOf);
     // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
-    // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages).
-    const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(body);
-    // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown.
-    const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(body) || /"?addRecordButtonVisible"?\s*:\s*false/.test(body);
+    // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages). Scan the UNION of
+    // layers (it may be declared in a base replacing layer, not the top).
+    const epM = /(?:getEditPageName|editPageName|EditPageSchemaName)[\s\S]{0,80}?["']([A-Za-z]\w+)["']/.exec(scanText);
+    // editability best-effort: an explicit `false` on the add-record button = view-only; else unknown. This is the
+    // read-only signal for system-maintained details (stage history) — and it lives in the BASE layer, so scan the union.
+    const viewOnly = /getAddRecordButtonVisible[\s\S]{0,80}?return\s+false/.test(scanText) || /"?addRecordButtonVisible"?\s*:\s*false/.test(scanText);
     const eObj = (e && typeof e === "object") ? e : {};
     const editPageFromBody = epM ? epM[1] : null;      // getEditPageName match, else null
     const editableFromBody = viewOnly ? false : null;  // add-record hidden ⇒ view-only, else unknown
@@ -412,7 +444,7 @@ function parseDetailSchemas(manifest, bodyOf) {
       editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
       editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
       editableVerified: ("editable" in eObj),
-      addMode: detectAddMode(body), // custom add/edit mechanism (lookup / service / inline-editable grid), or null
+      addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
       error: p.error || null,
       astDiagnostics: p.astDiagnostics || [],
     };
@@ -444,7 +476,7 @@ export function runMigration(manifest, opts = {}) {
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionSchemas = parse(manifest.section);
-  const eff = mergeHierarchy(schemas, { seedTemplate, isMiniPage: !!opts.isMiniPage });
+  const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   const changeSet = mapToFreedom(eff, {
