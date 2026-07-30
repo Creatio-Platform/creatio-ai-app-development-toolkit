@@ -143,6 +143,7 @@ Jump to the section you need:
   - Stack **collapsible panels** (`crt.ExpansionPanel`) and whatever follows them in a **flex**, so the page reflows and lower components pull up when a panel collapses.
   - This is also why buttons go in a flex (they resize to their label) — see *Buttons and actions*.
   - Use a **grid** only for **static, always-present** field layouts where the set of visible items and their coordinates don't change at runtime.
+- **A read-only detail must have inline editing turned OFF on its List, not just its add button hidden.** Making a detail (child list) non-editable takes TWO changes: hide/remove the add (`+`) button AND clear the inline-editing flag on the List component itself. Hiding only the add button still leaves existing rows editable in place (and often a new-row affordance), so the detail is not actually read-only. Turn the List's inline-edit setting off as well; resolve the exact property via `get-component-info` for the list/detail component.
 
 ### New island / card container — standard settings
 
@@ -239,3 +240,4 @@ Platform defaults that look fine in the designer but break the rules above at ru
 - Read-only/calculated and other non-obvious fields ship with no tooltip/placeholder → add guidance. [Fields]
 - Ordered status defaults to a combo box → use a DCM stage progress bar (`crt.EntityStageProgressBar`). [Fields]
 - New side island holds only `Name` → add the key stable fields. [Grouping and page flow]
+- Detail's add button hidden but rows still edit inline → also turn off inline editing on the List. [Grouping and page flow]
