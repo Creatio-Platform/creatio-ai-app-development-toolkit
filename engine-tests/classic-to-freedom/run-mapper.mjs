@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, detectAddMode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
@@ -891,6 +891,17 @@ check("#19: a real MINI-PAGE seed (methods, no getActions) is NOT skeletal — n
   miniSeed.seedQuality.looksSkeletal === false && !miniSeed.warnings.some(w => w.name === "skeletal-seed"));
 check("#19: no seed at all → seedQuality.seeded=false, not flagged skeletal",
   mergeHierarchy(clientF()).seedQuality.seeded === false);
+// review (PR#58 Minor): pin the SEED_MIN_METHODS=5 BOUNDARY — exactly 4 must BLOCK (< 5), exactly 5 must PASS, so an
+// off-by-one (`<` vs `<=`) can't slip through unnoticed.
+const seed4 = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "onSaved", "loadValues", "getActions"] })] }); // exactly 4
+check("#19 boundary: a seed with EXACTLY 4 methods (< SEED_MIN_METHODS=5) is skeletal → blocks",
+  seed4.seedQuality.looksSkeletal === true && seed4.warnings.some(w => w.name === "skeletal-seed"));
+const seed5 = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "onSaved", "loadValues", "getActions", "setColumns"] })] }); // exactly 5
+check("#19 boundary: a seed with EXACTLY 5 methods (== SEED_MIN_METHODS) is NOT skeletal → passes (off-by-one guard)",
+  seed5.seedQuality.looksSkeletal === false && !seed5.warnings.some(w => w.name === "skeletal-seed"));
+// KNOWN BLIND SPOT (documented, not asserted): a PARTIAL fetch of a real base chain that still yields > 5 methods
+// (e.g. a truncated 6-method grab of a ~347-method record page) is NOT caught by the count gate — the count only
+// catches a near-empty fetch. Tightening the threshold toward the real method-count distribution is tracked (Minor #4).
 
 /* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
 const capClient = () => L("Client", { entity: "X", diff: [
@@ -1111,12 +1122,18 @@ try {
   const unit2 = "addGridOperationsMenuItems: function(){ getButtonMenuItem( { " + "y".repeat(190) + " } ) }\n"; // ~250B
   const adversarial = unit1.repeat(6000) + unit2.repeat(1500);
   const bytes = Buffer.byteLength(adversarial);
+  // BASELINE-RELATIVE bound (review Minor): a fixed `ms < 1000` is flaky on contended/Windows CI where a legit bounded
+  // ~1MB scan can drift past 1s under GC/CPU pressure. Catastrophic backtracking is ORDERS of magnitude worse
+  // (seconds→minutes), so compare against a same-process trivial-body baseline with a wide absolute ceiling: the test
+  // still fails loudly on real ReDoS but tolerates ordinary scheduler jitter.
+  const b0 = Date.now(); detectAddMode(unit1.repeat(5)); const baseMs = Date.now() - b0;
   const t0 = Date.now();
   const r = detectAddMode(adversarial);
   const ms = Date.now() - t0;
-  check(`Minor4 ReDoS: detectAddMode on a ~${Math.round(bytes / 1024)}KB adversarial body stays sub-second (bounded quantifiers, no catastrophic backtracking) — ${ms}ms`,
-    bytes > 600 * 1024 && ms < 1000 && (r === null || typeof r === "object"),
-    () => ({ bytes, ms, r }));
+  const ceiling = Math.max(5000, baseMs * 500 + 2000); // linear scan → a few×base+jitter; ReDoS blows far past this
+  check(`Minor4 ReDoS: detectAddMode on a ~${Math.round(bytes / 1024)}KB adversarial body stays linear (bounded quantifiers, no catastrophic backtracking) — ${ms}ms vs ceiling ${ceiling}ms`,
+    bytes > 600 * 1024 && ms < ceiling && (r === null || typeof r === "object"),
+    () => ({ bytes, ms, baseMs, ceiling, r }));
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
@@ -1228,6 +1245,28 @@ check("#verify image: an expected image field with NO crt.ImageInput built → �
 const imgVerifyOk = renderVerify(imgVerifyResult, {}, { ops: [{ name: "Photo", type: "crt.ImageInput" }] });
 check("#verify image: crt.ImageInput present on the built page → image row ✅ Done",
   /Image field[\s\S]*?✅ Done/.test(imgVerifyOk.markdown));
+// review (PR#58 Minor) — renderVerify must NOT undercount a control-bound field whose built component type is OUTSIDE
+// FIELD_RE (rich-text / lookup or color variant / future type). Expected is control-based (type-agnostic); the built
+// count now matches by field NAME too, so an odd-typed field counts and does not spuriously set verifyIncomplete.
+const rvOddResult = { changeSet: { viewConfigDiff: [{ name: "Notes", values: { control: "$Notes", type: "crt.RichTextEdit" } }], images: [], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+const rvOdd = renderVerify(rvOddResult, {}, { ops: [{ name: "Notes", type: "crt.RichTextEdit" }] });
+check("#verify fields: a control-bound field whose built type is OUTSIDE FIELD_RE (crt.RichTextEdit) still COUNTS by name — no spurious 'fewer than expected'",
+  rvOdd.missing === 0 && rvOdd.unverified === 0 && /Fields[\s\S]*?✅ Done/.test(rvOdd.markdown),
+  () => ({ missing: rvOdd.missing, unverified: rvOdd.unverified, row: rvOdd.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
+// review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
+// image binds the sole column; the rest get a FILL + an image-column decision (no silent key overwrite of the shared
+// column / two widgets on one column).
+const imgCollide = runMigration({ entity: "X", entityColumns: { Photo: { type: "ImageLookup" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Img1",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen"}},{operation:"insert",name:"Img2",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen"}}]};});` }] }, { baseDir: FIX });
+check("#image-collision: 2 images + 1 sole IMAGELOOKUP → FIRST binds it, SECOND is FILL + an image-column decision (no shared-column overwrite)",
+  (() => {
+    const imgs = imgCollide.changeSet.images;
+    const a = imgs.find((x) => x.classic === "Img1"), b = imgs.find((x) => x.classic === "Img2");
+    const collide = (imgCollide.changeSet.needsDecision || []).filter((n) => n.kind === "image-column" && n.item === "Img2");
+    return a?.column === "Photo" && a?.filled === false && b?.column === null && b?.filled === true
+      && collide.length === 1 && /already bound to another image/.test(collide[0].reason);
+  })(),
+  () => JSON.stringify(imgCollide.changeSet.images) + " | " + JSON.stringify((imgCollide.changeSet.needsDecision || []).filter((n) => n.kind === "image-column")));
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
@@ -1896,6 +1935,32 @@ try {
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
 }
+
+// review (PR#58 Major) — AC1 fail-closed on EVERY call, BEHAVIORAL (not a source-text regex): force a FAILING
+// memoized integrity result via the test seam, then drive the real parse surface 3× — each MUST throw (a prior
+// version stored/threw only on call #1, so parse #2..N ran on a tampered parser). Restore after so later goldens are
+// unaffected. This is the seam the review asked for (resettable memo) + the golden the memoized re-throw lacked.
+__setVendorIntegrityForTest({ ok: false, failures: ["forced tamper (test)"], results: [] });
+let acThrows = 0, acLastMsg = "";
+for (let i = 0; i < 3; i++) {
+  try { parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); }
+  catch (e) { acLastMsg = e.message; if (/integrity check FAILED/.test(e.message)) acThrows++; }
+}
+__setVendorIntegrityForTest(null); // restore the real memoized check
+check("AC1 behavioral: a failing vendor-integrity result makes the parse surface THROW on EVERY call (1st/2nd/3rd — no fail-open)",
+  acThrows === 3, () => ({ acThrows, acLastMsg: acLastMsg.slice(0, 80) }));
+check("AC1 behavioral: restoring the real check lets parsing resume (test seam leaves no residue)",
+  (() => { try { const r = parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); return !r.error; } catch { return false; } })());
+// review (PR#58 Minor) — the gate must also assert acorn.mjs ITSELF is a verified pin before require(). Force an
+// ok result whose `results` OMITS acorn.mjs (a provenance tampered to drop the entry) → the parse surface must
+// refuse to load the unpinned parser, even though the gate returned ok.
+__setVendorIntegrityForTest({ ok: true, failures: [], results: [{ name: "other.mjs", ok: true }] });
+let acornPinThrew = false, acornPinMsg = "";
+try { parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); }
+catch (e) { acornPinThrew = true; acornPinMsg = e.message; }
+__setVendorIntegrityForTest(null); // restore
+check("acorn-pin: an ok integrity result that does NOT list acorn.mjs still REFUSES to load the parser (defense-in-depth)",
+  acornPinThrew && /not a verified entry|unpinned parser|provenance/.test(acornPinMsg), () => acornPinMsg.slice(0, 110));
 
 // Minor 2 — section.processNames are ESCAPED at the sink (defense-in-depth), not left to a remote parser
 // regex invariant. Feed a hostile name straight to the renderer (bypassing the parser) → the pipe is escaped.

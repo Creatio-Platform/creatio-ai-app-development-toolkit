@@ -1138,6 +1138,7 @@ function mapImages(eff, ctx, F) {
   // safe to auto-bind; zero or many ⇒ leave a FILL (don't guess which, don't invent a non-existent column).
   const imageLookupCols = Object.keys(cols || {}).filter((c) => isImageLookupType(colMeta(c).type));
   const soleImageCol = imageLookupCols.length === 1 ? imageLookupCols[0] : null;
+  let soleImageColUsed = false; // the sole IMAGELOOKUP fallback binds AT MOST ONE image — see the collision guard below
   for (const i of (eff.items || [])) {
     if (!isImageItem(i)) continue;
     accountedFor.push(i.name);
@@ -1149,8 +1150,17 @@ function mapImages(eff, ctx, F) {
     const parentName = own.kind === "profile" ? F.profileRegion(own) : FLAT_FALLBACK;
     if (own.kind !== "profile") needsDecision.push({ kind: "image-placement", item: i.name,
       reason: `image '${i.name}' does not resolve to the side profile (owner: ${own.kind === "tab" ? `tab '${own.tab}'` : "unresolved parent"}) — placed in ${FLAT_FALLBACK} as a fallback. Confirm its target container (a photo usually belongs in the profile island; a tab-placed image keeps its tab).` });
-    // binding column: explicit config column (i.imageColumn / i.bindTo) > sole entity IMAGELOOKUP > FILL.
-    const boundCol = i.imageColumn || i.bindTo || soleImageCol || null;
+    // binding column: explicit config column (i.imageColumn / i.bindTo) > sole entity IMAGELOOKUP > FILL. The sole
+    // IMAGELOOKUP fallback binds AT MOST ONE image: with >1 image and exactly one IMAGELOOKUP column, binding them all
+    // to it collided (same `attr`/`boundCol` keys silently overwrote in attributes/pdsColumns, and two widgets pointed
+    // at one column). Only the FIRST column-less image takes the sole column; the rest fall to a FILL + a decision.
+    const ownCol = i.imageColumn || i.bindTo || null;
+    let boundCol = ownCol;
+    let soleCollision = false;
+    if (!boundCol && soleImageCol) {
+      if (!soleImageColUsed) { boundCol = soleImageCol; soleImageColUsed = true; }
+      else soleCollision = true;
+    }
     // Mirror the field path's guard (haveCols): with NO entityColumns supplied we have no basis to say "not on the
     // entity", so we must NOT misclassify an explicit-column image as read-only cross-datasource (that emitted it
     // unbound + non-editable with no model column). Only treat it as cross-datasource when columns ARE known and
@@ -1162,6 +1172,8 @@ function mapImages(eff, ctx, F) {
     const values = { type: "crt.ImageInput", value: "$" + attr, size: "large", borderRadius: "medium", positioning: "cover", readOnly: crossDs };
     viewConfigDiff.push({ operation: "insert", name: i.name, parentName, propertyName: "items", values });
     images.push({ classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !boundCol });
+    if (soleCollision) needsDecision.push({ kind: "image-column", item: i.name,
+      reason: `image '${i.name}' has no own column and the entity's sole IMAGELOOKUP column '${soleImageCol}' is already bound to another image — two crt.ImageInput widgets must not share one column. Pick or create a DISTINCT ImageLookup column for it (left as a FILL until then).` });
     if (boundCol && onEntity) {
       attributes[attr] = { modelConfig: { path: "PDS." + boundCol } };
       pdsColumns[boundCol] = { path: boundCol };

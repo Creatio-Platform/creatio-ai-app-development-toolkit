@@ -27,6 +27,12 @@ function ensureVendorIntegrity() {
   return true;
 }
 
+// Test seam (AC1 fail-closed regression): force or reset the memoized vendor-integrity result so a golden can prove
+// the PARSE surface throws on EVERY call when the check failed — not just the first (the fail-open a prior version
+// had). Pass a `{ ok, failures, results }` object to force a state, or `null` to restore the real memoized check on
+// the next parse. Also clears the acorn memo so the gate is re-entered. Test-only — never called on a production path.
+export function __setVendorIntegrityForTest(result) { __vendorCheck = result; __acornParse = null; }
+
 // Lazily load the vendored acorn's `parse` — AFTER the integrity check, so a tampered module's top-level code never
 // runs. `require(esm)` loads the pinned ESM `acorn.mjs` synchronously (no top-level await in it), keeping parseSchema
 // sync — but require(esm) needs Node >= 22.12 (or the >= 20.19 backport); on an older runtime it throws
@@ -37,6 +43,12 @@ let __acornParse = null;
 function getAcornParse() {
   if (__acornParse) return __acornParse;
   ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
+  // Defense-in-depth: the gate above passes when every LISTED pin matches, but never asserts that the file we are
+  // ABOUT to load (acorn.mjs) is itself one of the verified pins. A tampered provenance.json that DROPPED the
+  // acorn.mjs entry would leave the gate green while an unverified parser loads. Require acorn.mjs to be a verified
+  // ok-entry before require().
+  if (!(__vendorCheck.results || []).some((r) => r.name === "acorn.mjs" && r.ok))
+    throw new Error("classic-to-freedom engine: `acorn.mjs` is not a verified entry in vendor/provenance.json — refusing to load an unpinned parser (provenance may be tampered).");
   let acorn;
   try {
     acorn = createRequire(import.meta.url)("./vendor/acorn.mjs");

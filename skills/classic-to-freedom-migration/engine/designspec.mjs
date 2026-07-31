@@ -862,10 +862,14 @@ function buildLayoutGroupRows(cs, regionOf) {
 function buildCoverageRows(cs, pm, result) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
-  const expFields = (cs.viewConfigDiff || []).filter(isField).length;
+  const fieldOps = (cs.viewConfigDiff || []).filter(isField);
+  const expFields = fieldOps.length;
   const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields } });
+  // carry the expected field NAMES so the built count can match by identity (same source of truth as the
+  // control-based expected count) — a control-bound field whose built component type is outside FIELD_RE
+  // (rich-text / a lookup or color variant / a future type) must still count, not spuriously undercount.
+  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => strip(o.values.control)) } });
   const expImages = (cs.images || []).length;
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
@@ -990,7 +994,15 @@ function resolveStructuralVk(vk, ctx) {
   return ["⚠ verify", "get-page the mini schema / pass built.miniPageBuilt", "unverified"];
 }
 function resolveCountVk(vk, ctx) {
-  if (vk.type === "fields") { const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length; return b >= vk.n ? ["✅ Done", `${b} field components on the built page`, "ok"] : ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`, "unverified"]; }
+  if (vk.type === "fields") {
+    // Count a built op as a field if its NAME is one of the expected control-bound fields (type-agnostic — matches
+    // the expected side's source of truth, so a rich-text / lookup / color / future field still counts), OR its
+    // component type is a known field input (fallback when built ops carry no name). Prevents a spurious
+    // "fewer than expected" → verifyIncomplete false-block on a genuinely-complete page with an odd-typed field.
+    const names = new Set(vk.names || []);
+    const b = ctx.ops.filter((o) => (o.name && names.has(o.name)) || ctx.FIELD_RE.test(o.type || "")).length;
+    return b >= vk.n ? ["✅ Done", `${b} field components on the built page`, "ok"] : ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`, "unverified"];
+  }
   if (vk.type === "image") { const b = ctx.typeCount("crt.ImageInput"); return b >= vk.n ? ["✅ Done", `${b} crt.ImageInput built`, "ok"] : b > 0 ? ["⚠ verify", `${b}/${vk.n} crt.ImageInput built`, "unverified"] : ["❌ MISSING", "no crt.ImageInput on the built page — the image field was not added", "missing"]; }
   const noun = vk.type === "tabs" ? "crt.Tab" : "crt.DataGrid"; // tabs | details
   const b = ctx.typeCount(noun);
