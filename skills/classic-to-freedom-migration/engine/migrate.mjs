@@ -30,7 +30,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
-import { renderDesignSpec, renderPlan, renderChecklist, renderVerify } from "./designspec.mjs";
+import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -161,7 +161,7 @@ function miniPageIssue(miniPage, miniPageVerified) {
 // Returns the blocking issue string, or null. Extracted from validateStructure for Sonar CC 15.
 function hollowFormIssue(changeSet, typedPages, manifest, visited) {
   if (typedPages.length || visited.size !== 0 || manifest.planMeta?.freedomExists) return null;
-  const mainFields = (changeSet.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+  const mainFields = countFormFields(changeSet.viewConfigDiff);
   if (mainFields !== 0) return null;
   return `form fold produced 0 FIELDS — the section / its edit page did NOT resolve (wrong page schema, an under-captured layer chain [e.g. bundle \`layerCount:1\` missing the fields layer], or a diff built via an unresolved call). A hollow form and everything derived from it — the form spec, the on-stand signals, the whole plan — are INVALID. Re-resolve the section + its real edit page (verify the page schema name and that the bundle captured its full layer chain) and re-run BEFORE any downstream work. (If the page GENUINELY has no own fields — rare — confirm on-stand.)`;
 }
@@ -238,7 +238,7 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
     c.resolvedFrom = key;
     // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
     // agree): < 15 flat inputs → Mini page; otherwise (>= 15, or tabs/related-lists) → the Grid page template.
-    c.fieldCount = (res.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+    c.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
     c.hasTabs = (res.changeSet?.viewConfigDiff || []).some((o) => o?.values?.type === "crt.Tab");
     c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
     c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
@@ -264,7 +264,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
     t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
     t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
-    t.fieldCount = (res.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).length;
+    t.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
     t.ruleCount = (res.changeSet?.pageBusinessRules || []).length + (res.changeSet?.entityBusinessRules || []).length;
     t.ruleSources = res.changeSet?.ruleSourceCount || 0;
   }
@@ -390,7 +390,10 @@ function resolveDetailBody(name, e, bodyOf) {
 // rebuild must reproduce (a request handler that opens the lookup then creates links / calls the service — NOT a
 // default add-new). DETECT them from the body's methods (text-scan — method bodies are imperative, not statically
 // eval'd); returns the mechanism descriptor or null for a plain list. Extracted for Sonar CC 15.
-function detectAddMode(body) {
+// Exported for a direct perf/ReDoS golden: every text-scan below uses BOUNDED quantifiers ([\s\S]{0,80}? etc.) or a
+// linear global match — no nested/ambiguous quantifier — so a large adversarial body stays linear (no catastrophic
+// backtracking). engine.mjs documents a prior ~32s/700KB regression fixed exactly this way; the golden guards it.
+export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
   const lookup = /\bopenLookup\b|\baddFromLookup\b|\bgetLookupConfig\b/.test(body);

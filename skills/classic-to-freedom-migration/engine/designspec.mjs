@@ -41,6 +41,15 @@ const esc = (s) => strip(s)
 // marker. (Inline fills after a `**Label:**` prefix are already inert; only bare-line values need this.)
 const escBareLine = (s) => String(s).replace(/^(\s*)([#>*+~=-]|\d+\.)/, String.raw`$1\$2`);
 const isField = (o) => !!o?.values?.control;
+// A form's "content field" count for STRUCTURE gates (hollow-form / typed / child folds). A bound INPUT is either
+// control-bound (every normal field) OR a `crt.ImageInput` — which binds through `value`, NOT `control`. Counting
+// only `values.control` (as the fold gates did) made an image-only quick-add form (photo / signature — squarely in
+// ENG-93926's mini-page domain) read as 0 fields → a false "EMPTY Layout, do not proceed" hard-block / mis-template.
+// This is the ONE shared field-count, aligned with renderVerify (which likewise expects fields + image inputs).
+// NB deliberately NOT folded into `isField`: that predicate feeds the Layout fields TABLE (which strips
+// `values.control`) and images render via their own rowsForImages path — merging them would break the table.
+export const countFormFields = (diff) =>
+  (diff || []).filter((o) => o?.values && (o.values.control != null || o.values.type === "crt.ImageInput")).length;
 const DASH = "—";
 
 // Climb the emitted insert tree from a container to the region that holds it: crt.Tab → that tab,

@@ -5,7 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, detectAddMode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -821,6 +821,23 @@ check("cycle(mini): a cyclic mini renders its mini spec ('Mini page (quick-add)'
   /Mini page \(quick-add\)/.test(cycMiniRes.plan) && !/NOT folded/.test(cycMiniRes.plan),
   () => cycMiniRes.plan.split("\n").filter((l) => /mini|cycle|NOT folded/i.test(l)).join(" | "));
 
+/* ---- Minor 3 (PR#58 AC2) — a REAL captured mini page folds through the mapper, not a hand-written toy body.
+   `ActivityMiniPage [WorkPRMBase]` captured from applicants_workbuild246_0817 (ENG-93926's workenu site): its 5
+   real customer/product override layers (ConferenceRoom/IntegrationV2/SSP/WorkOverride/WorkPRMBase) on a compact
+   representative BaseMiniPage seed. The full 96KB platform seed is boilerplate (identical for every classic mini
+   page), so the fixture ships a small example seed that defines the containers + the base items the real layers
+   `merge` onto — the REAL part is the captured layer chain (real parentName containers, real field mix, real
+   merge/remove ops). This closes the "green toy body hides a real-world break" gap the toy mini goldens leave.
+   Provenance + how to re-capture: fixtures/activityminipage/README.md. ---- */
+const realMini = runMigration(JSON.parse(fs.readFileSync(path.join(FIX, "activityminipage", "manifest.json"), "utf8")), { baseDir: FIX });
+const realMiniFields = (realMini.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).map((o) => o.name);
+check("Minor3 real mini page: ActivityMiniPage's real captured layer chain folds gate-clean + structure-complete (not a toy body)",
+  realMini.gate?.blocked === false && realMini.structure?.complete === true,
+  () => ({ blocked: realMini.gate?.blocked, reasons: realMini.gate?.reasons, issues: realMini.structure?.issues }));
+check("Minor3 real mini page: the real customer fields (ConferenceRoom, StartDate) survive the layer merge into the Freedom layout",
+  realMiniFields.includes("ConferenceRoom") && realMiniFields.includes("StartDate"),
+  () => realMiniFields);
+
 /* ---- #6: a SECTION body whose `diff` is built via a dynamic construct must NOT hard-block the form-page plan.
    The section `diff` is never merged into the effective page (only its regex-derived list signals are used), so
    a section structural diagnostic gating the whole plan is a spurious BLOCK with a misleading reason. It is now
@@ -1054,6 +1071,53 @@ try {
 } finally {
   fs.rmSync(outPath, { force: true });
 }
+// review (PR#58 Major 2) — the `--verify --built` done-gate CLI path (exit-2 wiring, --built read/JSON.parse,
+// arg validation) was only exercised via renderVerify() directly; nothing ran it end-to-end through the CLI, so a
+// regression could let a page that MISSED deliverables read as done (exit 0) — the exact miss this feature prevents.
+// spawnSync goldens mirror the --out / GATE-BLOCKED pattern. The SU fixture is gate-clean + structure-complete, so
+// the exit code is driven by VERIFY, not the gate.
+const verifyManifest = JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS });
+// (a) --verify with NO --built → arg validation fails loudly (exit 1), nothing on stdout (not a silent false-done).
+const vNoBuilt = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify"], { input: verifyManifest, encoding: "utf8" });
+check("migrate.mjs --verify: missing --built → exit 1 with an actionable arg error, empty stdout (no false done)",
+  vNoBuilt.status === 1 && /--built/.test(vNoBuilt.stderr || "") && (vNoBuilt.stdout || "").trim() === "");
+// (b) --built points at a non-existent file → exit 1 ('cannot read --built'), surfaced, not a crash or false 0.
+const vNoFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", path.join(os.tmpdir(), `c2f_verify_absent_${process.pid}.json`)], { input: verifyManifest, encoding: "utf8" });
+check("migrate.mjs --verify: unreadable --built file → exit 1 ('cannot read --built')",
+  vNoFile.status === 1 && /cannot read --built/.test(vNoFile.stderr || ""));
+const builtPath = path.join(os.tmpdir(), `c2f_built_${process.pid}.json`);
+try {
+  // (c) a built page with the deliverables MISSING (empty ops) → verifyIncomplete → the HARD exit-2 done-gate fires
+  // end-to-end through the CLI, and the verify markdown carries a ❌ MISSING (a MISSED page must NOT exit 0).
+  fs.writeFileSync(builtPath, JSON.stringify({ ops: [], parentSchemaName: "SupportUnitPage", miniPageBuilt: null }));
+  const vIncomplete = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
+    vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
+    () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
+  // (d) --built with INVALID JSON → exit 1 ('cannot read --built …'), distinct from the exit-2 done-gate.
+  fs.writeFileSync(builtPath, "{ not valid json");
+  const vBadJson = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  check("migrate.mjs --verify --built: invalid-JSON built file → exit 1 ('cannot read --built'), NOT the exit-2 gate",
+    vBadJson.status === 1 && /cannot read --built/.test(vBadJson.stderr || ""));
+} finally {
+  fs.rmSync(builtPath, { force: true });
+}
+// review (PR#58 Minor 4) — detectAddMode text-scans a detail's body over the UNION of its replacing chain, so a
+// large body must NOT trigger catastrophic backtracking (engine.mjs documents a prior ~32s/700KB regex regression
+// fixed with bounded quantifiers). ~700KB of ADVERSARIAL near-matches (many `getAddRecordButtonVisible` heads that
+// never reach `return false`, so the bounded [\s\S]{0,80}? window does real work each time) must stay sub-second.
+{
+  const unit1 = "getAddRecordButtonVisible: function(){ " + "x".repeat(78) + " ; }\n"; // ~123B, head never reaches `return false`
+  const unit2 = "addGridOperationsMenuItems: function(){ getButtonMenuItem( { " + "y".repeat(190) + " } ) }\n"; // ~250B
+  const adversarial = unit1.repeat(6000) + unit2.repeat(1500);
+  const bytes = Buffer.byteLength(adversarial);
+  const t0 = Date.now();
+  const r = detectAddMode(adversarial);
+  const ms = Date.now() - t0;
+  check(`Minor4 ReDoS: detectAddMode on a ~${Math.round(bytes / 1024)}KB adversarial body stays sub-second (bounded quantifiers, no catastrophic backtracking) — ${ms}ms`,
+    bytes > 600 * 1024 && ms < 1000 && (r === null || typeof r === "object"),
+    () => ({ bytes, ms, r }));
+}
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
 const blockedRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
@@ -1117,6 +1181,13 @@ check("#1 image concrete: sole IMAGELOOKUP column → crt.ImageInput value bound
   && imgBound.changeSet.viewModelConfigDiff?.[0]?.values?.Photo?.modelConfig?.path === "PDS.Photo"
   && !imgBound.changeSet.needsDecision.some((n) => n.kind === "image-column"),
   () => JSON.stringify(imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values));
+// review (PR#58 Major 3) — an image-only top-level form (its only field is a crt.ImageInput) is NOT a hollow
+// 0-field form. crt.ImageInput binds via `value`, so the OLD hollow gate (filter on values.control) read it as 0
+// fields → false "0 FIELDS" block. The shared countFormFields() now counts image inputs too.
+check("Major3 image-only form: a sole crt.ImageInput is NOT a false hollow 0-field structure block",
+  imgBound.structure.complete === true
+  && !(imgBound.structure.issues || []).some((i) => /0 FIELDS/.test(i)),
+  () => imgBound.structure.issues);
 // #1 FILL (s-vanislemarina Q2): column unresolved → crt.ImageInput STILL emitted with a `<FILL>` value + the recipe
 // on the LAYOUT row, and NO separate image-column ⚠ (that duplicated the layout row verbatim — double-surfacing).
 check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL value, and NO redundant image-column decision",
@@ -2119,6 +2190,19 @@ check("typed-page tables-filled GATE(1): a typed fold with an EMPTY Layout (0 fi
   docTypedEmpty.structure.complete === false
   && docTypedEmpty.structure.issues.some((i) => /typed page 'XICPage'.*EMPTY Layout/.test(i)),
   () => docTypedEmpty.structure.issues);
+// review (PR#58 Major 3) — the CONVERSE: an image-only typed fold (a photo / signature quick-add per-type page,
+// squarely in ENG-93926's domain) is NOT an EMPTY Layout. crt.ImageInput binds via `value`, so the old
+// values.control-only count read it as 0 fields → false GATE(1) block. countFormFields() now counts the image.
+const docTypedImage = runMigration({
+  entity: "X", schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  typedPages: [{ schema: "XICPage", type: "Incoming" }],
+  typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XICPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"ProfileContainer",propertyName:"items",values:{}}]};});` }] } },
+  planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("Major3 image-only typed fold: a sole crt.ImageInput is NOT a false EMPTY Layout block (countFormFields counts the image)",
+  docTypedImage.structure.complete === true
+  && !docTypedImage.structure.issues.some((i) => /XICPage.*EMPTY Layout/.test(i)),
+  () => docTypedImage.structure.issues);
 // tables-filled GATE (2) — a typed body that DECLARES business rules but maps NONE (empty Logic) → block.
 const docTypedRulesDropped = runMigration({
   entity: "X", schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],

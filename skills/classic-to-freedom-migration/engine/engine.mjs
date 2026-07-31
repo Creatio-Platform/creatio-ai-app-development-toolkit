@@ -28,13 +28,27 @@ function ensureVendorIntegrity() {
 }
 
 // Lazily load the vendored acorn's `parse` — AFTER the integrity check, so a tampered module's top-level code never
-// runs. `require(esm)` (Node >= 22.12) loads the pinned ESM `acorn.mjs` synchronously (no top-level await in it),
-// keeping parseSchema sync. Memoized: the check + require run once per process.
+// runs. `require(esm)` loads the pinned ESM `acorn.mjs` synchronously (no top-level await in it), keeping parseSchema
+// sync — but require(esm) needs Node >= 22.12 (or the >= 20.19 backport); on an older runtime it throws
+// ERR_REQUIRE_ESM. That floor is declared in package.json `engines` and re-surfaced here as an actionable error
+// (otherwise every parse throws a cryptic ERR_REQUIRE_ESM and the whole engine looks broken). Memoized: the check +
+// require run once per process.
 let __acornParse = null;
 function getAcornParse() {
   if (__acornParse) return __acornParse;
   ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
-  const acorn = createRequire(import.meta.url)("./vendor/acorn.mjs");
+  let acorn;
+  try {
+    acorn = createRequire(import.meta.url)("./vendor/acorn.mjs");
+  } catch (e) {
+    if (e && e.code === "ERR_REQUIRE_ESM") {
+      throw new Error(
+        `classic-to-freedom engine: loading the vendored parser needs Node >= 22.12 (or the >= 20.19 backport) for require(esm); ` +
+        `this runtime is ${process.version}. Upgrade Node (see package.json "engines"). Original: ${e.message}`,
+      );
+    }
+    throw e;
+  }
   if (typeof acorn.parse !== "function") throw new Error("classic-to-freedom engine: vendored acorn has no `parse` export");
   __acornParse = acorn.parse;
   return __acornParse;
