@@ -1002,27 +1002,29 @@ function resolveStructuralVk(vk, ctx) {
   if (built.miniPageBuilt === false) return ["❌ MISSING", "NOT created — '+ New' still opens the full form", "missing"];
   return ["⚠ verify", "get-page the mini schema / pass built.miniPageBuilt", "unverified"];
 }
-function resolveCountVk(vk, ctx) {
-  if (vk.type === "fields") {
-    // Verify by IDENTITY when the built ops carry names: count how many EXPECTED field names are present. This is
-    // type-AGNOSTIC (a rich-text / lookup / color / future field still counts, matched by name) AND does not
-    // over-count (an unrelated input of the right TYPE but a different NAME no longer compensates for a dropped
-    // business field — the earlier `names.has || FIELD_RE` OR did exactly that). Fall back to type-based counting
-    // ONLY when no built op has a name at all (raw counts). Missing expected names are reported in the evidence.
-    const names = new Set(vk.names || []);
-    const named = ctx.ops.filter((o) => o.name);
-    let b, missing = [];
-    if (named.length) {
-      const builtNames = new Set(named.map((o) => o.name));
-      const present = [...names].filter((n) => builtNames.has(n));
-      b = present.length; missing = [...names].filter((n) => !builtNames.has(n));
-    } else {
-      b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
-    }
-    if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present on the built page`, "ok"];
-    const miss = missing.length ? ` — missing: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? "…" : ""}` : "";
-    return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
+// Verify the FIELDS count by IDENTITY when the built ops carry names: count how many EXPECTED field names are present.
+// Type-AGNOSTIC (a rich-text / lookup / color / future field still counts, matched by name) AND does not over-count
+// (an unrelated input of the right TYPE but a different NAME no longer compensates for a dropped business field — the
+// earlier `names.has || FIELD_RE` OR did exactly that). Type-based counting is the fallback ONLY when no built op has
+// a name. Missing expected names are reported. Extracted from resolveCountVk for Sonar CC 15.
+function resolveFieldsVk(vk, ctx) {
+  const names = new Set(vk.names || []);
+  const named = ctx.ops.filter((o) => o.name);
+  let b, missing = [];
+  if (named.length) {
+    const builtNames = new Set(named.map((o) => o.name));
+    b = [...names].filter((n) => builtNames.has(n)).length;
+    missing = [...names].filter((n) => !builtNames.has(n));
+  } else {
+    b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
   }
+  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present on the built page`, "ok"];
+  const overflow = missing.length > 8 ? "…" : "";
+  const miss = missing.length ? ` — missing: ${missing.slice(0, 8).join(", ")}${overflow}` : "";
+  return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
+}
+function resolveCountVk(vk, ctx) {
+  if (vk.type === "fields") return resolveFieldsVk(vk, ctx);
   if (vk.type === "image") {
     const b = ctx.typeCount("crt.ImageInput");
     if (b >= vk.n) return ["✅ Done", `${b} crt.ImageInput built`, "ok"];

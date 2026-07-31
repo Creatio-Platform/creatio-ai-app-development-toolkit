@@ -1246,7 +1246,7 @@ check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput FIL
     return el?.values.value === "$Photo_value" && el?.values.readOnly === true       // FILL, not "$ContactPhoto"
       && img?.crossDs === true && img?.filled === true && img?.column === "ContactPhoto"
       && vm.ContactPhoto === undefined                                                 // no wrong on-entity attribute
-      && /^<FILL/.test(vm.Photo_value?.modelConfig?.path || "")                        // the `$Photo_value` value RESOLVES to a declared placeholder attr (not dangling)
+      && (vm.Photo_value?.modelConfig?.path || "").startsWith("<FILL")                 // the `$Photo_value` value RESOLVES to a declared placeholder attr (not dangling)
       && !imgCross.changeSet.needsDecision.some((n) => n.kind === "image-column");
   })(),
   () => JSON.stringify({ el: imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values, imgs: imgCross.changeSet.images, vm: imgCross.changeSet.viewModelConfigDiff }));
