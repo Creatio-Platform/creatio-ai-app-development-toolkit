@@ -43,7 +43,7 @@ Jump to the section you need:
 ## Page composition
 
 - Use ready page templates where possible; they already include standard spacing and alignment.
-- **Editing an existing page: match what's already there.** Read the current page (`get-page`) and reuse its established conventions for any new element — ExpansionPanel style, input `labelPosition`, container spacing/padding/radius, widget sizes, column count. New components must look like they were part of the original design, not a different hand.
+- **Match what's already there — this page, or a reference page when this one is new.** Read the current page (`get-page`) and reuse its established conventions for any new element — ExpansionPanel style, input `labelPosition`, container spacing/padding/radius, widget sizes, column count. New components must look like they were part of the original design, not a different hand. **If the page is new/empty (a freshly created migration page) and has nothing to match, `get-page` a shipped Freedom page on the SAME template and copy those conventions from it** — a new ExpansionPanel or added container must carry the platform's spacing/padding/`borderRadius`/color, not a bare default.
 - Preserve left/right spacing around headers and consistent gaps between containers.
 - Put controls in proper containers, not directly onto a grid when alignment will break. For button groups, use flex layout and align heights.
 - Prefer a clear “island” structure on complex record pages:
@@ -105,6 +105,7 @@ Jump to the section you need:
 - Reuse template styles: Headline 1-4 for headings, Body for regular text, Caption for supporting text.
 - Treat color as information coding only with text/icon/status support.
 - Before requesting global font, theme, or style overrides, ask why the change is needed and how it affects system perception and consistency.
+- **Custom CSS is a last resort — native inputs first, then warn and confirm (mandatory).** Expressing a look through a `styles` object, a `classes`/CSS class, or a component `extraStyles` hook (e.g. `extraStyles.toggle`, `extraStyles.label` with `color`/`fill`/`font-family`) is custom CSS — `extraStyles` is not "native" merely because it is a component input, and changing a font-family or hard-coding a color is never a native default. Custom CSS is not covered by Creatio's platform-upgrade compatibility guarantees, so it can break on a future upgrade. First exhaust the component's native inputs (`get-component-info`); only if none can achieve the look, tell the user no native option exists, warn about the upgrade-compatibility risk, and get explicit confirmation before writing any `styles`/`classes`/`extraStyles`. If the user declines, offer the nearest native alternative instead. A "just apply / don't ask" instruction still requires at least a one-line upgrade-risk warning — never apply custom CSS silently. (See the "Mandatory implementation rules" list in `SKILL.md`.)
 
 ## Adding and editing data
 
