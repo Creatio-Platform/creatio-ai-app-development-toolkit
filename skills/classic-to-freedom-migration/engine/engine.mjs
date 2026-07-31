@@ -932,13 +932,21 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // ONLY record pages define — sections define `getSectionActions`, mini pages none — so real section/mini seeds
   // were wrongly flagged, which pushed the agent into a workaround (bundling the section as `schemas` + a thin
   // seed) that produced hollow folds. Count-based: 150–430 (real) all clear; ≈0 (broken fetch) blocks; a token
-  // 1-method stub still blocks (< 5). BLIND SPOT (accepted): a PARTIAL fetch with >5 methods is not caught here.
+  // 1-method stub still blocks (< 5).
   const SEED_MIN_METHODS = 5;
   const looksSkeletal = seedTemplate.length > 0 && seedMethodNames.size < SEED_MIN_METHODS;
+  // The mid-range partial-fetch blind spot the < 5 hard gate misses: a real base-template chain of ANY kind defines
+  // 150+ methods (mini 152, record ≈347, section 428), so a seed with 5..149 methods is likely a TRUNCATED fetch that
+  // silently folds onto an incomplete base. This is surfaced as an ADVISORY (`possiblyPartial`) — NOT a hard warning:
+  // a numeric floor as a hard block would false-block, and the seed layers are named by PACKAGE (CrtNUI / …), not by a
+  // recognizable "Base*" schema, so a name assertion is unreliable. The plan renders it so the agent confirms the full
+  // parent-template chain was captured instead of building on a partial one silently.
+  const SEED_PARTIAL_METHODS = 150;
+  const possiblyPartial = seedTemplate.length > 0 && !looksSkeletal && seedMethodNames.size < SEED_PARTIAL_METHODS;
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
     seedMethods: seedMethodNames.size, hasGetActions,
-    looksSkeletal,
+    looksSkeletal, possiblyPartial,
   };
   if (looksSkeletal) warnings.push({
     op: "seed", name: "skeletal-seed", schema: "(seed)",

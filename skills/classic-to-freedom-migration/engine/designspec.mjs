@@ -459,13 +459,21 @@ export function renderDesignSpec(result, opts = {}) {
   const L = renderSpecHeader(result, opts, entity, fields, cs);
 
   // ---- ONE Layout table (structure + contents) — one row-builder per element category (see helpers above) ----
+  // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
+  // field) is neither `isField` (it binds via `value`, not `control`) nor in `cs.images` (that is the mapImages
+  // generator/name-detected set) — so it would be INVISIBLE in the Layout table though its ChangeSet insert lands.
+  // Fold those crt.ImageInput elements into the images sink so EVERY emitted control gets exactly one Layout row.
+  const imgNames = new Set((cs.images || []).map((im) => im.classic));
+  const fieldImages = (cs.viewConfigDiff || [])
+    .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name))
+    .map((o) => { const v = o.values.value || ""; const filled = v.endsWith("_value"); return { classic: o.name, generator: null, parent: o.parentName, column: filled ? null : strip(v), crossDs: !!o.values.readOnly, filled }; });
   const rows = [
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
     ...rowsForFeatures(cs.standardFeatures, tabRegion),
     ...rowsForWidgets(cs.widgets),
     ...rowsForCardActions(cs.cardActions, result, opts),
-    ...rowsForImages(cs.images, regionOf),
+    ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
   ];
   // group by region (first-seen order), then reading order: side profile FIRST, tabs, widgets, actions, flagged.
   const { order, byRegion } = orderRegions(rows);
@@ -574,6 +582,10 @@ function renderPlanBanners(result, opts) {
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`). "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
+  // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
+  // real chain has 150+). Surface it so a partial fetch isn't silently folded onto — the agent confirms the full chain.
+  const sq = result.effective?.seedQuality || result.seedQuality;
+  if (sq?.possiblyPartial) P.push(`> ⚠ **Seed may be a PARTIAL fetch — confirm before relying on the base layout.** The parent-template \`seed\` defines only ${sq.seedMethods} method(s); a FULL base-template chain has 150+ (mini 152, record ≈347, section 428). Re-check that \`get-classic-page-sources\` captured the WHOLE parent-template chain (not a truncated grab) — building on a partial base silently produces a hollow fold. (Advisory only: it does not block the gate.)`, "");
   return P;
 }
 // Child page mappings — one design spec per related-list child, recursively embedding grandchildren. Own fn for

@@ -919,9 +919,23 @@ check("#19 boundary: a seed with EXACTLY 4 methods (< SEED_MIN_METHODS=5) is ske
 const seed5 = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["init", "onSaved", "loadValues", "getActions", "setColumns"] })] }); // exactly 5
 check("#19 boundary: a seed with EXACTLY 5 methods (== SEED_MIN_METHODS) is NOT skeletal → passes (off-by-one guard)",
   seed5.seedQuality.looksSkeletal === false && !seed5.warnings.some(w => w.name === "skeletal-seed"));
-// KNOWN BLIND SPOT (documented, not asserted): a PARTIAL fetch of a real base chain that still yields > 5 methods
-// (e.g. a truncated 6-method grab of a ~347-method record page) is NOT caught by the count gate — the count only
-// catches a near-empty fetch. Tightening the threshold toward the real method-count distribution is tracked (Minor #4).
+// review (#5) — the mid-range PARTIAL-fetch blind spot the <5 hard gate misses is now surfaced as an ADVISORY
+// (`possiblyPartial`, 5..149 methods) — NOT a hard warning (no false-block, no churn to the #19 warning goldens).
+const midMethods = Array.from({ length: 30 }, (_, i) => "m" + i); // 30 — mid-range (a real base chain has 150+)
+const partialSeed = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: midMethods })] });
+check("#5: a mid-range seed (30 methods, 5..149) → possiblyPartial ADVISORY, but NOT looksSkeletal and NOT a hard warning",
+  partialSeed.seedQuality.possiblyPartial === true && partialSeed.seedQuality.looksSkeletal === false
+  && !partialSeed.warnings.some((w) => w.name === "skeletal-seed"));
+const fullSeed = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: Array.from({ length: 160 }, (_, i) => "m" + i) })] });
+check("#5: a full seed (160 methods, >=150) → NOT possiblyPartial",
+  fullSeed.seedQuality.possiblyPartial === false);
+// and the plan SURFACES the advisory (⚠, non-blocking) so a partial fetch isn't silently folded onto.
+const partialPlan = runMigration({ entity: "X",
+  seed: [{ pkg: "Base", body: `define("Base",[],function(){return{diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{${midMethods.map((m) => m + ":function(){}").join(",")}}};});` }],
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("#5: the plan surfaces the PARTIAL-seed advisory (⚠, non-blocking); the gate is NOT blocked by it",
+  /Seed may be a PARTIAL fetch/.test(partialPlan.plan) && partialPlan.gate.blocked === false,
+  () => ({ blocked: partialPlan.gate.blocked, hasAdvisory: /PARTIAL fetch/.test(partialPlan.plan) }));
 
 /* ---- #5/#13: resolve resource-key captions from manifest.resources ---- */
 const capClient = () => L("Client", { entity: "X", diff: [
@@ -1154,6 +1168,15 @@ try {
   check(`Minor4 ReDoS: detectAddMode on a ~${Math.round(bytes / 1024)}KB adversarial body stays linear (bounded quantifiers, no catastrophic backtracking) — ${ms}ms vs ceiling ${ceiling}ms`,
     bytes > 600 * 1024 && ms < ceiling && (r === null || typeof r === "object"),
     () => ({ bytes, ms, baseMs, ceiling, r }));
+  // review round-5 Minor #7 — the wall-clock check reads ~0 ms baseline on Windows and collapses to a fixed ceiling,
+  // so back it with a DETERMINISTIC structural assertion: every `[\s\S]` run in detectAddMode's regexes must be
+  // BOUNDED (`{0,N}`), never unbounded `*`/`+` (the actual catastrophic-backtracking surface). Timing-independent.
+  const daSrc = detectAddMode.toString();
+  const daRuns = daSrc.split("[\\s\\S]");
+  const daAllBounded = daRuns.slice(1).every((seg) => /^\{0,\d+\}/.test(seg));
+  check("Minor4 structural: every `[\\s\\S]` run in detectAddMode is BOUNDED ({0,N}) — no unbounded */+ (deterministic ReDoS guard, timing-independent)",
+    daRuns.length > 1 && daAllBounded && !daSrc.includes("[\\s\\S]*") && !daSrc.includes("[\\s\\S]+"),
+    () => ({ runs: daRuns.length - 1, allBounded: daAllBounded }));
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
@@ -1218,6 +1241,15 @@ check("#1 image concrete: sole IMAGELOOKUP column → crt.ImageInput value bound
   && imgBound.changeSet.viewModelConfigDiff?.[0]?.values?.Photo?.modelConfig?.path === "PDS.Photo"
   && !imgBound.changeSet.needsDecision.some((n) => n.kind === "image-column"),
   () => JSON.stringify(imgBound.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values));
+// review (round-5 Minor #4) — a VALUE-bound crt.ImageInput emitted via the FIELD path (an entity IMAGELOOKUP column
+// laid out as a normal field, name NOT Photo/Logo, no generator) is neither `isField` (binds via value) nor in
+// cs.images — it must STILL get a Layout row so the plan-reader sees every emitted control.
+const imgFieldPath = runMigration({ entity: "X", entityColumns: { CoverImg: { type: "ImageLookup" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"CoverImg",parentName:"Header",propertyName:"items",values:{bindTo:"CoverImg"}}]};});` }] }, { baseDir: FIX });
+check("#4 value-bound image field: an IMAGELOOKUP column laid out as a normal field appears in the Layout table as a crt.ImageInput row (not silently dropped)",
+  imgFieldPath.changeSet.viewConfigDiff.find((o) => o.name === "CoverImg")?.values.type === "crt.ImageInput"
+  && /\| CoverImg \| crt\.ImageInput \|/.test(imgFieldPath.designSpec),
+  () => imgFieldPath.designSpec.split("\n").filter((l) => /CoverImg/.test(l)).join(" | "));
 // review (PR#58 Major 3) — an image-only top-level form (its only field is a crt.ImageInput) is NOT a hollow
 // 0-field form. crt.ImageInput binds via `value`, so the OLD hollow gate (filter on values.control) read it as 0
 // fields → false "0 FIELDS" block. The shared countFormFields() now counts image inputs too.
@@ -2033,29 +2065,37 @@ try {
 // memoized integrity result via the test seam, then drive the real parse surface 3× — each MUST throw (a prior
 // version stored/threw only on call #1, so parse #2..N ran on a tampered parser). Restore after so later goldens are
 // unaffected. This is the seam the review asked for (resettable memo) + the golden the memoized re-throw lacked.
-// The seam is GATED behind C2F_TEST_SEAM=1 (inert on the shipped surface); enable it for these goldens.
+// The seam is GATED behind C2F_TEST_SEAM=1 (inert on the shipped surface); arm it ONLY for these goldens and DISARM
+// it in `finally` so it never stays live for the rest of the shared-process run (review round-5 Minor #3).
+let acThrows = 0, acLastMsg = "", acornPinThrew = false, acornPinMsg = "";
 process.env.C2F_TEST_SEAM = "1";
-__setVendorIntegrityForTest({ ok: false, failures: ["forced tamper (test)"], results: [] });
-let acThrows = 0, acLastMsg = "";
-for (let i = 0; i < 3; i++) {
+try {
+  __setVendorIntegrityForTest({ ok: false, failures: ["forced tamper (test)"], results: [] });
+  for (let i = 0; i < 3; i++) {
+    try { parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); }
+    catch (e) { acLastMsg = e.message; if (/integrity check FAILED/.test(e.message)) acThrows++; }
+  }
+  __setVendorIntegrityForTest(null); // restore the real memoized check
+  check("AC1 behavioral: a failing vendor-integrity result makes the parse surface THROW on EVERY call (1st/2nd/3rd — no fail-open)",
+    acThrows === 3, () => ({ acThrows, acLastMsg: acLastMsg.slice(0, 80) }));
+  check("AC1 behavioral: restoring the real check lets parsing resume (test seam leaves no residue)",
+    (() => { try { const r = parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); return !r.error; } catch { return false; } })());
+  // the gate must also assert acorn.cjs ITSELF is a verified pin before require(): force an ok result whose `results`
+  // OMITS acorn.cjs (a provenance tampered to drop the entry) → the parse surface must refuse the unpinned parser.
+  __setVendorIntegrityForTest({ ok: true, failures: [], results: [{ name: "other.mjs", ok: true }] });
   try { parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); }
-  catch (e) { acLastMsg = e.message; if (/integrity check FAILED/.test(e.message)) acThrows++; }
+  catch (e) { acornPinThrew = true; acornPinMsg = e.message; }
+  check("acorn-pin: an ok integrity result that does NOT list acorn.cjs still REFUSES to load the parser (defense-in-depth)",
+    acornPinThrew && /not a verified entry|unpinned parser|provenance/.test(acornPinMsg), () => acornPinMsg.slice(0, 110));
+} finally {
+  __setVendorIntegrityForTest(null); // restore the real check even on a mid-block throw
+  delete process.env.C2F_TEST_SEAM;  // DISARM the seam — must not stay live for later tests/imports in this process
 }
-__setVendorIntegrityForTest(null); // restore the real memoized check
-check("AC1 behavioral: a failing vendor-integrity result makes the parse surface THROW on EVERY call (1st/2nd/3rd — no fail-open)",
-  acThrows === 3, () => ({ acThrows, acLastMsg: acLastMsg.slice(0, 80) }));
-check("AC1 behavioral: restoring the real check lets parsing resume (test seam leaves no residue)",
+// review round-5 Minor #3 — once the env flag is cleared the seam is INERT: a forced-failing injection is a no-op,
+// so a later accidental __setVendorIntegrityForTest call cannot tamper the runtime integrity state.
+__setVendorIntegrityForTest({ ok: false, failures: ["disarmed — must be ignored"], results: [] });
+check("seam-disarm: with C2F_TEST_SEAM cleared, __setVendorIntegrityForTest is INERT — parsing still succeeds (no live bypass left armed)",
   (() => { try { const r = parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); return !r.error; } catch { return false; } })());
-// review (PR#58 Minor) — the gate must also assert acorn.cjs ITSELF is a verified pin before require(). Force an
-// ok result whose `results` OMITS acorn.cjs (a provenance tampered to drop the entry) → the parse surface must
-// refuse to load the unpinned parser, even though the gate returned ok.
-__setVendorIntegrityForTest({ ok: true, failures: [], results: [{ name: "other.mjs", ok: true }] });
-let acornPinThrew = false, acornPinMsg = "";
-try { parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); }
-catch (e) { acornPinThrew = true; acornPinMsg = e.message; }
-__setVendorIntegrityForTest(null); // restore
-check("acorn-pin: an ok integrity result that does NOT list acorn.cjs still REFUSES to load the parser (defense-in-depth)",
-  acornPinThrew && /not a verified entry|unpinned parser|provenance/.test(acornPinMsg), () => acornPinMsg.slice(0, 110));
 
 // Minor 2 — section.processNames are ESCAPED at the sink (defense-in-depth), not left to a remote parser
 // regex invariant. Feed a hostile name straight to the renderer (bypassing the parser) → the pipe is escaped.
