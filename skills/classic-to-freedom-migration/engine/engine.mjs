@@ -53,7 +53,7 @@ function getAcornParse() {
   try {
     acorn = createRequire(import.meta.url)("./vendor/acorn.mjs");
   } catch (e) {
-    if (e && e.code === "ERR_REQUIRE_ESM") {
+    if (e?.code === "ERR_REQUIRE_ESM") {
       throw new Error(
         `classic-to-freedom engine: loading the vendored parser needs Node >= 22.12 (or the >= 20.19 backport) for require(esm); ` +
         `this runtime is ${process.version}. Upgrade Node (see package.json "engines"). Original: ${e.message}`,

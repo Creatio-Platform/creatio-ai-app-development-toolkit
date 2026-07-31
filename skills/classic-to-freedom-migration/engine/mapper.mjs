@@ -231,6 +231,28 @@ const KNOWN_ACTION_ITEMS = new Set([
   "PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton",
 ]);
 
+// A base (template-owned) field a CLIENT schema RECONFIGURED (hid / moved / re-laid-out) is excluded from the payload
+// as template context — but the delta is KNOWN, so emit it as a CONCRETE applied override (what to change on the base
+// field), not a punt. CHILD pages build these inline (no override list). Extracted from mapToFreedom for Sonar CC 15.
+function computeBaseFieldOverrides(eff, isChildPage) {
+  const overrides = [];
+  if (isChildPage) return overrides;
+  for (const f of eff.fields.filter((x) => x.templateOwned && x.schemaTouched)) {
+    const hidden = f.visible === false;
+    const lay = f.layout || null;
+    const parts = [];
+    if (hidden) parts.push("hide it");
+    if (lay && (lay.column != null || lay.row != null)) {
+      const rowPart = lay.row != null ? `, row ${lay.row}` : "";
+      const spanPart = lay.colSpan != null ? ` (span ${lay.colSpan})` : "";
+      parts.push(`move to column ${lay.column ?? "?"}${rowPart}${spanPart}`);
+    } else if (lay) parts.push("re-lay-out (position changed)");
+    const change = parts.join("; ") || "reconfigured (delta not concretely readable — inspect the client schema)";
+    overrides.push({ field: f.bindTo || f.name, hidden, layout: lay, change });
+  }
+  return overrides;
+}
+
 export function mapToFreedom(eff, opts = {}) {
   const cols = opts.entityColumns || {};       // { column: dataType }
   const clientEditableSchemas = new Set(opts.clientEditableSchemas || []); // for B6 removals
@@ -303,20 +325,7 @@ export function mapToFreedom(eff, opts = {}) {
   // template's copy. Only when the change can't be read concretely does `change` fall back to "reconfigured".
   // For a CHILD page these base fields are now built inline (isContentField above), so there is NO separate
   // override list — the reconfiguration rides the built field.
-  const baseFieldOverrides = [];
-  if (!isChildPage) for (const f of eff.fields.filter(f => f.templateOwned && f.schemaTouched)) {
-    const hidden = f.visible === false;
-    const lay = f.layout || null;
-    const parts = [];
-    if (hidden) parts.push("hide it");
-    if (lay && (lay.column != null || lay.row != null)) {
-      const rowPart = lay.row != null ? `, row ${lay.row}` : "";
-      const spanPart = lay.colSpan != null ? ` (span ${lay.colSpan})` : "";
-      parts.push(`move to column ${lay.column ?? "?"}${rowPart}${spanPart}`);
-    } else if (lay) parts.push("re-lay-out (position changed)");
-    const change = parts.join("; ") || "reconfigured (delta not concretely readable — inspect the client schema)";
-    baseFieldOverrides.push({ field: f.bindTo || f.name, hidden, layout: lay, change });
-  }
+  const baseFieldOverrides = computeBaseFieldOverrides(eff, isChildPage);
   const payloadRules = eff.rules.filter(notTpl);
   const payloadDetails = eff.details.filter(notTpl);
   const payloadMethods = eff.methods.filter(notTpl);
@@ -1137,69 +1146,78 @@ function isImageItem(i) {
 // can bind): an explicit generator-config column > the SOLE IMAGELOOKUP column on the entity > a `<FILL>` slot with
 // the concrete recipe. A related-object photo (Contact.Photo on Employee) is the cross-datasource case (§#3): the
 // column is not on THIS entity → bind `value` through the lookup path, read-only (same pattern as a linked field).
-function mapImages(eff, ctx, F) {
+// Resolve an image's binding column. Explicit config column (i.imageColumn / i.bindTo) > the entity's SOLE IMAGELOOKUP
+// column (bound to AT MOST ONE image — the rest collide → FILL) > FILL. `haveCols` guard: with NO entityColumns we
+// can't say "not on the entity", so an explicit column is treated on-entity (not misclassified cross-datasource).
+// Only an ON-ENTITY column is a real bindable attribute (`bound`); a cross-datasource one falls to a FILL (§#1 —
+// otherwise `value:"$col"` dangles, since the attribute is declared only for on-entity). Extracted for Sonar CC 15.
+function resolveImageBinding(i, cols, soleImageCol, soleUsed) {
+  const ownCol = i.imageColumn || i.bindTo || null;
+  let boundCol = ownCol, soleCollision = false, usedSole = soleUsed;
+  if (!boundCol && soleImageCol) {
+    if (!soleUsed) { boundCol = soleImageCol; usedSole = true; }
+    else soleCollision = true;
+  }
+  const haveCols = Object.keys(cols || {}).length > 0;
+  const onEntity = !!boundCol && (!haveCols || boundCol in cols);
+  const crossDs = !!boundCol && haveCols && !(boundCol in cols); // column is on a RELATED object (via a lookup), not this entity
+  const bound = boundCol && onEntity ? boundCol : null;
+  return { boundCol, bound, onEntity, crossDs, soleCollision, usedSole };
+}
+
+// Map ONE image item → its crt.ImageInput element, image record, optional attribute/pdsColumn, and decisions.
+// Extracted from mapImages so the loop stays under the cognitive-complexity budget (S3776). `soleUsed` in →
+// `usedSole` out advances the sole-IMAGELOOKUP-taken state across the loop.
+function mapOneImage(i, ctx, F, soleImageCol, soleUsed) {
   const { index, profileAnchors, cols, colMeta } = ctx;
+  const decisions = [];
+  // placement: a photo lives in the profile island on most pages; a tab-placed / unresolved-parent image falls back
+  // to the general container — a genuine placement gap, so surface a decision (not a silent misplacement).
+  const own = i.parent ? resolveOwner(i.parent, index, profileAnchors) : { kind: "unresolved" };
+  const parentName = own.kind === "profile" ? F.profileRegion(own) : FLAT_FALLBACK;
+  if (own.kind !== "profile") {
+    const ownerNote = own.kind === "tab" ? `tab '${own.tab}'` : "unresolved parent";
+    decisions.push({ kind: "image-placement", item: i.name,
+      reason: `image '${i.name}' does not resolve to the side profile (owner: ${ownerNote}) — placed in ${FLAT_FALLBACK} as a fallback. Confirm its target container (a photo usually belongs in the profile island; a tab-placed image keeps its tab).` });
+  }
+  const { boundCol, bound, onEntity, crossDs, soleCollision, usedSole } = resolveImageBinding(i, cols, soleImageCol, soleUsed);
+  const attr = bound || `${i.name}_value`;
+  const values = { type: "crt.ImageInput", value: "$" + attr, size: "large", borderRadius: "medium", positioning: "cover", readOnly: crossDs };
+  const element = { operation: "insert", name: i.name, parentName, propertyName: "items", values };
+  const image = { classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !bound };
+  if (soleCollision) decisions.push({ kind: "image-column", item: i.name,
+    reason: `image '${i.name}' has no own column and the entity's sole IMAGELOOKUP column '${soleImageCol}' is already bound to another image — two crt.ImageInput widgets must not share one column. Pick or create a DISTINCT ImageLookup column for it (left as a FILL until then).` });
+  let attrEntry = null, pdsEntry = null;
+  if (boundCol && onEntity) {
+    attrEntry = { key: attr, value: { modelConfig: { path: "PDS." + boundCol } } };
+    pdsEntry = { key: boundCol, value: { path: boundCol } };
+    // crt.ImageInput binds ONLY an IMAGELOOKUP column — a binary Image / Text URL binds but shows/uploads nothing
+    // (silent runtime fail), so surface a real decision. crossDs/FILL raise NO decision — the LAYOUT row's recipe
+    // carries the wiring (a separate ⚠ just duplicated it).
+    if (!isImageLookupType(colMeta(boundCol).type)) decisions.push({ kind: "image-column", item: boundCol,
+      reason: `image '${i.name}' would bind to '${boundCol}', which is NOT an IMAGELOOKUP (16) column — crt.ImageInput can bind ONLY an "Image link" column (references SysImage), never a binary Image or a Text URL. Create/point at an ImageLookup column, or the image shows nothing and uploads fail silently.` });
+  }
+  return { element, image, attrEntry, pdsEntry, decisions, usedSole };
+}
+
+function mapImages(eff, ctx, F) {
+  const { cols, colMeta } = ctx;
   const images = [], viewConfigDiff = [], attributes = {}, pdsColumns = {}, needsDecision = [], accountedFor = [];
   // the entity's IMAGELOOKUP column(s) — the usual binding target (Contact.Photo / Account.Logo). Exactly one ⇒
-  // safe to auto-bind; zero or many ⇒ leave a FILL (don't guess which, don't invent a non-existent column).
+  // safe to auto-bind ONE image; zero or many ⇒ leave a FILL (don't guess which, don't invent a non-existent column).
   const imageLookupCols = Object.keys(cols || {}).filter((c) => isImageLookupType(colMeta(c).type));
   const soleImageCol = imageLookupCols.length === 1 ? imageLookupCols[0] : null;
-  let soleImageColUsed = false; // the sole IMAGELOOKUP fallback binds AT MOST ONE image — see the collision guard below
+  let soleUsed = false;
   for (const i of (eff.items || [])) {
     if (!isImageItem(i)) continue;
     accountedFor.push(i.name);
-    // placement: route to the owner's Freedom region (a photo lives in the profile island in the vast majority of
-    // pages). A tab-placed image or an unresolved parent falls back to the general container — and, unlike a
-    // profile image, that IS a genuine placement gap, so surface a decision (the old "flagged by review" comment
-    // emitted nothing — a silent misplacement).
-    const own = i.parent ? resolveOwner(i.parent, index, profileAnchors) : { kind: "unresolved" };
-    const parentName = own.kind === "profile" ? F.profileRegion(own) : FLAT_FALLBACK;
-    if (own.kind !== "profile") needsDecision.push({ kind: "image-placement", item: i.name,
-      reason: `image '${i.name}' does not resolve to the side profile (owner: ${own.kind === "tab" ? `tab '${own.tab}'` : "unresolved parent"}) — placed in ${FLAT_FALLBACK} as a fallback. Confirm its target container (a photo usually belongs in the profile island; a tab-placed image keeps its tab).` });
-    // binding column: explicit config column (i.imageColumn / i.bindTo) > sole entity IMAGELOOKUP > FILL. The sole
-    // IMAGELOOKUP fallback binds AT MOST ONE image: with >1 image and exactly one IMAGELOOKUP column, binding them all
-    // to it collided (same `attr`/`boundCol` keys silently overwrote in attributes/pdsColumns, and two widgets pointed
-    // at one column). Only the FIRST column-less image takes the sole column; the rest fall to a FILL + a decision.
-    const ownCol = i.imageColumn || i.bindTo || null;
-    let boundCol = ownCol;
-    let soleCollision = false;
-    if (!boundCol && soleImageCol) {
-      if (!soleImageColUsed) { boundCol = soleImageCol; soleImageColUsed = true; }
-      else soleCollision = true;
-    }
-    // Mirror the field path's guard (haveCols): with NO entityColumns supplied we have no basis to say "not on the
-    // entity", so we must NOT misclassify an explicit-column image as read-only cross-datasource (that emitted it
-    // unbound + non-editable with no model column). Only treat it as cross-datasource when columns ARE known and
-    // the column is absent from them.
-    const haveCols = Object.keys(cols || {}).length > 0;
-    const onEntity = !!boundCol && (!haveCols || boundCol in cols);
-    const crossDs = !!boundCol && haveCols && !(boundCol in cols); // §#3 — column is on a RELATED object (via a lookup), not this entity
-    // Only an ON-ENTITY column is a real bindable attribute. A cross-datasource column (on a RELATED object, reached
-    // via a lookup) is NOT — emitting `value: "$" + boundCol` there produced a DANGLING binding (the attribute/
-    // pdsColumn declaration below runs only for onEntity, so `value` referenced an attribute that was never declared),
-    // and --verify (which counts by component type) reported the built-but-unbound image as green. So crossDs falls to
-    // a FILL placeholder (`$<name>_value`, `filled:true`) exactly like an unresolved column — the real lookup path is
-    // resolved on-stand per the layout-row recipe. `column` is still recorded for that recipe.
-    const bound = boundCol && onEntity ? boundCol : null;
-    const attr = bound || `${i.name}_value`;
-    const values = { type: "crt.ImageInput", value: "$" + attr, size: "large", borderRadius: "medium", positioning: "cover", readOnly: crossDs };
-    viewConfigDiff.push({ operation: "insert", name: i.name, parentName, propertyName: "items", values });
-    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !bound });
-    if (soleCollision) needsDecision.push({ kind: "image-column", item: i.name,
-      reason: `image '${i.name}' has no own column and the entity's sole IMAGELOOKUP column '${soleImageCol}' is already bound to another image — two crt.ImageInput widgets must not share one column. Pick or create a DISTINCT ImageLookup column for it (left as a FILL until then).` });
-    if (boundCol && onEntity) {
-      attributes[attr] = { modelConfig: { path: "PDS." + boundCol } };
-      pdsColumns[boundCol] = { path: boundCol };
-      // validate the source TYPE: crt.ImageInput binds ONLY an IMAGELOOKUP column — a binary Image / Text URL
-      // binds but shows/uploads nothing (silent runtime fail), so surface it as a real decision, not a guess.
-      if (!isImageLookupType(colMeta(boundCol).type)) needsDecision.push({ kind: "image-column", item: boundCol,
-        reason: `image '${i.name}' would bind to '${boundCol}', which is NOT an IMAGELOOKUP (16) column — crt.ImageInput can bind ONLY an "Image link" column (references SysImage), never a binary Image or a Text URL. Create/point at an ImageLookup column, or the image shows nothing and uploads fail silently.` });
-    }
-    // NB: the crossDs (related-object photo) and FILL (column unresolved) cases raise NO decision — the crt.ImageInput
-    // element is emitted either way and the LAYOUT row carries the full recipe (bind `value` to the IMAGELOOKUP column
-    // / via the lookup read-only / add it to entityColumns). A separate `[image-column]` ⚠ duplicated that row verbatim
-    // (double-surfacing, same noise the old `[image]` decision was). Only a genuinely WRONG bind — an on-entity column
-    // that is NOT IMAGELOOKUP (silent runtime fail) — remains a decision (handled above).
+    const r = mapOneImage(i, ctx, F, soleImageCol, soleUsed);
+    soleUsed = r.usedSole;
+    viewConfigDiff.push(r.element);
+    images.push(r.image);
+    if (r.attrEntry) attributes[r.attrEntry.key] = r.attrEntry.value;
+    if (r.pdsEntry) pdsColumns[r.pdsEntry.key] = r.pdsEntry.value;
+    needsDecision.push(...r.decisions);
   }
   return { images, viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor };
 }

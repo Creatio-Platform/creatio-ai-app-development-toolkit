@@ -1228,7 +1228,7 @@ check("Major3 image-only form: a sole crt.ImageInput is NOT a false hollow 0-fie
 // #1 FILL (s-vanislemarina Q2): column unresolved → crt.ImageInput STILL emitted with a `<FILL>` value + the recipe
 // on the LAYOUT row, and NO separate image-column ⚠ (that duplicated the layout row verbatim — double-surfacing).
 check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL value, and NO redundant image-column decision",
-  imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && /_value$/.test(o.values.value))
+  imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && o.values.value?.endsWith("_value"))
   && !imageRowCs.changeSet.needsDecision.some((n) => n.kind === "image-column")
   && /crt\.ImageInput/.test(imageRowCs.designSpec) && /IMAGELOOKUP/.test(imageRowCs.designSpec));
 // #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity). review (PR#58 round 4 #1):
@@ -1927,11 +1927,13 @@ check("vendor-integrity: no engine source imports acorn by BARE specifier (only 
 // a top-level payload would fire regardless of the gate. The parser is loaded LAZILY via createRequire inside
 // getAcornParse(), only AFTER ensureVendorIntegrity() passes — so a tampered bundle throws before its bytes run.
 const engineSrc = fs.readFileSync(path.join(ENGINE_DIR, "engine.mjs"), "utf8");
+// line-by-line (not a single super-linear regex, S8786): a static import line is `import … from … vendor/acorn`.
+const hasStaticAcornImport = engineSrc.split("\n").some((l) => /^\s*import\b/.test(l) && /\bfrom\b/.test(l) && l.includes("vendor/acorn"));
 check("vendor-integrity: engine.mjs loads the parser LAZILY (no static hoisted vendor import) — closes the import-time payload vector",
-  !/^\s*import\b[^\n]*\bfrom\s+["'][^"']*vendor\/acorn/m.test(engineSrc)
+  !hasStaticAcornImport
   && /createRequire\(import\.meta\.url\)\(\s*["']\.\/vendor\/acorn\.mjs["']\s*\)/.test(engineSrc)
   && engineSrc.indexOf("ensureVendorIntegrity()") < engineSrc.indexOf('createRequire(import.meta.url)("./vendor/acorn.mjs")'),
-  () => ({ hasStaticImport: /^\s*import\b[^\n]*vendor\/acorn/m.test(engineSrc) }));
+  () => ({ hasStaticAcornImport }));
 // NEGATIVE paths — the gate's whole point is FAILING on a tampered/absent bundle. verify-vendor.mjs takes an
 // optional vendor-dir arg so we can point it at a temp fixture without touching the real bundle. Cover every
 // exit-1 branch (mismatch / missing file / empty manifest / unreadable manifest) — a green-only test proves nothing.
@@ -2759,7 +2761,7 @@ const roTopOnly = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg:
   detailSchemas: { StageDetail: { body: roTopLayer, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
 const roTopDetail = roTopOnly.changeSet.details.find((d) => d.detailSchema === "StageDetail");
 check("#12 control: the TOP layer ALONE (base not supplied) does NOT detect the read-only signal — the chain union is what surfaces it",
-  !(roTopDetail?.addMode && roTopDetail.addMode.addDisabled));
+  !roTopDetail?.addMode?.addDisabled);
 // review (Applicant #13): a DCM object with SEVERAL case versions → the On-stand signals line advises using the
 // ACTIVE/published one (both widgets auto-populate); a single case gets no such note.
 const dcmEmpty = { entity: "X", changeSet: { viewConfigDiff: [], details: [], standardFeatures: [], cardActions: [], needsDecision: [] } };

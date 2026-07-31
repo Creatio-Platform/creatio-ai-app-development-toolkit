@@ -151,10 +151,8 @@ function rowsForFields(fields, regionOf) {
     const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
     // COMPACT per-field marker — the full cross-datasource recipe is printed ONCE under the Layout table (see
     // `linkedFieldsNote`), not repeated verbatim on every linked field (it was ~5× the same paragraph on a page).
-    const linked = v.linkedValue
-      ? "↳ linked (read-only) — bind via the lookup (recipe below)"
-        + (Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "")
-      : null;
+    const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
+    const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
     return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
@@ -243,12 +241,12 @@ function rowsForImages(images, regionOf) {
   return (images || []).map((im) => {
     // Source = the resolved IMAGELOOKUP column when known; a related-object photo shows its lookup path; a FILL
     // slot when the column could not be resolved. The mapper emits a real crt.ImageInput either way.
-    const src = im.column ? (im.crossDs ? `\`${esc(im.column)}\` (related object — via lookup)` : `\`${esc(im.column)}\``) : "`<FILL: image column>`";
-    const note = im.crossDs
-      ? "→ `crt.ImageInput`, `value` bound through the lookup READ-ONLY (related-object photo); must be an IMAGELOOKUP column"
-      : im.column
-        ? "→ `crt.ImageInput` bound via `value` to this IMAGELOOKUP column"
-        : "→ `crt.ImageInput` — bind `value` to the entity's IMAGELOOKUP (16) column (add it to `entityColumns`); if the photo is from a related object bind through its lookup read-only; if none exists, create an ImageLookup column";
+    const colLabel = im.crossDs ? `\`${esc(im.column)}\` (related object — via lookup)` : `\`${esc(im.column)}\``;
+    const src = im.column ? colLabel : "`<FILL: image column>`";
+    let note;
+    if (im.crossDs) note = "→ `crt.ImageInput`, `value` bound through the lookup READ-ONLY (related-object photo); must be an IMAGELOOKUP column";
+    else if (im.column) note = "→ `crt.ImageInput` bound via `value` to this IMAGELOOKUP column";
+    else note = "→ `crt.ImageInput` — bind `value` to the entity's IMAGELOOKUP (16) column (add it to `entityColumns`); if the photo is from a related object bind through its lookup read-only; if none exists, create an ImageLookup column";
     return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
   });
 }
@@ -707,9 +705,9 @@ function buildChildScopeRows(childs) {
       // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
       // recommendation banner. Unknown count (unmapped real page) → generic.
       const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
-      target = choice === "mini" ? "Mini page (`BaseMiniPageTemplate`)"
-        : choice === "grid" ? "Grid page (`PageWithAreaFreedomTemplate`)"
-        : "Freedom child page";
+      if (choice === "mini") target = "Mini page (`BaseMiniPageTemplate`)";
+      else if (choice === "grid") target = "Grid page (`PageWithAreaFreedomTemplate`)";
+      else target = "Freedom child page";
       call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
     } else if (c.editPage === false || c.editable === false) {
       target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
@@ -904,11 +902,14 @@ function buildPageRows(result, opts, pm, typed, fill) {
   // gated row for the whole typed entity (mirrors the section-registration row: built ≠ reachable).
   if (typed.length) pages.push({ label: `Per-type page routing — bind EACH Type's form by the Type column (the Freedom equivalent of Classic's per-type \`SysModuleEdit\` rows). Without it only one Type ever opens its form; the other ${typed.length - 1} are built but unreachable.` });
   if (result.miniPage?.schema) {
-    pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
-    // …and WIRE it: a built mini page is an orphan schema until the section's "+ New" is bound to it. In Freedom that
-    // is a configuration record (a RelatedPage binding with the ADD purpose), NOT part of the page body — so it is a
-    // separate gated deliverable, same reachability class as the section-registration and typed-routing rows.
-    pages.push({ label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).` });
+    // The mini page is a build deliverable AND a WIRING deliverable: a built mini page is an orphan schema until the
+    // section's "+ New" is bound to it. In Freedom that binding is a configuration record (a RelatedPage binding with
+    // the ADD purpose), NOT part of the page body — a separate gated row, same reachability class as section
+    // registration and typed routing. Both pushed together (one Array#push, S7778).
+    pages.push(
+      { label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } },
+      { label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).` },
+    );
   }
   if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it" });
   return pages;
@@ -1009,7 +1010,12 @@ function resolveCountVk(vk, ctx) {
     const b = ctx.ops.filter((o) => (o.name && names.has(o.name)) || ctx.FIELD_RE.test(o.type || "")).length;
     return b >= vk.n ? ["✅ Done", `${b} field components on the built page`, "ok"] : ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`, "unverified"];
   }
-  if (vk.type === "image") { const b = ctx.typeCount("crt.ImageInput"); return b >= vk.n ? ["✅ Done", `${b} crt.ImageInput built`, "ok"] : b > 0 ? ["⚠ verify", `${b}/${vk.n} crt.ImageInput built`, "unverified"] : ["❌ MISSING", "no crt.ImageInput on the built page — the image field was not added", "missing"]; }
+  if (vk.type === "image") {
+    const b = ctx.typeCount("crt.ImageInput");
+    if (b >= vk.n) return ["✅ Done", `${b} crt.ImageInput built`, "ok"];
+    if (b > 0) return ["⚠ verify", `${b}/${vk.n} crt.ImageInput built`, "unverified"];
+    return ["❌ MISSING", "no crt.ImageInput on the built page — the image field was not added", "missing"];
+  }
   const noun = vk.type === "tabs" ? "crt.Tab" : "crt.DataGrid"; // tabs | details
   const b = ctx.typeCount(noun);
   if (b >= vk.n) return ["✅ Done", `${b} ${noun} built`, "ok"];

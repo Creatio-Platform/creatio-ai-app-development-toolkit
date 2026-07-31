@@ -74,7 +74,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
   // Derive the memo key from ALL truthy render flags (sorted) rather than hand-listing isChildPage/isMiniPage: any
   // future render-affecting flag in `extra` then participates in the key automatically, so it can never serve a
   // wrong-flavor cached spec (the sub-run receives the full `...extra`, so the key must reflect all of it).
-  const flagKey = Object.keys(extra).filter((k) => extra[k]).sort().join(",");
+  const flagKey = Object.keys(extra).filter((k) => extra[k]).sort((a, b) => a.localeCompare(b)).join(",");
   const memoKey = flagKey ? `${key}::${flagKey}` : key;
   if (ctx.memo.has(memoKey)) { ctx.memoStats.hits++; return { status: "ok", res: ctx.memo.get(memoKey) }; }
   try {
@@ -308,15 +308,18 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
 // add-card). Returns the phrases; extracted from attachDetailAddModes for Sonar CC 15.
 function describeAddMode(am) {
   const parts = [];
+  // Inner conditionals lifted to locals: keeps the template literals flat (no nested templates, S4624) and the
+  // function under the cognitive-complexity budget (S3776).
+  const actionMethod = am.actionMethod ? ` (\`${am.actionMethod}\`)` : "";
+  const serviceMethod = am.method ? "." + am.method : "";
+  const editableCols = am.editableColumns?.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : "";
+  const filterOnCols = am.filterCols?.length ? ` on ${am.filterCols.join(", ")}` : "";
   if (am.addDisabled) parts.push("has add-new DISABLED (read-only / attach-only — no default add button)");
-  if (am.customAction) parts.push(`exposes a CUSTOM grid action${am.actionMethod ? ` (\`${am.actionMethod}\`)` : ""} — reproduce it as a custom detail action (e.g. attach an existing record), NOT a default add-new`);
+  if (am.customAction) parts.push(`exposes a CUSTOM grid action${actionMethod} — reproduce it as a custom detail action (e.g. attach an existing record), NOT a default add-new`);
   if (am.lookup) parts.push("ADDS via a lookup (pick existing record(s))");
-  if (am.service) parts.push(`calls service \`${am.service}${am.method ? "." + am.method : ""}\` to link/insert`);
-  if (am.editableGrid) {
-    const colsNote = am.editableColumns?.length ? ` (editable columns: ${am.editableColumns.join(", ")})` : "";
-    parts.push(`is an INLINE-EDITABLE grid${colsNote}`);
-  }
-  if (am.fixedFilters) parts.push(`applies FIXED list filters${am.filterCols?.length ? ` on ${am.filterCols.join(", ")}` : ""} — reproduce as a Freedom data-source / business-rule filter`);
+  if (am.service) parts.push(`calls service \`${am.service}${serviceMethod}\` to link/insert`);
+  if (am.editableGrid) parts.push(`is an INLINE-EDITABLE grid${editableCols}`);
+  if (am.fixedFilters) parts.push(`applies FIXED list filters${filterOnCols} — reproduce as a Freedom data-source / business-rule filter`);
   if (!parts.length && am.openCardOverridden) parts.push("overrides the default add-card open (custom add flow)");
   return parts;
 }
@@ -381,7 +384,10 @@ function resolveDetailBody(name, e, bodyOf) {
   // return false` in the HRApplicant base of a stage-history detail — is invisible in the top override the client
   // authored. Text-scans (view-only / add-mechanism) therefore run over the UNION of all layers; structure
   // (entity/columns/diff) parses the TOP (most-derived) layer.
-  const layerText = (x) => typeof x === "string" ? x : (x && (x.body != null || x.file) ? bodyOf(x) : "");
+  const layerText = (x) => {
+    if (typeof x === "string") return x;
+    return x && (x.body != null || x.file) ? bodyOf(x) : "";
+  };
   const layers = (e && Array.isArray(e.bodies)) ? e.bodies.map(layerText).filter(Boolean) : [layerText(e)].filter(Boolean);
   const body = layers.length ? layers[layers.length - 1] : ""; // TOP = last (bodies are base→top)
   const scanText = layers.join("\n");                            // UNION of all layers, for the text-scans
@@ -432,7 +438,7 @@ export function detectAddMode(body) {
 function parseDetailSchemas(manifest, bodyOf) {
   const detailSchemas = {};
   for (const [name, e] of Object.entries(manifest.detailSchemas || {})) {
-    const { body, scanText, p } = resolveDetailBody(name, e, bodyOf);
+    const { scanText, p } = resolveDetailBody(name, e, bodyOf);
     // child EDIT PAGE the detail opens on add/edit (for the recursive child-page migration) — from the
     // detail's getEditPageName / editPageName, else null (the agent resolves it via list-pages). Scan the UNION of
     // layers (it may be declared in a base replacing layer, not the top).
