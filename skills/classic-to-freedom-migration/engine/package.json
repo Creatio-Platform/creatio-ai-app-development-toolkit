@@ -3,11 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic Classic→Freedom merge engine + mapper (runtime only). Golden runners + fixtures live in the repo-root engine-tests/classic-to-freedom (outside the shipped skill).",
-  "engines": {
-    "//": "require(esm) — used to load the vendored acorn synchronously AFTER the integrity check — needs Node >=22.12 (or the >=20.19 backport). On an older runtime getAcornParse() throws ERR_REQUIRE_ESM with an actionable message.",
-    "node": ">=22.12"
-  },
+  "description": "Deterministic Classic→Freedom merge engine + mapper (runtime only). Golden runners + fixtures live in the repo-root engine-tests/classic-to-freedom (outside the shipped skill). The vendored acorn parser is the CommonJS build (vendor/acorn.cjs), loaded via a plain synchronous require() after the integrity check — so there is NO raised Node floor (works on the repo's Node 20 baseline and up).",
   "scripts": {
     "test": "node ../../../engine-tests/classic-to-freedom/run.mjs && node ../../../engine-tests/classic-to-freedom/run-mapper.mjs && node ../../../engine-tests/classic-to-freedom/run-infra.mjs",
     "test:verify-vendor": "node verify-vendor.mjs"

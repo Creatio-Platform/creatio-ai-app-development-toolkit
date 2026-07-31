@@ -1274,6 +1274,14 @@ check("#verify image: an expected image field with NO crt.ImageInput built → �
 const imgVerifyOk = renderVerify(imgVerifyResult, {}, { ops: [{ name: "Photo", type: "crt.ImageInput" }] });
 check("#verify image: crt.ImageInput present on the built page → image row ✅ Done",
   /Image field[\s\S]*?✅ Done/.test(imgVerifyOk.markdown));
+// review (PR#58 round 5 Minor) — the PARTIAL image-verify branch (0 < built < expected → ⚠ verify / unverified) had
+// no golden; only Done and MISSING were asserted, so a regression mislabeling a partial build would ship green.
+const imgVerifyPartialRes = { changeSet: { viewConfigDiff: [], images: [{ classic: "Photo", column: "Photo" }, { classic: "Logo", column: "Logo" }], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+const imgVerifyPartial = renderVerify(imgVerifyPartialRes, {}, { ops: [{ name: "Photo", type: "crt.ImageInput" }] }); // 2 expected, 1 built
+check("#verify image: 2 expected / 1 built → ⚠ verify (unverified), NOT Done and NOT MISSING (partial branch covered)",
+  imgVerifyPartial.unverified >= 1 && imgVerifyPartial.complete === false
+  && /1\/2 crt\.ImageInput built/.test(imgVerifyPartial.markdown) && /⚠ verify/.test(imgVerifyPartial.markdown),
+  () => imgVerifyPartial.markdown.split("\n").filter((l) => /Image field/.test(l)).join(" | "));
 // review (PR#58 Minor) — renderVerify must NOT undercount a control-bound field whose built component type is OUTSIDE
 // FIELD_RE (rich-text / lookup or color variant / future type). Expected is control-based (type-agnostic); the built
 // count now matches by field NAME too, so an odd-typed field counts and does not spuriously set verifyIncomplete.
@@ -1914,13 +1922,13 @@ check("vendor-integrity: verify-vendor.mjs passes on the checked-in acorn bundle
   vv.status === 0 && /verified/.test(vv.stdout || ""));
 const prov = JSON.parse(fs.readFileSync(path.join(ENGINE_DIR, "vendor", "provenance.json"), "utf8"));
 check("vendor-integrity: provenance.json pins acorn with a 64-hex SHA-256 (the gate has something to enforce)",
-  prov.files?.["acorn.mjs"]?.package === "acorn" && /^[0-9a-f]{64}$/.test(prov.files["acorn.mjs"].sha256 || ""));
-// The ONLY acorn import allowed is the pinned vendor bundle (`./vendor/acorn.mjs`). A BARE specifier
+  prov.files?.["acorn.cjs"]?.package === "acorn" && /^[0-9a-f]{64}$/.test(prov.files["acorn.cjs"].sha256 || ""));
+// The ONLY acorn import allowed is the pinned vendor bundle (`./vendor/acorn.cjs`). A BARE specifier
 // (`from "acorn"`) would make Node resolve node_modules — an UNPINNED parser that silently bypasses this
 // integrity gate. Scan every engine source and fail on any non-vendor acorn import (regression guard).
 const engineSrcs = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs")).map((f) => path.join(ENGINE_DIR, f));
 const bareAcorn = engineSrcs.filter((f) => /\bfrom\s+["']acorn["']/.test(fs.readFileSync(f, "utf8")));
-check("vendor-integrity: no engine source imports acorn by BARE specifier (only ./vendor/acorn.mjs is allowed — else the pin is bypassed)",
+check("vendor-integrity: no engine source imports acorn by BARE specifier (only ./vendor/acorn.cjs is allowed — else the pin is bypassed)",
   bareAcorn.length === 0, () => bareAcorn.map((f) => path.basename(f)));
 // Import-time RCE guard (PR #58): engine.mjs must NOT STATICALLY import the vendored parser — a hoisted
 // `import … from "./vendor/acorn…"` evaluates the (possibly tampered) module BEFORE the integrity check runs, so
@@ -1931,8 +1939,8 @@ const engineSrc = fs.readFileSync(path.join(ENGINE_DIR, "engine.mjs"), "utf8");
 const hasStaticAcornImport = engineSrc.split("\n").some((l) => /^\s*import\b/.test(l) && /\bfrom\b/.test(l) && l.includes("vendor/acorn"));
 check("vendor-integrity: engine.mjs loads the parser LAZILY (no static hoisted vendor import) — closes the import-time payload vector",
   !hasStaticAcornImport
-  && /createRequire\(import\.meta\.url\)\(\s*["']\.\/vendor\/acorn\.mjs["']\s*\)/.test(engineSrc)
-  && engineSrc.indexOf("ensureVendorIntegrity()") < engineSrc.indexOf('createRequire(import.meta.url)("./vendor/acorn.mjs")'),
+  && /createRequire\(import\.meta\.url\)\(\s*["']\.\/vendor\/acorn\.cjs["']\s*\)/.test(engineSrc)
+  && engineSrc.indexOf("ensureVendorIntegrity()") < engineSrc.indexOf('createRequire(import.meta.url)("./vendor/acorn.cjs")'),
   () => ({ hasStaticAcornImport }));
 // NEGATIVE paths — the gate's whole point is FAILING on a tampered/absent bundle. verify-vendor.mjs takes an
 // optional vendor-dir arg so we can point it at a temp fixture without touching the real bundle. Cover every
@@ -1964,14 +1972,14 @@ try {
   check("vendor-integrity(neg): an unreadable/absent manifest FAILS — exit 1 + 'cannot read'",
     vNoMan.status === 1 && /cannot read/.test(vNoMan.stderr || ""));
   // (e) DENY-UNKNOWN (review round 4 #5): an UNPINNED .mjs sibling in vendor/ must fail closed — otherwise a module
-  // loaded transitively (e.g. by acorn.mjs) would bypass the hash gate. (acorn.mjs today is self-contained + the only
+  // loaded transitively (e.g. by acorn.cjs) would bypass the hash gate. (acorn.cjs today is self-contained + the only
   // pinned .mjs, so this guards the future: a new unpinned .mjs is a hard failure, not a silent bypass.)
   fs.writeFileSync(provPath, JSON.stringify({ files: { "t.txt": { package: "x", version: "1", sha256: "0".repeat(64) } } }));
   fs.writeFileSync(path.join(vvDir, "t.txt"), "hello");
   fs.writeFileSync(path.join(vvDir, "evil.mjs"), "export const x = 1;\n");
   const vUnpinned = vvOn(vvDir);
-  check("vendor-integrity(neg): an UNPINNED .mjs sibling FAILS closed — exit 1 + 'unpinned .mjs' (deny-unknown, no transitive-load bypass)",
-    vUnpinned.status === 1 && /unpinned \.mjs/.test(vUnpinned.stderr || ""), () => (vUnpinned.stderr || "").slice(0, 160));
+  check("vendor-integrity(neg): an UNPINNED .mjs sibling FAILS closed — exit 1 + 'unpinned executable module' (deny-unknown, no transitive-load bypass)",
+    vUnpinned.status === 1 && /unpinned executable module/.test(vUnpinned.stderr || ""), () => (vUnpinned.stderr || "").slice(0, 160));
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
 }
@@ -1980,6 +1988,8 @@ try {
 // memoized integrity result via the test seam, then drive the real parse surface 3× — each MUST throw (a prior
 // version stored/threw only on call #1, so parse #2..N ran on a tampered parser). Restore after so later goldens are
 // unaffected. This is the seam the review asked for (resettable memo) + the golden the memoized re-throw lacked.
+// The seam is GATED behind C2F_TEST_SEAM=1 (inert on the shipped surface); enable it for these goldens.
+process.env.C2F_TEST_SEAM = "1";
 __setVendorIntegrityForTest({ ok: false, failures: ["forced tamper (test)"], results: [] });
 let acThrows = 0, acLastMsg = "";
 for (let i = 0; i < 3; i++) {
@@ -1991,15 +2001,15 @@ check("AC1 behavioral: a failing vendor-integrity result makes the parse surface
   acThrows === 3, () => ({ acThrows, acLastMsg: acLastMsg.slice(0, 80) }));
 check("AC1 behavioral: restoring the real check lets parsing resume (test seam leaves no residue)",
   (() => { try { const r = parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); return !r.error; } catch { return false; } })());
-// review (PR#58 Minor) — the gate must also assert acorn.mjs ITSELF is a verified pin before require(). Force an
-// ok result whose `results` OMITS acorn.mjs (a provenance tampered to drop the entry) → the parse surface must
+// review (PR#58 Minor) — the gate must also assert acorn.cjs ITSELF is a verified pin before require(). Force an
+// ok result whose `results` OMITS acorn.cjs (a provenance tampered to drop the entry) → the parse surface must
 // refuse to load the unpinned parser, even though the gate returned ok.
 __setVendorIntegrityForTest({ ok: true, failures: [], results: [{ name: "other.mjs", ok: true }] });
 let acornPinThrew = false, acornPinMsg = "";
 try { parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P"); }
 catch (e) { acornPinThrew = true; acornPinMsg = e.message; }
 __setVendorIntegrityForTest(null); // restore
-check("acorn-pin: an ok integrity result that does NOT list acorn.mjs still REFUSES to load the parser (defense-in-depth)",
+check("acorn-pin: an ok integrity result that does NOT list acorn.cjs still REFUSES to load the parser (defense-in-depth)",
   acornPinThrew && /not a verified entry|unpinned parser|provenance/.test(acornPinMsg), () => acornPinMsg.slice(0, 110));
 
 // Minor 2 — section.processNames are ESCAPED at the sink (defense-in-depth), not left to a remote parser

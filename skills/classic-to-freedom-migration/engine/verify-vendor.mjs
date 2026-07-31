@@ -77,15 +77,15 @@ export function checkVendorIntegrity(vendorDir) {
       failures.push(msg); results.push({ name, ok: false, package: pin.package, version: pin.version, expected: pin.sha256, actual });
     }
   }
-  // DENY-UNKNOWN for executable modules: any `.mjs` present in vendor/ that is NOT pinned could be loaded
-  // transitively (e.g. by acorn.mjs) and would bypass the hash gate entirely. Fail closed on it. Today acorn.mjs is
-  // a self-contained bundle and the only pinned .mjs, so this is future-proofing — a new unpinned .mjs sibling is a
-  // hard failure, not a silent bypass. (Non-.mjs assets like the LICENSE are inert and not enumerated.)
+  // DENY-UNKNOWN for executable modules: any `.cjs`/`.mjs`/`.js` present in vendor/ that is NOT pinned could be
+  // loaded transitively (e.g. by acorn.cjs) and would bypass the hash gate entirely. Fail closed on it. Today
+  // acorn.cjs is a self-contained bundle and the only pinned module, so this is future-proofing — a new unpinned
+  // executable sibling is a hard failure, not a silent bypass. (Inert assets like the LICENSE are not enumerated.)
   try {
     const pinned = new Set(names);
     for (const f of readdirSync(vendorDir)) {
-      if (f.endsWith(".mjs") && !pinned.has(f)) {
-        const msg = `${f}: unpinned .mjs present in vendor/ — every executable module must be pinned in provenance.json (deny-unknown); pin it or remove it`;
+      if (/\.(cjs|mjs|js)$/.test(f) && !pinned.has(f)) {
+        const msg = `${f}: unpinned executable module present in vendor/ — every .cjs/.mjs/.js must be pinned in provenance.json (deny-unknown); pin it or remove it`;
         failures.push(msg); results.push({ name: f, ok: false, error: msg });
       }
     }

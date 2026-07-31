@@ -8,12 +8,13 @@ import { checkVendorIntegrity } from "./verify-vendor.mjs";
 
 // Runtime supply-chain gate. parseSchema feeds UNTRUSTED classic bodies to the vendored acorn parser (the AST route
 // is chosen over `vm` precisely to deny RCE from a hostile body). CRITICAL: the parser is NOT statically imported —
-// a static top-level `import … from "./vendor/acorn.mjs"` is HOISTED and EVALUATED before any module code, so a
+// a static top-level `import … from "./vendor/acorn…"` is HOISTED and EVALUATED before any module code, so a
 // tampered file's module-level payload would run at import time, BEFORE the check. Instead `getAcornParse()` loads
-// acorn LAZILY, via `createRequire` (synchronous `require(esm)`, Node >= 22.12), and ONLY AFTER
-// `ensureVendorIntegrity()` has passed — so a tampered/drifted `acorn.mjs` is caught and the throw happens BEFORE
-// its bytes are ever evaluated. This closes the import-time vector while keeping the whole parse pipeline synchronous
-// (a dynamic `import()` would have forced parseSchema — and everything above it — to become async).
+// acorn LAZILY, via `createRequire`, and ONLY AFTER `ensureVendorIntegrity()` has passed — so a tampered/drifted
+// bundle is caught and the throw happens BEFORE its bytes are ever evaluated. The parser is vendored as the
+// CommonJS build (`vendor/acorn.cjs`), so a plain `require()` loads it SYNCHRONOUSLY on ANY supported Node (no
+// `require(esm)` >= 22.12 floor; a dynamic `import()` would have forced parseSchema — and everything above it —
+// to become async). This closes the import-time vector while keeping the whole parse pipeline synchronous.
 //
 // The check itself: verify vendor/ against the pinned provenance before the FIRST parse. Lazy + memoized at the
 // PARSE surface — NOT a top-level throw (that fails closed but every importer — mapper, designspec, all goldens —
@@ -30,37 +31,29 @@ function ensureVendorIntegrity() {
 // Test seam (AC1 fail-closed regression): force or reset the memoized vendor-integrity result so a golden can prove
 // the PARSE surface throws on EVERY call when the check failed — not just the first (the fail-open a prior version
 // had). Pass a `{ ok, failures, results }` object to force a state, or `null` to restore the real memoized check on
-// the next parse. Also clears the acorn memo so the gate is re-entered. Test-only — never called on a production path.
-export function __setVendorIntegrityForTest(result) { __vendorCheck = result; __acornParse = null; }
+// the next parse. GATED behind `C2F_TEST_SEAM=1`: on the shipped runtime surface (no flag) it is an inert no-op, so
+// this control ships NO usable integrity-gate bypass (defense-in-depth — a security gate must not carry its own
+// disable switch). The golden runner sets the flag before using it.
+export function __setVendorIntegrityForTest(result) {
+  if (process.env.C2F_TEST_SEAM !== "1") return; // inert unless the test seam is explicitly enabled
+  __vendorCheck = result;
+  __acornParse = null;
+}
 
 // Lazily load the vendored acorn's `parse` — AFTER the integrity check, so a tampered module's top-level code never
-// runs. `require(esm)` loads the pinned ESM `acorn.mjs` synchronously (no top-level await in it), keeping parseSchema
-// sync — but require(esm) needs Node >= 22.12 (or the >= 20.19 backport); on an older runtime it throws
-// ERR_REQUIRE_ESM. That floor is declared in package.json `engines` and re-surfaced here as an actionable error
-// (otherwise every parse throws a cryptic ERR_REQUIRE_ESM and the whole engine looks broken). Memoized: the check +
-// require run once per process.
+// runs. The CommonJS build (`vendor/acorn.cjs`) loads via a plain synchronous `require()` on ANY supported Node
+// (no `require(esm)` floor), keeping parseSchema sync. Memoized: the check + require run once per process.
 let __acornParse = null;
 function getAcornParse() {
   if (__acornParse) return __acornParse;
   ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
   // Defense-in-depth: the gate above passes when every LISTED pin matches, but never asserts that the file we are
-  // ABOUT to load (acorn.mjs) is itself one of the verified pins. A tampered provenance.json that DROPPED the
-  // acorn.mjs entry would leave the gate green while an unverified parser loads. Require acorn.mjs to be a verified
+  // ABOUT to load (acorn.cjs) is itself one of the verified pins. A tampered provenance.json that DROPPED the
+  // acorn.cjs entry would leave the gate green while an unverified parser loads. Require acorn.cjs to be a verified
   // ok-entry before require().
-  if (!(__vendorCheck.results || []).some((r) => r.name === "acorn.mjs" && r.ok))
-    throw new Error("classic-to-freedom engine: `acorn.mjs` is not a verified entry in vendor/provenance.json — refusing to load an unpinned parser (provenance may be tampered).");
-  let acorn;
-  try {
-    acorn = createRequire(import.meta.url)("./vendor/acorn.mjs");
-  } catch (e) {
-    if (e?.code === "ERR_REQUIRE_ESM") {
-      throw new Error(
-        `classic-to-freedom engine: loading the vendored parser needs Node >= 22.12 (or the >= 20.19 backport) for require(esm); ` +
-        `this runtime is ${process.version}. Upgrade Node (see package.json "engines"). Original: ${e.message}`,
-      );
-    }
-    throw e;
-  }
+  if (!(__vendorCheck.results || []).some((r) => r.name === "acorn.cjs" && r.ok))
+    throw new Error("classic-to-freedom engine: `acorn.cjs` is not a verified entry in vendor/provenance.json — refusing to load an unpinned parser (provenance may be tampered).");
+  const acorn = createRequire(import.meta.url)("./vendor/acorn.cjs");
   if (typeof acorn.parse !== "function") throw new Error("classic-to-freedom engine: vendored acorn has no `parse` export");
   __acornParse = acorn.parse;
   return __acornParse;
@@ -926,6 +919,9 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // building on it silently drops base actions + the true nesting. Surface it as a WARNING so the SKILL's
   // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
   const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
+  // INFORMATIONAL ONLY — surfaced in seedQuality for diagnostics; it NO LONGER gates `looksSkeletal` (that is now the
+  // kind-agnostic method-COUNT test below). Kept because a record-page seed defining `getActions` is useful context
+  // when reading a seedQuality dump; do NOT reintroduce it as a gate (keying on it false-blocked section/mini seeds).
   const hasGetActions = seedMethodNames.has("getActions");
   // #19 — the seed must be the REAL fetched base-template chain, not a broken/empty bundle fetch. Since the seed
   // ALWAYS comes from `get-classic-page-sources` (real schema bodies read off the stand) — never hand-authored

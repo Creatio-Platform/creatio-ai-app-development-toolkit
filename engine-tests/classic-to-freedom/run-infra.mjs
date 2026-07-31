@@ -46,9 +46,9 @@ console.log("\n===== ustar reader (offline) =====");
 const body = "export const x = 1;\nconst y = 2;\n"; // CRLF-free content
 const tar = makeTar([
   { name: "package/README.md", content: "readme" },              // a preceding entry the reader must skip past
-  { name: "package/dist/acorn.mjs", content: body },
+  { name: "package/dist/acorn.cjs", content: body },
 ]);
-const entry = readTarEntry(tar, "package/dist/acorn.mjs");
+const entry = readTarEntry(tar, "package/dist/acorn.cjs");
 check("ustar: extracts the requested entry's exact bytes (skips preceding entries by size)",
   !!entry && entry.toString("utf8") === body, () => (entry ? JSON.stringify(entry.toString("utf8")) : "null"));
 check("ustar: sha256Lf of the extracted bytes matches an independent hash of the content",
@@ -56,9 +56,9 @@ check("ustar: sha256Lf of the extracted bytes matches an independent hash of the
 check("ustar: a non-existent entry name returns null (not a wrong/partial slice)",
   readTarEntry(tar, "package/dist/missing.mjs") === null);
 // the ustar `prefix` field (long paths): full path = prefix + "/" + name
-const tarPfx = makeTar([{ name: "acorn.mjs", prefix: "package/dist", content: body }]);
+const tarPfx = makeTar([{ name: "acorn.cjs", prefix: "package/dist", content: body }]);
 check("ustar: honours the `prefix` field when reconstructing the full path",
-  readTarEntry(tarPfx, "package/dist/acorn.mjs")?.toString("utf8") === body);
+  readTarEntry(tarPfx, "package/dist/acorn.cjs")?.toString("utf8") === body);
 
 console.log("\n===== integrity (offline) =====");
 const blob = Buffer.from("some tarball bytes");
@@ -89,12 +89,12 @@ check("vendor-gate: importing verify-vendor.mjs did NOT exit the process (CLI ru
   typeof checkVendorIntegrity === "function");
 check("vendor-gate: the REAL vendor dir passes (positive control — the check is not vacuously failing)",
   checkVendorIntegrity(VENDOR).ok === true);
-// negative 1 — a byte-mutated acorn.mjs beside the genuine provenance pin
+// negative 1 — a byte-mutated acorn.cjs beside the genuine provenance pin
 const tmpBad = mkdtempSync(path.join(os.tmpdir(), "vendorgate-bad-"));
 copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpBad, "provenance.json"));
-writeFileSync(path.join(tmpBad, "acorn.mjs"), Buffer.concat([readFileSync(path.join(VENDOR, "acorn.mjs")), Buffer.from("\n// tampered\n")]));
+writeFileSync(path.join(tmpBad, "acorn.cjs"), Buffer.concat([readFileSync(path.join(VENDOR, "acorn.cjs")), Buffer.from("\n// tampered\n")]));
 const badRes = checkVendorIntegrity(tmpBad);
-check("vendor-gate: a byte-mutated acorn.mjs FAILS integrity (ok:false + SHA-256 MISMATCH)",
+check("vendor-gate: a byte-mutated acorn.cjs FAILS integrity (ok:false + SHA-256 MISMATCH)",
   badRes.ok === false && badRes.failures.some((f) => /SHA-256 MISMATCH/.test(f)), () => JSON.stringify(badRes.failures));
 // negative 2 — provenance pins a file that is absent
 const tmpMissing = mkdtempSync(path.join(os.tmpdir(), "vendorgate-missing-"));
