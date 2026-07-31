@@ -38,7 +38,7 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.11'
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: '20'
 
@@ -231,7 +231,18 @@ jobs:
           export GH_HOST="${GITHUB_SERVER_URL#http://}"
           export GH_HOST="${GH_HOST#https://}"
           export GH_HOST="${GH_HOST%/}"
+          # Product-style release TITLE: "<version> — <hook>", where <hook> is the leading **bold** lead
+          # sentence of the notes section (the announcement convention in RELEASE-NOTES.md). Without a title,
+          # `gh release create` names the release after the bare tag; a hook makes the Releases page read like
+          # product announcements. Falls back to just the version when the section has no bold lead line.
+          # `[^*]*` (not `.*`) captures only the FIRST **bold** span: the hook line can carry more `**bold**`
+          # runs later (e.g. `**layout, components, and business rules**`), and a greedy `.*` would swallow the
+          # whole paragraph up to the last `**`.
+          HOOK="$(sed -n 's/^\*\*\([^*]*\)\*\*.*/\1/p' /tmp/release_notes.md | head -1)"
+          HOOK="${HOOK%.}"   # trim one trailing period
+          if [ -n "$HOOK" ]; then TITLE="$RELEASE_VERSION — $HOOK"; else TITLE="$RELEASE_VERSION"; fi
           gh release create "$RELEASE_VERSION" \
+            --title "$TITLE" \
             --notes-file /tmp/release_notes.md \
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" \
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip.sha256"
