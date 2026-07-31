@@ -888,7 +888,18 @@ function buildPageRows(result, opts, pm, typed, fill) {
   const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
   if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
   for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}` }); }
-  if (result.miniPage?.schema) pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
+  // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
+  // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
+  // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
+  // gated row for the whole typed entity (mirrors the section-registration row: built ≠ reachable).
+  if (typed.length) pages.push({ label: `Per-type page routing — bind EACH Type's form by the Type column (the Freedom equivalent of Classic's per-type \`SysModuleEdit\` rows). Without it only one Type ever opens its form; the other ${typed.length - 1} are built but unreachable.` });
+  if (result.miniPage?.schema) {
+    pages.push({ label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } });
+    // …and WIRE it: a built mini page is an orphan schema until the section's "+ New" is bound to it. In Freedom that
+    // is a configuration record (a RelatedPage binding with the ADD purpose), NOT part of the page body — so it is a
+    // separate gated deliverable, same reachability class as the section-registration and typed-routing rows.
+    pages.push({ label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).` });
+  }
   if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it" });
   return pages;
 }

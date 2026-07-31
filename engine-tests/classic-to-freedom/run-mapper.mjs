@@ -2392,6 +2392,18 @@ check("Plan-vs-Done checklist: produced as a SEPARATE artifact (result.checklist
 check("Plan-vs-Done checklist: has a Pages row for the MINI PAGE (a built page can't be left off the control table)",
   /Mini page `XMiniPage`/.test(ck),
   () => ck.split("\n").filter((l) => /Mini page/.test(l)));
+// review (ENG-93926 mini-page wiring): a built mini page is an ORPHAN schema until the section's "+ New" is bound to
+// it (an ADD-purpose RelatedPage binding — a config record, NOT part of the page body). That wiring is its OWN gated
+// deliverable, distinct from the build row, so it can't depend on the agent noticing it.
+check("Plan-vs-Done checklist: the MINI PAGE also gets a WIRING row (ADD-purpose RelatedPage binding to '+ New'), not just a build row",
+  /Mini page wired to "\+ New"/.test(ck) && /ADD-purpose RelatedPage binding/.test(ck),
+  () => ck.split("\n").filter((l) => /wired|RelatedPage|\+ New/.test(l)));
+// review (ENG-93925 typed routing): the engine plans N per-type forms, but each Type opens its form only if it is
+// ROUTED to it (Classic's per-type SysModuleEdit rows → the Freedom per-Type binding). That routing must be a GATED
+// row like the forms themselves — not just prose in the ⚠ template banner (which relied on the agent noticing it).
+check("Plan-vs-Done checklist (typed): a gated 'Per-type page routing' deliverable row (bind each Type by the Type column), not banner-prose only",
+  /Per-type page routing/.test(docSecRun.checklist || "") && /Type column/.test(docSecRun.checklist || "") && /SysModuleEdit/.test(docSecRun.checklist || ""),
+  () => (docSecRun.checklist || "").split("\n").filter((l) => /routing|Type column|SysModuleEdit/.test(l)));
 // review (s-vanislemarina #3): STANDARD framework methods (init/onSaved) are NOT surfaced as handlers — only the
 // CUSTOM business method (onContactChange) gets a handler row.
 check("Plan-vs-Done checklist: ONE row per CUSTOM handler (onContactChange); standard init/onSaved are NOT listed",
