@@ -1158,6 +1158,10 @@ function resolveImageBinding(i, cols, soleImageCol, soleUsed) {
     if (!soleUsed) { boundCol = soleImageCol; usedSole = true; }
     else soleCollision = true;
   }
+  // An EXPLICIT bind to the sole IMAGELOOKUP column ALSO reserves it — else a later column-less image would fall
+  // back to the same column and both crt.ImageInput controls would bind it (the collision guard only tracked the
+  // auto-fallback path, not an explicit `bindTo` to soleImageCol).
+  if (boundCol === soleImageCol) usedSole = true;
   const haveCols = Object.keys(cols || {}).length > 0;
   const onEntity = !!boundCol && (!haveCols || boundCol in cols);
   const crossDs = !!boundCol && haveCols && !(boundCol in cols); // column is on a RELATED object (via a lookup), not this entity
@@ -1192,10 +1196,17 @@ function mapOneImage(i, ctx, F, soleImageCol, soleUsed) {
     attrEntry = { key: attr, value: { modelConfig: { path: "PDS." + boundCol } } };
     pdsEntry = { key: boundCol, value: { path: boundCol } };
     // crt.ImageInput binds ONLY an IMAGELOOKUP column — a binary Image / Text URL binds but shows/uploads nothing
-    // (silent runtime fail), so surface a real decision. crossDs/FILL raise NO decision — the LAYOUT row's recipe
-    // carries the wiring (a separate ⚠ just duplicated it).
+    // (silent runtime fail), so surface a real decision.
     if (!isImageLookupType(colMeta(boundCol).type)) decisions.push({ kind: "image-column", item: boundCol,
       reason: `image '${i.name}' would bind to '${boundCol}', which is NOT an IMAGELOOKUP (16) column — crt.ImageInput can bind ONLY an "Image link" column (references SysImage), never a binary Image or a Text URL. Create/point at an ImageLookup column, or the image shows nothing and uploads fail silently.` });
+  } else {
+    // FILL / cross-datasource / collision: `value` is `$<name>_value`. Declare a PLACEHOLDER view-model attribute for
+    // it so the binding is NOT dangling (it resolves to a real declared attribute) — its `modelConfig.path` is a
+    // <FILL> the agent completes with the real IMAGELOOKUP column / related-object lookup path per the layout recipe.
+    // No pdsColumn yet (the datasource column is unknown until resolved). Fixes the round-4 residue where the value
+    // referenced an attribute that was never declared.
+    const hint = crossDs ? "the related-object lookup path (read-only)" : "the entity's IMAGELOOKUP (16) column";
+    attrEntry = { key: attr, value: { modelConfig: { path: `<FILL: bind to ${hint}>` } } };
   }
   return { element, image, attrEntry, pdsEntry, decisions, usedSole };
 }

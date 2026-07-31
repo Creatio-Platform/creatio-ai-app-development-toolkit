@@ -895,23 +895,25 @@ function buildCoverageRows(cs, pm, result) {
 function buildPageRows(result, opts, pm, typed, fill) {
   const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
   if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}` }); }
+  // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
+  // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
+  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
-  // gated row for the whole typed entity (mirrors the section-registration row: built ≠ reachable).
-  if (typed.length) pages.push({ label: `Per-type page routing — bind EACH Type's form by the Type column (the Freedom equivalent of Classic's per-type \`SysModuleEdit\` rows). Without it only one Type ever opens its form; the other ${typed.length - 1} are built but unreachable.` });
+  // gated row for the whole typed entity (mirrors the section-registration row: built ≠ reachable). GATED via
+  // on-stand evidence so an unrouted typed entity can't exit --verify with 0 (deep-review #1).
+  if (typed.length) pages.push({ label: `Per-type page routing — bind EACH Type's form by the Type column (the Freedom equivalent of Classic's per-type \`SysModuleEdit\` rows). Without it only one Type ever opens its form; the other ${typed.length - 1} are built but unreachable.`, vk: { type: "onstand", evidence: "typedRouting", what: "per-Type RelatedPage binding check", miss: "Types route to Classic / only one form opens" } });
   if (result.miniPage?.schema) {
-    // The mini page is a build deliverable AND a WIRING deliverable: a built mini page is an orphan schema until the
-    // section's "+ New" is bound to it. In Freedom that binding is a configuration record (a RelatedPage binding with
-    // the ADD purpose), NOT part of the page body — a separate gated row, same reachability class as section
-    // registration and typed routing. Both pushed together (one Array#push, S7778).
+    // The mini page is a build deliverable (vk mini) AND a WIRING deliverable: a built mini page is an orphan schema
+    // until the section's "+ New" is bound to it (an ADD-purpose RelatedPage binding — a config record, NOT part of
+    // the page body). GATED via on-stand evidence `built.miniPageWired` so an unwired mini page can't pass --verify.
     pages.push(
       { label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } },
-      { label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).` },
+      { label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).`, vk: { type: "onstand", evidence: "miniPageWired", what: "add-purpose RelatedPage binding check", miss: "'+ New' still opens the full form" } },
     );
   }
-  if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it" });
+  if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it", vk: { type: "onstand", evidence: "sectionRegistered", what: "app-menu section-registration check", miss: "the section is not in the menu — its pages are unreachable" } });
   return pages;
 }
 // List-page contents checklist rows (columns / quick filters / section actions). Returns the rows. Extracted for CC.
@@ -1002,13 +1004,24 @@ function resolveStructuralVk(vk, ctx) {
 }
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") {
-    // Count a built op as a field if its NAME is one of the expected control-bound fields (type-agnostic — matches
-    // the expected side's source of truth, so a rich-text / lookup / color / future field still counts), OR its
-    // component type is a known field input (fallback when built ops carry no name). Prevents a spurious
-    // "fewer than expected" → verifyIncomplete false-block on a genuinely-complete page with an odd-typed field.
+    // Verify by IDENTITY when the built ops carry names: count how many EXPECTED field names are present. This is
+    // type-AGNOSTIC (a rich-text / lookup / color / future field still counts, matched by name) AND does not
+    // over-count (an unrelated input of the right TYPE but a different NAME no longer compensates for a dropped
+    // business field — the earlier `names.has || FIELD_RE` OR did exactly that). Fall back to type-based counting
+    // ONLY when no built op has a name at all (raw counts). Missing expected names are reported in the evidence.
     const names = new Set(vk.names || []);
-    const b = ctx.ops.filter((o) => (o.name && names.has(o.name)) || ctx.FIELD_RE.test(o.type || "")).length;
-    return b >= vk.n ? ["✅ Done", `${b} field components on the built page`, "ok"] : ["⚠ verify", `${b} built — fewer than ${vk.n} expected; check which fields were dropped`, "unverified"];
+    const named = ctx.ops.filter((o) => o.name);
+    let b, missing = [];
+    if (named.length) {
+      const builtNames = new Set(named.map((o) => o.name));
+      const present = [...names].filter((n) => builtNames.has(n));
+      b = present.length; missing = [...names].filter((n) => !builtNames.has(n));
+    } else {
+      b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
+    }
+    if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present on the built page`, "ok"];
+    const miss = missing.length ? ` — missing: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? "…" : ""}` : "";
+    return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
   }
   if (vk.type === "image") {
     const b = ctx.typeCount("crt.ImageInput");
@@ -1032,11 +1045,25 @@ function resolveComponentVk(vk, ctx) {
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image"]);
 const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
+// A REACHABILITY / wiring deliverable (per-type routing, mini-page "+ New" binding, section registration, typed-form
+// existence) is a configuration record NOT derivable from a single page's get-page ownBodySummary — but it MUST still
+// gate: an unproven one may leave built pages unreachable. So it reads an explicit on-stand EVIDENCE boolean the agent
+// supplies in `--built` (e.g. `built.typedRouting`): true → Done; false → MISSING (exit 2); ABSENT → unverified
+// (exit 2, NOT "skip") — so `--verify` cannot exit 0 until the wiring is confirmed. (deep-review #1.)
+function resolveOnstandVk(vk, ctx) {
+  const v = ctx.built?.[vk.evidence];
+  const what = vk.what ? ` — run the on-stand ${vk.what}` : "";
+  if (v === true) return ["✅ Done", `${vk.evidence} confirmed on-stand`, "ok"];
+  if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified"];
+}
+const VK_ONSTAND = new Set(["onstand"]);
 function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
   if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
   if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
+  if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
   return ["⚠ verify", "confirm on-stand", "unverified"];
 }
 

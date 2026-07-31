@@ -1238,17 +1238,31 @@ check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL v
 // lookup path is resolved on-stand per the layout recipe; the column name is still recorded for that recipe.
 const imgCross = runMigration({ entity: "X", entityColumns: { Name: { type: "Text" } },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"ContactPhoto"}}]};});` }] }, { baseDir: FIX });
-check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput as a FILL (NOT a dangling $column binding), read-only, no dangling attribute, no image-column ⚠",
+check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput FILL, read-only, `$value` resolves to a DECLARED placeholder attribute (NOT dangling), no wrong $ContactPhoto attr, no image-column ⚠",
   (() => {
     const el = imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo");
     const img = imgCross.changeSet.images.find((i) => i.classic === "Photo");
     const vm = imgCross.changeSet.viewModelConfigDiff?.[0]?.values || {};
     return el?.values.value === "$Photo_value" && el?.values.readOnly === true       // FILL, not "$ContactPhoto"
       && img?.crossDs === true && img?.filled === true && img?.column === "ContactPhoto"
-      && vm.ContactPhoto === undefined                                                 // the bug: dangling attribute never declared
+      && vm.ContactPhoto === undefined                                                 // no wrong on-entity attribute
+      && /^<FILL/.test(vm.Photo_value?.modelConfig?.path || "")                        // the `$Photo_value` value RESOLVES to a declared placeholder attr (not dangling)
       && !imgCross.changeSet.needsDecision.some((n) => n.kind === "image-column");
   })(),
   () => JSON.stringify({ el: imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values, imgs: imgCross.changeSet.images, vm: imgCross.changeSet.viewModelConfigDiff }));
+// review (PR#58 round 6 / file2 #1) — EVERY emitted crt.ImageInput's `$attribute` must be DECLARED in
+// viewModelConfigDiff.attributes (a value pointing at an undeclared attribute is a dangling binding). Holds for
+// on-entity (real PDS path) AND FILL/cross-datasource (placeholder <FILL> path). General guard across image cases.
+{
+  const attrsDeclared = (r) => {
+    const vm = r.changeSet.viewModelConfigDiff?.[0]?.values || {};
+    return (r.changeSet.viewConfigDiff || [])
+      .filter((o) => o.values?.type === "crt.ImageInput" && typeof o.values.value === "string" && o.values.value.startsWith("$"))
+      .every((o) => vm[o.values.value.slice(1)] != null); // the attr named after `$` exists
+  };
+  check("#image: every emitted crt.ImageInput `$attribute` is declared (on-entity + FILL/cross-datasource) — no dangling binding",
+    attrsDeclared(imgCross) && attrsDeclared(imgBound) && attrsDeclared(imageRowCs));
+}
 // review (PR#58 MEDIUM): with NO entityColumns supplied, an explicit-column image must NOT be misclassified as
 // read-only cross-datasource — mirror the field path's haveCols guard (treat as on-entity when columns unknown).
 const imgNoCols = runMigration({ entity: "X",
@@ -1304,6 +1318,22 @@ check("#image-collision: 2 images + 1 sole IMAGELOOKUP → FIRST binds it, SECON
       && collide.length === 1 && /already bound to another image/.test(collide[0].reason);
   })(),
   () => JSON.stringify(imgCollide.changeSet.images) + " | " + JSON.stringify((imgCollide.changeSet.needsDecision || []).filter((n) => n.kind === "image-column")));
+// review (PR#58 round 6 / deep #4) — the OTHER collision order: an EXPLICIT bind to the sole IMAGELOOKUP column must
+// ALSO reserve it, so a later column-less image can't fall back onto the same column (two controls, one column).
+const imgExplicitFirst = runMigration({ entity: "X", entityColumns: { Photo: { type: "ImageLookup" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Img1",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"Photo"}},{operation:"insert",name:"Img2",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen"}}]};});` }] }, { baseDir: FIX });
+check("#image-collision(explicit-first): Img1 explicitly binds the sole IMAGELOOKUP → Img2 (column-less) does NOT reuse it (FILL + decision), not both on $Photo",
+  (() => {
+    const imgs = imgExplicitFirst.changeSet.images;
+    const a = imgs.find((x) => x.classic === "Img1"), b = imgs.find((x) => x.classic === "Img2");
+    const el2 = imgExplicitFirst.changeSet.viewConfigDiff.find((o) => o.name === "Img2");
+    const collide = (imgExplicitFirst.changeSet.needsDecision || []).filter((n) => n.kind === "image-column" && n.item === "Img2");
+    return a?.column === "Photo" && a?.filled === false        // explicit bind kept
+      && b?.column === null && b?.filled === true              // Img2 NOT bound to Photo
+      && el2?.values.value === "$Img2_value"                    // Img2 is a distinct FILL, not "$Photo"
+      && collide.length === 1;                                  // and it's flagged, not silently doubled
+  })(),
+  () => JSON.stringify(imgExplicitFirst.changeSet.images));
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
@@ -1927,16 +1957,31 @@ check("vendor-integrity: provenance.json pins acorn with a 64-hex SHA-256 (the g
 // (`from "acorn"`) would make Node resolve node_modules — an UNPINNED parser that silently bypasses this
 // integrity gate. Scan every engine source and fail on any non-vendor acorn import (regression guard).
 const engineSrcs = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs")).map((f) => path.join(ENGINE_DIR, f));
-const bareAcorn = engineSrcs.filter((f) => /\bfrom\s+["']acorn["']/.test(fs.readFileSync(f, "utf8")));
-check("vendor-integrity: no engine source imports acorn by BARE specifier (only ./vendor/acorn.cjs is allowed — else the pin is bypassed)",
+// catch BOTH `from "acorn"` AND the side-effect `import "acorn"` (review deep #5) — the specifier is exactly `acorn`.
+const bareAcornRe = /(?:from|import)\s+["']acorn["']/;
+const bareAcorn = engineSrcs.filter((f) => bareAcornRe.test(fs.readFileSync(f, "utf8")));
+check("vendor-integrity: no engine source imports acorn by BARE specifier — `from \"acorn\"` OR side-effect `import \"acorn\"` (only ./vendor/acorn.cjs is allowed)",
   bareAcorn.length === 0, () => bareAcorn.map((f) => path.basename(f)));
+// the BARE-specifier detector must catch BOTH import forms (negative fixtures — deep #5).
+check("vendor-integrity(guard): the bare-acorn detector catches `from \"acorn\"` AND side-effect `import \"acorn\"`",
+  bareAcornRe.test('import { parse } from "acorn";') && bareAcornRe.test('import "acorn";')
+  && !bareAcornRe.test('createRequire(import.meta.url)("./vendor/acorn.cjs")'));
 // Import-time RCE guard (PR #58): engine.mjs must NOT STATICALLY import the vendored parser — a hoisted
 // `import … from "./vendor/acorn…"` evaluates the (possibly tampered) module BEFORE the integrity check runs, so
 // a top-level payload would fire regardless of the gate. The parser is loaded LAZILY via createRequire inside
 // getAcornParse(), only AFTER ensureVendorIntegrity() passes — so a tampered bundle throws before its bytes run.
 const engineSrc = fs.readFileSync(path.join(ENGINE_DIR, "engine.mjs"), "utf8");
-// line-by-line (not a single super-linear regex, S8786): a static import line is `import … from … vendor/acorn`.
-const hasStaticAcornImport = engineSrc.split("\n").some((l) => /^\s*import\b/.test(l) && /\bfrom\b/.test(l) && l.includes("vendor/acorn"));
+// line-by-line (not a single super-linear regex, S8786). A STATIC import line begins with `import`, is NOT a dynamic
+// `import(` call, and references the target — this catches BOTH `import … from "…/vendor/acorn…"` AND the side-effect
+// `import "…/vendor/acorn…"` (which would ALSO evaluate the module before the gate). deep #5: the old `&& /from/`
+// requirement missed the side-effect form. `createRequire(...)(...)` is not an `import` statement → not matched.
+const isStaticImportOf = (l, target) => /^\s*import\b/.test(l) && !/\bimport\s*\(/.test(l) && l.includes(target);
+const hasStaticAcornImport = engineSrc.split("\n").some((l) => isStaticImportOf(l, "vendor/acorn"));
+// the detector must catch the side-effect form too (negative fixtures — deep #5).
+check("vendor-integrity(guard): the static-import detector catches side-effect `import \"./vendor/acorn.cjs\"` (no `from`), not just `import … from`",
+  isStaticImportOf('import "./vendor/acorn.cjs";', "vendor/acorn")
+  && isStaticImportOf('import { parse } from "./vendor/acorn.cjs";', "vendor/acorn")
+  && !isStaticImportOf('const acorn = createRequire(import.meta.url)("./vendor/acorn.cjs");', "vendor/acorn"));
 check("vendor-integrity: engine.mjs loads the parser LAZILY (no static hoisted vendor import) — closes the import-time payload vector",
   !hasStaticAcornImport
   && /createRequire\(import\.meta\.url\)\(\s*["']\.\/vendor\/acorn\.cjs["']\s*\)/.test(engineSrc)
@@ -2590,7 +2635,7 @@ const vResult = {
 // the real s46 shape: fields + a DataGrid + a button built, but NO progress bar / Next steps / comm options /
 // approvals, plain template, mini page not created.
 const vMissing = renderVerify(vResult, {}, {
-  ops: [{ name: "AF", type: "crt.Input" }, { name: "BF", type: "crt.Input" }, { name: "DG", type: "crt.DataGrid" }, { name: "Btn", type: "crt.Button" }],
+  ops: [{ name: "Contact", type: "crt.ComboBox" }, { name: "Owner", type: "crt.ComboBox" }, { name: "DG", type: "crt.DataGrid" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsFreedomTemplate", miniPageBuilt: false,
 });
 check("verify: a built page missing the DCM progress bar / Next steps / Communication options / Approvals / mini page is flagged INCOMPLETE",
@@ -2600,14 +2645,39 @@ check("verify: a built page missing the DCM progress bar / Next steps / Communic
   && /INCOMPLETE/.test(vMissing.markdown),
   () => vMissing.markdown.split("\n").filter((l) => /❌|Verdict/.test(l)));
 const vOk = renderVerify(vResult, {}, {
-  ops: [{ name: "AF", type: "crt.Input" }, { name: "BF", type: "crt.Input" }, { name: "DG", type: "crt.DataGrid" },
+  ops: [{ name: "Contact", type: "crt.ComboBox" }, { name: "Owner", type: "crt.ComboBox" }, { name: "DG", type: "crt.DataGrid" },
     { name: "Bar", type: "crt.EntityStageProgressBar" }, { name: "NS", type: "crt.NextSteps" },
     { name: "CC", type: "crt.ContactCommunication" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
+  // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
+  // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
+  miniPageWired: true, sectionRegistered: true,
 });
-check("verify: a built page with all expected deliverables present → complete (no MISSING / machine-⚠)",
+check("verify: a built page with all deliverables present AND on-stand wiring evidence supplied → complete",
   vOk.missing === 0 && vOk.complete === true && /All machine-checkable deliverables present/.test(vOk.markdown),
   () => vOk.markdown.split("\n").filter((l) => /❌|⚠ verify|Verdict/.test(l)));
+// review (deep-review #1) — reachability deliverables (typed forms + per-type routing, mini-page "+ New" binding,
+// section registration) are GATED via on-stand evidence: ABSENT → unverified (NOT "skip"), so --verify can no longer
+// exit 0 on an unreachable migration; explicit false → ❌ MISSING.
+const vTypedNoRoute = renderVerify(
+  { changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: {}, typedPages: [{ schema: "XICPage", type: "IC" }, { schema: "XOCPage", type: "OC" }] },
+  {}, { ops: [] }); // no typedRouting / typedFormsBuilt evidence supplied
+check("deep#1 verify: typed forms + per-type routing with NO on-stand evidence → unverified (NOT complete, NOT silently skipped)",
+  vTypedNoRoute.unverified >= 1 && vTypedNoRoute.complete === false
+  && /Per-type page routing[\s\S]*?⚠ verify/.test(vTypedNoRoute.markdown),
+  () => vTypedNoRoute.markdown.split("\n").filter((l) => /routing|Typed form/.test(l)).join(" | "));
+const vTypedRouteFalse = renderVerify(
+  { changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: {}, typedPages: [{ schema: "XICPage", type: "IC" }] },
+  {}, { ops: [], typedRouting: false, typedFormsBuilt: true });
+check("deep#1 verify: per-type routing explicitly NOT done (built.typedRouting=false) → ❌ MISSING (exit 2)",
+  vTypedRouteFalse.missing >= 1 && /Per-type page routing[\s\S]*?❌ MISSING/.test(vTypedRouteFalse.markdown));
+const vMiniNoWire = renderVerify(
+  { changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: {}, miniPage: { schema: "XMiniPage" } },
+  {}, { ops: [], miniPageBuilt: true }); // built, but no miniPageWired evidence
+check("deep#1 verify: mini page BUILT but wiring evidence absent → unverified (built ≠ reachable; not complete)",
+  vMiniNoWire.unverified >= 1 && vMiniNoWire.complete === false
+  && /wired to "\+ New"[\s\S]*?⚠ verify/.test(vMiniNoWire.markdown),
+  () => vMiniNoWire.markdown.split("\n").filter((l) => /wired|Mini page/.test(l)).join(" | "));
 check("verify: DCM progress bar counts as PRESENT when built on PageWithTabsAndProgressBarTemplate (template ships it)",
   /DCM case progress bar \| ✅ Done/.test(renderVerify({ changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [] }, signals: { dcm: { resolved: true, present: true } } }, {}, { ops: [], parentSchemaName: "PageWithTabsAndProgressBarTemplate" }).markdown));
 // review (s53 #1): the plan recommends a top-island / progress-bar template but the agent builds on the plain
