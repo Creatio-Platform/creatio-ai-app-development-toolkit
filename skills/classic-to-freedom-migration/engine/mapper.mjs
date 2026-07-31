@@ -289,7 +289,13 @@ export function mapToFreedom(eff, opts = {}) {
   // suppressed for children too. (Vanislemarina review §2 / Variant B.)
   const isChildPage = !!opts.isChildPage;
   const isContentField = (f) => !f.templateOwned || (isChildPage && !!f.bindTo);
-  const payloadFields = eff.fields.filter(isContentField);
+  // An image/photo item is emitted by mapImages as a crt.ImageInput — it must NOT ALSO be emitted here as a plain
+  // field. A generator/name-detected image with an explicit off-entity `bindTo` (a cross-datasource photo) otherwise
+  // leaked a phantom crt.Input for its column (+ a PDS.<col> attribute), duplicating the widget and — since the
+  // image's own value fell to a FILL — leaving a dangling binding. Exclude image-item names from the field payload
+  // (the field-projection lacks the `generator`, so match by the item name resolved from eff.items).
+  const imageItemNames = new Set((eff.items || []).filter(isImageItem).map((i) => i.name));
+  const payloadFields = eff.fields.filter((f) => isContentField(f) && !imageItemNames.has(f.name));
   // A base (template-owned) field a CLIENT schema RECONFIGURED (hid / moved / re-laid-out it) is excluded from
   // the payload as template context, so its client override would silently vanish. This is NOT a decision to
   // punt — the delta is KNOWN, so emit it as a CONCRETE applied override (what to change on the existing base
@@ -1168,10 +1174,17 @@ function mapImages(eff, ctx, F) {
     const haveCols = Object.keys(cols || {}).length > 0;
     const onEntity = !!boundCol && (!haveCols || boundCol in cols);
     const crossDs = !!boundCol && haveCols && !(boundCol in cols); // §#3 — column is on a RELATED object (via a lookup), not this entity
-    const attr = boundCol || `${i.name}_value`;
+    // Only an ON-ENTITY column is a real bindable attribute. A cross-datasource column (on a RELATED object, reached
+    // via a lookup) is NOT — emitting `value: "$" + boundCol` there produced a DANGLING binding (the attribute/
+    // pdsColumn declaration below runs only for onEntity, so `value` referenced an attribute that was never declared),
+    // and --verify (which counts by component type) reported the built-but-unbound image as green. So crossDs falls to
+    // a FILL placeholder (`$<name>_value`, `filled:true`) exactly like an unresolved column — the real lookup path is
+    // resolved on-stand per the layout-row recipe. `column` is still recorded for that recipe.
+    const bound = boundCol && onEntity ? boundCol : null;
+    const attr = bound || `${i.name}_value`;
     const values = { type: "crt.ImageInput", value: "$" + attr, size: "large", borderRadius: "medium", positioning: "cover", readOnly: crossDs };
     viewConfigDiff.push({ operation: "insert", name: i.name, parentName, propertyName: "items", values });
-    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !boundCol });
+    images.push({ classic: i.name, generator: i.generator || null, parent: i.parent, column: boundCol, crossDs, filled: !bound });
     if (soleCollision) needsDecision.push({ kind: "image-column", item: i.name,
       reason: `image '${i.name}' has no own column and the entity's sole IMAGELOOKUP column '${soleImageCol}' is already bound to another image — two crt.ImageInput widgets must not share one column. Pick or create a DISTINCT ImageLookup column for it (left as a FILL until then).` });
     if (boundCol && onEntity) {

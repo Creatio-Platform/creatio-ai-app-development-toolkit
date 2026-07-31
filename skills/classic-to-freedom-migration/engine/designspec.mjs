@@ -57,12 +57,18 @@ const DASH = "—";
 // else the raw container name (a base-template container not re-emitted here).
 // The nearest CAPTIONED group label for a container, or null — resolved real text OR a human-readable key, but
 // NOT an auto-generated hex-hash noise key. Extracted so the region resolver stays under Sonar CC 15.
-function captionGroupLabel(o, resources) {
+export function captionGroupLabel(o, resources) {
   const raw = o.values?.caption;
   if (!raw) return null;
   const t = resources[resourceKey(raw)] ?? resourceKey(raw);
   const resolved = resources[resourceKey(raw)] != null;
-  return (resolved || !/[0-9a-f]{6}/i.test(t)) ? esc(t) : null;
+  // Auto-generated designer keys carry a hash chunk (e.g. `Tab67ea6463TabLabelGroupc1bf3d46…`) — a hex run that
+  // always contains DIGITS. A bare `/[0-9a-f]{6}/` also matched ordinary hex-LETTERED words (facade, decade, beaded),
+  // wrongly suppressing a real unresolved caption. Anchor to the auto-key shape: a hex run of >=6 that contains a
+  // digit (a GUID's first segment qualifies too) — pure-letter hex words no longer trip it.
+  const hexRun = t.match(/[0-9a-f]{6,}/i);
+  const looksNoise = !!hexRun && /\d/.test(hexRun[0]);
+  return (resolved || !looksNoise) ? esc(t) : null;
 }
 function regionResolver(viewConfigDiff, resources = {}) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));

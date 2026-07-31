@@ -71,7 +71,11 @@ function childPageIssue(c) {
 // mini) cache entry, and vice versa — the diamond memo stays correct per render flavor.
 function foldSubPage(key, schemasMap, ctx, extra = {}) {
   if (ctx.visited.has(key)) return { status: "cycle" };
-  const memoKey = key + (extra.isChildPage ? "::child" : "") + (extra.isMiniPage ? "::mini" : "");
+  // Derive the memo key from ALL truthy render flags (sorted) rather than hand-listing isChildPage/isMiniPage: any
+  // future render-affecting flag in `extra` then participates in the key automatically, so it can never serve a
+  // wrong-flavor cached spec (the sub-run receives the full `...extra`, so the key must reflect all of it).
+  const flagKey = Object.keys(extra).filter((k) => extra[k]).sort().join(",");
+  const memoKey = flagKey ? `${key}::${flagKey}` : key;
   if (ctx.memo.has(memoKey)) { ctx.memoStats.hits++; return { status: "ok", res: ctx.memo.get(memoKey) }; }
   try {
     ctx.memoStats.misses++;

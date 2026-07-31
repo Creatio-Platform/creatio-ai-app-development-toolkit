@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, detectAddMode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -287,6 +287,26 @@ check("#4: a `this.Terrasoft.ViewItemType.CONTROL_GROUP` group builds as crt.Exp
   () => JSON.stringify(symGrpCs.viewConfigDiff.map(o => ({ name: o.name, type: o.values?.type }))));
 check("#4: fields nest inside the resolved group's grid (grouping preserved, not flattened to the tab)",
   symGrpCs.viewConfigDiff.some(o => o.name === "ColA" && o.parentName === "Grp1Grid"));
+// review (PR#58 round 4 #6): captionGroupLabel must not drop a REAL caption that merely reads as hex LETTERS. A
+// designer auto-key carries a hash chunk with DIGITS; a plain hex-lettered word does not. Direct unit test.
+check("#6 caption: an unresolved hex-LETTERED caption is KEPT (facade/decade/beaded — no digit, not a hash key)",
+  captionGroupLabel({ values: { caption: "Facade" } }, {}) === "Facade"
+  && captionGroupLabel({ values: { caption: "decade" } }, {}) === "decade"
+  && captionGroupLabel({ values: { caption: "beaded" } }, {}) === "beaded");
+check("#6 caption: an auto-hash key (hex run WITH digits) is still DROPPED as noise",
+  captionGroupLabel({ values: { caption: "Tab1a2b3c4dTabLabelGroupc1bf3d46" } }, {}) === null
+  && captionGroupLabel({ values: { caption: "Resources.Strings.Tab67ea6463Group" } }, {}) === null);
+check("#6 caption: a RESOLVED caption is always kept verbatim (resolution wins over the noise heuristic)",
+  captionGroupLabel({ values: { caption: "Resources.Strings.K1" } }, { K1: "Real Label" }) === "Real Label");
+// review (PR#58 round 4 #3): mapToFreedom must NOT mutate its input — the detail caption backfill copies
+// (`cur.d = { ...cur.d, caption }`). Snapshot the merged input, run, assert it is byte-identical after; a revert to
+// in-place mutation fails HERE even though the OUTPUT would stay identical (so the determinism test can't catch it).
+const purityIn = mergeHierarchy([parseSchema('define("P",[],function(){return{entitySchemaName:"X",details:[{schemaName:"MyDetail",entitySchemaName:"Rel"},{schemaName:"MyDetail",entitySchemaName:"Rel",caption:"Cap"}],diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Col"}}]};});', "P")]);
+const puritySnap = JSON.stringify(purityIn);
+mapToFreedom(purityIn, { resources: {} });
+check("#3 purity: mapToFreedom does NOT mutate its input eff (detail caption backfill copies, not in-place)",
+  JSON.stringify(purityIn) === puritySnap,
+  () => "input eff mutated by mapToFreedom");
 
 /* ---- C4: a rule targeting a field not inserted in the ChangeSet is flagged (dangling) ---- */
 const c4seed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }),
@@ -1211,15 +1231,24 @@ check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL v
   imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && /_value$/.test(o.values.value))
   && !imageRowCs.changeSet.needsDecision.some((n) => n.kind === "image-column")
   && /crt\.ImageInput/.test(imageRowCs.designSpec) && /IMAGELOOKUP/.test(imageRowCs.designSpec));
-// #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity) → value bound read-only, no ⚠.
+// #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity). review (PR#58 round 4 #1):
+// it must NOT emit a concrete `$ContactPhoto` binding — that column is not an attribute here, and the on-entity
+// attribute/pdsColumn declaration is skipped for crossDs, so the value was DANGLING (and --verify counted the
+// built-but-unbound image green). It now falls to a FILL placeholder (`$Photo_value`, read-only, filled) — the real
+// lookup path is resolved on-stand per the layout recipe; the column name is still recorded for that recipe.
 const imgCross = runMigration({ entity: "X", entityColumns: { Name: { type: "Text" } },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"ContactPhoto"}}]};});` }] }, { baseDir: FIX });
-check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput value bound read-only, no image-column ⚠",
-  imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.value === "$ContactPhoto"
-  && imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values.readOnly === true
-  && imgCross.changeSet.images.some((i) => i.classic === "Photo" && i.crossDs === true)
-  && !imgCross.changeSet.needsDecision.some((n) => n.kind === "image-column"),
-  () => JSON.stringify(imgCross.changeSet.images));
+check("#1/#3 image cross-datasource: related-object photo → crt.ImageInput as a FILL (NOT a dangling $column binding), read-only, no dangling attribute, no image-column ⚠",
+  (() => {
+    const el = imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo");
+    const img = imgCross.changeSet.images.find((i) => i.classic === "Photo");
+    const vm = imgCross.changeSet.viewModelConfigDiff?.[0]?.values || {};
+    return el?.values.value === "$Photo_value" && el?.values.readOnly === true       // FILL, not "$ContactPhoto"
+      && img?.crossDs === true && img?.filled === true && img?.column === "ContactPhoto"
+      && vm.ContactPhoto === undefined                                                 // the bug: dangling attribute never declared
+      && !imgCross.changeSet.needsDecision.some((n) => n.kind === "image-column");
+  })(),
+  () => JSON.stringify({ el: imgCross.changeSet.viewConfigDiff.find((o) => o.name === "Photo")?.values, imgs: imgCross.changeSet.images, vm: imgCross.changeSet.viewModelConfigDiff }));
 // review (PR#58 MEDIUM): with NO entityColumns supplied, an explicit-column image must NOT be misclassified as
 // read-only cross-datasource — mirror the field path's haveCols guard (treat as on-entity when columns unknown).
 const imgNoCols = runMigration({ entity: "X",
@@ -1932,6 +1961,15 @@ try {
   const vNoMan = vvOn(vvDir);
   check("vendor-integrity(neg): an unreadable/absent manifest FAILS — exit 1 + 'cannot read'",
     vNoMan.status === 1 && /cannot read/.test(vNoMan.stderr || ""));
+  // (e) DENY-UNKNOWN (review round 4 #5): an UNPINNED .mjs sibling in vendor/ must fail closed — otherwise a module
+  // loaded transitively (e.g. by acorn.mjs) would bypass the hash gate. (acorn.mjs today is self-contained + the only
+  // pinned .mjs, so this guards the future: a new unpinned .mjs is a hard failure, not a silent bypass.)
+  fs.writeFileSync(provPath, JSON.stringify({ files: { "t.txt": { package: "x", version: "1", sha256: "0".repeat(64) } } }));
+  fs.writeFileSync(path.join(vvDir, "t.txt"), "hello");
+  fs.writeFileSync(path.join(vvDir, "evil.mjs"), "export const x = 1;\n");
+  const vUnpinned = vvOn(vvDir);
+  check("vendor-integrity(neg): an UNPINNED .mjs sibling FAILS closed — exit 1 + 'unpinned .mjs' (deny-unknown, no transitive-load bypass)",
+    vUnpinned.status === 1 && /unpinned \.mjs/.test(vUnpinned.stderr || ""), () => (vUnpinned.stderr || "").slice(0, 160));
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
 }

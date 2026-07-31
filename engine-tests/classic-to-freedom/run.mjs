@@ -152,6 +152,27 @@ check("cascade: a BASE (templateOwned) child of a removed container is SWEPT (ru
   !casc.items.some((i) => i.name === "BaseChild"));
 check("cascade: a CLIENT-authored orphan of the same removed container still SURFACES (unresolvedParents) — client content not silently dropped",
   casc.unresolvedParents.includes("BaseGrp") && casc.items.some((i) => i.name === "ClientChild"));
+// review (PR#58 round 4 #4): the sweep must propagate DEEP, not one level — a GRANDCHILD of a removed container is
+// swept too (silent client-content drop is the stated risk if propagation is shallow).
+const cascDeep = mergeHierarchy(
+  [makeSchema("Client", { entity: "X", diff: [{ operation: "remove", name: "BaseGrp" }] })],
+  { seedTemplate: [makeSchema("Tpl", { diff: [
+    { operation: "insert", name: "BaseGrp", itemType: 15 },
+    { operation: "insert", name: "MidGrp", parentName: "BaseGrp", propertyName: "items", itemType: 15 },       // child container
+    { operation: "insert", name: "DeepChild", parentName: "MidGrp", propertyName: "items", bindTo: "DeepCol" }, // GRANDCHILD (2 levels down)
+  ], methods: ["a", "b", "c", "d", "e", "f"] })] });
+check("cascade(deep): removing a container sweeps its WHOLE base subtree — a GRANDCHILD (BaseGrp→MidGrp→DeepChild) is swept, not just the direct child",
+  !cascDeep.items.some((i) => i.name === "MidGrp") && !cascDeep.items.some((i) => i.name === "DeepChild"),
+  () => cascDeep.items.map((i) => i.name).join(","));
+// ...and a CYCLIC base parentName (CycA↔CycB) must not spin the fixpoint — removing one TERMINATES and sweeps both.
+const cascCycle = mergeHierarchy(
+  [makeSchema("Client", { entity: "X", diff: [{ operation: "remove", name: "CycA" }] })],
+  { seedTemplate: [makeSchema("Tpl", { diff: [
+    { operation: "insert", name: "CycA", parentName: "CycB", propertyName: "items", itemType: 15 },
+    { operation: "insert", name: "CycB", parentName: "CycA", propertyName: "items", itemType: 15 },
+  ], methods: ["a", "b", "c", "d", "e", "f"] })] });
+check("cascade(cyclic parent): a cyclic base parentName terminates the sweep fixpoint (no hang) and sweeps both nodes",
+  !cascCycle.items.some((i) => ["CycA", "CycB"].includes(i.name)));
 
 /* ---- C2: a merge that introduces contentType on an ALREADY-defined field must carry it (not drop) ---- */
 const c2 = mergeHierarchy([
