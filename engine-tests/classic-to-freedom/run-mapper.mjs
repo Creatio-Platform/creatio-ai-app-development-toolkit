@@ -1172,10 +1172,10 @@ try {
   // so back it with a DETERMINISTIC structural assertion: every `[\s\S]` run in detectAddMode's regexes must be
   // BOUNDED (`{0,N}`), never unbounded `*`/`+` (the actual catastrophic-backtracking surface). Timing-independent.
   const daSrc = detectAddMode.toString();
-  const daRuns = daSrc.split("[\\s\\S]");
+  const daRuns = daSrc.split(String.raw`[\s\S]`);
   const daAllBounded = daRuns.slice(1).every((seg) => /^\{0,\d+\}/.test(seg));
   check("Minor4 structural: every `[\\s\\S]` run in detectAddMode is BOUNDED ({0,N}) — no unbounded */+ (deterministic ReDoS guard, timing-independent)",
-    daRuns.length > 1 && daAllBounded && !daSrc.includes("[\\s\\S]*") && !daSrc.includes("[\\s\\S]+"),
+    daRuns.length > 1 && daAllBounded && !daSrc.includes(String.raw`[\s\S]*`) && !daSrc.includes(String.raw`[\s\S]+`),
     () => ({ runs: daRuns.length - 1, allBounded: daAllBounded }));
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
