@@ -154,7 +154,7 @@ const PROP_ACTION = {
 // like a regular related list (Activities/Emails — same UI as any child list); `component` = a distinct
 // native Freedom component with its own UI (Approvals, Attachments). This drives whether the spec marks it
 // "Related list" vs the component name — the two are NOT visually interchangeable.
-const FEATURE_CATALOG = {
+export const FEATURE_CATALOG = {
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
   // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
   // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.

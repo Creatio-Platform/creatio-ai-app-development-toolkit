@@ -882,10 +882,14 @@ function buildCoverageRows(cs, pm, result) {
   const expFields = fieldOps.length;
   const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  // carry the expected field NAMES so the built count can match by identity (same source of truth as the
-  // control-based expected count) — a control-bound field whose built component type is outside FIELD_RE
-  // (rich-text / a lookup or color variant / a future type) must still count, not spuriously undercount.
-  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => strip(o.values.control)) } });
+  // carry the expected field NAMES (element names, not the stripped control) so the built count can match by
+  // identity — a control-bound field whose built component type is outside FIELD_RE (rich-text / a lookup or
+  // color variant / a future type) must still count, not spuriously undercount. NB the element name is the
+  // distinct identity: several classic items can bind the SAME column (`col`, `col_2`, `col_3` — mapper emits
+  // them deliberately) all sharing `control: "$col"`, so keying on the stripped control would collapse the
+  // Set below and the gate could never reach ✅ for such a page. `o.name` is `col` / `col_2` — distinct and
+  // identical to the built element names.
+  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
   const expImages = (cs.images || []).length;
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });

@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { mapToFreedom, FEATURE_CATALOG } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, detectAddMode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -561,6 +561,25 @@ const diamond = runMigration({ entity: "PE", noParentTemplate: true,
 check("perf: a diamond (one child page referenced by two details) is folded once and reused (memo hit), both rows still mapped",
   diamond.memoStats.hits === 1 && diamond.memoStats.misses === 1 && diamond.childPages.filter((c) => c.spec).length === 2,
   () => diamond.memoStats);
+// review (PR#58 Minor 2, 2026-08-01) — DIFFERENT-FLAVOR diamond: the SAME sub-schema folded once as a CHILD edit page
+// (isChildPage) and once as the section's ADD mini page (isMiniPage) must get its OWN spec PER FLAVOR. The render flags
+// are folded into the memo key, so the two folds are distinct MISSES, never a cross-flavor cache HIT. This is the case
+// the same-flavor diamond above does NOT cover: dropping the flags from the key regresses it — the second fold would be
+// served the first's WRONG-flavor cached spec (memoStats.hits > 0) and the mini would render WITHOUT its
+// "Mini page (quick-add)" heading. Same body in both bundles → the ONLY variable is the render flavor.
+const SHARED_FLAVOR_BODY = `define("SharedPage",[],function(){return{entitySchemaName:"Shared",diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});`;
+const flavorDiamond = runMigration({ entity: "PE", noParentTemplate: true, addRecordMiniPage: { schema: "SharedPage" },
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "SharedPage" } },
+  section: [{ pkg: "PSec", body: `define("PESection",[],function(){return{entitySchemaName:"PE",methods:{},diff:[]};});` }],
+  childPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } },
+  miniPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } } });
+const fdChildSpec = (flavorDiamond.childPages.find((c) => c.spec) || {}).spec || "";
+const fdMiniSpec = flavorDiamond.miniPage?.spec || "";
+check("perf/correctness: a DIFFERENT-flavor diamond (same schema folded as child AND as the add mini page) gets its OWN spec per flavor — NO cross-flavor memo hit + the mini keeps its 'Mini page (quick-add)' heading the child does not (PR#58 Minor 2)",
+  flavorDiamond.memoStats.hits === 0 && flavorDiamond.memoStats.misses === 2
+    && /Mini page \(quick-add\)/.test(fdMiniSpec) && !/Mini page \(quick-add\)/.test(fdChildSpec),
+  () => ({ memoStats: flavorDiamond.memoStats, miniHasHeading: /Mini page \(quick-add\)/.test(fdMiniSpec), childHasHeading: /Mini page \(quick-add\)/.test(fdChildSpec) }));
 
 /* ---- Phase-2 review fixes: #6 (Activities≠Timeline + suffix match), #7 (template-provided), #14 (24-col grid), #15 (detail-caption) ---- */
 const featCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
@@ -1336,6 +1355,39 @@ const rvOdd = renderVerify(rvOddResult, {}, { ops: [{ name: "Notes", type: "crt.
 check("#verify fields: a control-bound field whose built type is OUTSIDE FIELD_RE (crt.RichTextEdit) still COUNTS by name — no spurious 'fewer than expected'",
   rvOdd.missing === 0 && rvOdd.unverified === 0 && /Fields[\s\S]*?✅ Done/.test(rvOdd.markdown),
   () => ({ missing: rvOdd.missing, unverified: rvOdd.unverified, row: rvOdd.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
+// review (PR#58 Major, 2026-08-01) — a page where SEVERAL classic items bind the SAME column is a pattern the mapper
+// deliberately emits (resolveFieldControl → `col`, `col_2`, `col_3`, all sharing `control: "$col"`). The verify
+// done-gate keys EXPECTED field identities on the element NAME (`col` / `col_2`), NOT the stripped control — else the
+// Set collapses the duplicates, the matched count is bounded by the DISTINCT column count, and `--verify` could never
+// reach ✅ for such a page. A correctly-built duplicate-column page MUST verify. (Reverting to `strip(control)` regresses
+// this: names→["Amount","Amount","Amount"], Set size 1 < 3 expected → unverified > 0 → the assertion below fails.)
+const rvDupResult = { changeSet: { viewConfigDiff: [
+  { name: "Amount", values: { control: "$Amount", type: "crt.Input" } },
+  { name: "Amount_2", values: { control: "$Amount", type: "crt.Input" } },
+  { name: "Amount_3", values: { control: "$Amount", type: "crt.Input" } },
+], images: [], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+const rvDup = renderVerify(rvDupResult, {}, { ops: [
+  { name: "Amount", type: "crt.Input" }, { name: "Amount_2", type: "crt.Input" }, { name: "Amount_3", type: "crt.Input" },
+] });
+check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control (PR#58 Major)",
+  rvDup.missing === 0 && rvDup.unverified === 0 && /Fields — 3 expected[\s\S]*?✅ Done/.test(rvDup.markdown),
+  () => ({ missing: rvDup.missing, unverified: rvDup.unverified, row: rvDup.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
+// review (PR#58 Minor 3, 2026-08-01) — DRIFT guard: buildCoverageRows emits a machine-verifiable component row only
+// when `FEATURE_TYPE[f]` resolves, where `f` is the feature's DISPLAY name. Those keys must stay byte-identical to the
+// `feature:` strings in mapper's FEATURE_CATALOG. Read the catalog (source of truth) and assert every non-list feature
+// still yields a resolved verify row — so a label drift fails HERE rather than silently under-verifying a real deliverable.
+const nonListCatalogFeatures = [...new Set(Object.values(FEATURE_CATALOG)
+  .filter((c) => (c.uiShape || "list") !== "list").map((c) => c.feature))];
+const featDriftResult = { changeSet: { viewConfigDiff: [], images: [], details: [], cardActions: [],
+  standardFeatures: nonListCatalogFeatures.map((feature) => ({ feature, uiShape: "component" })) }, signals: {} };
+const featDrift = renderVerify(featDriftResult, {}, { ops: [] });
+// a resolved feature row is the ONLY line carrying both the display name and a `crt.` component type (this result has
+// no fields/images/tabs/details) — an unresolved FEATURE_TYPE lookup is `continue`-skipped, so no such line exists.
+const featDriftMissing = nonListCatalogFeatures.filter((f) =>
+  !featDrift.markdown.split("\n").some((l) => l.includes(f) && /`crt\./.test(l)));
+check("#verify feature drift: every NON-LIST FEATURE_CATALOG feature has a FEATURE_TYPE entry → a machine-verify component row (a catalog label drift would break this, not silently drop the gate) (PR#58 Minor 3)",
+  nonListCatalogFeatures.length > 0 && featDriftMissing.length === 0,
+  () => ({ nonListCatalogFeatures, featDriftMissing, rows: featDrift.markdown.split("\n").filter((l) => /crt\./.test(l)).join(" | ") }));
 // review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
 // image binds the sole column; the rest get a FILL + an image-column decision (no silent key overwrite of the shared
 // column / two widgets on one column).
@@ -2666,7 +2718,9 @@ check("region caption: a RESOLVED group caption still shows as the group (Tab ·
    Approvals / Communication options / mini page all silently dropped while the agent declared "complete"). ---- */
 const vResult = {
   changeSet: {
-    viewConfigDiff: [{ name: "A", values: { control: "$Contact" } }, { name: "B", values: { control: "$Owner" } }],
+    // NB the insert op's `name` IS the bound column (mapper.mjs:767) — identical to the built element name; the verify
+    // gate keys expected field identity on that name, so the fixture must mirror it (name === column === built name).
+    viewConfigDiff: [{ name: "Contact", values: { control: "$Contact" } }, { name: "Owner", values: { control: "$Owner" } }],
     standardFeatures: [{ feature: "Communication options" }, { feature: "Approvals" }],
     details: [{ detailSchema: "D1", entity: "E1" }], cardActions: ["SecurityCheckProcessButton"],
   },
