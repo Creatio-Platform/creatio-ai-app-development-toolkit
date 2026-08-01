@@ -574,7 +574,7 @@ const flavorDiamond = runMigration({ entity: "PE", noParentTemplate: true, addRe
   section: [{ pkg: "PSec", body: `define("PESection",[],function(){return{entitySchemaName:"PE",methods:{},diff:[]};});` }],
   childPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } },
   miniPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } } });
-const fdChildSpec = (flavorDiamond.childPages.find((c) => c.spec) || {}).spec || "";
+const fdChildSpec = flavorDiamond.childPages.find((c) => c.spec)?.spec || "";
 const fdMiniSpec = flavorDiamond.miniPage?.spec || "";
 check("perf/correctness: a DIFFERENT-flavor diamond (same schema folded as child AND as the add mini page) gets its OWN spec per flavor — NO cross-flavor memo hit + the mini keeps its 'Mini page (quick-add)' heading the child does not (PR#58 Minor 2)",
   flavorDiamond.memoStats.hits === 0 && flavorDiamond.memoStats.misses === 2
