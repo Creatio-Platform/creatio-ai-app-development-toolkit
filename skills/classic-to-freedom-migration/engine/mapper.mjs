@@ -940,13 +940,14 @@ function mapCardActions(eff) {
 // carry no business logic to port. They are NOT surfaced in the Logic table nor as `method` decisions (they were
 // pure noise: every migration listed init/onSaved/setValidationConfig… as "imperative → review"). Only CUSTOM
 // business methods (validators, on<Field>Changed, get<X>Filter, domain helpers) remain. Applies uniformly to the
-// form, mini, typed and detail/child pages (they all fold through mapRemainingLogic). Extend as new base names
-// surface; a name here that a client OVERROTE with real logic is the rare miss — the reviewer still has the schema.
+// form, mini, typed and detail/child pages (they all fold through mapRemainingLogic). Extend ONLY with GENERIC
+// framework/scaffolding names — NEVER a domain/data method (e.g. a get<Entity>Collection): a domain name carries
+// portable logic, so suppressing it silently drops a real client override. (The broader question — how to treat a
+// client override of ANY boxed base method faithfully — is out of this tool's scope and tracked as its own task.)
 const STANDARD_CLASSIC_METHODS = new Set([
   "init", "onSaved", "onEntityInitialized", "setValidationConfig", "createValidator", "asyncValidate",
   "getDefaultValues", "onGetSelectResult", "getSelectedButton", "onAnswerYes", "onAnswerNo",
   "subscribeSandboxEvents", "initializeReferenceParametersValues", "getServiceRequest", "onSaveButtonClick",
-  "getContactCareerCollection",
 ]);
 
 // Returns handlerStubs[] + its own needsDecision[].
@@ -1154,14 +1155,18 @@ function isImageItem(i) {
 function resolveImageBinding(i, cols, soleImageCol, soleUsed) {
   const ownCol = i.imageColumn || i.bindTo || null;
   let boundCol = ownCol, soleCollision = false, usedSole = soleUsed;
-  if (!boundCol && soleImageCol) {
+  if (!boundCol && soleImageCol) {                     // AUTO fallback: a column-less image takes the sole IMAGELOOKUP…
     if (!soleUsed) { boundCol = soleImageCol; usedSole = true; }
-    else soleCollision = true;
+    else soleCollision = true;                         // …unless a prior image already reserved it.
+  } else if (boundCol && boundCol === soleImageCol) {
+    // An EXPLICIT bind to the sole IMAGELOOKUP column reserves it too. A SECOND image resolving to that column —
+    // by auto-fallback OR by another explicit bind — is the SAME collision: two crt.ImageInput must not share one
+    // column. Resolve it identically to the auto path: keep the FIRST on the column, FILL the second (drop its
+    // bind → boundCol null) and raise the image-column decision. (The guard previously fired only on the auto
+    // path, so TWO explicit binds to soleImageCol both resolved to it — two widgets silently on one column.)
+    if (soleUsed) { soleCollision = true; boundCol = null; }
+    else usedSole = true;
   }
-  // An EXPLICIT bind to the sole IMAGELOOKUP column ALSO reserves it — else a later column-less image would fall
-  // back to the same column and both crt.ImageInput controls would bind it (the collision guard only tracked the
-  // auto-fallback path, not an explicit `bindTo` to soleImageCol).
-  if (boundCol === soleImageCol) usedSole = true;
   const haveCols = Object.keys(cols || {}).length > 0;
   const onEntity = !!boundCol && (!haveCols || boundCol in cols);
   const crossDs = !!boundCol && haveCols && !(boundCol in cols); // column is on a RELATED object (via a lookup), not this entity

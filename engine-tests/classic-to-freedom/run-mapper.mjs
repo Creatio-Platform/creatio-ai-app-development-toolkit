@@ -1434,6 +1434,24 @@ check("#image-collision(explicit-first): Img1 explicitly binds the sole IMAGELOO
       && collide.length === 1;                                  // and it's flagged, not silently doubled
   })(),
   () => JSON.stringify(imgExplicitFirst.changeSet.images));
+// review (PR#58 round 9 / Minor 5) — the THIRD collision order the guard missed: TWO EXPLICIT binds to the SAME sole
+// IMAGELOOKUP column. Both resolve to it, so the collision must fire on the explicit path too (not only auto-fallback):
+// the FIRST keeps the column, the SECOND is FILLed (its bind dropped) + an image-column decision — never two widgets on
+// one column. (Before the fix both bound `$Photo` with no decision.)
+const imgTwoExplicit = runMigration({ entity: "X", entityColumns: { Photo: { type: "ImageLookup" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Img1",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"Photo"}},{operation:"insert",name:"Img2",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"Photo"}}]};});` }] }, { baseDir: FIX });
+check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole IMAGELOOKUP → FIRST keeps it, SECOND is FILLed + decision, not both on $Photo (PR#58 Minor 5)",
+  (() => {
+    const imgs = imgTwoExplicit.changeSet.images;
+    const a = imgs.find((x) => x.classic === "Img1"), b = imgs.find((x) => x.classic === "Img2");
+    const el2 = imgTwoExplicit.changeSet.viewConfigDiff.find((o) => o.name === "Img2");
+    const collide = (imgTwoExplicit.changeSet.needsDecision || []).filter((n) => n.kind === "image-column" && n.item === "Img2");
+    return a?.column === "Photo" && a?.filled === false          // first explicit bind kept the column
+      && b?.column === null && b?.filled === true                // second is FILLed, NOT a second widget on Photo
+      && el2?.values.value === "$Img2_value"                     // distinct FILL attr, not "$Photo"
+      && collide.length === 1;                                   // and the collision is flagged
+  })(),
+  () => JSON.stringify(imgTwoExplicit.changeSet.images) + " | " + JSON.stringify((imgTwoExplicit.changeSet.needsDecision || []).filter((n) => n.kind === "image-column")));
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
@@ -2125,6 +2143,13 @@ try {
   const vUnpinned = vvOn(vvDir);
   check("vendor-integrity(neg): an UNPINNED .mjs sibling FAILS closed — exit 1 + 'unpinned executable module' (deny-unknown, no transitive-load bypass)",
     vUnpinned.status === 1 && /unpinned executable module/.test(vUnpinned.stderr || ""), () => (vUnpinned.stderr || "").slice(0, 160));
+  // (f) DENY-UNKNOWN is RECURSIVE (PR#58 round 9 / Minor 3): a NESTED unpinned module must fail closed too — a flat
+  // top-level scan would miss vendor/sub/evil.js while it stays equally loadable (require("./sub/evil.js")).
+  fs.mkdirSync(path.join(vvDir, "sub"));
+  fs.writeFileSync(path.join(vvDir, "sub", "evil.js"), "module.exports = 1;\n");
+  const vNested = vvOn(vvDir);
+  check("vendor-integrity(neg): a NESTED unpinned module (vendor/sub/evil.js) FAILS closed — deny-unknown walks recursively, not only the flat top level (PR#58 Minor 3)",
+    vNested.status === 1 && /sub\/evil\.js: unpinned executable module/.test(vNested.stderr || ""), () => (vNested.stderr || "").slice(0, 200));
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
 }

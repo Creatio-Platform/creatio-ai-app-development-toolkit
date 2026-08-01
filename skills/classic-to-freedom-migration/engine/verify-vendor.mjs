@@ -81,14 +81,22 @@ export function checkVendorIntegrity(vendorDir) {
   // loaded transitively (e.g. by acorn.cjs) and would bypass the hash gate entirely. Fail closed on it. Today
   // acorn.cjs is a self-contained bundle and the only pinned module, so this is future-proofing — a new unpinned
   // executable sibling is a hard failure, not a silent bypass. (Inert assets like the LICENSE are not enumerated.)
+  // Walked RECURSIVELY: a nested `vendor/sub/evil.js` is equally loadable, so it must fail closed too, not only the
+  // flat top level. Pins are flat basenames, so any executable at depth > 0 (relPath !== basename) can never match a
+  // pin and is denied by construction.
   try {
     const pinned = new Set(names);
-    for (const f of readdirSync(vendorDir)) {
-      if (/\.(cjs|mjs|js)$/.test(f) && !pinned.has(f)) {
-        const msg = `${f}: unpinned executable module present in vendor/ — every .cjs/.mjs/.js must be pinned in provenance.json (deny-unknown); pin it or remove it`;
-        failures.push(msg); results.push({ name: f, ok: false, error: msg });
+    const walk = (dir, rel) => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const relPath = rel ? `${rel}/${ent.name}` : ent.name;
+        if (ent.isDirectory()) { walk(path.join(dir, ent.name), relPath); continue; }
+        if (/\.(cjs|mjs|js)$/.test(ent.name) && !pinned.has(relPath)) {
+          const msg = `${relPath}: unpinned executable module present in vendor/ (at any depth) — every .cjs/.mjs/.js must be pinned in provenance.json (deny-unknown); pin it or remove it`;
+          failures.push(msg); results.push({ name: relPath, ok: false, error: msg });
+        }
       }
-    }
+    };
+    walk(vendorDir, "");
   } catch { /* vendor dir unreadable → the pinned-file loop above already recorded the read failures */ }
   return { ok: failures.length === 0, failures, results };
 }
