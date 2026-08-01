@@ -62,6 +62,7 @@ function getAcornParse() {
 // Build the parse RESULT from the extracted schema object `s` (+ text-scanned signals from `src`).
 // Kept separate from the AST extraction so the "what fields the merge consumes" shape lives in one place.
 function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
+  const methodKeys = safeKeys(s.methods); // reused for the name list AND the empty-body (stub) subset below
   return {
     pkg,
     error: parseError,
@@ -70,7 +71,8 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     businessRules: plainObj(s.businessRules),
     rules: plainObj(s.rules),
     details: normalizeDetails(s.details),
-    methods: safeKeys(s.methods),
+    methods: methodKeys,
+    emptyMethods: methodKeys.filter(k => s.methods[k] === AST_FN_EMPTY), // stub methods `(){}` — the seed gate's structural signal
     attributes: safeKeys(s.attributes),
     modules: normalizeModules(s.modules),
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
@@ -194,7 +196,9 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 const MAX_AST_DEPTH = 500;
 const AST_RULE_TYPE = { BINDPARAMETER: 0, FILTRATION: 1 };
 const AST_PROPERTY = { VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 };
-const AST_FN = Symbol("fn"); // placeholder for function values (methods/attributes) — only their KEYS matter
+const AST_FN = Symbol("fn"); // placeholder for a function value with a NON-empty body (methods/attributes) — only its KEY matters downstream
+const AST_FN_EMPTY = Symbol("fn-empty"); // a function whose body is an EMPTY block `(){}` — a stub. Distinguished so the
+// seed-skeletal gate can tell a real fetched method (has a body) from a broken-fetch/hand stub (empty body), independent of count.
 
 // resolveMemberValue models a small finite automaton over a member-access chain (mirroring the old vm proxy
 // graph). TAG_TRANSITIONS[state][key] = the next state; any key absent from a state's map collapses to "proxy"
@@ -291,7 +295,12 @@ function makeAstEvaluator(scope, diagnostics, src) {
       case "ArrayExpression": return evalArray(node, path);
       case "MemberExpression": return evalMember(node, path);
       case "FunctionExpression":
-      case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
+      case "ArrowFunctionExpression": {
+        // methods/attributes: only keys are read downstream — EXCEPT we note an EMPTY body `(){}` so the seed gate can
+        // distinguish a real fetched method from a stub. An arrow with an expression body (`() => x`) is never empty.
+        const b = node.body;
+        return (b && b.type === "BlockStatement" && b.body.length === 0) ? AST_FN_EMPTY : AST_FN;
+      }
       case "Identifier": return evalIdentifier(node, path);
       case "UnaryExpression": return evalUnary(node, path);
       case "BinaryExpression": return evalBinary(node, path);
@@ -934,7 +943,13 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // seed) that produced hollow folds. Count-based: 150–430 (real) all clear; ≈0 (broken fetch) blocks; a token
   // 1-method stub still blocks (< 5).
   const SEED_MIN_METHODS = 5;
-  const looksSkeletal = seedTemplate.length > 0 && seedMethodNames.size < SEED_MIN_METHODS;
+  // Structural stub signal (round-10 Major 1): the seed method names that have a REAL (non-empty) body in SOME layer.
+  // The PARSER sets `emptyMethods` from real body strings; L()-built test seeds carry none → treated as real-bodied.
+  const seedNonEmptyMethods = new Set(seedTemplate.flatMap(l => (l.methods || []).filter(m => !(l.emptyMethods || []).includes(m))));
+  // Skeletal if near-empty by COUNT (< 5) OR every seed method is an empty stub `(){}` (seedNonEmptyMethods empty) — the
+  // latter catches a >=5-method skeleton the count test alone would clear. A seed with >=5 REAL-bodied methods but < 150
+  // is NOT skeletal; it is the possiblyPartial advisory below (no false-block on a legitimately small real template).
+  const looksSkeletal = seedTemplate.length > 0 && (seedMethodNames.size < SEED_MIN_METHODS || seedNonEmptyMethods.size === 0);
   // The mid-range partial-fetch blind spot the < 5 hard gate misses: a real base-template chain of ANY kind defines
   // 150+ methods (mini 152, record ≈347, section 428), so a seed with 5..149 methods is likely a TRUNCATED fetch that
   // silently folds onto an incomplete base. This is surfaced as an ADVISORY (`possiblyPartial`) — NOT a hard warning:
@@ -945,13 +960,17 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const possiblyPartial = seedTemplate.length > 0 && !looksSkeletal && seedMethodNames.size < SEED_PARTIAL_METHODS;
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
-    seedMethods: seedMethodNames.size, hasGetActions,
+    seedMethods: seedMethodNames.size, seedRealMethods: seedNonEmptyMethods.size, hasGetActions,
     looksSkeletal, possiblyPartial,
   };
-  if (looksSkeletal) warnings.push({
-    op: "seed", name: "skeletal-seed", schema: "(seed)",
-    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define only ${seedMethodNames.size} method(s) — a REAL fetched base-template chain of any kind defines many (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
-  });
+  if (looksSkeletal) {
+    const allStub = seedMethodNames.size >= SEED_MIN_METHODS && seedNonEmptyMethods.size === 0;
+    const detail = allStub ? "but ALL of them are EMPTY stubs (no bodies)" : `(below the ${SEED_MIN_METHODS}-method floor)`;
+    warnings.push({
+      op: "seed", name: "skeletal-seed", schema: "(seed)",
+      message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+    });
+  }
 
   return {
     entity,

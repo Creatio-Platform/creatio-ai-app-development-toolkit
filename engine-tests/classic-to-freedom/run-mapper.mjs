@@ -742,9 +742,10 @@ check("design-spec: Confirm section present (⚠ worklist)",
   /#### ⚠ Confirm before I build/.test(cli.designSpec));
 // a clean (non-skeletal) seed defining the base containers the SupportUnit fixture patches — so these CLI
 // runs are gate-CLEAN (exit 0, no ⛔ banner) and stay pure shape tests; the blocked path is tested separately.
-// Carries ≥5 methods so it clears the KIND-AGNOSTIC skeletal gate (a real fetched base chain has 150+; the gate
-// blocks a broken/near-empty fetch of < 5 methods).
-const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){},getActions:function(){},onSaved:function(){},setColumns:function(){},loadValues:function(){},onRender:function(){}}};});' }];
+// Carries ≥5 methods WITH real (non-empty) bodies so it clears BOTH the count gate AND the structural stub-detect
+// (round-10 Major 1): a real fetched base chain has 150+ bodied methods; the gate blocks a < 5-method fetch OR a
+// seed whose methods are all empty `(){}` stubs. The bodies here are trivial `return;` — enough to read as real.
+const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){return;},getActions:function(){return;},onSaved:function(){return;},setColumns:function(){return;},loadValues:function(){return;},onRender:function(){return;}}};});' }];
 // review (s-vanislemarina #3): STANDARD Creatio-classic framework methods are NOT surfaced as handlers or `method`
 // decisions; only CUSTOM business methods are. Applies via mapRemainingLogic → covers form/mini/typed/detail pages.
 const stdMethRun = runMigration({ entity: "X", seed: CLEAN_SEED,
@@ -964,9 +965,34 @@ check("#5: a mid-range seed (30 methods, 5..149) → possiblyPartial ADVISORY, b
 const fullSeed = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: Array.from({ length: 160 }, (_, i) => "m" + i) })] });
 check("#5: a full seed (160 methods, >=150) → NOT possiblyPartial",
   fullSeed.seedQuality.possiblyPartial === false);
-// and the plan SURFACES the advisory (⚠, non-blocking) so a partial fetch isn't silently folded onto.
+// review (PR#58 round 10 / Major 1, option B) — STRUCTURAL stub-detect: the count-based gate alone clears a >=5-method
+// seed whose methods are ALL empty stubs `(){}` (a broken / metadata-only fetch that returned names without bodies). The
+// PARSER now marks empty bodies (emptyMethods), so a seed whose methods have NO real body is skeletal regardless of count
+// — while a seed with >=5 REAL-bodied methods (< 150) stays a NON-blocking possiblyPartial advisory (no false-block on a
+// legitimately small real template). NB these use parseSchema (real body strings); the L()-built seeds above carry no
+// emptyMethods, so they are correctly treated as real-bodied and are unaffected.
+const stubBody = `define("BaseStub",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){},onSaved:function(){},loadValues:function(){},getActions:function(){},setColumns:function(){},onRender:function(){}}};});`;
+const stubSeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(stubBody, "BaseStub")] });
+check("#Major1 stub-detect: a >=5-method seed whose methods are ALL empty stubs is looksSkeletal → BLOCKS (count alone would clear it)",
+  stubSeed.seedQuality.seedMethods === 6 && stubSeed.seedQuality.seedRealMethods === 0
+  && stubSeed.seedQuality.looksSkeletal === true && stubSeed.warnings.some((w) => w.name === "skeletal-seed" && /EMPTY stubs/.test(w.message)),
+  () => stubSeed.seedQuality);
+const realBody = `define("BaseReal",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){return 1;},onSaved:function(){this.x=1;},loadValues:function(){var a=2;},getActions:function(){return [];},setColumns:function(){this.y=3;},onRender:function(){return true;}}};});`;
+const realBodySeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(realBody, "BaseReal")] });
+check("#Major1 stub-detect: a >=5-method seed with REAL bodies (< 150) is NOT skeletal — only the possiblyPartial advisory (no false-block on a small real template)",
+  realBodySeed.seedQuality.seedRealMethods === 6 && realBodySeed.seedQuality.looksSkeletal === false
+  && realBodySeed.seedQuality.possiblyPartial === true && !realBodySeed.warnings.some((w) => w.name === "skeletal-seed"),
+  () => realBodySeed.seedQuality);
+const mixedBody = `define("BaseMixed",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){},onSaved:function(){},loadValues:function(){},getActions:function(){},setColumns:function(){},onRender:function(){return 1;}}};});`;
+const mixedSeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(mixedBody, "BaseMixed")] });
+check("#Major1 stub-detect: even ONE real-bodied method among stubs → NOT skeletal (real content present, not a broken fetch)",
+  mixedSeed.seedQuality.seedRealMethods === 1 && mixedSeed.seedQuality.looksSkeletal === false,
+  () => mixedSeed.seedQuality);
+// and the plan SURFACES the advisory (⚠, non-blocking) so a partial fetch isn't silently folded onto. NB a PARTIAL
+// fetch is REAL-but-incomplete (bodied methods, just too few) — hence `function(){return;}` bodies; an all-EMPTY-stub
+// seed is the SKELETAL (blocking) case, covered by the stub-detect goldens above, not this advisory.
 const partialPlan = runMigration({ entity: "X",
-  seed: [{ pkg: "Base", body: `define("Base",[],function(){return{diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{${midMethods.map((m) => m + ":function(){}").join(",")}}};});` }],
+  seed: [{ pkg: "Base", body: `define("Base",[],function(){return{diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{${midMethods.map((m) => m + ":function(){return;}").join(",")}}};});` }],
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#5: the plan surfaces the PARTIAL-seed advisory (⚠, non-blocking); the gate is NOT blocked by it",
   /Seed may be a PARTIAL fetch/.test(partialPlan.plan) && partialPlan.gate.blocked === false,
@@ -2150,6 +2176,14 @@ try {
   const vNested = vvOn(vvDir);
   check("vendor-integrity(neg): a NESTED unpinned module (vendor/sub/evil.js) FAILS closed — deny-unknown walks recursively, not only the flat top level (PR#58 Minor 3)",
     vNested.status === 1 && /sub\/evil\.js: unpinned executable module/.test(vNested.stderr || ""), () => (vNested.stderr || "").slice(0, 200));
+  // (g) DROPPED acorn PIN (PR#58 round 10 / Major 3b), real-path: a provenance that DROPS the executable's own pin while
+  // the executable stays present must fail closed — deny-unknown flags the now-unpinned acorn.cjs, so getAcornParse never
+  // sees a verified `ok` acorn entry and refuses to load the parser. This is the real-path (CLI) analogue of the
+  // seam-based acorn-pin golden below: "provenance.json with the acorn entry removed → parser not loaded".
+  fs.writeFileSync(path.join(vvDir, "acorn.cjs"), "module.exports = {};\n"); // present in vendor/, but NOT pinned in provenance.json
+  const vDroppedPin = vvOn(vvDir);
+  check("vendor-integrity(neg): acorn.cjs present but its provenance pin DROPPED → FAILS closed (deny-unknown; acorn is never a verified ok entry) (PR#58 round 10 Major 3b)",
+    vDroppedPin.status === 1 && /acorn\.cjs: unpinned executable module/.test(vDroppedPin.stderr || ""), () => (vDroppedPin.stderr || "").slice(0, 200));
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
 }
