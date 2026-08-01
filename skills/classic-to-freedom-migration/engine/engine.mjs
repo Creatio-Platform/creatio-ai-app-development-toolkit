@@ -299,7 +299,7 @@ function makeAstEvaluator(scope, diagnostics, src) {
         // methods/attributes: only keys are read downstream — EXCEPT we note an EMPTY body `(){}` so the seed gate can
         // distinguish a real fetched method from a stub. An arrow with an expression body (`() => x`) is never empty.
         const b = node.body;
-        return (b && b.type === "BlockStatement" && b.body.length === 0) ? AST_FN_EMPTY : AST_FN;
+        return (b?.type === "BlockStatement" && b.body.length === 0) ? AST_FN_EMPTY : AST_FN;
       }
       case "Identifier": return evalIdentifier(node, path);
       case "UnaryExpression": return evalUnary(node, path);
