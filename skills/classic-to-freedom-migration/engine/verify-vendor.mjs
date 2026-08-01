@@ -77,27 +77,35 @@ export function checkVendorIntegrity(vendorDir) {
       failures.push(msg); results.push({ name, ok: false, package: pin.package, version: pin.version, expected: pin.sha256, actual });
     }
   }
-  // DENY-UNKNOWN for executable modules: any `.cjs`/`.mjs`/`.js` present in vendor/ that is NOT pinned could be
+  // DENY-UNKNOWN for executable modules: any `.cjs`/`.mjs`/`.js`/`.node` present in vendor/ that is NOT pinned could be
   // loaded transitively (e.g. by acorn.cjs) and would bypass the hash gate entirely. Fail closed on it. Today
   // acorn.cjs is a self-contained bundle and the only pinned module, so this is future-proofing — a new unpinned
   // executable sibling is a hard failure, not a silent bypass. (Inert assets like the LICENSE are not enumerated.)
-  // Walked RECURSIVELY: a nested `vendor/sub/evil.js` is equally loadable, so it must fail closed too, not only the
-  // flat top level. Pins are flat basenames, so any executable at depth > 0 (relPath !== basename) can never match a
-  // pin and is denied by construction.
+  // Match is CASE-INSENSITIVE (extension lower-cased) and includes native addons (`.node`): on a case-insensitive FS
+  // (Windows / default macOS) a planted `evil.JS` / `evil.CJS` is still require()-able, and a `.node` addon is
+  // dlopen-able — both must be caught. Walked RECURSIVELY: a nested `vendor/sub/evil.js` is equally loadable, so it
+  // must fail closed too, not only the flat top level. Pins are flat basenames, so any executable at depth > 0
+  // (relPath !== basename) can never match a pin and is denied by construction.
   try {
     const pinned = new Set(names);
     const walk = (dir, rel) => {
       for (const ent of readdirSync(dir, { withFileTypes: true })) {
         const relPath = rel ? `${rel}/${ent.name}` : ent.name;
         if (ent.isDirectory()) { walk(path.join(dir, ent.name), relPath); continue; }
-        if (/\.(cjs|mjs|js)$/.test(ent.name) && !pinned.has(relPath)) {
-          const msg = `${relPath}: unpinned executable module present in vendor/ (at any depth) — every .cjs/.mjs/.js must be pinned in provenance.json (deny-unknown); pin it or remove it`;
+        if (/\.(cjs|mjs|js|node)$/.test(ent.name.toLowerCase()) && !pinned.has(relPath)) {
+          const msg = `${relPath}: unpinned executable module present in vendor/ (at any depth) — every .cjs/.mjs/.js/.node must be pinned in provenance.json (deny-unknown); pin it or remove it`;
           failures.push(msg); results.push({ name: relPath, ok: false, error: msg });
         }
       }
     };
     walk(vendorDir, "");
-  } catch { /* vendor dir unreadable → the pinned-file loop above already recorded the read failures */ }
+  } catch (e) {
+    // A mid-walk readdir failure (e.g. an unreadable SUBdir) must NOT silently pass the deny-unknown gate: the flat
+    // pinned-file loop above only covers the TOP dir, so a swallowed subtree error could leave ok:true with an
+    // un-scanned subtree. Fail closed with an explicit failure entry.
+    const msg = `vendor/ deny-unknown scan could not fully enumerate the tree (${e.message}) — cannot prove no unpinned executable is present; failing closed`;
+    failures.push(msg); results.push({ name: "(vendor deny-unknown scan)", ok: false, error: msg });
+  }
   return { ok: failures.length === 0, failures, results };
 }
 

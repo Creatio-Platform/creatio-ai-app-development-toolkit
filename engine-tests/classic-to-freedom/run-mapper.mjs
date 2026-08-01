@@ -2184,6 +2184,18 @@ try {
   const vDroppedPin = vvOn(vvDir);
   check("vendor-integrity(neg): acorn.cjs present but its provenance pin DROPPED → FAILS closed (deny-unknown; acorn is never a verified ok entry) (PR#58 round 10 Major 3b)",
     vDroppedPin.status === 1 && /acorn\.cjs: unpinned executable module/.test(vDroppedPin.stderr || ""), () => (vDroppedPin.stderr || "").slice(0, 200));
+  // (h) CASE-INSENSITIVE + native addons (PR#58 round 11 / Major 1): on a case-insensitive FS (Windows / default macOS)
+  // an UPPERCASE-extension sibling (evil.JS / evil.CJS) is still require()-able, and a `.node` native addon is
+  // dlopen-able — a case-sensitive `.js`-only scan would miss BOTH. The extension is lower-cased and `.node` included.
+  fs.writeFileSync(path.join(vvDir, "evil.JS"), "//\n");
+  const vUpper = vvOn(vvDir);
+  check("vendor-integrity(neg): an UPPERCASE-extension sibling (evil.JS) FAILS closed — deny-unknown lower-cases the extension (case-insensitive-FS require bypass) (PR#58 round 11 Major 1)",
+    vUpper.status === 1 && /evil\.JS: unpinned executable module/.test(vUpper.stderr || ""), () => (vUpper.stderr || "").slice(0, 200));
+  fs.rmSync(path.join(vvDir, "evil.JS"));
+  fs.writeFileSync(path.join(vvDir, "addon.node"), "\0");
+  const vNode = vvOn(vvDir);
+  check("vendor-integrity(neg): a native addon (addon.node) FAILS closed — deny-unknown covers .node, not only .cjs/.mjs/.js (PR#58 round 11 Major 1)",
+    vNode.status === 1 && /addon\.node: unpinned executable module/.test(vNode.stderr || ""), () => (vNode.stderr || "").slice(0, 200));
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
 }
