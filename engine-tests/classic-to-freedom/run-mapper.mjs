@@ -877,6 +877,22 @@ check("Minor3 real mini page: the real customer fields (ConferenceRoom, StartDat
   realMiniFields.includes("ConferenceRoom") && realMiniFields.includes("StartDate"),
   () => realMiniFields);
 
+/* ---- Minor 4 (PR#58 2026-08-01) — a SECOND real captured mini page, widening the AC3 net beyond one fixture. It
+   exercises a DIFFERENT fold path than ActivityMiniPage: there the real fields come from CUSTOMER layers that
+   `insert` them; here `ContactMiniPage`'s fields live in the BASE layout layer (`CrtUIv2` — 19 inserts / 3 merges)
+   and a customer/product layer (`WorkLeadBase` — 1 insert / 11 merges) merges onto them. Captured from
+   applicants_workbuild246_0817; the two empty passthrough layers are dropped, the ~96KB platform seed is replaced
+   by a compact representative BaseMiniPage that supplies the containers/base-items the kept layers target.
+   Provenance + how to re-capture: fixtures/contactminipage/README.md. ---- */
+const realMini2 = runMigration(JSON.parse(fs.readFileSync(path.join(FIX, "contactminipage", "manifest.json"), "utf8")), { baseDir: FIX });
+const realMini2Fields = (realMini2.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).map((o) => o.name);
+check("Minor4 real mini page: ContactMiniPage's base-layer + customer-merge chain folds gate-clean + structure-complete (a different fold path than Activity)",
+  realMini2.gate?.blocked === false && realMini2.structure?.complete === true,
+  () => ({ blocked: realMini2.gate?.blocked, reasons: realMini2.gate?.reasons, issues: realMini2.structure?.issues }));
+check("Minor4 real mini page: the real base-layout contact fields (Name, Account) survive the layer merge into the Freedom layout",
+  realMini2Fields.includes("Name") && realMini2Fields.includes("Account"),
+  () => realMini2Fields);
+
 /* ---- #6: a SECTION body whose `diff` is built via a dynamic construct must NOT hard-block the form-page plan.
    The section `diff` is never merged into the effective page (only its regex-derived list signals are used), so
    a section structural diagnostic gating the whole plan is a spurious BLOCK with a misleading reason. It is now
