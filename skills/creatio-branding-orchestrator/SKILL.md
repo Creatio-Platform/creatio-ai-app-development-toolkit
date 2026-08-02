@@ -165,31 +165,55 @@ Optional. Ask whether to change the font (default is Montserrat), then whether t
 family for everything or separate families for headings and body.
 
 Check each requested family against Google Fonts **before** building, so the conversation happens up
-front and the theme is built once instead of built, warned about, and built again. Fetch
-`https://fonts.google.com/metadata/fonts/<Family>`: 200 means the family is published on Google Fonts,
-404 means it is not. Names there are case-sensitive, so try the correct capitalisation before
-concluding anything — "Roboto" resolves where "roboto" returns 404. Note that neither this check nor
-clio's tells you which weights the family ships; that stays yours to confirm, since a family offering
-only one weight renders the heavier ones as the nearest available fallback.
+front and the theme is built once instead of built, warned about, and built again. First check the
+name against the contract clio enforces: it trims the name and collapses internal whitespace runs, and
+the normalized name must then start with a letter or digit, use only letters, digits, spaces, and
+hyphens, and be at most 100 characters long — so `" Open   Sans "` is fine and builds as `Open Sans`.
+Anything else fails build-theme outright with `INVALID_FONT_FAMILY`, so ask for the intended name
+instead of probing it — that matters most when the name came from a brandbook, a site, or a search
+result rather than from the user. Then fetch `https://fonts.google.com/metadata/fonts/<Family>`,
+percent-encoding the family as a whole URL path segment (a space becomes `%20`): 200 means the family
+is published on Google Fonts, 404 means that exact spelling is not. The endpoint is case-sensitive and
+does not correct spellings, so probe the exact name you would pass to build-theme.
+Note that neither this check nor clio's tells you which weights the family ships; that stays yours to
+confirm, since a family offering only one weight renders the heavier ones as the nearest available
+fallback.
 - Published on Google Fonts — go ahead and build; the theme downloads it as a web font.
-- Not published — say so and offer a Google font instead. If the user still wants that family, treat it
-  as a locally installed font and stop for an explicit confirmation; do not decide this for them. Tell
-  them plainly that the theme will show the font only on machines where it is already installed, and
-  that everywhere else the text falls back to a generic face, so a serif or monospace choice lands on
-  sans-serif. Once they confirm, build with the family passed as the heading or body font exactly as you
-  would for a Google font **and** additionally listed in build-theme's `local-font-families`: the font
-  parameters apply the family, while `local-font-families` only suppresses the download for it. A family
-  listed in `local-font-families` alone applies nothing — the theme keeps its default font.
-- Could not be checked (no network, blocked host) — say so instead of guessing, and ask the user whether
-  it is a Google font or a locally installed one.
+- 404 — before concluding anything, retry the probe once with the published spelling you know from your
+  own knowledge: the exact casing ("roboto" is published as "Roboto", "pt sans" as "PT Sans") or the
+  current name of a renamed family ("Muli" is published as "Mulish" today). If the retry resolves,
+  confirm the corrected spelling with the user and build with it.
+- Still 404 — the family is not on Google Fonts, and the user is the resolver, not you: say so, link
+  `https://fonts.google.com/?query=<family>` so they can look for the published spelling themselves,
+  and offer a similar Google font. If the user still wants that family, treat it as a locally
+  installed font and stop for an explicit confirmation; do not decide this for them. This is a
+  deliberate exception to "font steps are not approval gates" (see Conversation rules): it is its own,
+  earlier gate, and the single pre-build confirmation does not stand in for it. Tell them plainly
+  that the theme will show the font only on machines where it is already installed, and that everywhere
+  else the text falls back to a generic face, so a serif or monospace choice lands on sans-serif. Once
+  they confirm, build with the family passed as the heading or body font exactly as you would for a
+  Google font: build-theme runs its own check, leaves an unpublished family out of the web-font
+  download on its own (a downloaded look-alike would shadow the installed font), and reports that in a
+  warning.
+- Could not be checked (no network, blocked host — any answer that is neither 200 nor 404) — say so
+  instead of guessing, and ask the user whether it is a Google font or a locally installed one before
+  building. If they say Google font, build normally — when clio cannot verify a family either, it keeps
+  the web-font import, so a Google font still downloads. If they say locally installed, take the same
+  explicit confirmation as in the previous point, plus one more consequence stated plainly: the import
+  cannot be suppressed while the catalogue is unreachable, so either wait and re-check when it is
+  reachable again, or build now — the "could not verify" warning will come back — and restyle once
+  connectivity is back so the import gets suppressed.
 
-build-theme runs the same check and is the authority. Read its warnings even when your own check said a
-family was fine: if it reports a family missing or unverifiable, relay that and settle it with the user
-before going on — your check may have used a different spelling, or reached the network differently. What
-you must not do is quietly drop a warning the user has not already settled with you. A family passed to
-`local-font-families` is never warned about at all, so a confirmation you already have needs no second
-round: build once with the flag and there is nothing left to relay. Never hand-author an `@import` for a
-font, and never pass `local-font-families` without the user's explicit confirmation.
+build-theme runs the same check and is the authority. A malformed family fails its build outright with
+`INVALID_FONT_FAMILY` — that is what the name check above prevents; only the availability outcomes
+warn, and those never fail the build. Correlate those warnings with what the user already settled. A
+"was not found in Google Fonts" warning about the family the user explicitly confirmed as locally
+installed is the expected echo of that confirmation — the import was suppressed exactly as announced,
+so acknowledge it and move on. Any other font warning must be relayed and settled with the user, not
+swallowed — your own check may have used a different spelling, or reached the network differently. A
+"could not verify" warning means the web-font import was kept so a Google font keeps working; if that
+family is actually a locally installed one, settle it with the user and restyle (rebuild the CSS and
+update the theme) once connectivity is back. Never hand-author an `@import` for a font.
 
 ## Theme name — after fonts
 
@@ -207,7 +231,10 @@ hard limit and returns a clear error if the name is too long, which you relay.
 - Intake, palette, logo, background, and font steps are not approval gates. The logo-extraction
   and background questions are in-flow choices like any color choice; there is one confirmation
   before building the theme (see below). That build confirmation covers the theme, which is a
-  per-user change — it does **not** stand in for the environment-wide apply gate below.
+  per-user change — it does **not** stand in for the environment-wide apply gate below. One
+  exception inside the Fonts step: building with a family that is not on Google Fonts requires its
+  own explicit confirmation there (see Fonts) — a separate, earlier gate that the single pre-build
+  confirmation does not replace.
 - Logo and background writes are environment-wide (they change the look for every user, including
   pre-login surfaces), so they get their own explicit confirmation, distinct from the per-user
   theme build. Do not fold them into the theme's single pre-build confirmation. See the
