@@ -61,7 +61,7 @@ const tabGridName = (tab) => `${tab}Grid`;
 // range is NOT cleanly partitioned (31 is a decimal, yet 30/32 were believed to be text), so an UNCONFIRMED code
 // is left unmapped and flagged loudly (a folded field-control decision) rather than guessed into a wrong control.
 // If another Decimal-precision code (0.01/0.001/…) surfaces on a future page, confirm it on-stand and add it here.
-const DATAVALUETYPE_CODE = { "1": "text", "4": "integer", "5": "float", "6": "money", "7": "datetime", "8": "date", "12": "boolean", "16": "imagelookup", "31": "float" };
+const DATAVALUETYPE_CODE = { "1": "text", "4": "integer", "5": "float", "6": "money", "7": "datetime", "8": "date", "12": "boolean", "16": "imagelookup", "31": "float", "42": "phone", "44": "weblink" };
 // An IMAGELOOKUP column (dataValueType 16, "Image link" → references SysImage) is the ONLY column crt.ImageInput
 // can bind — NOT a binary Image, NOT a Text URL. Recognize it by normalized code or by name so an image field /
 // generator-image can be bound concretely (and a non-IMAGELOOKUP source flagged, never silently mis-bound).
@@ -70,8 +70,9 @@ const isImageLookupType = (t) => { const s = String(t ?? "").toLowerCase(); retu
 function scalarControl(t) {
   // Keyed to what get-entity-schema-properties ACTUALLY returns (verified on-stand): most types arrive by NAME
   // (Boolean/DateTime/Integer/Float/Money/ShortText/MediumText/LongText/MaxSizeText/RichText); some core scalars
-  // arrive as a numeric DataValueType code (Date "8", Money "6", Decimal "31", …) — normalized above. Genuinely
-  // unknown/unconfirmed codes (18=Color, 44=URL, …) stay null → the caller flags a loud field-control decision.
+  // arrive as a numeric DataValueType code (Date "8", Money "6", Decimal "31", Phone "42", Web link "44", …) —
+  // normalized above. Genuinely unknown/unconfirmed codes (18=Color, …) stay null → the caller flags a loud
+  // field-control decision.
   t = DATAVALUETYPE_CODE[t] || t;
   if (t === "imagelookup") return { type: "crt.ImageInput", image: true }; // binds via `value`, not `control`
   if (t === "boolean") return { type: "crt.Checkbox" };
@@ -80,6 +81,12 @@ function scalarControl(t) {
   if (["integer", "decimal", "float", "money"].includes(t)) return { type: "crt.NumberInput" };
   if (["longtext", "maxsizetext", "richtext"].includes(t)) return { type: "crt.Input", multiline: true };
   if (["text", "shorttext", "mediumtext"].includes(t)) return { type: "crt.Input" };
+  // Phone / Email / Web link are TEXT-storage columns carrying a FORMAT on the column (verified on-stand: Contact.
+  // Phone/MobilePhone = 42, Account.Web = 44, Contact.Email = "Email"). The Freedom field is a plain crt.Input bound
+  // to the column — the phone/email/web-link rendering is inherited from the column's format, there is NO field-level
+  // format prop (verified on Applicant_FormPage: MobilePhone & Email are both plain crt.Input). Recognizing them keeps
+  // the control right AND drops the spurious "type not recognized" field-control ⚠.
+  if (["phone", "email", "weblink"].includes(t)) return { type: "crt.Input" };
   return null; // unknown scalar -> caller flags needsDecision (loud)
 }
 // control = the DATA type first; the classic `contentType` is only a PAGE control HINT, not the data type.
@@ -103,12 +110,16 @@ function control(dataType, contentType, ref) {
 }
 
 // Short, human data-type label for the design-spec Type column. Lookups are flagged by `ctl.lookup` (the
-// caller adds the referenced object separately); email/phone are inferred from the column name (Creatio
-// stores them as text); text carries its length when the column metadata provides it.
+// caller adds the referenced object separately); Phone / Email / Web link come from the column FORMAT
+// (DataValueType 42 / "Email" / 44 — Creatio stores them as text with a format), with a column-name fallback for
+// when the type is missing; text carries its length when the column metadata provides it.
 function fieldTypeLabel(col, meta, ctl) {
   if (ctl.lookup) return "Lookup";
   let t = String(meta.type || "").toLowerCase();
-  t = DATAVALUETYPE_CODE[t] || t;   // same numeric-code normalization as scalarControl (Money "6", …)
+  t = DATAVALUETYPE_CODE[t] || t;   // same numeric-code normalization as scalarControl (Money "6", Phone "42", …)
+  if (t === "phone") return "Phone";
+  if (t === "email") return "Email";
+  if (t === "weblink") return "Web link";
   if (/email/i.test(col)) return "Email";
   if (/phone|mobile/i.test(col)) return "Phone";
   if (ctl.type === "crt.Checkbox" || t === "boolean") return "Boolean";
@@ -255,7 +266,6 @@ function computeBaseFieldOverrides(eff, isChildPage) {
 
 export function mapToFreedom(eff, opts = {}) {
   const cols = opts.entityColumns || {};       // { column: dataType }
-  const clientEditableSchemas = new Set(opts.clientEditableSchemas || []); // for B6 removals
   // #5/#13 — localizable strings from the manifest (page + detail resources). Lets the mapper resolve a
   // classic `Resources.Strings.X` caption to its real localized text instead of shipping an opaque key.
   const resources = opts.resources || {};
@@ -381,7 +391,7 @@ export function mapToFreedom(eff, opts = {}) {
   _ca.accountedFor.forEach(a => accountedFor.add(a));
 
   // feature toggles / charts / methods → handler stubs / removals / referenced modules
-  const _rl = mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditableSchemas);
+  const _rl = mapRemainingLogic(eff, payloadMethods, payloadComponents);
   const handlerStubs = _rl.handlerStubs;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
 
@@ -951,7 +961,7 @@ const STANDARD_CLASSIC_METHODS = new Set([
 ]);
 
 // Returns handlerStubs[] + its own needsDecision[].
-function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditableSchemas) {
+function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   const needsDecision = [];
   // feature toggles gate WHICH elements render — the ChangeSet is the full static UNION of blocks/fields;
   // the rendered page shows one feature-state (e.g. old ProductCategoryBlock vs new one). Flag for review;

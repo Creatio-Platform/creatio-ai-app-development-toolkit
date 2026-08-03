@@ -89,24 +89,30 @@ check("vendor-gate: importing verify-vendor.mjs did NOT exit the process (CLI ru
   typeof checkVendorIntegrity === "function");
 check("vendor-gate: the REAL vendor dir passes (positive control — the check is not vacuously failing)",
   checkVendorIntegrity(VENDOR).ok === true);
-// negative 1 — a byte-mutated acorn.cjs beside the genuine provenance pin
-const tmpBad = mkdtempSync(path.join(os.tmpdir(), "vendorgate-bad-"));
-copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpBad, "provenance.json"));
-writeFileSync(path.join(tmpBad, "acorn.cjs"), Buffer.concat([readFileSync(path.join(VENDOR, "acorn.cjs")), Buffer.from("\n// tampered\n")]));
-const badRes = checkVendorIntegrity(tmpBad);
-check("vendor-gate: a byte-mutated acorn.cjs FAILS integrity (ok:false + SHA-256 MISMATCH)",
-  badRes.ok === false && badRes.failures.some((f) => /SHA-256 MISMATCH/.test(f)), () => JSON.stringify(badRes.failures));
-// negative 2 — provenance pins a file that is absent
-const tmpMissing = mkdtempSync(path.join(os.tmpdir(), "vendorgate-missing-"));
-copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpMissing, "provenance.json"));
-const missRes = checkVendorIntegrity(tmpMissing);
-check("vendor-gate: a MISSING pinned file FAILS (ok:false + 'cannot read')",
-  missRes.ok === false && missRes.failures.some((f) => /cannot read/.test(f)));
-// the gate does NOT block normal use on the untampered vendor — parseSchema (which calls ensureVendorIntegrity
-// on the co-located real vendor) parses a benign body cleanly.
-check("vendor-gate: parseSchema still parses normally on the untampered vendor (gate passes, real use not blocked)",
-  parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P").entitySchemaName === "X");
-rmSync(tmpBad, { recursive: true, force: true }); rmSync(tmpMissing, { recursive: true, force: true });
+// OS-temp fixtures cleaned in a finally so a throwing check never strands them (matches run-mapper.mjs's vv-dir pattern).
+let tmpBad, tmpMissing;
+try {
+  // negative 1 — a byte-mutated acorn.cjs beside the genuine provenance pin
+  tmpBad = mkdtempSync(path.join(os.tmpdir(), "vendorgate-bad-"));
+  copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpBad, "provenance.json"));
+  writeFileSync(path.join(tmpBad, "acorn.cjs"), Buffer.concat([readFileSync(path.join(VENDOR, "acorn.cjs")), Buffer.from("\n// tampered\n")]));
+  const badRes = checkVendorIntegrity(tmpBad);
+  check("vendor-gate: a byte-mutated acorn.cjs FAILS integrity (ok:false + SHA-256 MISMATCH)",
+    badRes.ok === false && badRes.failures.some((f) => /SHA-256 MISMATCH/.test(f)), () => JSON.stringify(badRes.failures));
+  // negative 2 — provenance pins a file that is absent
+  tmpMissing = mkdtempSync(path.join(os.tmpdir(), "vendorgate-missing-"));
+  copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpMissing, "provenance.json"));
+  const missRes = checkVendorIntegrity(tmpMissing);
+  check("vendor-gate: a MISSING pinned file FAILS (ok:false + 'cannot read')",
+    missRes.ok === false && missRes.failures.some((f) => /cannot read/.test(f)));
+  // the gate does NOT block normal use on the untampered vendor — parseSchema (which calls ensureVendorIntegrity
+  // on the co-located real vendor) parses a benign body cleanly.
+  check("vendor-gate: parseSchema still parses normally on the untampered vendor (gate passes, real use not blocked)",
+    parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P").entitySchemaName === "X");
+} finally {
+  if (tmpBad) rmSync(tmpBad, { recursive: true, force: true });
+  if (tmpMissing) rmSync(tmpMissing, { recursive: true, force: true });
+}
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Supply-chain integrity gate for the engine's vendored third-party code.
 //
-// `parseSchema` runs UNTRUSTED classic schema-body through the bundled acorn parser (vendor/acorn.mjs) —
+// `parseSchema` runs UNTRUSTED classic schema-body through the bundled acorn parser (vendor/acorn.cjs) —
 // the one executable component standing between a hostile stand input and the engine. A vendored bundle
 // gets no automatic security patching AND no automatic tamper detection: a swapped or silently-drifted
 // parser would execute unnoticed. This script pins each vendored file to a known-good SHA-256 recorded
@@ -91,6 +91,14 @@ export function checkVendorIntegrity(vendorDir) {
     const walk = (dir, rel) => {
       for (const ent of readdirSync(dir, { withFileTypes: true })) {
         const relPath = rel ? `${rel}/${ent.name}` : ent.name;
+        // A SYMLINK is fail-closed FIRST: readdirSync uses lstat, so a symlink-to-directory reports isDirectory()===false
+        // (never walked) and typically carries no matching extension (never flagged) — it would silently escape the scan
+        // while still being loadable / pointing outside the pinned set. A symlink has no place in vendor/; reject it.
+        if (ent.isSymbolicLink()) {
+          const msg = `${relPath}: symlink present in vendor/ — not allowed (it can point outside the pinned set or to a directory the deny-unknown scan never walks); remove it`;
+          failures.push(msg); results.push({ name: relPath, ok: false, error: msg });
+          continue;
+        }
         if (ent.isDirectory()) { walk(path.join(dir, ent.name), relPath); continue; }
         if (/\.(cjs|mjs|js|node)$/.test(ent.name.toLowerCase()) && !pinned.has(relPath)) {
           const msg = `${relPath}: unpinned executable module present in vendor/ (at any depth) — every .cjs/.mjs/.js/.node must be pinned in provenance.json (deny-unknown); pin it or remove it`;

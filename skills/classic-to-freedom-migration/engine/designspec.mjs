@@ -455,7 +455,9 @@ export function renderDesignSpec(result, opts = {}) {
   // looks for the business rules in ONE place. The Layout Rule column carries only intrinsic field state
   // (read-only mirrors / column metadata), never rule-driven state.
   // `embedded` (rendered inside renderPlan) skips the standalone title/preamble to avoid duplicating renderPlan's
-  // Overview; the ⛔ gate/structure banners are safety-critical and shown in BOTH modes (see renderSpecHeader).
+  // Overview; the ⛔ gate/structure banners are shown ONLY in standalone mode — in embedded mode renderPlan itself
+  // owns and prints the banner, so the spec skips it (both banners gate on `!opts.embedded` in renderSpecHeader) to
+  // avoid a double print. Do NOT "fix" the embedded skip to also print here — that would duplicate renderPlan's banner.
   const L = renderSpecHeader(result, opts, entity, fields, cs);
 
   // ---- ONE Layout table (structure + contents) — one row-builder per element category (see helpers above) ----
@@ -890,7 +892,15 @@ function buildCoverageRows(cs, pm, result) {
   // Set below and the gate could never reach ✅ for such a page. `o.name` is `col` / `col_2` — distinct and
   // identical to the built element names.
   if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
-  const expImages = (cs.images || []).length;
+  // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
+  // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
+  // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
+  // only image is an IMAGELOOKUP-column field gets NO image vk row, `renderVerify` never runs the crt.ImageInput
+  // MISSING check, and a dropped image field passes `--verify` with exit 0 (the AC2 gap two reviewers flagged).
+  const imgNames = new Set((cs.images || []).map((im) => im.classic));
+  const fieldImageCount = (cs.viewConfigDiff || [])
+    .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
+  const expImages = (cs.images || []).length + fieldImageCount;
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });

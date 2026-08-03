@@ -204,8 +204,6 @@ const rmSpec = renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHier
 check("removals: N client removes produce NO '[removal]' rows and NO '[removals ×N]' collapse line — the plan just carries the final scope",
   !/\*\*\[removal\]\*\*/.test(rmSpec) && !/\[removals ×/.test(rmSpec),
   () => rmSpec.split("\n").filter((l) => /removal/i.test(l)));
-check("removals: even a CONFIRMED client remove (removing layer IS client-editable) is NOT surfaced — removed = out of scope",
-  !/\[removal/.exec(renderDesignSpec({ entity: "X", changeSet: mapToFreedom(mergeHierarchy([rmClient], { seedTemplate: [rmSeed] }), { clientEditableSchemas: ["WorkCorrespondence"] }) })));
 
 /* ---- regionResolver: nested General-info fields resolve to their TAB, not a legacy "fallback" hardcode ---- */
 // Fields sit under GeneralInfoBlock → GeneralInfoGroup → GeneralInfoTabContainer (a real crt.Tab). A removed
@@ -1311,6 +1309,37 @@ check("#4 value-bound image field: an IMAGELOOKUP column laid out as a normal fi
   imgFieldPath.changeSet.viewConfigDiff.find((o) => o.name === "CoverImg")?.values.type === "crt.ImageInput"
   && /\| CoverImg \| crt\.ImageInput \|/.test(imgFieldPath.designSpec),
   () => imgFieldPath.designSpec.split("\n").filter((l) => /CoverImg/.test(l)).join(" | "));
+// review (PR#58 HUMAN review — Rita Major 2 == Tetiana Major, BLOCKING) — the SAME field-path image must also be
+// covered by `--verify`. buildCoverageRows now derives expImages from cs.images PLUS the viewConfigDiff crt.ImageInput
+// elements (the fieldImages fold), so a page whose ONLY image is an IMAGELOOKUP-COLUMN FIELD (binds via `value` → not
+// isField, and NOT in cs.images) still gets an image vk and renderVerify HARD-fails when it's dropped. Before the fix
+// that page produced NO image vk → a dropped image field passed `--verify` with exit 0 (the AC2 gap).
+check("#verify field-path image: preconditions — CoverImg is a FIELD-path image (crt.ImageInput in viewConfigDiff, NOT in cs.images)",
+  imgFieldPath.changeSet.viewConfigDiff.some((o) => o.name === "CoverImg" && o.values?.type === "crt.ImageInput")
+  && !(imgFieldPath.changeSet.images || []).some((im) => im.classic === "CoverImg"),
+  () => JSON.stringify(imgFieldPath.changeSet.images || []));
+const fpImgMissing = renderVerify(imgFieldPath, {}, { ops: [{ name: "Other", type: "crt.Input" }] }); // built page has NO crt.ImageInput
+check("#verify field-path image: dropped (no crt.ImageInput built) → ❌ MISSING + NOT complete — field-path image now gated by --verify (PR#58 blocking)",
+  fpImgMissing.missing >= 1 && fpImgMissing.complete === false && /Image field[\s\S]*?❌ MISSING/.test(fpImgMissing.markdown),
+  () => ({ missing: fpImgMissing.missing, complete: fpImgMissing.complete, rows: fpImgMissing.markdown.split("\n").filter((l) => /Image|MISSING/.test(l)).join(" | ") }));
+const fpImgOk = renderVerify(imgFieldPath, {}, { ops: [{ name: "CoverImg", type: "crt.ImageInput" }] }); // built
+check("#verify field-path image: WITH crt.ImageInput built → image row ✅ Done (regression guard closing the coverage gap)",
+  fpImgOk.missing === 0 && /Image field[\s\S]*?✅ Done/.test(fpImgOk.markdown),
+  () => fpImgOk.markdown.split("\n").filter((l) => /Image/.test(l)).join(" | "));
+// review (PR#58 human review R-m3, on-stand verified: DataValueType 42=Phone number, 44=Web link, "Email"=Email
+// address — text-storage columns carrying a FORMAT on the column). The Freedom field is a plain crt.Input (the format
+// is inherited from the column, no field-level format prop); recognizing the codes drops the spurious "type not
+// recognized" field-control ⚠ that a plain unmapped code triggers.
+const fmtCs = runMigration({ entity: "X", entityColumns: { Phone: { type: "42" }, Web: { type: "44" }, Email: { type: "Email" } },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Phone",parentName:"Header",propertyName:"items",values:{bindTo:"Phone"}},{operation:"insert",name:"Web",parentName:"Header",propertyName:"items",values:{bindTo:"Web"}},{operation:"insert",name:"Email",parentName:"Header",propertyName:"items",values:{bindTo:"Email"}}]};});` }] }, { baseDir: FIX });
+const fmtVal = (n) => (fmtCs.changeSet.viewConfigDiff || []).find((o) => o.name === n)?.values;
+check("#format R-m3: phone(42) / weblink(44) / email columns → crt.Input, RECOGNIZED (no 'type not recognized' field-control ⚠) — formats live on the column",
+  fmtVal("Phone")?.type === "crt.Input" && fmtVal("Web")?.type === "crt.Input" && fmtVal("Email")?.type === "crt.Input"
+  && !(fmtCs.changeSet.needsDecision || []).some((d) => d.kind === "field-control"),
+  () => ({ phone: fmtVal("Phone")?.type, web: fmtVal("Web")?.type, email: fmtVal("Email")?.type, fc: (fmtCs.changeSet.needsDecision || []).filter((d) => d.kind === "field-control") }));
+check("#format R-m3: the type LABELS read Phone / Web link / Email (driven by the column format, not just the name)",
+  fmtVal("Phone")?.typeLabel === "Phone" && fmtVal("Web")?.typeLabel === "Web link" && fmtVal("Email")?.typeLabel === "Email",
+  () => ({ phone: fmtVal("Phone")?.typeLabel, web: fmtVal("Web")?.typeLabel, email: fmtVal("Email")?.typeLabel }));
 // review (PR#58 Major 3) — an image-only top-level form (its only field is a crt.ImageInput) is NOT a hollow
 // 0-field form. crt.ImageInput binds via `value`, so the OLD hollow gate (filter on values.control) read it as 0
 // fields → false "0 FIELDS" block. The shared countFormFields() now counts image inputs too.
@@ -1820,8 +1849,9 @@ check("L5: section processLaunch + processNames captured from an executeProcess 
 // scalarControl aligned to what get-entity-schema-properties ACTUALLY returns (verified on-stand): Date
 // arrives as the numeric code "8"; text subtypes arrive by NAME (Short/Medium/Long/MaxSize). These used to
 // fall to a loud field-control decision (phantom numeric codes 27/28/29/30/32 were never emitted); now they
-// map. A genuinely unknown code (44=URL) still falls to a loud field-control decision.
-const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "44" } };
+// map. A genuinely unknown code (18=Color) still falls to a loud field-control decision. (42=Phone / 44=Web link are
+// now RECOGNIZED formats — see the R-m3 golden above — so a still-unmapped code is used here.)
+const rdCols = { DT8: { type: "8" }, ST: { type: "ShortText" }, MT: { type: "MediumText" }, LT: { type: "LongText" }, XT: { type: "MaxSizeText" }, UNK: { type: "18" } };
 const rdNames = ["DT8", "ST", "MT", "LT", "XT", "UNK"];
 const rdDiff = rdNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const rdCs = runMigration({ entity: "X", entityColumns: rdCols,
@@ -1832,12 +1862,12 @@ check("scalarControl: reader's real types map — Date '8'→DateTimePicker; Sho
   && rf("ST")?.values.type === "crt.Input" && rf("MT")?.values.type === "crt.Input"
   && rf("LT")?.values.type === "crt.Input" && rf("LT")?.values.typeLabel === "Long text"
   && rf("XT")?.values.type === "crt.Input" && rf("XT")?.values.typeLabel === "Long text");
-check("scalarControl: a genuinely unknown type code (44=URL) still falls to a loud field-control decision (folded: field named in the summary)",
+check("scalarControl: a genuinely unknown type code (18=Color) still falls to a loud field-control decision (folded: field named in the summary)",
   rdCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bUNK\b/.test(d.reason)));
 // s48 — get-entity-schema-properties returns some core scalars as the NUMERIC DataValueType code, not a name
 // (Money "6" on the ASPContractData configurator was 202 field-control misses). Map the stable core codes;
 // an uncertain text-range code (e.g. 31) still falls to field-control (not guessed into a wrong control).
-const codeCols = { MON: { type: "6" }, DT7: { type: "7" }, BOOL: { type: "12" }, INT: { type: "4" }, FLT: { type: "5" }, TXT: { type: "1" }, DEC31: { type: "31" }, URL44: { type: "44" } };
+const codeCols = { MON: { type: "6" }, DT7: { type: "7" }, BOOL: { type: "12" }, INT: { type: "4" }, FLT: { type: "5" }, TXT: { type: "1" }, DEC31: { type: "31" }, COLOR18: { type: "18" } };
 const codeNames = Object.keys(codeCols);
 const codeDiff = codeNames.map((n) => `{operation:"insert",name:"${n}",parentName:"Header",propertyName:"items",values:{bindTo:"${n}"}}`).join(",");
 const codeCs = runMigration({ entity: "X", entityColumns: codeCols,
@@ -1851,9 +1881,9 @@ check("scalarControl: numeric DataValueType codes map — Money '6'→NumberInpu
   && codeF("FLT")?.values.type === "crt.NumberInput"
   && codeF("TXT")?.values.type === "crt.Input"
   && codeF("DEC31")?.values.type === "crt.NumberInput" && codeF("DEC31")?.values.typeLabel === "Decimal"); // "31" = Decimal(0.1), confirmed on-stand
-check("scalarControl: a genuinely unknown code (44=URL) is NOT guessed — still a loud field-control decision",
-  codeF("URL44")?.values.type === "crt.Input"   // defaulted
-  && codeCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bURL44\b/.test(d.reason)));
+check("scalarControl: a genuinely unknown code (18=Color) is NOT guessed — still a loud field-control decision",
+  codeF("COLOR18")?.values.type === "crt.Input"   // defaulted
+  && codeCs.changeSet.needsDecision.some((d) => d.kind === "field-control" && /\bCOLOR18\b/.test(d.reason)));
 
 // Blocker 1 — the AST parser (which replaced the vm) must not let an unresolved structural field pass as a
 // clean-but-EMPTY page. (a) A diff built via a top-level const alias now resolves statically (part 2); (b) a

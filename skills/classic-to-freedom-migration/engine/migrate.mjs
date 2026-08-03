@@ -12,7 +12,6 @@
 //     "entityColumns": { "Col": "Lookup", … },// optional; from get-entity-schema-properties — sharpens control choice
 //     "schemas": [ { "pkg": "Case", "body": "<define(...) source>" } | { "pkg": "Case", "file": "..." }, … ],
 //     "seed":   [ { "pkg": "BaseModulePageV2/CrtUIPlatform7x", "body"|"file": … }, … ],  // parent template chain
-//     "clientEditableSchemas": ["WorkOverride", …], // optional; drives B6 removal confidence
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
@@ -404,7 +403,10 @@ function resolveDetailBody(name, e, bodyOf) {
 // eval'd); returns the mechanism descriptor or null for a plain list. Extracted for Sonar CC 15.
 // Exported for a direct perf/ReDoS golden: every text-scan below uses BOUNDED quantifiers ([\s\S]{0,80}? etc.) or a
 // linear global match — no nested/ambiguous quantifier — so a large adversarial body stays linear (no catastrophic
-// backtracking). engine.mjs documents a prior ~32s/700KB regression fixed exactly this way; the golden guards it.
+// backtracking). engine.mjs documents a prior ~32s/700KB regression fixed exactly this way. GUARDED by two goldens in
+// engine-tests/classic-to-freedom/run-mapper.mjs — a wall-clock timing bound on a ~700KB adversarial body
+// ("Minor4 ReDoS: detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
+// ({0,N}) ("Minor4 structural …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
 export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
@@ -496,7 +498,6 @@ export function runMigration(manifest, opts = {}) {
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
-    clientEditableSchemas: manifest.clientEditableSchemas || [],
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
