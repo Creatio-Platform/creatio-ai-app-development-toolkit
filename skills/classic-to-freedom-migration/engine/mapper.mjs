@@ -1123,7 +1123,10 @@ function mapProfileCards(ctx) {
     // the profile schema may be supplied under its own name OR — when the classic config names no schemaName —
     // under the module key, which is then the only key the agent can key it by (see the structure gate).
     const decl = profileSchemas[c.schemaName] ?? profileSchemas[c.key];
-    const info = (decl && typeof decl === "object") ? decl : null; // `false` = agent verified there is no separate schema
+    // `verifiedNone` (manifest `false`) = the agent verified there is no separate schema to read → no info to use,
+    // but a RESOLVED state, so the plan says that instead of "not supplied".
+    const verifiedNone = decl === false || !!decl?.verifiedNone;
+    const info = (!verifiedNone && decl && typeof decl === "object") ? decl : null;
     // profiled entity, most authoritative first: the profile schema's own entitySchemaName → the master
     // lookup column's referenced schema (entity metadata) → the schema-name family. Never a blind guess.
     const entity = info?.entity || colMeta(c.masterColumnName).ref || guessProfiledEntity(c.schemaName);
@@ -1137,7 +1140,7 @@ function mapProfileCards(ctx) {
       masterColumn: c.masterColumnName, profileColumn: c.profileColumnName || null,
       freedom: t.freedom, package: t.package, fields: t.fields,
       region: own.kind === "tab" ? own.tab : "SideAreaProfileContainer",
-      displayFlags: c.displayFlags || {}, schemaSupplied: !!info, base: !!c.fromTemplate,
+      displayFlags: c.displayFlags || {}, schemaSupplied: !!info, schemaVerifiedNone: verifiedNone, base: !!c.fromTemplate,
     });
     needsDecision.push({ kind: "profile-card", item: c.key, reason: t.reason });
   }

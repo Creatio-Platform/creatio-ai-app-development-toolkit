@@ -95,18 +95,20 @@ function parseProfileSchemas(manifest, bodyOf) {
   return out;
 }
 
-// ONE profile-schema entry → its record. `false` is passed through VERBATIM: it means the agent VERIFIED there is
-// no separate profile schema to read (the card's config names none, or it is unreadable) — a resolved answer,
-// exactly like `addRecordMiniPage: false` / `editPage: false`, so the gate can tell "verified none" from "never
-// checked" and the mapper falls back to the by-hand recipe cleanly.
+// ONE profile-schema entry → its record (always the same shape, so callers never type-check the return).
+// A manifest value of `false` becomes `verifiedNone: true`: the agent VERIFIED there is no separate profile
+// schema to read (the card's config names none, or it is unreadable) — a resolved answer, exactly like
+// `addRecordMiniPage: false` / `editPage: false`, so the gate can tell "verified none" from "never checked"
+// and the mapper falls back to the by-hand recipe cleanly.
 function profileSchemaRecord(name, e, bodyOf) {
-  if (e === false) return false;
-  const eObj = (e && typeof e === "object") ? e : {};
-  const hasBody = typeof e === "string" || e?.body != null || !!e?.file;
+  const verifiedNone = e === false;
+  const eObj = (!verifiedNone && e && typeof e === "object") ? e : {};
+  const hasBody = !verifiedNone && (typeof e === "string" || e?.body != null || !!e?.file);
   let p = { entitySchemaName: "?", diff: [] };
   if (hasBody) p = parseSchema(typeof e === "string" ? e : bodyOf(e), name);
   const parsedEntity = p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null;
   return {
+    verifiedNone,
     entity: eObj.entity || parsedEntity,
     columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
     error: p.error || null,

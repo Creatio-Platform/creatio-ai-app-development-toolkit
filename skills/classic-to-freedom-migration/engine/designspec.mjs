@@ -172,6 +172,7 @@ function profileCardRow(pc, regionOf) {
   const parts = [];
   if (pc.package) parts.push(`needs \`${esc(pc.package)}\``);
   if (pc.fields?.length) parts.push(`classic showed: ${pc.fields.map(esc).join(" · ")}`);
+  else if (pc.schemaVerifiedNone) parts.push("no separate profile schema (verified) — rebuild the card per the mapping recipe");
   else if (!pc.schemaSupplied) parts.push("⚠ profile schema not supplied — contents unresolved");
   return { region, sort: 0, cells: [label, "Profile card", src, "read-only", parts.join(" · ") || DASH] };
 }

@@ -1950,7 +1950,10 @@ check("ENG-93928 structure gate: supplying the profile schema clears the profile
 const pcNoneVerified = runMigration(profileMani({ profileSchemas: { RequesterProfilePage: false } }));
 check("ENG-93928 structure gate: `profileSchemas[name]: false` (verified none) resolves the card, like editPage:false",
   !pcNoneVerified.structure.issues.some((i) => /profile card/i.test(i))
-  && pcNoneVerified.changeSet.needsDecision.some((d) => d.kind === "profile-card"),
+  && pcNoneVerified.changeSet.needsDecision.some((d) => d.kind === "profile-card")
+  // and the plan states it as VERIFIED, not as "not supplied" — the two must not read the same
+  && (pcNoneVerified.changeSet.profileCards || [])[0]?.schemaVerifiedNone === true
+  && /no separate profile schema \(verified\)/.test(pcNoneVerified.designSpec),
   () => pcNoneVerified.structure.issues);
 
 // (6c) a card whose config names NO schemaName must still be resolvable — keyed by the MODULE name, otherwise
