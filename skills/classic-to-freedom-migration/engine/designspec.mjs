@@ -160,6 +160,22 @@ function cardActionNote(name) {
   return null;
 }
 
+// ENG-93928 — an embedded profile card (a compact card of a LINKED record). It is real page CONTENT, so it gets
+// its own Layout row in the region it sat in (the side profile on every real page), with the Freedom component
+// and its `referenceColumn` wiring in Source — the full instructions stay in the ⚠ Confirm item.
+function profileCardRow(pc, regionOf) {
+  const region = pc.region === "SideAreaProfileContainer" ? "Side profile" : regionOf(pc.region);
+  const label = esc(pc.schemaName || pc.classic);
+  const src = pc.freedom
+    ? `${esc(pc.freedom)} · referenceColumn \`$${esc(pc.masterColumn)}\``
+    : `⚠ no native compact profile for ${esc(pc.entity || "the profiled entity")} — read-only fields via \`${esc(pc.masterColumn)}.<column>\``;
+  const parts = [];
+  if (pc.package) parts.push(`needs \`${esc(pc.package)}\``);
+  if (pc.fields?.length) parts.push(`classic showed: ${pc.fields.map(esc).join(" · ")}`);
+  else if (!pc.schemaSupplied) parts.push("⚠ profile schema not supplied — contents unresolved");
+  return { region, sort: 0, cells: [label, "Profile card", src, "read-only", parts.join(" · ") || DASH] };
+}
+
 // RV12 — image/photo components (mapper emits them in cs.images, each with its own needsDecision) were the
 // only category with no Layout row. Give them one, placed in the region their parent resolves to.
 function imageRow(im, regionOf) {
@@ -175,6 +191,7 @@ function buildLayoutRows(cs, fields, { regionOf, tabRegion }) {
     ...(cs.widgets || []).map(widgetRow),
     ...(cs.cardActions || []).map(cardActionRow),
     ...(cs.images || []).map((im) => imageRow(im, regionOf)),
+    ...(cs.profileCards || []).map((pc) => profileCardRow(pc, regionOf)),
   ];
 }
 
@@ -322,7 +339,7 @@ function renderSpecPreamble(result, opts, cs, fields) {
   }
   const structure = result.structure || { complete: true, issues: [] };
   if (!structure.complete) {
-    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail/child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
+    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail / profile / child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
     for (const it of structure.issues) L.push(`> - ${esc(it)}`);
   }
   return L;
@@ -427,7 +444,7 @@ function renderPlanBanners(result, opts) {
   // STRUCTURE VALIDATOR banner — the plan is incomplete until every detail/child-page schema is supplied.
   const structure = result.structure || { complete: true, issues: [] };
   if (!structure.complete) {
-    P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
+    P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / embedded-profile schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
     for (const it of structure.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
