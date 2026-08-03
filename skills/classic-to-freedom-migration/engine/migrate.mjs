@@ -90,34 +90,38 @@ function parseDetailSchemas(manifest, bodyOf) {
 function parseProfileSchemas(manifest, bodyOf) {
   const out = {};
   for (const [name, e] of Object.entries(manifest.profileSchemas || {})) {
-    // `false` = the agent VERIFIED there is no separate profile schema to read (the card's config names none, or
-    // the schema is unreadable) — a resolved answer, exactly like `addRecordMiniPage: false` / `editPage: false`.
-    // Kept verbatim so the gate can tell "verified none" from "never checked" and the mapper falls back cleanly.
-    if (e === false) { out[name] = false; continue; }
-    const hasBody = typeof e === "string" || (e && (e.body != null || e.file));
-    const body = hasBody ? (typeof e === "string" ? e : bodyOf(e)) : "";
-    const p = hasBody ? parseSchema(body, name) : { entitySchemaName: "?", diff: [] };
-    const eObj = (e && typeof e === "object") ? e : {};
-    const parsedEntity = p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null;
-    out[name] = {
-      entity: eObj.entity || parsedEntity,
-      columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
-      error: p.error || null,
-      astDiagnostics: p.astDiagnostics || [],
-    };
+    out[name] = profileSchemaRecord(name, e, bodyOf);
   }
   return out;
 }
 
-// A recognised profile card whose profile schema was NOT supplied is an INPUT gap, not a detail: without that
-// body the engine cannot say which entity the card profiled or which values it showed, so the plan would ship
-// a card with no contents. Same doctrine as detail/child-page schemas — fetch it, do not defer.
-// A card is RESOLVED when the manifest declares its profile schema under the schema name OR under the module key
-// (the only available key when the config names no schemaName) — either with a body, or as `false` (verified: no
-// separate schema to read). Anything else is "never checked" and blocks.
+// ONE profile-schema entry → its record. `false` is passed through VERBATIM: it means the agent VERIFIED there is
+// no separate profile schema to read (the card's config names none, or it is unreadable) — a resolved answer,
+// exactly like `addRecordMiniPage: false` / `editPage: false`, so the gate can tell "verified none" from "never
+// checked" and the mapper falls back to the by-hand recipe cleanly.
+function profileSchemaRecord(name, e, bodyOf) {
+  if (e === false) return false;
+  const eObj = (e && typeof e === "object") ? e : {};
+  const hasBody = typeof e === "string" || e?.body != null || !!e?.file;
+  let p = { entitySchemaName: "?", diff: [] };
+  if (hasBody) p = parseSchema(typeof e === "string" ? e : bodyOf(e), name);
+  const parsedEntity = p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null;
+  return {
+    entity: eObj.entity || parsedEntity,
+    columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
+    error: p.error || null,
+    astDiagnostics: p.astDiagnostics || [],
+  };
+}
+
+// A recognised profile card whose profile schema was NOT supplied is an INPUT gap: without that body the engine
+// cannot say which entity the card profiled or which values it showed, so the plan would ship a card with no
+// contents. Same doctrine as detail/child-page schemas — fetch it, do not defer. A card is RESOLVED when the
+// manifest declares its profile schema under the schema name OR under the module key (the only available key when
+// the config names no schemaName) — either with a body, or as `false`. Anything else is "never checked", and blocks.
 function profileSchemaIssues(manifest, changeSet) {
   const declared = manifest.profileSchemas && typeof manifest.profileSchemas === "object" ? manifest.profileSchemas : {};
-  const has = (k) => k != null && Object.prototype.hasOwnProperty.call(declared, k);
+  const has = (k) => k != null && Object.hasOwn(declared, k);
   return (changeSet.profileCards || [])
     .filter((pc) => !has(pc.schemaName) && !has(pc.classic))
     .map((pc) => {
