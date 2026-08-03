@@ -31,6 +31,15 @@ MAX_SKILL_DESCRIPTION_BYTES = 1024
 # not: trimming under the cap must not silently drop a load-bearing trigger.
 # ENG-92957 dropped these during trimming and they were caught by hand, not CI.
 LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
+    # The orchestrator is the ENTRYPOINT, so its description is the only thing that can attract a
+    # cold "create an app" request. It previously named only the toolkit's own artifacts ("Business
+    # Plans", "approved plan"); a live run on the plain prompt "Create Verrify1 app. It should
+    # have..." never selected the skill and fell through to clio MCP alone, so none of the toolkit's
+    # gates applied. These substrings are the user-intent triggers that recovery depends on — a
+    # future trim must not drop them the way ENG-92957 dropped the ui-guidelines ones.
+    "creatio-app-orchestrator": [
+        "Creatio app", "create", "scaffold", "section", "Apply proactively",
+    ],
     "creatio-ui-guidelines": [
         "Creatio", "Freedom UI", "record page", "form page", "list page", "detail",
         "expanded list", "expansion panel", "datagrid", "lookup", "field group", "tab",

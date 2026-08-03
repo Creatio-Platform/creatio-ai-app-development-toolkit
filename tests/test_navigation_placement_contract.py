@@ -77,6 +77,44 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         self.assertIn("in the FIRST discovery batch", content)
 
 
+class OrchestratorTriggerContractTests(unittest.TestCase):
+    """The entrypoint skill must be selectable from a plain user request.
+
+    Its description previously named only the toolkit's own artifacts — "Business Plans", "technical
+    implementation handoffs", "the approved plan". A live run on "Create Verrify1 app. It should
+    have..." never selected the skill (transcript: zero Skill invocations, no toolkit file read) and
+    fell straight through to clio MCP, so every gate in this toolkit was inert. Every sibling skill is
+    phrased through user intent or carries "Apply proactively"; the one that must fire first was the
+    only one that could not match a natural request.
+    """
+
+    ORCHESTRATOR_SKILL_MD = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
+    ORCHESTRATOR_RULE_MDC = ROOT / "rules/creatio-app-orchestrator.mdc"
+
+    @staticmethod
+    def _description(path: Path) -> str:
+        for line in read_text(path).splitlines():
+            if line.startswith("description:"):
+                return line[len("description:"):].strip()
+        raise AssertionError(f"{path} has no description: line")
+
+    def test_description_names_the_user_intent_not_only_toolkit_artifacts(self):
+        for path in (self.ORCHESTRATOR_SKILL_MD, self.ORCHESTRATOR_RULE_MDC):
+            desc = self._description(path).lower()
+            self.assertIn("create", desc, str(path))
+            self.assertIn("creatio app", desc, str(path))
+            self.assertIn("apply proactively", desc, str(path))
+
+    def test_skill_and_cursor_rule_descriptions_stay_in_sync(self):
+        # Both are public trigger surfaces (test_release_structure pins them together); a fix applied
+        # to one and not the other silently leaves Cursor on the old, unmatchable trigger.
+        skill = self._description(self.ORCHESTRATOR_SKILL_MD)
+        rule = self._description(self.ORCHESTRATOR_RULE_MDC)
+        normalize = lambda d: d.replace("this rule", "this skill")
+        self.assertEqual(normalize(skill), normalize(rule),
+                         "orchestrator SKILL.md and rules/*.mdc descriptions must carry the same triggers")
+
+
 class NavigationPlacementContractTests(unittest.TestCase):
     def test_essentials_documents_the_workplace_model_and_home_page(self):
         content = read_text(ESSENTIALS)

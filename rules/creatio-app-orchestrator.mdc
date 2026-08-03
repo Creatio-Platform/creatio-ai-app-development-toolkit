@@ -1,5 +1,5 @@
 ---
-description: Use when creating Creatio app Business Plans, technical implementation handoffs, or applying the approved plan through clio MCP.
+description: Use when the user asks to create, scaffold, build, or plan a Creatio app or a new section — for example "create a Todo app" or "add an Orders section". Apply proactively for any new-app or new-section request, even when not explicitly selected: this rule is the entrypoint that produces the Creatio app Business Plan and technical implementation handoff and then applies the approved plan through clio MCP.
 alwaysApply: false
 ---
 
