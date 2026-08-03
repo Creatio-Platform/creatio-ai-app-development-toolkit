@@ -65,8 +65,10 @@ If the scope is genuinely ambiguous (e.g. a name that is both a section and its 
 
 ## Source Policy
 
-1. Source everything from Creatio **runtime metadata through Clio MCP** against the resolved environment — the schema chain, package structure, and hardcoded logic all come from `get-classic-page-sources` / the schema tools. This is the sole source path: a client-site migration has no local package-source checkout to fall back on, so do not depend on one.
-2. If the runtime metadata is unavailable, continue only if the target can still be identified; record the missing source as a risk in the plan.
+Discovery is runtime-only, through Clio MCP:
+
+1. Resolve all metadata through Creatio runtime via Clio MCP; an environment must resolve first.
+2. If the runtime metadata for a target is unavailable, continue only if the target can still be identified; record the gap as a risk in the plan.
 3. Stop and ask for the missing identifier only when the target cannot be resolved from the URL, name, or runtime metadata.
 
 ## Documentation
@@ -88,10 +90,10 @@ Decide the scope from "Migration Scope" above. For **whole-package** scope, buil
 ### 1. Resolve The Target
 
 1. Parse the input: a URL → host, route, section/page hints, record Ids, page/designer UIds; a name → possible section caption/code, entity/page/package/app name, or schema prefix. Whole-package → the set of sections from the step-0 inventory.
-2. Resolve the environment: `list-environments`, match the URL host. The environment is the source of everything downstream — if none resolves, you cannot fetch the runtime metadata: stop and ask for a resolvable environment (do not proceed on an unresolved target).
+2. Resolve the environment: `list-environments`, match the URL host; if no match, record the gap and request an environment (runtime discovery needs one).
 3. Resolve the target inventory: section schema + code, edit pages, mini pages, details/related schemas, entity schema, the Classic parent/template chain per page, existing Freedom pages for the same entity/app, package/app ownership, and whether the owning package is editable or needs a new/replacing package.
 
-### 2. Discover Runtime And Source Metadata
+### 2. Discover Runtime Metadata
 
 Read-only operations first.
 
@@ -100,7 +102,7 @@ Read-only operations first.
 > 2. **Resolve a tool's argument shape with `get-tool-contract` BEFORE calling it — never invent a payload.** This prevents the whole class of wasted round-trips (wrong arg names, object-vs-JSON-string, inline-body vs `body-file`, a tool on a different MCP server).
 > Arg-facts: `get-classic-page-sources` takes **`schema-name`** (+ optional `entity`, `output-file`) and writes the whole manifest to disk — the one-call path in step 4.0; `list-entity-client-schemas` takes **`entity-name`** and returns `sections` + `editPages` (each with `kind: classic|freedom`, per-type `typeColumnValue`, and `miniPageSchema`). Do **NOT** offload the fetch to a general-purpose sub-agent — it just duplicates this context.
 
-Runtime discovery, when available:
+Runtime discovery:
 
 - `list-app-sections`, `list-pages` + `get-page` (existing Freedom pages), `get-client-unit-schema` (Classic client-unit schemas).
 - `list-entity-client-schemas` (entity → its Classic sections, edit pages incl. per-type/typed cards, and add mini pages, each classified `classic`/`freedom`) — the entity-first, one-call way to resolve an entity's page-role graph. Use it here for the TARGET entity, and per CHILD entity in step 4.2.
@@ -113,7 +115,7 @@ Runtime discovery, when available:
 Decide *where* Freedom artifacts can be created before choosing templates. Follow `./references/classic-to-freedom-mapping.md` (Package Placement Mapping) for the decision table and the evidence to collect.
 
 1. Identify the Classic owning package/app: name, UId, maintainer, installed app, dependencies, lock/read-only state; whether existing Freedom pages for the entity already live in an editable app/package.
-2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, missing locally, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable and touching it risks a shared/base package).
+2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable and touching it risks a shared/base package).
 3. Record evidence + decision in the plan. If the user specified a strategy, still verify it is technically possible and call out conflicts. Whole-package → decide once and reuse (a vendor/locked owning package ⇒ new package/app for the app's own sections + replacing deltas for base sections it extends).
 
 ### 4. Reconstruct The Effective Classic Page (engine)

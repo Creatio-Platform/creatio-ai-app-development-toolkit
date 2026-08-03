@@ -18,9 +18,9 @@ Decide package placement before page/template mapping. Do not assume a Classic s
 
 | Package/Ownership Situation | Migration Placement | Notes |
 | --- | --- | --- |
-| Classic owning package is editable, source-owned, present in the repo, and matches the target app ownership | Same package | Preferred only when repository ownership and runtime editability are both clear. |
+| Classic owning package is editable, source-owned, and matches the target app ownership | Same package | Preferred only when ownership and runtime editability are both clear. |
 | Classic owning package is locked, installed, or vendor/base-owned, but Creatio can create replacing schemas in the design package | Replacing/extension package | Use for page replacements or additive Freedom artifacts that should not mutate the locked source package. |
-| Classic owning package is read-only, missing locally, unsafe to mutate, or user wants isolation | New package/app | Default safe option when ownership is uncertain or migration should be parallel. |
+| Classic owning package is read-only, unsafe to mutate, or user wants isolation | New package/app | Default safe option when ownership is uncertain or migration should be parallel. |
 | Existing Freedom page for the same entity already exists in an editable app/package | Update existing Freedom package/page | Avoid duplicate sections/pages unless there is a documented reason. |
 | Package lock/editability cannot be verified and implementation would touch shared/base assets | Manual decision or blocked | Planning can continue, but implementation must wait for package ownership confirmation. |
 
@@ -28,7 +28,6 @@ Evidence to collect:
 
 - package name, UId, maintainer, install type or lock/read-only indicators
 - installed app ownership and section ownership
-- local repository package descriptor/project presence
 - existing replacing schemas or Freedom pages for the same entity
 - explicit user package strategy, if provided
 
@@ -199,7 +198,7 @@ auto-filled/companion fields before shipping.
 | Button click methods | Freedom button bound to a request handler. |
 | Sandbox messages | Handler-mediated communication, shared service, or explicit event replacement design. |
 | Process launch | Freedom handler calling the existing process/service. |
-| Service call | Freedom handler using the approved service/client pattern from the repository. |
+| Service call | Freedom handler using the approved service/client pattern. |
 | Permission-driven UI | Backend permission check plus Freedom handler/rule state; do not rely only on hidden controls. |
 | Complex validation | Freedom validator or backend validation, depending on whether it must block persistence globally. |
 
