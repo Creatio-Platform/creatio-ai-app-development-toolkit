@@ -112,6 +112,24 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `SysModuleEntity` binds an entity to a section
 - `SysModuleEdit` binds a form page to a section
 
+Registering a section is not the same as making it reachable. What a user actually sees in the left
+navigation is a **workplace**, and that spans three more tables:
+- `SysWorkplace` — the workplace itself (the entry in the navigation switcher). Also carries
+  `HomePageUId`, the workplace's home page.
+- `SysModuleInWorkplace` — one row per section placed in a workplace.
+- `SysAdminUnitInWorkplace` — one row per role that can see the workplace.
+
+Two consequences that decide whether a newly created app is usable:
+- `create-app` places the section in the `My applications` workplace, which is granted to
+  `System administrators` only. Left there, the app is invisible to ordinary users.
+- A **home page** is a page schema (`BaseHomePage`) that only becomes a workplace's landing page once
+  that workplace's `SysWorkplace.HomePageUId` points at it. Creating the page is half the job.
+
+Do not improvise these tables. clio owns the model, the recipes, and the data-binding column sets:
+read `get-guidance name=workplaces` (and `name=home-page` for `HomePageUId`) before any navigation
+write. Navigation changes are cached — the user must log out and back in to see them; a browser
+refresh is not enough.
+
 ---
 
 ## Local MCP Workflow

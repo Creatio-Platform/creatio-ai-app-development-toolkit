@@ -84,6 +84,21 @@ If restrictions are not essential, explicitly state:
 
 Do not suggest optional restrictions without a business reason.
 
+Also required, and NOT covered by the sentence above — navigation placement and audience:
+- where the app belongs in the left navigation: a NEW workplace named for the app (recommend this when
+  scaffolding a new app), the default `My applications`, or an existing workplace the developer names
+- who should see that workplace (which roles)
+
+These are separate questions from record-level access, and the "no specific access restrictions"
+default does NOT answer them. Every app gets a navigation placement whether or not anyone chose one:
+`create-app` puts the section in `My applications`, which is granted to `System administrators` only,
+so silence here ships an app that ordinary users cannot reach. If the developer also asked for a home
+page, ask which workplace it should land on — a home page is only reachable through a workplace.
+
+Ask this in the discovery batch, not at implementation time: it changes the plan, not just the build.
+The mechanics (three tables, data bindings, transfer between environments) belong to clio — see
+`get-guidance name=workplaces`; the checklist only has to secure the developer's decision.
+
 ### Core process and business logic
 
 Required:
@@ -192,6 +207,13 @@ Before presenting the BA draft to the developer, run a pre-analysis pass across 
 
 The pre-analysis must check for:
 - contradictions between business context, process, data model, UX assumptions, and assumptions
+- the SAME concept specified twice in the request in incompatible ways — most often a state modelled
+  both as a boolean and as a multi-value status (e.g. a `Completed` checkbox alongside a
+  `New / In progress / Completed` status). Pick ONE carrier and say which, or ask; never satisfy both
+  by creating both fields, because nothing then keeps them in agreement and every metric, filter, and
+  business rule silently picks a different source of truth
+- a workplace placement or workplace audience that no answer or assumption covers (see
+  "Users, access and ownership")
 - business logic that is not reflected in the data model or cannot be supported by the described UX
 - required fields in business logic that are not marked as required in the data model
 - defaults that do not identify an explicit business default or explicit absence of default

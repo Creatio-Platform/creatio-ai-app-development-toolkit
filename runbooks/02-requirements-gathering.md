@@ -209,6 +209,10 @@ Use this exact visible skeleton for the Business Plan:
 - actors and responsibilities
 - access posture or ownership limits
 - persona notes when they materially affect behavior
+- navigation placement and its audience: which workplace the app's section (and its home page, if the
+  plan has one) belongs to, and which roles can see that workplace. State it in business terms — a new
+  workplace named for the app, `My applications`, or a named existing one. This is a plan-level
+  decision, not a build detail: left unstated, the app ships where only administrators can reach it.
 
 `## 3. Object Model` must define the core business objects.
 For each object block, include:
