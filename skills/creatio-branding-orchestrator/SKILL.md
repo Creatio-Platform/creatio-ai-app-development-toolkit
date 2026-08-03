@@ -170,9 +170,18 @@ family for everything or separate families for headings and body.
 > `get-tool-contract` for `build-theme` (that one tool name, not the full index) and require its description
 > to say that font families are **checked against Google Fonts**. If that statement is absent, the installed
 > clio predates this section — stop, tell the user their clio needs updating, and do not fall back to
-> guessing or to hand-authoring an `@import`. The same conclusion follows from either later signal, and each
-> is enough on its own: `build-theme` rejecting an argument this section never tells you to pass, or an
-> outcome that is neither "import kept" nor "import suppressed with a warning naming the family".
+> guessing or to hand-authoring an `@import`. (That phrase is a deliberate, fail-safe handshake: clio pins it
+> with tests on both the tool attribute and the `get-tool-contract` projection, so an upstream reword breaks
+> a clio test rather than silently disarming this gate. If it is ever reworded anyway, this check reads as
+> "old clio" and stops — it never lets a stale clio through.)
+>
+> One outcome is conclusive on its own, and it is the case this gate exists for. When you build a family the
+> user confirmed is NOT on Google Fonts, a correct clio always returns a warning naming that family — either
+> "was not found in Google Fonts" (checked, import suppressed) or "could not verify" (its own probe was
+> blocked, import kept — the documented fail-open branch, handled by "Could not be checked" below, NOT a sign
+> of old clio). **No warning naming that family at all** is the tell: it means the build never checked, which
+> only old clio does. Stop there too. Judge by the warnings, not by the CSS — workspace-write mode returns a
+> path and the no-code flow builds inside `create-theme`, so in both the CSS is never yours to inspect.
 
 Check each requested family against Google Fonts **before** building, so the conversation happens up
 front and the theme is built once instead of built, warned about, and built again. First check the
@@ -204,10 +213,11 @@ fallback.
   earlier gate, and the single pre-build confirmation does not stand in for it. Tell them plainly
   that the theme will show the font only on machines where it is already installed, and that everywhere
   else the text falls back to a generic face, so a serif or monospace choice lands on sans-serif. Once
-  they confirm, build with the family passed as the heading or body font exactly as you would for a
-  Google font: build-theme runs its own check, leaves an unpublished family out of the web-font
-  download on its own (a downloaded look-alike would shadow the installed font), and reports that in a
-  warning.
+  they confirm, build with the family passed as the heading or body font and nothing else — there is no
+  local-font flag to pass, and none is needed: build-theme runs its own check and leaves an unpublished
+  family out of the web-font download by itself (a downloaded look-alike would shadow the installed
+  font), reporting that in a warning naming the family. Read that warning back: it is what confirms the
+  suppression actually happened rather than the family having been downloaded anyway.
 - Could not be checked (no network, blocked host — any answer that is neither 200 nor 404) — say so
   instead of guessing, and ask the user whether it is a Google font or a locally installed one before
   building. If they say Google font, build normally — when clio cannot verify a family either, it keeps
