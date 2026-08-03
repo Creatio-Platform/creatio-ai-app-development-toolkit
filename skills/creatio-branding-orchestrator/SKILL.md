@@ -164,24 +164,11 @@ background will be generated or not.
 Optional. Ask whether to change the font (default is Montserrat), then whether to use one
 family for everything or separate families for headings and body.
 
-> **Requires clio with probe-driven font handling** (the release that ships ENG-93985). Older clio emits a
-> web-font `@import` for every custom family, including ones Google Fonts does not publish — which is the
-> bug this section's advice depends on being fixed. Confirm the capability before relying on it: read
-> `get-tool-contract` for `build-theme` (that one tool name, not the full index) and require its description
-> to say that font families are **checked against Google Fonts**. If that statement is absent, the installed
-> clio predates this section — stop, tell the user their clio needs updating, and do not fall back to
-> guessing or to hand-authoring an `@import`. (That phrase is a deliberate, fail-safe handshake: clio pins it
-> with tests on both the tool attribute and the `get-tool-contract` projection, so an upstream reword breaks
-> a clio test rather than silently disarming this gate. If it is ever reworded anyway, this check reads as
-> "old clio" and stops — it never lets a stale clio through.)
->
-> One outcome is conclusive on its own, and it is the case this gate exists for. When you build a family the
-> user confirmed is NOT on Google Fonts, a correct clio always returns a warning naming that family — either
-> "was not found in Google Fonts" (checked, import suppressed) or "could not verify" (its own probe was
-> blocked, import kept — the documented fail-open branch, handled by "Could not be checked" below, NOT a sign
-> of old clio). **No warning naming that family at all** is the tell: it means the build never checked, which
-> only old clio does. Stop there too. Judge by the warnings, not by the CSS — workspace-write mode returns a
-> path and the no-code flow builds inside `create-theme`, so in both the CSS is never yours to inspect.
+> **Font changes work on any clio; one path needs a current one.** Moving between families Google Fonts
+> publishes needs nothing new — build-theme has always emitted the web-font `@import` for those, so never
+> block an ordinary font change on clio's version. Only ONE path depends on newer behavior: building a family
+> the user confirmed is NOT on Google Fonts, where the import has to be *suppressed* rather than emitted.
+> That capability check lives in the "Still 404" branch below and fires only there.
 
 Check each requested family against Google Fonts **before** building, so the conversation happens up
 front and the theme is built once instead of built, warned about, and built again. First check the
@@ -213,15 +200,33 @@ fallback.
   earlier gate, and the single pre-build confirmation does not stand in for it. Tell them plainly
   that the theme will show the font only on machines where it is already installed, and that everywhere
   else the text falls back to a generic face, so a serif or monospace choice lands on sans-serif. Once
-  they confirm, build with the family passed as the heading or body font and nothing else — there is no
-  local-font flag to pass, and none is needed: build-theme runs its own check and leaves an unpublished
-  family out of the web-font download by itself (a downloaded look-alike would shadow the installed
-  font), reporting that in a warning naming the family. Read that warning back: it is what confirms the
-  suppression actually happened rather than the family having been downloaded anyway.
+  they confirm, check that the installed clio can actually suppress the import before you build: read
+  `get-tool-contract` for `build-theme` (that one tool name, not the full index) and require its description
+  to say that font families are **checked against Google Fonts**. That phrase is a deliberate, fail-safe
+  handshake — clio pins it with tests on both the tool attribute and the `get-tool-contract` projection, so
+  an upstream reword breaks a clio test rather than silently disarming this check; if it is ever reworded
+  anyway, this reads as "old clio" and stops, never the other way round. If the phrase is absent, do NOT
+  build this family: tell the user their clio predates probe-driven suppression, so the theme would download
+  a look-alike that shadows their installed font, and offer either a clio upgrade or a published Google font
+  instead. Never hand-author or hand-edit an `@import` to work around it.
+  With the capability confirmed, build with the family passed as the heading or body font and nothing else —
+  there is no local-font flag to pass, and none is needed: build-theme leaves an unpublished family out of
+  the web-font download by itself, reporting that in a warning naming the family. Read that warning back: it
+  is what confirms the suppression actually happened. If NO warning names that family, the build did not
+  check — treat the theme you just produced as suspect, tell the user it may carry an unwanted import for
+  that family, and prompt for a clio upgrade followed by a rebuild of the same theme. Judge this by the
+  warnings, never by the CSS: workspace-write mode returns a path and the no-code flow builds inside
+  `create-theme`, so in neither is the CSS yours to inspect.
 - Could not be checked (no network, blocked host — any answer that is neither 200 nor 404) — say so
   instead of guessing, and ask the user whether it is a Google font or a locally installed one before
   building. If they say Google font, build normally — when clio cannot verify a family either, it keeps
-  the web-font import, so a Google font still downloads. If they say locally installed, take the same
+  the web-font import, so a Google font still downloads. But read the build warnings back: if clio's own
+  probe reached the catalogue and answered "was not found in Google Fonts" for that family, its verdict
+  contradicts the user's answer and the theme has already shipped with the import suppressed. Do not let
+  that pass as the expected echo — say plainly that clio could reach Google Fonts where you could not and
+  did not find the family, and offer to redo the confirmation: keep it as a locally installed font (the
+  build is already correct for that choice) or switch to a published family and rebuild. If they say
+  locally installed, take the same
   explicit confirmation as in the previous point, plus one more consequence stated plainly: the import
   cannot be suppressed while the catalogue is unreachable, so either wait and re-check when it is
   reachable again, or build now — the "could not verify" warning will come back — and restyle once
@@ -232,14 +237,15 @@ build-theme runs the same check and is the authority. A malformed family fails i
 warn, and those never fail the build. Correlate each warning by the family name it NAMES, not by the
 fact that a warning arrived: this skill can set separate heading and body families, so a warning may be
 about the other one. A "was not found in Google Fonts" warning naming exactly the family the user
-explicitly confirmed as locally installed is the expected echo of that confirmation — the import was
-suppressed exactly as announced, so acknowledge it and move on. A warning naming any other family, or
-one whose family you cannot identify, is NOT covered by that confirmation and must be relayed and
-settled with the user, not swallowed — your own check may have used a different spelling, or reached
-the network differently. A "could not verify" warning means the web-font import was kept so a
-Google font keeps working; if that
-family is actually a locally installed one, settle it with the user and restyle (rebuild the CSS and
-update the theme) once connectivity is back. Never hand-author an `@import` for a font.
+explicitly confirmed as LOCALLY INSTALLED is the expected echo of that confirmation — the import was
+suppressed exactly as announced, so acknowledge it and move on. The same warning for a family the user
+called a Google font is the opposite: a contradiction to surface and settle, not an echo to acknowledge.
+A warning naming any other family, or one whose family you cannot identify, is NOT covered by that
+confirmation and must be relayed and settled with the user, not swallowed — your own check may have used
+a different spelling, or reached the network differently. A "could not verify" warning means the web-font
+import was kept so a Google font keeps working; if that family is actually a locally installed one, settle
+it with the user and restyle (rebuild the CSS and update the theme) once connectivity is back. Never
+hand-author an `@import` for a font.
 
 ## Theme name — after fonts
 
