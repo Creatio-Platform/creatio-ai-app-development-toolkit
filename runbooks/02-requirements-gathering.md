@@ -116,7 +116,8 @@ Required sections:
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
-- `## 7. Edge Cases and Exceptions`
+- `## 7. Analytics`
+- `## 8. Edge Cases and Exceptions`
 
 ## Document Rendering Contract
 
@@ -133,7 +134,7 @@ Do not expose any of the following in the Business Plan:
 - implementation choreography
 
 Use tables only in `## 3. Object Model` unless the developer explicitly asks for a tabular business matrix elsewhere.
-Sections `1`, `2`, `4`, `5`, `6`, and `7` must use short paragraphs and bullets, not tables.
+Sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` must use short paragraphs and bullets, not tables.
 
 ## Pre-Write Self-Check
 
@@ -145,7 +146,8 @@ Before presenting the Business Plan to the developer, verify the assembled draft
 4. `## 4. Lifecycle and Statuses`
 5. `## 5. Business Logic`
 6. `## 6. UX Expectations`
-7. `## 7. Edge Cases and Exceptions`
+7. `## 7. Analytics`
+8. `## 8. Edge Cases and Exceptions`
 
 If any required section is absent, renamed, or out of order, do not present the draft.
 Regenerate the missing section from conversation context or business discovery before presenting.
@@ -195,7 +197,10 @@ Use this exact visible skeleton for the Business Plan:
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
-- `## 7. Edge Cases and Exceptions`
+- `## 7. Analytics`
+  - `### 7.1 Section analytics` — dashboards shown on a section, one block per dashboard
+  - `### 7.2 Workplace analytics` — app/workplace-level dashboards
+- `## 8. Edge Cases and Exceptions`
 
 `## 1. Business Outcome` must include:
 
@@ -278,6 +283,22 @@ Also include when applicable:
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
 
+`## 7. Analytics` is mandatory and the agent ALWAYS proposes it — never wait for the developer to ask. Propose analytics **as a domain expert**: for each role and section, propose exactly the dashboards, metrics, and charts that an experienced practitioner in the app's business domain would expect to see, so the boards are meaningful out of the box rather than generic filler. When the request does not pin a concrete widget set, use domain-aware judgment to propose one (same posture as the domain-baseline rule for the object model). The section must be populated — an empty or `TBD` `## 7. Analytics` fails the draft.
+
+Organize `## 7. Analytics` into two required subsections:
+
+- `### 7.1 Section analytics` — dashboards surfaced on a section, immediately useful to the role that works with that section. There may be several per section (different data slices or different roles). Default to 2-3 dashboards per section, each sized to fit roughly one screen; if the developer asks for more, that limit does not apply. Include one block per dashboard.
+- `### 7.2 Workplace analytics` — more general, app/workplace-level dashboards: overall indicators describing how the whole app is working, useful to the roles that work with the app. Include one block per dashboard.
+
+Describe each dashboard with these labels (colon included) — the validator checks `dashboard:` and `widgets:` verbatim:
+
+- `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
+- `serves role:` — the role from `## 2. Roles and Permissions` this dashboard is for, e.g. `serves role: Sales manager`
+- `scope:` — the data slice / question it answers, e.g. `scope: open orders by stage this quarter`
+- `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
+
+Widgets may draw on any business object visible on the site — the app's own objects from `## 3. Object Model` and standard platform objects (for example Activity, Contact, Account) — whichever a domain expert would use to answer the dashboard's question. Keep the analytics business-facing: name metrics and charts by what they measure, not by widget schema or platform mechanics.
+
 Before finalizing the BA draft, verify at minimum:
 
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
@@ -287,8 +308,10 @@ Before finalizing the BA draft, verify at minimum:
 - an `inline` related list states only its `list columns:` plus the `add/edit: inline in the list` note — it must NOT also carry `form fields:`, `form groups:`, `add page:`, or `edit page:` (those duplicate the columns or imply a page that does not exist)
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
-- sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
+- sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
+- `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, and at least one dashboard block with its `dashboard:` title and `widgets:` line — it is never left empty or `TBD`
+- each dashboard `serves role:` names a role that exists in `## 2. Roles and Permissions`
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 

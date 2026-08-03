@@ -12,7 +12,8 @@ REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 4. Lifecycle and Statuses",
     "## 5. Business Logic",
     "## 6. UX Expectations",
-    "## 7. Edge Cases and Exceptions",
+    "## 7. Analytics",
+    "## 8. Edge Cases and Exceptions",
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
     "Minimum to create:",
@@ -60,6 +61,16 @@ SURFACE_HEADING_RE = re.compile(r"(?im)^[\s\-*>#`]*(Section|Related list)\b(?=\s
 INLINE_INTERACTION_RE = re.compile(r"(?im)^[\s\-*`]*add/edit:\s*inline\b")
 PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*`]*(?:form fields:|form groups:|add page:|edit page:)")
 
+# Section 7 Analytics contract. The agent must ALWAYS propose analytics as a
+# domain expert, so the section is mandatory AND must be populated: both the
+# section-level (7.1) and workplace-level (7.2) subsections must be present, and
+# at least one concrete dashboard (with its widgets) must be described. These
+# checks enforce "the section is filled", not merely "the heading exists".
+ANALYTICS_SECTION_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.1\s+Section analytics\b")
+ANALYTICS_WORKPLACE_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.2\s+Workplace analytics\b")
+DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:")
+DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:")
+
 
 def extract_section(text, start_heading, end_heading=None):
     lines = text.splitlines()
@@ -105,8 +116,9 @@ def validate_requirements_doc(content: str) -> None:
     section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
     section4_text = extract_section(text, "## 4. Lifecycle and Statuses", "## 5. Business Logic")
     section5_text = extract_section(text, "## 5. Business Logic", "## 6. UX Expectations")
-    section6_text = extract_section(text, "## 6. UX Expectations", "## 7. Edge Cases and Exceptions")
-    section7_text = extract_section(text, "## 7. Edge Cases and Exceptions")
+    section6_text = extract_section(text, "## 6. UX Expectations", "## 7. Analytics")
+    section7_analytics_text = extract_section(text, "## 7. Analytics", "## 8. Edge Cases and Exceptions")
+    section8_text = extract_section(text, "## 8. Edge Cases and Exceptions")
     lines = section3_text.splitlines()
     object_indices = [index for index, line in enumerate(lines) if OBJECT_HEADING_RE.search(line)]
     if not object_indices:
@@ -166,4 +178,15 @@ def validate_requirements_doc(content: str) -> None:
             raise WorkflowError(
                 "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"
             )
+    # Section 7 Analytics must be populated, not a placeholder. The agent always
+    # proposes analytics as a domain expert, so both subsections must exist and at
+    # least one concrete dashboard with its widgets must be described.
+    if not ANALYTICS_SECTION_SUBHEADING_RE.search(section7_analytics_text):
+        raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.1 Section analytics' subsection")
+    if not ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text):
+        raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.2 Workplace analytics' subsection")
+    if not DASHBOARD_LABEL_RE.search(section7_analytics_text):
+        raise WorkflowError("Requirements doc failed: section 7 Analytics must describe at least one 'dashboard:' (the section is mandatory and must be populated, not left empty)")
+    if not DASHBOARD_WIDGETS_LABEL_RE.search(section7_analytics_text):
+        raise WorkflowError("Requirements doc failed: each dashboard in section 7 Analytics must list its 'widgets:'")
 

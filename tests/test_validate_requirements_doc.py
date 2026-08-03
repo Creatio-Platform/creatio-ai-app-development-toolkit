@@ -59,7 +59,23 @@ Tasks move through New, Active, and Done.
 - list filters: Status
 - form groups: Main information
 
-## 7. Edge Cases and Exceptions
+## 7. Analytics
+
+### 7.1 Section analytics
+
+- dashboard: Task overview
+  - serves role: Team member
+  - scope: open tasks by status
+  - widgets: metric — open tasks count; chart — tasks by status (bar)
+
+### 7.2 Workplace analytics
+
+- dashboard: Team workload
+  - serves role: Team member
+  - scope: tasks across the whole app
+  - widgets: metric — total tasks; list — tasks due this week
+
+## 8. Edge Cases and Exceptions
 
 - Done tasks are excluded from active views.
 """
@@ -105,11 +121,49 @@ class TestValidateRequirementsDocSections(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("## 6. UX Expectations", str(ctx.exception))
 
-    def test_missing_section_7_edge_cases(self):
-        doc = VALID_DOC.replace("## 7. Edge Cases and Exceptions", "## 7. Notes")
+    def test_missing_section_7_analytics(self):
+        doc = VALID_DOC.replace("## 7. Analytics", "## 7. Reporting")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("## 7. Edge Cases and Exceptions", str(ctx.exception))
+        self.assertIn("## 7. Analytics", str(ctx.exception))
+
+    def test_missing_section_8_edge_cases(self):
+        doc = VALID_DOC.replace("## 8. Edge Cases and Exceptions", "## 8. Notes")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("## 8. Edge Cases and Exceptions", str(ctx.exception))
+
+
+class TestValidateRequirementsDocAnalytics(unittest.TestCase):
+    def test_missing_section_analytics_subsection(self):
+        doc = VALID_DOC.replace("### 7.1 Section analytics", "### 7.1 Reports")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.1 Section analytics", str(ctx.exception))
+
+    def test_missing_workplace_analytics_subsection(self):
+        doc = VALID_DOC.replace("### 7.2 Workplace analytics", "### 7.2 Company reports")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.2 Workplace analytics", str(ctx.exception))
+
+    def test_missing_dashboard_label_is_rejected(self):
+        # An analytics section with the subheadings but no concrete `dashboard:`
+        # block is a placeholder — it must fail the "must be populated" rule.
+        doc = VALID_DOC.replace("- dashboard: Task overview", "- Task overview").replace(
+            "- dashboard: Team workload", "- Team workload"
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("dashboard:", str(ctx.exception))
+
+    def test_missing_widgets_label_is_rejected(self):
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — open tasks count; chart — tasks by status (bar)", ""
+        ).replace("  - widgets: metric — total tasks; list — tasks due this week", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
 
 
 class TestValidateRequirementsDocTables(unittest.TestCase):

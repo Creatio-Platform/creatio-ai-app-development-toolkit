@@ -21,12 +21,14 @@ The required top-level sections of every BA-style Business Plan are, in order:
 4. Lifecycle and Statuses
 5. Business Logic
 6. UX Expectations
-7. Edge Cases and Exceptions
+7. Analytics
+8. Edge Cases and Exceptions
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
+`Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries both section-level dashboards (`### 7.1 Section analytics`) and app/workplace-level dashboards (`### 7.2 Workplace analytics`).
 
 Required BA-style Business Plan template:
 
@@ -37,7 +39,8 @@ Required BA-style Business Plan template:
 ## 4. Lifecycle and Statuses
 ## 5. Business Logic
 ## 6. UX Expectations
-## 7. Edge Cases and Exceptions
+## 7. Analytics
+## 8. Edge Cases and Exceptions
 ```
 
 ## Format Compliance Rule
@@ -250,7 +253,7 @@ Gate R:
 - **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
 - Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
+- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`).
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
 - The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.

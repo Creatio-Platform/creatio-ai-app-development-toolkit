@@ -3,16 +3,16 @@
 ## Role
 
 Apply the approved Business Plan on the resolved Creatio environment through clio MCP: create the
-application, scaffold its sections, and model entities, pages, and data. This runbook covers the
-post-Gate-R execution stage where scaffolding tools such as `create-app` and `create-app-section`
-run.
+application, scaffold its sections, model entities, pages, and data, and build the analytics
+(dashboards) from the plan's `## 7. Analytics` section. This runbook covers the post-Gate-R
+execution stage where scaffolding tools such as `create-app` and `create-app-section` run.
 
 ## Input/Output
 
 - **Input:** Approved Business Plan + Technical Implementation Handoff, and the `<env_name>` resolved
   by Agent 1.
-- **Output:** The application and its sections created and verified on the environment, with
-  execution evidence reported inline in the conversation.
+- **Output:** The application, its sections, and its analytics dashboards created and verified on
+  the environment, with execution evidence reported inline in the conversation.
 
 ## Context
 
@@ -54,10 +54,40 @@ Apply the remaining plan (entities, lookups, pages, bindings) through the tools 
 DB-first and immediately runtime-accessible — they do **not** require a separate compile or deploy
 step.
 
-### 4. Verify and report
+### 4. Build analytics dashboards
 
-Verify each created section against `list-app-sections` and report operation, page, and acceptance
-evidence inline in the conversation.
+Build the analytics from the plan's `## 7. Analytics` section. **Run this only after step 3 has
+produced the section list pages** — a section dashboard is hosted on its section's list page, so
+that page must already exist. Read `get-guidance name=dashboards` first; it routes to the specific
+guides (`dashboard-creation`, `dashboard-and-home-page-layout`, `dashboard-design`,
+`indicator-widget`, `chart-widget`, `dashboard-rights`, `home-page`). Resolve all tool names and
+payload shapes through `get-tool-contract`; do not hardcode them here.
+
+For each dashboard in the plan:
+
+- **Section analytics (`### 7.1`)** — host the dashboard on the section's **list page**
+  (`<Entity>_ListPage`, which carries the `crt.Dashboards` element). Create the dashboard page on
+  `BaseDashboardTemplate`, resolving the three link-back `optional-properties`
+  (`DashboardsEntitySchemaName` = the section entity, `DashboardsElementName`,
+  `DashboardsClientUnitSchemaUId` = the ROOT host-page schema UId) from that list page per
+  `dashboard-creation`. Lay out and size the widgets per `dashboard-and-home-page-layout`, and bind
+  every data-bound widget to the hidden `DashboardDS` source per `dashboard-design`.
+- **Workplace analytics (`### 7.2`)** — host app-level dashboards on the shared home dashboards page
+  `FreedomDashboards` (leave `DashboardsEntitySchemaName` empty). If the app has no workplace of its
+  own yet, create a **"My application"** workplace and set its home page per `home-page`
+  (`BaseHomePage` + `SysWorkplace.HomePageUId`); otherwise reuse the existing workplace.
+- **Access** — dashboards are created with the default `All Employees` read grant (access for
+  everyone). Ship those grants with the package per `dashboard-rights` so they survive a package
+  transfer (grants are data, not schema, and are otherwise lost on transfer).
+
+Widgets may draw on any site object named in the plan — the app's own entities and standard platform
+entities alike.
+
+### 5. Verify and report
+
+Verify each created section against `list-app-sections`, confirm the planned dashboards exist on
+their host pages, and report operation, page, dashboard, and acceptance evidence inline in the
+conversation.
 
 ## Error Handling
 
@@ -121,6 +151,8 @@ diagnostic — no change is required here when the clio-side wording lands.
 ## Completion Criteria
 
 ✅ The application and all planned sections exist and are verified against `list-app-sections`
+✅ Every dashboard in the plan's `## 7. Analytics` (section-level and workplace-level) exists on its
+   host page, with its widgets laid out and (for entity-scoped hosts) bound to `DashboardDS`
 ✅ No section was created by varying its caption, and no `compile-creatio` was run speculatively
 ✅ Execution, page, and acceptance evidence is reported inline in the conversation
 ✅ When support mode is on and the run returns a final response, include the canonical final support
