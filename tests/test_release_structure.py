@@ -38,7 +38,7 @@ LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
     # gates applied. These substrings are the user-intent triggers that recovery depends on — a
     # future trim must not drop them the way ENG-92957 dropped the ui-guidelines ones.
     "creatio-app-orchestrator": [
-        "Creatio app", "create", "scaffold", "section", "Apply proactively",
+        "Creatio app", "create", "generate", "scaffold", "add", "section", "Apply proactively",
     ],
     "creatio-ui-guidelines": [
         "Creatio", "Freedom UI", "record page", "form page", "list page", "detail",

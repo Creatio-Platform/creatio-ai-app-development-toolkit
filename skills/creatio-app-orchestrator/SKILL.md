@@ -1,6 +1,6 @@
 ---
 name: creatio-app-orchestrator
-description: Use when the user asks to create, scaffold, build, or plan a Creatio app or a new section — for example "create a Todo app" or "add an Orders section". Apply proactively for any new-app or new-section request, even when not explicitly selected: this skill is the entrypoint that produces the Creatio app Business Plan and technical implementation handoff and then applies the approved plan through clio MCP.
+description: Use when the user asks to create, generate, scaffold, build, add, or plan a Creatio app or a new section — for example "create a Todo app" or "add an Orders section". Apply proactively for any new-app or new-section request, even when not explicitly selected: this skill is the entrypoint that produces the Creatio app Business Plan and technical implementation handoff and then applies the approved plan through clio MCP.
 ---
 
 # Creatio App Orchestrator
