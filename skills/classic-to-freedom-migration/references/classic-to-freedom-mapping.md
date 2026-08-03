@@ -218,9 +218,17 @@ Read the two wiring properties correctly (verified against `BaseProfileSchema`, 
 3. **Confirm the package** on the target environment (`list-packages`) and add it as a dependency of the page's
    package. Without `CrtCustomer360App` the Contact/Account cards do not render at all.
 4. **Insert the component into the side profile** (`SideAreaProfileFieldFlexContainer` / the template's
-   side-profile container), read-only, wired to the master lookup:
+   side-profile container), read-only, with `referenceColumn` pointing at a view-model attribute over the master
+   lookup. This is the shape the OOTB `Opportunities_FormPage` uses for its account/contact cards — copied from
+   it, not invented:
 
    ```jsonc
+   // viewModelConfigDiff — the attribute that carries the profiled record's Id
+   { "operation": "merge", "path": ["attributes"], "values": {
+       "RequesterRef": { "modelConfig": { "path": "PDS.Requester" } }
+   } }
+
+   // viewConfigDiff
    {
      "operation": "insert",
      "name": "RequesterCompactProfile",
@@ -229,12 +237,15 @@ Read the two wiring properties correctly (verified against `BaseProfileSchema`, 
      "index": 0,
      "values": {
        "type": "crt.ContactCompactProfile",
-       "referenceColumn": "$Requester",   // the MASTER lookup — holds the profiled record's Id
-       "readonly": true,                  // embedded on a related-entity page: the card is a view of another record
+       "referenceColumn": "$RequesterRef",  // attribute over the MASTER lookup — the profiled record's Id
+       "readonly": true,                    // embedded on a related-entity page: a view of another record
        "layoutConfig": {}
      }
    }
    ```
+
+   `referenceColumn` must resolve to a **GUID**, never a `{ value, displayValue }` lookup object or a display
+   value — a card wired to a display value renders empty.
 
 5. **Add back the values the native card does not render.** It covers photo + name (+ country/city/time zone,
    birth date). Classic cards routinely also showed Phone, Email, JobTitle, Web, Industry — for each such
@@ -264,12 +275,22 @@ already provides — see *Profile islands* below) holding one **read-only** fiel
 a `{ path: "<masterColumn>.<column>", type: "ForwardReference" }` PDS attribute as in step 5, plus the record
 link. Never drop the card, and never flatten its fields into the master record's own group.
 
-**Example pair (OOTB, both verified on-stand).**
+**A POLYMORPHIC client profile maps to TWO cards.** When the profile schema declares **no**
+`entitySchemaName` (it profiles an Account *or* a Contact depending on the record — `ClientProfileSchema`,
+`BaseMultipleProfileSchema`, as `OpportunityPageV2` · `"ClientProfile"` · `masterColumnName: "Client"` does),
+there is no single Freedom counterpart: build **both** native cards, each over its own lookup and shown
+conditionally. The OOTB `Opportunities_FormPage` does exactly that — `crt.AccountCompactProfile` over
+`PDS.Account` plus `crt.ContactCompactProfile` over `PDS.Contact`, both `readonly: true`. The engine reports
+this card with an unresolved profiled entity, which is the signal to check for this case before falling back to
+hand-built fields.
+
+**Example pairs (OOTB, all three verified on-stand).**
 
 | Classic | Freedom |
 | --- | --- |
-| `ContactPageV2` · `"AccountProfile"` → `AccountProfileSchema`, `masterColumnName: "Account"` (no `profileColumnName`); card showed Type, Owner, Web, Phone, AccountCategory, Industry | `crt.AccountCompactProfile` in the side profile, `referenceColumn: "$Account"`, `readonly: true` + read-only `Account.Web` / `Account.Phone` / `Account.Industry` … fields beside it |
-| `AccountPageV2` · `"ContactProfile"` → `ContactProfileSchema`, `masterColumnName: "PrimaryContact"`, `profileColumnName: "Account"`; card showed JobTitle, MobilePhone, Phone, Email | `crt.ContactCompactProfile`, `referenceColumn: "$PrimaryContact"`, `readonly: true` + read-only `PrimaryContact.JobTitle` / `.MobilePhone` / `.Phone` / `.Email` fields beside it |
+| `ContactPageV2` · `"AccountProfile"` → `AccountProfileSchema`, `masterColumnName: "Account"` (no `profileColumnName`); card showed Type, Owner, Web, Phone, AccountCategory, Industry | `crt.AccountCompactProfile` in the side profile, `readonly: true`, `referenceColumn` over `PDS.Account` + read-only `Account.Web` / `Account.Phone` / `Account.Industry` … fields beside it |
+| `AccountPageV2` · `"ContactProfile"` → `ContactProfileSchema`, `masterColumnName: "PrimaryContact"`, `profileColumnName: "Account"`; card showed JobTitle, MobilePhone, Phone, Email | `crt.ContactCompactProfile`, `readonly: true`, `referenceColumn` over `PDS.PrimaryContact` + read-only `PrimaryContact.JobTitle` / `.MobilePhone` / `.Phone` / `.Email` fields beside it |
+| `OpportunityPageV2` · `"ClientProfile"` → `ClientProfileSchema` (no `entitySchemaName` — polymorphic), `masterColumnName: "Client"` | **both** cards on `Opportunities_FormPage`: `crt.AccountCompactProfile` over `PDS.Account` and `crt.ContactCompactProfile` over `PDS.Contact`, each `readonly: true` — plus the denormalized companion fields (`AccountWeb`, `AccountIndustry`, `ContactJobTitle`, …) |
 
 **Profile islands — build EVERY one the plan shows; do not collapse "for simplicity".** When the classic
 left area groups fields into more than one island, the plan lists them — each as a `Side profile › <island>`

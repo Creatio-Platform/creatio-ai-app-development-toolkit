@@ -1908,7 +1908,7 @@ check("ENG-93928 mapper: the profile schema resolves the columns the classic car
   () => pcCard?.fields);
 const pcDecision = pcRun.changeSet.needsDecision.find((d) => d.kind === "profile-card");
 check("ENG-93928 decision: names the component, the referenceColumn wiring, the package and the back-reference column",
-  pcDecision && /crt\.ContactCompactProfile/.test(pcDecision.reason) && /referenceColumn': '\$Requester/.test(pcDecision.reason)
+  pcDecision && /crt\.ContactCompactProfile/.test(pcDecision.reason) && /master lookup 'Requester' holds the profiled record's Id/.test(pcDecision.reason)
   && /CrtCustomer360App/.test(pcDecision.reason) && /pre-filling 'Contact'/.test(pcDecision.reason),
   () => pcDecision?.reason);
 
@@ -1989,6 +1989,25 @@ check("ENG-93928 fallback: no native compact profile for the profiled entity →
   && /path: "Requester\.<column>", type: "ForwardReference"/.test(pcCustom.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || "")
   && /no native compact profile/.test(pcCustom.designSpec),
   () => ({ card: pcCustomCard, spec: pcCustom.designSpec.split("\n").filter((l) => /Profile card/.test(l)) }));
+
+// (7b) POLYMORPHIC client profile — the profile schema declares no entitySchemaName (it profiles an Account OR a
+// Contact per record, e.g. ClientProfileSchema on OpportunityPageV2). The Freedom answer is BOTH native cards
+// (as the OOTB Opportunities_FormPage does), so the unresolved-entity decision must say that rather than sending
+// the agent straight to hand-built fields.
+const pcPoly = runMigration(profileMani({
+  profileSchemas: { RequesterProfilePage: { body: 'define("RequesterProfilePage",[],function(){return{mixins:{},diff:[]};});' } } }));
+check("ENG-93928 polymorphic profile: an unresolved profiled entity points at BOTH native cards, not straight to hand-built fields",
+  (pcPoly.changeSet.profileCards || [])[0]?.entity === null
+  && /POLYMORPHIC/.test(pcPoly.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || "")
+  && /crt\.AccountCompactProfile \+ crt\.ContactCompactProfile/.test(pcPoly.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || ""),
+  () => pcPoly.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason);
+
+// (7c) the native wiring must be the PRODUCT-verified shape: an attribute over `PDS.<masterColumn>` that
+// referenceColumn points at (how Opportunities_FormPage wires its cards), not a bare `$<column>` guess.
+check("ENG-93928 native wiring: the decision gives the attribute-over-PDS shape for referenceColumn",
+  /modelConfig: \{ path: "PDS\.Requester" \}/.test(pcDecision?.reason || "")
+  && /'referenceColumn': '\$<thatAttribute>'/.test(pcDecision?.reason || ""),
+  () => pcDecision?.reason);
 
 // (8) with NO profile schema, the profiled entity still resolves from the master lookup's referenced schema
 // (entity metadata) — so the card is wired correctly even before the schema body is fetched.
