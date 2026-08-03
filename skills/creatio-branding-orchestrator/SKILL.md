@@ -164,13 +164,15 @@ background will be generated or not.
 Optional. Ask whether to change the font (default is Montserrat), then whether to use one
 family for everything or separate families for headings and body.
 
-> **Requires clio with probe-driven font handling** (the release that ships ENG-93985 — `build-theme`
-> checks each family against Google Fonts itself and leaves an unpublished family out of the web-font
-> download). Older clio still accepts a `local-font-families` argument and does NOT suppress the import
-> on its own. If `build-theme` rejects an argument this section never tells you to pass, or its outcome
-> is neither "import kept" nor "import suppressed with a warning naming the family", treat that as a
-> clio-version mismatch: stop, tell the user their clio predates this behaviour and needs updating, and
-> do not fall back to guessing or to hand-authoring an `@import`.
+> **Requires clio with probe-driven font handling** (the release that ships ENG-93985). Older clio emits a
+> web-font `@import` for every custom family, including ones Google Fonts does not publish — which is the
+> bug this section's advice depends on being fixed. Confirm the capability before relying on it: read
+> `get-tool-contract` for `build-theme` (that one tool name, not the full index) and require its description
+> to say that font families are **checked against Google Fonts**. If that statement is absent, the installed
+> clio predates this section — stop, tell the user their clio needs updating, and do not fall back to
+> guessing or to hand-authoring an `@import`. The same conclusion follows from either later signal, and each
+> is enough on its own: `build-theme` rejecting an argument this section never tells you to pass, or an
+> outcome that is neither "import kept" nor "import suppressed with a warning naming the family".
 
 Check each requested family against Google Fonts **before** building, so the conversation happens up
 front and the theme is built once instead of built, warned about, and built again. First check the
