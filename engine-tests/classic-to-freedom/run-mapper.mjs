@@ -1228,14 +1228,15 @@ try {
     bytes > 600 * 1024 && ms < ceiling && (r === null || typeof r === "object"),
     () => ({ bytes, ms, baseMs, ceiling, r }));
   // review round-5 Minor #7 — the wall-clock check reads ~0 ms baseline on Windows and collapses to a fixed ceiling,
-  // so back it with a DETERMINISTIC structural assertion: every `[\s\S]` run in detectAddMode's regexes must be
-  // BOUNDED (`{0,N}`), never unbounded `*`/`+` (the actual catastrophic-backtracking surface). Timing-independent.
+  // so back it with a DETERMINISTIC structural assertion. PR#58 review (Tetiana T-m2): scope it to the ACTUAL
+  // catastrophic-backtracking surface — NO unbounded `[\s\S]*` / `[\s\S]+` in detectAddMode's regexes — and NOT the
+  // exact `{0,N}` spelling of every run (that coupled the assert to source text and broke on behaviour-preserving
+  // refactors, exactly the kind this PR is full of). This keeps a timing-independent ReDoS guard that a reintroduced
+  // unbounded quantifier still fails, while surviving a rename/extract that keeps the bounded discipline.
   const daSrc = detectAddMode.toString();
-  const daRuns = daSrc.split(String.raw`[\s\S]`);
-  const daAllBounded = daRuns.slice(1).every((seg) => /^\{0,\d+\}/.test(seg));
-  check("Minor4 structural: every `[\\s\\S]` run in detectAddMode is BOUNDED ({0,N}) — no unbounded */+ (deterministic ReDoS guard, timing-independent)",
-    daRuns.length > 1 && daAllBounded && !daSrc.includes(String.raw`[\s\S]*`) && !daSrc.includes(String.raw`[\s\S]+`),
-    () => ({ runs: daRuns.length - 1, allBounded: daAllBounded }));
+  check("Minor4 structural: detectAddMode has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` run (deterministic ReDoS guard, timing-independent, refactor-tolerant)",
+    daSrc.includes(String.raw`[\s\S]`) && !daSrc.includes(String.raw`[\s\S]*`) && !daSrc.includes(String.raw`[\s\S]+`),
+    () => ({ usesBoundedScan: daSrc.includes(String.raw`[\s\S]`), hasUnboundedStar: daSrc.includes(String.raw`[\s\S]*`), hasUnboundedPlus: daSrc.includes(String.raw`[\s\S]+`) }));
 }
 // ⛔ HARD GATE (RV1): the SAME manifest with NO seed is gate-BLOCKED — the CLI must exit non-zero AND the
 // plan must carry the ⛔ banner at the top (so a blocked run can't be mistaken for an approvable plan).
