@@ -22,6 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+AGENTS = ROOT / "AGENTS.md"
 CHECKLIST = ROOT / "context/business-checklist.md"
 ESSENTIALS = ROOT / "context/essentials.md"
 REQUIREMENTS_RUNBOOK = ROOT / "runbooks/02-requirements-gathering.md"
@@ -39,6 +40,41 @@ WORKPLACE_TABLES = [
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+class FirstTurnDiscoveryContractTests(unittest.TestCase):
+    """The first discovery batch is composed BEFORE any reference file is read.
+
+    `AGENTS.md` forbids reading large repository files until the first clarification turn is done, so
+    a requirement that lives only in `context/business-checklist.md` cannot reach the opening question
+    set. A live behavioural run confirmed it: asked to build a Todo app, the agent opened with metric
+    scope, description, list editing, and platform — and never asked where the app belonged, because
+    the business-discovery priority list did not mention it. These tests pin the requirement onto the
+    only surfaces that are in context during that first turn.
+    """
+
+    def test_discovery_priorities_include_navigation_placement(self):
+        content = read_text(AGENTS)
+        self.assertIn("navigation placement and its audience", content)
+
+    def test_placement_is_declared_critical_not_a_minor_implementation_question(self):
+        # "ask only the minimum critical questions" is the pressure that drops it; the rule has to
+        # win that argument explicitly.
+        content = read_text(AGENTS)
+        self.assertIn('never a "minor implementation question"', content)
+
+    def test_placement_is_required_in_the_first_batch(self):
+        content = read_text(AGENTS)
+        self.assertIn("Keep it in the FIRST batch", content)
+
+    def test_agents_states_why_the_checklist_cannot_carry_it(self):
+        # Guards against a future edit that "tidies up" by moving this back into the checklist.
+        content = read_text(AGENTS)
+        self.assertIn("not read until after that batch", content)
+
+    def test_orchestrator_requires_placement_in_the_first_batch(self):
+        content = read_text(ORCHESTRATOR_SKILL)
+        self.assertIn("in the FIRST discovery batch", content)
 
 
 class NavigationPlacementContractTests(unittest.TestCase):
