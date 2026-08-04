@@ -347,6 +347,12 @@ function validateStructure({ manifest, changeSet, childPages, typedPages, sectio
 // schema touched is NOT context (that is the `base-field-override` distinction), so the ledger keys on
 // `fromTemplate`, which the engine derives from `schemaTouched`, not on template ownership alone.
 const MEMBER_KINDS = ["diff-op", "method", "attribute", "message", "mixin", "module-dep", "resource", "detail"];
+// modules that carry no page behaviour of their own (framework root / pure styling) — mirrors the mapper's own
+// list; a module wrongly called inert is a silently dropped member, so it stays deliberately short.
+const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
+// what a method contributes to its ledger row — kept out of the source table so the table stays scannable
+const methodLedgerDetail = (m) =>
+  m.facts ? { lines: m.facts.lines, kinds: m.facts.kinds, trivial: m.facts.callParentOnly || m.facts.isEmpty } : null;
 
 // A member's disposition, decided by what the pipeline actually produced for it.
 function disposition(name, { fromTemplate, mapped, decided }) {
@@ -356,19 +362,42 @@ function disposition(name, { fromTemplate, mapped, decided }) {
   return "unaccounted";
 }
 
+// The nearest ANCESTOR of a layout item that the pipeline accounted for, or null.
+// A unit is often multi-member (04-units.md): the mapper deliberately emits ONE `unmapped-component` decision per
+// dropped SUBTREE ROOT — its text says "and its sub-items" — so a child of an accounted block is attributed to
+// that block's unit, not a gap of its own. Without this the ledger reports a block's leaves as unaccounted while
+// the worklist has already covered the whole block: on a real Opportunity page that was the radio options inside
+// a client `IsPrimary` control, flagged as gaps although their parent carried the decision.
+function accountedAncestor(name, parentOf, isAccounted) {
+  const seen = new Set([name]);
+  let cur = parentOf.get(name);
+  while (cur && !seen.has(cur)) {          // `seen` guards a malformed parent cycle in an untrusted body
+    if (isAccounted(cur)) return cur;
+    seen.add(cur);
+    cur = parentOf.get(cur);
+  }
+  return null;
+}
+
 // Everything the ChangeSet demonstrably produced an artifact for, as a name set — the `mapped` evidence.
 // The primary source is the mapper's OWN `accountedFor` list (it is what `mapUnmappedDrop` already trusts to
 // decide what silently vanished). The extra sweeps below cover names the mapper keys differently from the diff
 // item — a rule's target column, a detail's schema name, a resource key.
 function mappedNames(changeSet) {
   const s = new Set(changeSet.accountedFor || []);
-  for (const op of changeSet.viewConfigDiff || []) { if (op?.name) s.add(op.name); if (op?.values?.bindTo) s.add(String(op.values.bindTo).replace(/^\$/, "")); }
-  for (const r of changeSet.pageBusinessRules || []) if (r.element) s.add(r.element);
-  for (const r of changeSet.entityBusinessRules || []) if (r.targetAttribute) s.add(r.targetAttribute);
-  for (const d of changeSet.details || []) { if (d.detailSchema) s.add(d.detailSchema); if (d.classic) s.add(d.classic); }
-  for (const f of changeSet.standardFeatures || []) { if (f.classic) s.add(f.classic); if (f.detailSchema) s.add(f.detailSchema); }
-  for (const w of changeSet.widgets || []) if (w.classic) s.add(w.classic);
-  for (const w of changeSet.chromeWidgets || []) if (w.classic) s.add(w.classic);
+  const addAll = (list, ...keys) => {
+    for (const entry of list || []) for (const k of keys) { const v = entry?.[k]; if (v) s.add(String(v)); }
+  };
+  for (const op of changeSet.viewConfigDiff || []) {
+    if (op?.name) s.add(op.name);
+    if (op?.values?.bindTo) s.add(String(op.values.bindTo).replace(/^\$/, ""));
+  }
+  addAll(changeSet.pageBusinessRules, "element");
+  addAll(changeSet.entityBusinessRules, "targetAttribute");
+  addAll(changeSet.details, "detailSchema", "classic");
+  addAll(changeSet.standardFeatures, "classic", "detailSchema");
+  addAll(changeSet.widgets, "classic");
+  addAll(changeSet.chromeWidgets, "classic");
   for (const k of Object.keys(changeSet.resources || {})) s.add(k);
   return s;
 }
@@ -380,14 +409,25 @@ function mappedNames(changeSet) {
 // column names and field names overlap heavily, so this silently cleared genuine gaps.
 const AGGREGATED_DECISION_KINDS = new Set(["module-dep"]);
 
-export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) {
+// The set of member names a decision covers. Plain `split(",")` + trim rather than a `\s*,\s*` pattern: the
+// whitespace-padded separator backtracks super-linearly on a long run of spaces, and `item` carries stand-derived
+// text — the same ReDoS discipline the process-launch scan already follows.
+function decidedNames(needsDecision) {
   const decided = new Set();
-  for (const d of changeSet.needsDecision || []) {
+  for (const d of needsDecision || []) {
     if (d.item == null) continue;
     const item = String(d.item);
-    if (AGGREGATED_DECISION_KINDS.has(d.kind)) { for (const part of item.split(/\s*,\s*/)) if (part.trim()) decided.add(part.trim()); }
-    else decided.add(item.trim());
+    if (!AGGREGATED_DECISION_KINDS.has(d.kind)) { decided.add(item.trim()); continue; }
+    for (const part of item.split(",")) {
+      const name = part.trim();
+      if (name) decided.add(name);
+    }
   }
+  return decided;
+}
+
+export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) {
+  const decided = decidedNames(changeSet.needsDecision);
   const mapped = mappedNames(changeSet);
   // The agent's own dispositions, supplied like `manifest.signals`: `{ "<member>": { "resolved": true,
   // "disposition": "ported"|"dropped"|"blocked"|"n/a", "note": "…" } }`. This is how a member that the engine
@@ -398,14 +438,26 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
   // binds, so attribute `Amount` and diff-op `Amount` coexist in one ledger. A bare-name key would let ONE
   // disposition entry clear both — over-clearing across kinds is the same silent pass the gate exists to stop.
   // A bare-name key is still accepted as a fallback so a disposition can be written either way.
+  // parent links + "did the pipeline account for this name at all", for the ancestor walk below
+  const parentOf = new Map((eff.items || []).filter((i) => i.parent).map((i) => [i.name, i.parent]));
+  const isAccounted = (n) => mapped.has(n) || decided.has(n);
   const add = (kind, name, opts) => {
     const id = `${kind}:${name}`;
     const dec = plainObject(declared[id] ?? declared[name]);
     const agentResolved = dec.resolved === true && typeof dec.disposition === "string";
+    let disp = agentResolved ? "resolved" : disposition(name, opts);
+    // Only a LAYOUT member can inherit its attribution — a method/attribute/message has no parent chain.
+    let via = null;
+    if (disp === "unaccounted" && kind === "diff-op") {
+      via = accountedAncestor(name, parentOf, isAccounted);
+      if (via) disp = "decision";
+    }
     rows.push({
       kind, name, id,
-      disposition: agentResolved ? "resolved" : disposition(name, opts),
+      disposition: disp,
       agentDisposition: agentResolved ? dec.disposition : null,
+      // recorded, never silent: the ledger says WHICH unit absorbed this member, so the attribution is auditable
+      viaAncestor: via,
       note: typeof dec.note === "string" ? dec.note : null,
       provenance: opts.provenance || null,
       fromTemplate: !!opts.fromTemplate,
@@ -413,23 +465,41 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
     });
   };
 
-  for (const i of eff.items || [])
-    add("diff-op", i.name, { fromTemplate: i.templateOwned, mapped: mapped.has(i.name) || (i.bindTo && mapped.has(i.bindTo)), decided: decided.has(i.name), provenance: i.provenance });
-  for (const m of eff.methods || [])
-    add("method", m.name, { fromTemplate: m.fromTemplate, mapped: false, decided: decided.has(m.name), provenance: m.stack,
-      detail: m.facts ? { lines: m.facts.lines, kinds: m.facts.kinds, trivial: m.facts.callParentOnly || m.facts.isEmpty } : null });
-  for (const a of eff.attributes || [])
-    add("attribute", a.name, { fromTemplate: a.fromTemplate, mapped: mapped.has(a.name), decided: decided.has(a.name) || [...decided].some((d) => d.startsWith(a.name + " ")), provenance: a.provenance,
-      detail: { lookupFilters: a.lookupFilters, dependencies: a.dependencies.length, fnKeys: a.fnKeys } });
-  for (const m of eff.messages || [])
-    add("message", m.name, { fromTemplate: m.fromTemplate, mapped: false, decided: decided.has(m.name), provenance: m.provenance, detail: { mode: m.mode, direction: m.direction } });
-  for (const m of eff.mixins || [])
-    add("mixin", m.name, { fromTemplate: m.fromTemplate, mapped: false, decided: decided.has(m.name), provenance: m.provenance, detail: { module: m.module } });
-  for (const d of eff.moduleDeps || [])
+  // One declarative row per member KIND: where its members come from, how each is named, and what counts as
+  // `mapped` for it. A table rather than eight near-identical loops so adding a kind is one entry — and so the
+  // "did anyone account for this?" logic stays in ONE readable place.
+  const SOURCES = [
+    { kind: "diff-op", list: eff.items, name: (i) => i.name, prov: (i) => i.provenance,
+      tpl: (i) => i.templateOwned, mapped: (i) => mapped.has(i.name) || (!!i.bindTo && mapped.has(i.bindTo)) },
+    { kind: "method", list: eff.methods, name: (m) => m.name, prov: (m) => m.stack,
+      tpl: (m) => m.fromTemplate, mapped: () => false, detail: methodLedgerDetail },
+    { kind: "attribute", list: eff.attributes, name: (a) => a.name, prov: (a) => a.provenance,
+      tpl: (a) => a.fromTemplate, mapped: (a) => mapped.has(a.name),
+      // an `attribute-dependency` decision is keyed "<attr> ← <cols>", so match on that prefix too
+      extraDecided: (a) => [...decided].some((d) => d.startsWith(a.name + " ")),
+      detail: (a) => ({ lookupFilters: a.lookupFilters, dependencies: a.dependencies.length, fnKeys: a.fnKeys }) },
+    { kind: "message", list: eff.messages, name: (m) => m.name, prov: (m) => m.provenance,
+      tpl: (m) => m.fromTemplate, mapped: () => false, detail: (m) => ({ mode: m.mode, direction: m.direction }) },
+    { kind: "mixin", list: eff.mixins, name: (m) => m.name, prov: (m) => m.provenance,
+      tpl: (m) => m.fromTemplate, mapped: () => false, detail: (m) => ({ module: m.module }) },
     // the framework root / pure styling carries no page behaviour — a recorded `context` zero, not a gap
-    add("module-dep", d.name, { fromTemplate: d.fromTemplate || /^(?:terrasoft|ext-base|Ext|sandbox|css!)/.test(d.name), mapped: false, decided: decided.has(d.name), provenance: d.provenance });
-  for (const d of eff.details || [])
-    add("detail", d.key, { fromTemplate: d.fromTemplate, mapped: mapped.has(d.key) || mapped.has(d.schemaName), decided: decided.has(d.key), provenance: d.provenance });
+    { kind: "module-dep", list: eff.moduleDeps, name: (d) => d.name, prov: (d) => d.provenance,
+      tpl: (d) => d.fromTemplate || INERT_MODULE_RX.test(d.name), mapped: () => false },
+    { kind: "detail", list: eff.details, name: (d) => d.key, prov: (d) => d.provenance,
+      tpl: (d) => d.fromTemplate, mapped: (d) => mapped.has(d.key) || mapped.has(d.schemaName) },
+  ];
+  for (const src of SOURCES) {
+    for (const entry of src.list || []) {
+      const name = src.name(entry);
+      add(src.kind, name, {
+        fromTemplate: src.tpl(entry),
+        mapped: src.mapped(entry),
+        decided: decided.has(name) || (src.extraDecided ? src.extraDecided(entry) : false),
+        provenance: src.prov(entry),
+        detail: src.detail ? src.detail(entry) : null,
+      });
+    }
+  }
 
   const byDisposition = {};
   for (const r of rows) byDisposition[r.disposition] = (byDisposition[r.disposition] || 0) + 1;

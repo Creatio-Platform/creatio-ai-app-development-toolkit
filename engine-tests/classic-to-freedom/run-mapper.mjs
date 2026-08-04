@@ -981,7 +981,7 @@ check("#3 Logic: set/clear<X>Info helpers folded into on<X>Change (not separate 
 check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
   /#### ⚠ Imperative logic/.test(foldCs.designSpec)
   && ["onContactChange", "setContactInfo", "clearContactInfo"].every((m) =>
-    new RegExp(`\\| ${m} \\|`).test((foldCs.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0])));
+    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0])));
 // #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
@@ -1968,7 +1968,7 @@ check("method evidence: `new Terrasoft.EntitySchemaQuery(…)` (a NewExpression)
 const impSpecSection = (impRun.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0];
 check("⚠ Imperative logic: EVERY client method has a row — the defect was methods reaching NO binding worklist",
   /#### ⚠ Imperative logic/.test(impRun.designSpec)
-  && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(`\\| ${m} \\|`).test(impSpecSection)),
+  && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(String.raw`\| ` + m + String.raw` \|`).test(impSpecSection)),
   () => impSpecSection);
 check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
   /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
@@ -2048,6 +2048,30 @@ check("coverage gate(false-pass): a kind-qualified disposition clears ONLY its o
   () => collide.rows.map((r) => ({ id: r.id, d: r.disposition })));
 check("coverage gate: ledger rows carry a kind-qualified id, and the issue text names THAT id as the key to use",
   collide.rows.every((r) => r.id === `${r.kind}:${r.name}`) && /memberDispositions\["attribute:Amount"\]/.test(collide.issues[0]));
+
+// (b2) a LAYOUT child of an accounted block is attributed to that block's unit, not a gap of its own: the mapper
+// emits ONE `unmapped-component` decision per dropped SUBTREE ROOT ("and its sub-items"). Found on a real
+// Opportunity page — the radio options inside a client `IsPrimary` control were reported as gaps while their
+// parent already carried the decision. The attribution is RECORDED (`viaAncestor`), never silently absorbed.
+const viaParent = buildCoverage({
+  eff: { ...emptyEff, items: [
+    { name: "IsPrimary", parent: "Header", templateOwned: false, provenance: ["P"] },
+    { name: "FirstOption", parent: "IsPrimary", templateOwned: false, provenance: ["P"] },
+    { name: "SecondOption", parent: "IsPrimary", templateOwned: false, provenance: ["P"] },
+    { name: "Orphan", parent: "Header", templateOwned: false, provenance: ["P"] }] },
+  changeSet: { accountedFor: [], needsDecision: [{ kind: "unmapped-component", item: "IsPrimary", reason: "…and its sub-items…" }] },
+  manifest: {} });
+check("coverage gate: a layout child of an ACCOUNTED block is attributed via its ancestor, and the ancestor is named",
+  viaParent.rows.find((r) => r.name === "FirstOption").disposition === "decision"
+  && viaParent.rows.find((r) => r.name === "FirstOption").viaAncestor === "IsPrimary"
+  && viaParent.rows.find((r) => r.name === "SecondOption").viaAncestor === "IsPrimary",
+  () => viaParent.rows.map((r) => ({ n: r.name, d: r.disposition, via: r.viaAncestor })));
+check("coverage gate: inheriting an attribution does NOT clear an unrelated sibling (still a real gap)",
+  viaParent.complete === false && viaParent.rows.find((r) => r.name === "Orphan").disposition === "unaccounted");
+check("coverage gate: a NON-layout member never inherits an attribution (a method has no parent chain)",
+  buildCoverage({ eff: { ...emptyEff, items: [{ name: "Box", parent: null, templateOwned: false, provenance: ["P"] }],
+    methods: [ghost("ghostMethod")] },
+    changeSet: { accountedFor: ["Box"], needsDecision: [] }, manifest: {} }).complete === false);
 
 // (c) subtree aggregation — the migration is a page TREE, and every other gate aggregates it. A child whose own
 // members are unaccounted must block the PARENT, or the parent asserts a coverage its children do not have.

@@ -409,9 +409,8 @@ export function renderDesignSpec(result, opts = {}) {
   // scoped to the ⚠ worklist, so nothing forced an account of a single line of imperative logic. This section
   // is that worklist — one row per method, with the evidence the engine read from the body, so it can be worked
   // rather than skimmed. Both sections together are "the ⚠ worklist" the SKILL's rules refer to.
-  L.push(...renderImperativeLogic(cs));
   // ---- Member ledger: the completeness proof ----
-  L.push(...renderMemberLedger(result.coverage));
+  L.push(...renderImperativeLogic(cs), ...renderMemberLedger(result.coverage));
 
   return L.join("\n");
 }
@@ -419,35 +418,62 @@ export function renderDesignSpec(result, opts = {}) {
 // One row per client-authored method: what calls it, what its body does, and where it lives in the classic body.
 // A passthrough override is listed too (never silently filtered) but marked as carrying no behaviour of its own,
 // so the reader can tell "nothing to port" from "not looked at".
+// ONE trigger, rendered from its traced origin. `attribute-dependency` names the attribute and the columns whose
+// change fires it; a control trigger names the element and the bound property.
+function triggerText(t) {
+  if (t.kind !== "attribute-dependency") return `${esc(t.element)}.${esc(t.property)}`;
+  const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
+  return `${esc(t.attribute)} changes${cols}`;
+}
+
+// Where the method's body lives. An externally-assigned method has none HERE — naming the module beats leaving a
+// blank the reader mistakes for "nothing to port".
+function sourceText(h) {
+  if (h.externalRef) return `⚠ from ${esc(h.externalRef)}`;
+  return h.lines ? `L${h.lines.start}-${h.lines.end}` : DASH;
+}
+
+// What the body does, from evidence. Three distinct states, kept apart on purpose: body elsewhere · nothing of its
+// own · recognised calls · nothing recognised (which is a ⚠, not a blank).
+function bodyDoesText(h) {
+  if (h.externalRef) return "defined in another module";
+  if (h.trivial) return "passthrough (base only)";
+  const kinds = h.evidence?.kinds || [];
+  if (kinds.length) return kinds.map(esc).join(", ");
+  return `⚠ no call recognised (${esc(h.category)})`;
+}
+
+function readsWritesText(ev) {
+  if (!ev || (!ev.readsAttrs.length && !ev.writesAttrs.length)) return DASH;
+  const reads = ev.readsAttrs.map(esc).join(", ") || DASH;
+  const writes = ev.writesAttrs.map(esc).join(", ") || DASH;
+  return `${reads} → ${writes}`;
+}
+
+function targetText(h) {
+  if (h.externalRef) return "read that module, then port its behaviour";
+  if (h.trivial) return "confirm template provides it";
+  return freedomTargetFor(h.category);
+}
+
+const IMPERATIVE_LOGIC_PREAMBLE = [
+  "> Each row is a method the classic page defines. Mark it **ported** (name the Freedom handler / converter /",
+  "> virtual attribute you built), **dropped** (with the reason), or **blocked** — the same standard as an",
+  "> ⚠ Confirm item. `Trigger: unresolved` means the engine could not trace what calls it; trace it from the",
+  "> control / hook / message, never from the method's name.", "",
+  "| Method | Source | Trigger | Body does | Reads → writes | Freedom target |",
+  "| --- | --- | --- | --- | --- | --- |",
+];
+
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
-  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
-    "> Each row is a method the classic page defines. Mark it **ported** (name the Freedom handler / converter /",
-    "> virtual attribute you built), **dropped** (with the reason), or **blocked** — the same standard as an",
-    "> ⚠ Confirm item. `Trigger: unresolved` means the engine could not trace what calls it; trace it from the",
-    "> control / hook / message, never from the method's name.", "",
-    "| Method | Source | Trigger | Body does | Reads → writes | Freedom target |",
-    "| --- | --- | --- | --- | --- | --- |"];
+  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "", ...IMPERATIVE_LOGIC_PREAMBLE];
   for (const h of stubs) {
-    const ev = h.evidence;
-    const where = h.lines ? `L${h.lines.start}-${h.lines.end}` : DASH;
-    const trigger = (h.triggers || []).length
-      ? (h.triggers || []).map((t) => t.kind === "attribute-dependency"
-          ? `${esc(t.attribute)} changes${t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : ""}`
-          : `${esc(t.element)}.${esc(t.property)}`).join(" / ")
-      : "⚠ unresolved";
-    // an externally-assigned method has no body HERE — say where the body is, instead of leaving a blank the
-    // reader mistakes for "nothing to port"
-    const source = h.externalRef ? `⚠ from ${esc(h.externalRef)}` : where;
-    const does = h.externalRef ? "defined in another module"
-      : h.trivial ? "passthrough (base only)"
-      : (ev?.kinds?.length ? ev.kinds.map(esc).join(", ") : `⚠ no call recognised (${esc(h.category)})`);
-    const io = ev && (ev.readsAttrs.length || ev.writesAttrs.length)
-      ? `${ev.readsAttrs.map(esc).join(", ") || DASH} → ${ev.writesAttrs.map(esc).join(", ") || DASH}` : DASH;
-    const target = h.externalRef ? "read that module, then port its behaviour"
-      : h.trivial ? "confirm template provides it" : freedomTargetFor(h.category);
-    L.push(`| ${esc(h.sourceMethod)} | ${source} | ${trigger} | ${does} | ${io} | ${target} |`);
+    const triggers = h.triggers || [];
+    const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
+    const cells = [esc(h.sourceMethod), sourceText(h), trigger, bodyDoesText(h), readsWritesText(h.evidence), targetText(h)];
+    L.push(`| ${cells.join(" | ")} |`);
   }
   L.push("");
   return L;
@@ -480,23 +506,39 @@ const freedomTargetFor = (cat) => FREEDOM_TARGET[cat] || "request handler / conv
 // The member ledger — the completeness proof, per `03-member-ledger.md`: every member of every layer is
 // attributed, or it is a gap. Rendered as counts per kind plus the full list of anything still unaccounted,
 // because a ledger the reader cannot check is not a proof.
-function renderMemberLedger(coverage) {
-  if (!coverage || !Array.isArray(coverage.rows)) return [];
+const LEDGER_PREAMBLE = [
+  "> Every member of every merged schema layer, and what happened to it. **mapped** = the ChangeSet carries a",
+  "> Freedom artifact · **decision** = it is on a ⚠ worklist above · **resolved** = you recorded a disposition in",
+  "> `manifest.memberDispositions` · **context** = inherited base-template content, excluded by design ·",
+  "> **unaccounted** = a gap, and the coverage gate blocks on it.", "",
+  "| Member kind | Mapped | Decision | Resolved | Context | Unaccounted |",
+  "| --- | --- | --- | --- | --- | --- |",
+];
+const LEDGER_DISPOSITIONS = ["mapped", "decision", "resolved", "context", "unaccounted"];
+// explicit locale-aware comparator (Array#sort's default coerces to string and orders by code unit) — the same
+// determinism discipline engine.mjs applies to its own diagnostic lists, and a golden test asserts byte-identical
+// output across two runs of the same manifest.
+const alphabetical = (a, b) => String(a).localeCompare(String(b));
+
+// disposition counts per member kind, as `{ <kind>: { mapped, decision, … } }`
+function ledgerCounts(rows) {
   const byKind = {};
-  for (const r of coverage.rows) {
-    byKind[r.kind] = byKind[r.kind] || { mapped: 0, decision: 0, context: 0, resolved: 0, unaccounted: 0 };
+  for (const r of rows) {
+    byKind[r.kind] = byKind[r.kind] || Object.fromEntries(LEDGER_DISPOSITIONS.map((d) => [d, 0]));
     byKind[r.kind][r.disposition] = (byKind[r.kind][r.disposition] || 0) + 1;
   }
-  const L = [`#### Member ledger (${coverage.total} members)`, "",
-    "> Every member of every merged schema layer, and what happened to it. **mapped** = the ChangeSet carries a",
-    "> Freedom artifact · **decision** = it is on a ⚠ worklist above · **resolved** = you recorded a disposition in",
-    "> `manifest.memberDispositions` · **context** = inherited base-template content, excluded by design ·",
-    "> **unaccounted** = a gap, and the coverage gate blocks on it.", "",
-    "| Member kind | Mapped | Decision | Resolved | Context | Unaccounted |",
-    "| --- | --- | --- | --- | --- | --- |"];
-  for (const kind of Object.keys(byKind).sort()) {
+  return byKind;
+}
+
+function renderMemberLedger(coverage) {
+  if (!coverage || !Array.isArray(coverage.rows)) return [];
+  const byKind = ledgerCounts(coverage.rows);
+  const L = [`#### Member ledger (${coverage.total} members)`, "", ...LEDGER_PREAMBLE];
+  // alphabetical, not Array#sort's default: an explicit comparator keeps the rendered order deterministic —
+  // deterministic and locale-aware, and a golden test asserts byte-identical output across runs.
+  for (const kind of Object.keys(byKind).sort(alphabetical)) {
     const c = byKind[kind];
-    L.push(`| ${esc(kind)} | ${c.mapped || 0} | ${c.decision || 0} | ${c.resolved || 0} | ${c.context || 0} | ${c.unaccounted || 0} |`);
+    L.push(`| ${esc(kind)} | ${LEDGER_DISPOSITIONS.map((d) => c[d] || 0).join(" | ")} |`);
   }
   // counted zeros: a kind with no members is RECORDED as verified-empty, never omitted — otherwise "the plan
   // says nothing about messages" is indistinguishable from "nobody looked at messages".

@@ -212,30 +212,43 @@ function baseTag(cur, scope) {
   return cur.name === "Terrasoft" ? "terrasoft" : "proxy";
 }
 
-function resolveMemberValue(node, scope) {
-  const chain = memberChain(node);
-  if (!chain) return null;
-  const { path } = chain;
-  let cur = chain.base;
-  // If the base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
-  // `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
+// If the chain's base is an Identifier that ALIASES an enum member chain, splice the alias's own chain in front so
+// `vt.GridLayout` (where `var vt = Terrasoft.core.enums.ViewItemType`) resolves exactly like the full path.
+// Mutates `path` in place; returns the resolved base node, or null when an alias link is unreadable.
+function spliceAliasChain(path, base, scope) {
+  let cur = base;
   let guard = 0;
   while (cur?.type === "Identifier" && scope.get(cur.name)?.kind === "memberAlias" && guard++ < 20) {
     const aliased = memberChain(scope.get(cur.name).node);
     if (!aliased) return null;
-    path.unshift(...aliased.path); cur = aliased.base;
+    path.unshift(...aliased.path);
+    cur = aliased.base;
   }
-  let tag = baseTag(cur, scope);
-  if (tag == null) return null;
+  return cur;
+}
+
+// Walk the transition table from `tag` along `path` to the value it lands on.
+function walkTagAutomaton(tag, path) {
   for (const k of path) {
     if (tag === TAG_SYMBOLIC) return k;                          // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
-    if (enumTable) return k in enumTable ? enumTable[k] : null; // terminal: the next key indexes the enum table
+    if (enumTable) return k in enumTable ? enumTable[k] : null;  // terminal: the next key indexes the enum table
     const next = TAG_TRANSITIONS[tag];
-    if (!next) return null;                                     // proxy (or already a value) — further access is null
-    tag = next[k] || "proxy";                                   // unknown key at this state collapses to proxy
+    if (!next) return null;                                      // proxy (or already a value) — further access is null
+    tag = next[k] || "proxy";                                    // unknown key at this state collapses to proxy
   }
   return null; // ended on a resolver, not a concrete value
+}
+
+function resolveMemberValue(node, scope) {
+  const chain = memberChain(node);
+  if (!chain) return null;
+  const { path } = chain;
+  const cur = spliceAliasChain(path, chain.base, scope);
+  if (cur === null) return null;
+  const tag = baseTag(cur, scope);
+  if (tag == null) return null;
+  return walkTagAutomaton(tag, path);
 }
 
 // The root identifier a member chain reads off (`cfg.items[0].x` → "cfg"), or null if the base isn't a plain
@@ -461,12 +474,17 @@ const MAX_WALK_DEPTH = 400;
 
 // Render a callee as a readable dotted path (`this.callParent`, `this.sandbox.publish`, `Terrasoft.EntitySchemaQuery`).
 // Returns null for a callee no static reading can name (a computed index, an immediately-invoked expression).
+// how a member chain's ROOT reads in a dotted path: `this`, a plain identifier, or nothing nameable
+function chainBaseName(base) {
+  if (base?.type === "ThisExpression") return "this";
+  return base?.type === "Identifier" ? base.name : null;
+}
+
 function calleePath(node) {
   if (node?.type === "Identifier") return node.name;
   const chain = memberChain(node);
   if (!chain) return null;
-  const base = chain.base?.type === "ThisExpression" ? "this"
-    : chain.base?.type === "Identifier" ? chain.base.name : null;
+  const base = chainBaseName(chain.base);
   if (base == null) return null;
   return [base, ...chain.path].join(".");
 }
@@ -488,8 +506,9 @@ const CALL_KIND_RX = [
   ["sandbox-load", /(?:^|\.)sandbox\.(?:load|unload)$/],
   ["process-launch", /ProcessModuleUtilities|executeProcess|RunProcessRequest|(?:^|\.)runProcess$|showProcessPage|openProcessByRecord/],
   ["service", /(?:^|\.)callService$|AjaxProvider|(?:^|\.)ServiceHelper\.|(?:^|\.)callConfigurationService$/],
-  ["dialog", /showInformationDialog|showConfirmationDialog|showMessageDialog|(?:^|\.)utils\.showMessage$/],
-  ["validator", /addColumnValidator|(?:^|\.)validate$/],
+  // the unanchored name alternatives are grouped so the trailing `$` visibly belongs ONLY to the anchored one
+  ["dialog", /(?:showInformationDialog|showConfirmationDialog|showMessageDialog)|(?:^|\.)utils\.showMessage$/],
+  ["validator", /(?:addColumnValidator)|(?:^|\.)validate$/],
   ["save", /(?:^|\.)save$|(?:^|\.)saveEntity$/],
   ["lookup", /openLookup|LookupUtilities|(?:^|\.)openCard$|(?:^|\.)getLookupValue$/],
   // Filter CONSTRUCTION is filtering logic even when no ESQ is created in the same method (the filter is often
@@ -505,6 +524,40 @@ const CALL_KIND_RX = [
 ];
 const classifyCall = (p) => CALL_KIND_RX.filter(([, rx]) => rx.test(p)).map(([kind]) => kind);
 
+// Where a call's first string argument lands: `this.get("X")` reads an attribute, `this.set("X", …)` writes one,
+// `sandbox.publish/subscribe("Msg")` moves a message. A table so a new accessor is one entry, not a new branch.
+const ARG_SINKS = [
+  [/(?:^|\.)get$/, "reads"],
+  [/(?:^|\.)set$/, "writes"],
+  [/(?:^|\.)sandbox\.publish$/, "publishes"],
+  [/(?:^|\.)sandbox\.subscribe$/, "subscribes"],
+];
+
+// record ONE call/new expression into the fact sinks
+function recordCall(node, sinks) {
+  const p = calleePath(node.callee);
+  if (!p) return;
+  sinks.calls.add(p);
+  for (const k of classifyCall(p)) sinks.kinds.add(k);
+  const arg = firstStringArg(node);
+  if (!arg) return;
+  const hit = ARG_SINKS.find(([rx]) => rx.test(p));
+  if (hit) sinks[hit[1]].add(arg);
+}
+
+// push every child NODE of `node` onto the walk stack. Generic (every own value that is a node or array of
+// nodes) so the walker needs no per-node-type child list to stay complete as the AST shape grows.
+const WALK_SKIP_KEYS = new Set(["loc", "range", "start", "end", "type"]);
+function pushChildren(node, depth, stack) {
+  for (const key of Object.keys(node)) {
+    if (WALK_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const el of v) if (el?.type) stack.push([el, depth + 1]);
+    } else if (v?.type) stack.push([v, depth + 1]);
+  }
+}
+
 // Walk one method body, collecting the facts above. Iterative (explicit stack) so a deeply nested body cannot
 // blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH.
 function walkMethodBody(fnNode) {
@@ -519,33 +572,15 @@ function walkMethodBody(fnNode) {
     // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
     // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
     // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
-    if (node.type === "CallExpression" || node.type === "NewExpression") {
-      const p = calleePath(node.callee);
-      if (p) {
-        calls.add(p);
-        for (const k of classifyCall(p)) kinds.add(k);
-        const arg = firstStringArg(node);
-        if (arg) {
-          if (/(?:^|\.)get$/.test(p)) reads.add(arg);
-          else if (/(?:^|\.)set$/.test(p)) writes.add(arg);
-          else if (/(?:^|\.)sandbox\.publish$/.test(p)) publishes.add(arg);
-          else if (/(?:^|\.)sandbox\.subscribe$/.test(p)) subscribes.add(arg);
-        }
-      }
-    }
-    // generic child traversal: every own value that is a node or an array of nodes
-    for (const key of Object.keys(node)) {
-      if (key === "loc" || key === "range" || key === "start" || key === "end" || key === "type") continue;
-      const v = node[key];
-      if (Array.isArray(v)) { for (const el of v) if (el && typeof el === "object" && el.type) stack.push([el, depth + 1]); }
-      else if (v && typeof v === "object" && v.type) stack.push([v, depth + 1]);
-    }
+    if (node.type === "CallExpression" || node.type === "NewExpression")
+      recordCall(node, { calls, kinds, reads, writes, publishes, subscribes });
+    pushChildren(node, depth, stack);
   }
   const sorted = (s) => [...s].sort(byLocale);
   // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
   // accessor for both. Splitting them keeps `readsAttrs` a true list of view-model attributes (what a Freedom
   // handler binds to) and gives the localization step its own list.
-  const isRes = (n) => /^Resources\.Strings\./.test(n);
+  const isRes = (n) => n.startsWith("Resources.Strings.");
   return { calls: sorted(calls), kinds: sorted(kinds),
     readsAttrs: sorted(reads).filter((n) => !isRes(n)), readsResources: sorted(reads).filter(isRes),
     writesAttrs: sorted(writes),
@@ -555,11 +590,16 @@ function walkMethodBody(fnNode) {
 // A pure passthrough override (`f: function(){ this.callParent(arguments); }`) declares NO behaviour of its own.
 // Recognising it is what keeps the worklist honest: a real base-template chain contributes hundreds of such
 // overrides, and listing each as "imperative logic — review" would bury the methods that actually do something.
+// the single statement's expression, whether it is `this.callParent(…)` or `return this.callParent(…)`
+function loneExpression(st) {
+  if (st.type === "ExpressionStatement") return st.expression;
+  if (st.type === "ReturnStatement") return st.argument;
+  return null;
+}
 function isCallParentOnly(fnNode, facts) {
   const body = fnNode.body?.type === "BlockStatement" ? fnNode.body.body : null;
   if (!body || body.length !== 1) return false;
-  const st = body[0];
-  const expr = st.type === "ExpressionStatement" ? st.expression : st.type === "ReturnStatement" ? st.argument : null;
+  const expr = loneExpression(body[0]);
   if (expr?.type !== "CallExpression") return false;
   return /(?:^|\.)callParent$/.test(calleePath(expr.callee) || "") && facts.calls.length === 1;
 }
@@ -578,42 +618,51 @@ function returnObjectNode(retArg, scope) {
 
 // `methods: { … }` facts for one schema body. Empty array when the block is absent or not statically readable —
 // the method NAMES still come from the evaluated object, so an unreadable body loses evidence, never members.
+// an object-literal property's static key, or null when it is a spread / computed / unreadable key
+function staticPropKey(p) {
+  if (p.type === "SpreadElement" || p.computed) return null;
+  if (p.key?.type === "Identifier") return p.key.name;
+  return p.key == null ? null : String(p.key.value);
+}
+
+const isFnNode = (n) => n?.type === "FunctionExpression" || n?.type === "ArrowFunctionExpression";
+
+// `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is not in
+// this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the module is a
+// define() dependency the ledger already tracks. Recording the reference is the difference between a blank cell
+// the reader skips and "port this from VisaHelper".
+function externalMethodFact(name, fn) {
+  const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
+  return { name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
+    writesAttrs: [], publishes: [], subscribes: [], truncated: false,
+    externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false };
+}
+
+function ownMethodFact(name, fn) {
+  const facts = walkMethodBody(fn);
+  const startLine = fn.loc?.start?.line ?? null;
+  const endLine = fn.loc?.end?.line ?? null;
+  return {
+    name,
+    lines: startLine == null ? null : { start: startLine, end: endLine },
+    sloc: startLine == null ? null : endLine - startLine + 1,
+    params: (fn.params || []).filter((x) => x.type === "Identifier").map((x) => x.name),
+    ...facts,
+    callParentOnly: isCallParentOnly(fn, facts),
+    isEmpty: fn.body?.type === "BlockStatement" && fn.body.body.length === 0,
+  };
+}
+
 function methodFactsFromAst(retArg, scope) {
   const obj = returnObjectNode(retArg, scope);
   if (!obj) return [];
-  const methodsProp = obj.properties.find((p) =>
-    p.type !== "SpreadElement" && !p.computed
-    && (p.key?.type === "Identifier" ? p.key.name : String(p.key?.value)) === "methods");
-  const mo = methodsProp?.value;
+  const mo = obj.properties.find((p) => staticPropKey(p) === "methods")?.value;
   if (mo?.type !== "ObjectExpression") return [];
   const out = [];
   for (const p of mo.properties) {
-    if (p.type === "SpreadElement" || p.computed) continue;
-    const name = p.key?.type === "Identifier" ? p.key.name : String(p.key?.value);
+    const name = staticPropKey(p);
     if (!name) continue;
-    const fn = p.value;
-    if (fn?.type !== "FunctionExpression" && fn?.type !== "ArrowFunctionExpression") {
-      // `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is
-      // not in this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the
-      // module is a define() dependency the ledger already tracks. Recording it as an external reference is the
-      // difference between a blank cell the reader skips and "port this from VisaHelper".
-      const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
-      out.push({ name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
-        writesAttrs: [], publishes: [], subscribes: [], truncated: false,
-        externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false });
-      continue;
-    }
-    const facts = walkMethodBody(fn);
-    const startLine = fn.loc?.start?.line ?? null, endLine = fn.loc?.end?.line ?? null;
-    out.push({
-      name,
-      lines: startLine == null ? null : { start: startLine, end: endLine },
-      sloc: startLine == null ? null : endLine - startLine + 1,
-      params: (fn.params || []).filter((x) => x.type === "Identifier").map((x) => x.name),
-      ...facts,
-      callParentOnly: isCallParentOnly(fn, facts),
-      isEmpty: fn.body?.type === "BlockStatement" && fn.body.body.length === 0,
-    });
+    out.push(isFnNode(p.value) ? ownMethodFact(name, p.value) : externalMethodFact(name, p.value));
   }
   return out;
 }
@@ -773,7 +822,8 @@ function messageFacts(messages) {
   const o = plainObj(messages);
   return safeKeys(o).map((k) => {
     const m = plainObj(o[k]);
-    const pick = (v) => (isStr(v) ? v : isNum(v) ? v : null);
+    // a symbolic name (PUBLISH / PTP) or a numeric literal is kept AS WRITTEN; anything unresolved stays null
+    const pick = (v) => (isStr(v) || isNum(v) ? v : null);
     return { name: k, mode: pick(m.mode), direction: pick(m.direction) };
   });
 }
@@ -968,7 +1018,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
   // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
-  if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...(cur.handlers || {}), ...op.handlers };
+  if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
 }

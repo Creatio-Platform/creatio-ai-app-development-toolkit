@@ -345,7 +345,9 @@ export function mapToFreedom(eff, opts = {}) {
     // it from `viewConfigDiff` gets it wrong (a tab becomes a structural container under a different name, a
     // detail is keyed by its schema, not its diff-item name) — which shows up as the ledger crying wolf over
     // elements that ARE mapped. One source of truth, consumed by both.
-    accountedFor: [...accountedFor].sort(),
+    // explicit comparator, not Array#sort's default: the ledger consumes this list, and a golden test asserts
+    // byte-identical output across two runs of the same manifest.
+    accountedFor: [...accountedFor].sort((a, b) => String(a).localeCompare(String(b))),
   };
 }
 
@@ -897,37 +899,96 @@ function mapCardActions(eff) {
 // and is surfaced. Kept deliberately SHORT — a module wrongly called inert is a silently dropped member.
 const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
 
+// (a) an imperatively filtered lookup — the imperative twin of a FILTRATION business rule
+function lookupFilterDecision(a) {
+  const keys = a.lookupFilterKeys.length ? ", keys: " + a.lookupFilterKeys.join(", ") : "";
+  const on = a.referenceSchema ? " on " + a.referenceSchema : "";
+  return { kind: "attribute-lookup-filter", item: a.name,
+    reason: `attribute '${a.name}' filters its lookup IMPERATIVELY via lookupListConfig.filters (${a.lookupFilters} filter(s)${keys})${on} — this is NOT a declarative businessRules FILTRATION and does NOT come across as one. Rebuild it as a Freedom lookup filter handler (or an entity business rule when the filter is static); resolve any lookup-record GUID in the filter to its display name on-stand first` };
+}
+
+// (b) `dependencies` — the classic "these columns changed → call this method" wiring. This IS the trigger.
+function dependencyDecision(a, d) {
+  const cols = d.columns.join(", ");
+  const handled = d.methodName ? ` handled by '${d.methodName}'` : "";
+  return { kind: "attribute-dependency", item: `${a.name} ← ${cols || "?"}`,
+    reason: `attribute '${a.name}' declares a dependency on column(s) ${cols || "(unnamed)"}${handled} — in Freedom this is an on-change request handler (or a converter when the value is purely derived). The TRIGGER is this dependency, not the method's name` };
+}
+
+// (d) a VIRTUAL attribute — on the view model with NO entity column behind it and none of the imperative shapes
+// above. It is the page's own UI STATE (an editability/mode flag, a collection backing a menu), read by bindings
+// and rule conditions. The field pipeline never emits it because there is no column to bind, so without this it
+// was the single largest silent drop after the methods themselves.
+function virtualAttributeDecision(a) {
+  const dvt = a.dataValueType == null ? "" : ` (dataValueType ${a.dataValueType})`;
+  const def = a.value == null ? "" : `, default ${JSON.stringify(a.value)}`;
+  const coll = a.isCollection ? ", a COLLECTION" : "";
+  return { kind: "attribute-virtual", item: a.name,
+    reason: `virtual view-model attribute '${a.name}'${dvt}${def}${coll} — declared on the classic view model with NO entity column behind it, so no field insert carries it. It is page UI state (an editability/mode flag, a collection backing a menu or list): create it as a Freedom view-model attribute (with its default) and re-wire whatever read it — a binding, a business rule condition, or a handler. Confirm what reads it before deciding it is unused` };
+}
+
+function messageDecision(m) {
+  const dir = m.direction == null ? "direction unresolved" : String(m.direction);
+  const mode = m.mode == null ? "" : ", " + m.mode;
+  return { kind: "message", item: m.name,
+    reason: `sandbox message '${m.name}' (${dir}${mode}) — cross-surface wiring whose counterpart lives in ANOTHER schema (a detail, a module, a section), OUTSIDE this page's migration unit. Find the counterpart before building: in Freedom this becomes a handler-mediated request, a shared service, or an explicit event replacement — never a silent drop. A subscribe with no publisher found is an unresolved thread, not "no behaviour"` };
+}
+
+// every decision one attribute contributes — each shape is independent, so an attribute can raise several
+function attributeDecisions(a, hasColumn) {
+  const out = [];
+  if (a.lookupFilters > 0) out.push(lookupFilterDecision(a));
+  for (const d of a.dependencies) out.push(dependencyDecision(a, d));
+  // (c) a function-valued sub-key (a computed default, a dynamic caption) is imperative logic on the attribute
+  if (a.fnKeys.length) out.push({ kind: "attribute-imperative", item: a.name,
+    reason: `attribute '${a.name}' defines ${a.fnKeys.join(", ")} as a FUNCTION — a computed value/state the engine reads as present but cannot evaluate; implement it as a Freedom converter, virtual attribute or handler and confirm the computed result` });
+  if (!a.lookupFilters && !a.dependencies.length && !a.fnKeys.length && !hasColumn(a.name))
+    out.push(virtualAttributeDecision(a));
+  return out;
+}
+
+// ---- the per-method decision text, assembled from the body evidence ----
+// A trivial passthrough and an externally-assigned method each get a decision that SAYS SO, rather than asking
+// for a port that has nothing to port here. Suppressing either would re-create the silent drop this removes.
+const triggerPhrase = (t) =>
+  t.kind === "attribute-dependency" ? `${t.attribute} changes (${t.columns.join(", ")})` : `${t.element}.${t.property}`;
+
+// the evidence clauses appended to a real method's reason: what it does, what it reads/writes, what it publishes
+function evidenceClauses(ev) {
+  if (!ev) return "";
+  const parts = [];
+  if (ev.kinds.length) parts.push(`; body does: ${ev.kinds.join(", ")}`);
+  if (ev.readsAttrs.length || ev.writesAttrs.length)
+    parts.push(`; reads ${ev.readsAttrs.join(", ") || "—"} → writes ${ev.writesAttrs.join(", ") || "—"}`);
+  if (ev.publishes.length || ev.subscribes.length) {
+    const traffic = [...ev.publishes.map((p) => "publish " + p), ...ev.subscribes.map((s) => "subscribe " + s)];
+    parts.push(`; messages: ${traffic.join(", ")}`);
+  }
+  return parts.join("");
+}
+
+function methodReason(stub) {
+  const where = stub.lines ? ` (L${stub.lines.start}-${stub.lines.end})` : "";
+  const trig = stub.triggers.length ? stub.triggers.map(triggerPhrase).join(" / ") : null;
+  if (stub.externalRef) {
+    const alsoTrig = trig ? `; triggered by ${trig}` : "";
+    return `method '${stub.sourceMethod}' is ASSIGNED FROM '${stub.externalRef}' — its body is not in this schema, so the behaviour to port lives in that module (a define() dependency). Read it there${alsoTrig}, then implement the Freedom equivalent. Do NOT report it as "no logic" just because this body has none`;
+  }
+  if (stub.trivial)
+    return `method '${stub.sourceMethod}'${where} is a passthrough override (calls the base implementation only) — no behaviour of its own to port; confirm the Freedom template provides the base behaviour, then mark it accounted-for`;
+  const trigClause = trig
+    ? `, triggered by ${trig}`
+    : ", trigger unresolved — trace the control/hook/message that calls it, do not infer it from the name";
+  return `imperative logic${where}${trigClause}${evidenceClauses(stub.evidence)} — implement as a Freedom handler, converter or virtual attribute (a declarative business rule only when it is genuinely declarative)`;
+}
+
 function mapImperativeMembers(eff, cols) {
   const needsDecision = [];
   const client = (xs) => (xs || []).filter((x) => !x.fromTemplate);
-  const hasColumn = (n) => !!(cols && Object.prototype.hasOwnProperty.call(cols, n));
+  const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n));
 
-  for (const a of client(eff.attributes)) {
-    // (a) an imperatively filtered lookup — the imperative twin of a FILTRATION business rule
-    if (a.lookupFilters > 0) needsDecision.push({ kind: "attribute-lookup-filter", item: a.name,
-      reason: `attribute '${a.name}' filters its lookup IMPERATIVELY via lookupListConfig.filters (${a.lookupFilters} filter(s)${a.lookupFilterKeys.length ? ", keys: " + a.lookupFilterKeys.join(", ") : ""})${a.referenceSchema ? ` on ${a.referenceSchema}` : ""} — this is NOT a declarative businessRules FILTRATION and does NOT come across as one. Rebuild it as a Freedom lookup filter handler (or an entity business rule when the filter is static); resolve any lookup-record GUID in the filter to its display name on-stand first` });
-    // (b) `dependencies` — the classic "recompute these columns changed → call this method" wiring
-    for (const d of a.dependencies) needsDecision.push({ kind: "attribute-dependency", item: `${a.name} ← ${d.columns.join(", ") || "?"}`,
-      reason: `attribute '${a.name}' declares a dependency on column(s) ${d.columns.join(", ") || "(unnamed)"}${d.methodName ? ` handled by '${d.methodName}'` : ""} — in Freedom this is an on-change request handler (or a converter when the value is purely derived). The TRIGGER is this dependency, not the method's name` });
-    // (c) a function-valued sub-key (a computed default, a dynamic caption) is imperative logic on the attribute
-    if (a.fnKeys.length) needsDecision.push({ kind: "attribute-imperative", item: a.name,
-      reason: `attribute '${a.name}' defines ${a.fnKeys.join(", ")} as a FUNCTION — a computed value/state the engine reads as present but cannot evaluate; implement it as a Freedom converter, virtual attribute or handler and confirm the computed result` });
-    // (d) a VIRTUAL attribute — declared on the view model with no entity column behind it and none of the
-    // imperative shapes above. These are the page's own UI STATE (an editability flag, a collection backing a
-    // menu, a mode switch), read by bindings and business rules. They have an exact Freedom analog, and the
-    // field pipeline never emits them because there is no column to bind — so without this they were the single
-    // largest silent drop after the methods themselves.
-    if (!a.lookupFilters && !a.dependencies.length && !a.fnKeys.length && !hasColumn(a.name))
-      needsDecision.push({ kind: "attribute-virtual", item: a.name,
-        reason: `virtual view-model attribute '${a.name}'${a.dataValueType != null ? ` (dataValueType ${a.dataValueType})` : ""}${a.value != null ? `, default ${JSON.stringify(a.value)}` : ""}${a.isCollection ? ", a COLLECTION" : ""} — declared on the classic view model with NO entity column behind it, so no field insert carries it. It is page UI state (an editability/mode flag, a collection backing a menu or list): create it as a Freedom view-model attribute (with its default) and re-wire whatever read it — a binding, a business rule condition, or a handler. Confirm what reads it before deciding it is unused` });
-  }
-
-  for (const m of client(eff.messages)) {
-    const dir = m.direction == null ? "direction unresolved" : String(m.direction);
-    needsDecision.push({ kind: "message", item: m.name,
-      reason: `sandbox message '${m.name}' (${dir}${m.mode == null ? "" : ", " + m.mode}) — cross-surface wiring whose counterpart lives in ANOTHER schema (a detail, a module, a section), OUTSIDE this page's migration unit. Find the counterpart before building: in Freedom this becomes a handler-mediated request, a shared service, or an explicit event replacement — never a silent drop. A subscribe with no publisher found is an unresolved thread, not "no behaviour"` });
-  }
-
+  for (const a of client(eff.attributes)) needsDecision.push(...attributeDecisions(a, hasColumn));
+  for (const m of client(eff.messages)) needsDecision.push(messageDecision(m));
   for (const m of client(eff.mixins)) needsDecision.push({ kind: "mixin", item: m.name,
     reason: `the page mixes in '${m.module || m.name}' — its members are defined in ANOTHER schema, so none of its behaviour appears in this page body. Read the mixin and port what it contributes to THIS page (an entity-parameterized mixin can also carry actions and messages); confirm whether the Freedom template already provides an equivalent` });
 
@@ -977,28 +1038,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditabl
       draft: true,
     };
   });
-  for (const stub of handlerStubs) {
-    // A trivial passthrough still gets a decision — but one that says so, instead of asking for a port that
-    // has nothing to port. Suppressing it entirely would re-create the silent-drop this whole change removes.
-    const where = stub.lines ? ` (L${stub.lines.start}-${stub.lines.end})` : "";
-    const trig = stub.triggers.length
-      ? stub.triggers.map((t) => t.kind === "attribute-dependency" ? `${t.attribute} changes (${t.columns.join(", ")})` : `${t.element}.${t.property}`).join(" / ")
-      : null;
-    const ev = stub.evidence;
-    const evTxt = ev && ev.kinds.length ? `; body does: ${ev.kinds.join(", ")}` : "";
-    const io = ev && (ev.readsAttrs.length || ev.writesAttrs.length)
-      ? `; reads ${ev.readsAttrs.join(", ") || "—"} → writes ${ev.writesAttrs.join(", ") || "—"}` : "";
-    const msg = ev && (ev.publishes.length || ev.subscribes.length)
-      ? `; messages: ${[...ev.publishes.map(p => "publish " + p), ...ev.subscribes.map(s => "subscribe " + s)].join(", ")}` : "";
-    let reason;
-    if (stub.externalRef)
-      reason = `method '${stub.sourceMethod}' is ASSIGNED FROM '${stub.externalRef}' — its body is not in this schema, so the behaviour to port lives in that module (a define() dependency). Read it there${trig ? `; triggered by ${trig}` : ""}, then implement the Freedom equivalent. Do NOT report it as "no logic" just because this body has none`;
-    else if (stub.trivial)
-      reason = `method '${stub.sourceMethod}'${where} is a passthrough override (calls the base implementation only) — no behaviour of its own to port; confirm the Freedom template provides the base behaviour, then mark it accounted-for`;
-    else
-      reason = `imperative logic${where}${trig ? `, triggered by ${trig}` : ", trigger unresolved — trace the control/hook/message that calls it, do not infer it from the name"}${evTxt}${io}${msg} — implement as a Freedom handler, converter or virtual attribute (a declarative business rule only when it is genuinely declarative)`;
-    needsDecision.push({ kind: "method", item: stub.sourceMethod, reason });
-  }
+  for (const stub of handlerStubs) needsDecision.push({ kind: "method", item: stub.sourceMethod, reason: methodReason(stub) });
 
   // removals (B6) — client removals only; template-internal removes are context (F9, C3)
   for (const rm of eff.removed.filter(x => !x.fromTemplate)) {
@@ -1187,7 +1227,7 @@ function categorize(name, facts) {
   if (facts && (facts.callParentOnly || facts.isEmpty)) return "passthrough";
   for (const [kind, cat] of KIND_CATEGORY) if (kinds.has(kind)) return cat;
   // writes attributes but makes no notable call → it sets view-model state, CONFIRMED by the writes
-  if (facts && facts.writesAttrs.length) return "set-values";
+  if (facts?.writesAttrs.length) return "set-values";
   const n = name.toLowerCase();
   if (n.startsWith("on") && n.endsWith("changed")) return "attribute-change";
   if (n.includes("init")) return "init";
