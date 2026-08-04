@@ -16,6 +16,19 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     details: normalizeDetails(s.details),
     methods: safeKeys(s.methods),
     attributes: safeKeys(s.attributes),
+    // ---- imperative members, captured with their VALUES (not just names) ----
+    // `attributeDefs`/`messageDefs`/`mixinDefs`/`moduleDeps` are what makes the member ledger possible: before
+    // they existed, `attributes` reached this object as bare keys and then never reached `mergeHierarchy`'s
+    // return at all, while `messages`/`mixins` were not read anywhere in the engine. A behaviour declared only
+    // in one of these blocks (an imperatively filtered lookup, a sandbox contract, a mixed-in action) therefore
+    // had NO member the plan could account for. Values come from the same static evaluation as `diff` — no body
+    // is executed, and function-valued sub-keys are recorded as names rather than dropped.
+    attributeDefs: attributeFacts(s.attributes),
+    messageDefs: messageFacts(s.messages),
+    mixinDefs: mixinFacts(s.mixins),
+    // the FULL define() dep list (`refModules` below is only the UI-rendering subset) — a constants/utility
+    // module is still a member: it is where lookup GUIDs and shared helpers come from.
+    moduleDeps: (Array.isArray(amdDeps) ? amdDeps : []).filter(isStr),
     modules: normalizeModules(s.modules),
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
     // lives in method bodies (imperative → judgment), so we surface the NAMES for a decision.
@@ -152,11 +165,19 @@ const TAG_TRANSITIONS = {
   this: { BusinessRuleModule: "brm", Terrasoft: "terrasoft" },
   brm: { enums: "brm.enums" },
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
-  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", controls: "terrasoft.controls", core: "terrasoft.core" },
+  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", controls: "terrasoft.controls", core: "terrasoft.core",
+    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
-  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct" },
+  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct",
+    MessageMode: "t:sym", MessageDirectionType: "t:sym" },
 };
+// "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
+// the `messages` block's `mode`/`direction` (`Terrasoft.MessageMode.PTP`, `…MessageDirectionType.PUBLISH`).
+// Deliberately not a numeric enum table: the migration needs to know a message is PUBLISH vs SUBSCRIBE, and the
+// plan reads better naming it, so there is no reason to pin numeric constants the engine would have to assert.
+// An unknown key under this state still yields its name (any member of these two namespaces is a symbol we want).
+const TAG_SYMBOLIC = "t:sym";
 // "t:ct" indexes ContentType. Only LOOKUP (5) drives behavior (the mapper renders it via a picker); every other
 // ContentType key is a display hint the mapper does not switch on, so it intentionally stays null (unknown-key →
 // null, exactly as before) rather than being pinned to a guessed numeric — resolving LOOKUP is the fix, and no
@@ -207,6 +228,7 @@ function resolveMemberValue(node, scope) {
   let tag = baseTag(cur, scope);
   if (tag == null) return null;
   for (const k of path) {
+    if (tag === TAG_SYMBOLIC) return k;                          // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) return k in enumTable ? enumTable[k] : null; // terminal: the next key indexes the enum table
     const next = TAG_TRANSITIONS[tag];
@@ -371,7 +393,10 @@ function findFactoryReturn(factory) {
 export function parseSchema(src, pkg) {
   const astDiagnostics = [];
   let ast;
-  try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
+  // `locations: true` so each method node carries its 1-based line span — the plan cites WHERE a behaviour lives
+  // in the classic body, which is what lets a reviewer check the engine's reading against the source. Purely
+  // additive to the AST shape; nothing else reads `loc`.
+  try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations: true }); }
   catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e?.message || e), {}, []), astDiagnostics }; }
   const call = findDefineCall(ast);
   if (!call) return { ...buildSchemaResult(pkg, src, "no define() call found", {}, []), astDiagnostics };
@@ -395,7 +420,10 @@ export function parseSchema(src, pkg) {
       astDiagnostics.push({ kind: "unresolved-return", path: "", snippet: src.slice(retArg.start, Math.min(retArg.end, retArg.start + 60)).replace(/\s+/g, " ") });
       return { ...buildSchemaResult(pkg, src, null, {}, amdDeps), astDiagnostics };
     }
-    return { ...buildSchemaResult(pkg, src, null, captured, amdDeps), astDiagnostics };
+    // Body facts are read from the AST the parse already produced — a second, independent pass over the SAME
+    // nodes, so a failure here degrades the same way the value pass does (below), never half-populated.
+    return { ...buildSchemaResult(pkg, src, null, captured, amdDeps),
+      methodFacts: methodFactsFromAst(retArg, scope), astDiagnostics };
   } catch (e) {
     const why = e instanceof RangeError ? "schema too deeply nested (evaluation aborted)" : String(e?.message || e);
     return { ...buildSchemaResult(pkg, src, "static evaluation failed: " + why, {}, amdDeps), astDiagnostics };
@@ -417,6 +445,177 @@ function referencedUiModules(deps) {
   const css = new Set(names.filter(d => d.startsWith("css!")).map(d => d.slice(4).replace(/CSS$/, "")));
   return [...new Set(names.filter(d => !d.startsWith("css!"))
     .filter(m => css.has(m) || css.has(m.replace(/CSS$/, "")) || UI_MODULE_RX.test(m)))].sort(byLocale);
+}
+
+// ---- Per-method BODY FACTS (read the AST, never execute it) ---------------------------------------------
+// The engine deliberately does not run schema bodies (see the SECURITY note on the parser). It does not have to:
+// acorn already built the AST for every method, and the previous code threw it away at the AST_FN placeholder,
+// leaving `categorize()` to guess a method's purpose from substrings of its NAME. These facts replace guessing
+// with evidence — which framework calls the method makes, which attributes it reads and writes, which sandbox
+// messages it publishes/subscribes — so the plan can state a method's behaviour instead of labelling it "review".
+//
+// Bounded on purpose: the body is UNTRUSTED, so the walk carries a node budget and a depth cap, and a method that
+// exceeds either is reported `truncated: true` (fail-loud) rather than silently half-analysed.
+const MAX_WALK_NODES = 20000;
+const MAX_WALK_DEPTH = 400;
+
+// Render a callee as a readable dotted path (`this.callParent`, `this.sandbox.publish`, `Terrasoft.EntitySchemaQuery`).
+// Returns null for a callee no static reading can name (a computed index, an immediately-invoked expression).
+function calleePath(node) {
+  if (node?.type === "Identifier") return node.name;
+  const chain = memberChain(node);
+  if (!chain) return null;
+  const base = chain.base?.type === "ThisExpression" ? "this"
+    : chain.base?.type === "Identifier" ? chain.base.name : null;
+  if (base == null) return null;
+  return [base, ...chain.path].join(".");
+}
+
+// The FIRST string-literal argument of a call — the attribute/message/service name in every classic idiom
+// (`this.get("X")`, `this.sandbox.publish("Msg", …)`, `this.callService("Svc", …)`).
+const firstStringArg = (call) => {
+  const a = call.arguments?.[0];
+  return a?.type === "Literal" && typeof a.value === "string" ? a.value : null;
+};
+
+// Which framework capability a callee path represents. One table so the taxonomy is inspectable and a new
+// idiom is a one-line addition rather than a new branch buried in the walker.
+const CALL_KIND_RX = [
+  ["callParent", /(?:^|\.)callParent$/],
+  ["esq", /EntitySchemaQuery|getEntityCollection|createEntitySchemaQuery|EntitySchemaManager/],
+  ["publish", /(?:^|\.)sandbox\.publish$/],
+  ["subscribe", /(?:^|\.)sandbox\.subscribe$/],
+  ["sandbox-load", /(?:^|\.)sandbox\.(?:load|unload)$/],
+  ["process-launch", /ProcessModuleUtilities|executeProcess|RunProcessRequest|(?:^|\.)runProcess$|showProcessPage|openProcessByRecord/],
+  ["service", /(?:^|\.)callService$|AjaxProvider|(?:^|\.)ServiceHelper\.|(?:^|\.)callConfigurationService$/],
+  ["dialog", /showInformationDialog|showConfirmationDialog|showMessageDialog|(?:^|\.)utils\.showMessage$/],
+  ["validator", /addColumnValidator|(?:^|\.)validate$/],
+  ["save", /(?:^|\.)save$|(?:^|\.)saveEntity$/],
+  ["lookup", /openLookup|LookupUtilities|(?:^|\.)openCard$|(?:^|\.)getLookupValue$/],
+  // Filter CONSTRUCTION is filtering logic even when no ESQ is created in the same method (the filter is often
+  // built here and handed to a detail's filter method). Reporting it as "no call recognised" understated exactly
+  // the behaviour that has to become a Freedom data-source filter.
+  ["filter-build", /createColumnFilterWithParameter|createColumnIsNotNullFilter|createColumnInFilterWithParameters|createFilterGroup|createExistsFilter|(?:^|\.)createFilter$|filterGroup\.add/],
+  // a system-setting read gates behaviour by configuration — it must be re-read on the Freedom side, not inlined
+  ["sys-setting", /SysSettings/],
+  // reloading fields / a detail after a change → a Freedom data-source reload request, not a no-op
+  ["refresh", /(?:^|\.)refreshFields$|(?:^|\.)updateDetail(?:s)?$|(?:^|\.)reloadEntity$|(?:^|\.)reloadGridData$/],
+  ["feature-toggle", /getIsFeatureEnabled/],
+  ["mixin-call", /(?:^|\.)mixins\./],
+];
+const classifyCall = (p) => CALL_KIND_RX.filter(([, rx]) => rx.test(p)).map(([kind]) => kind);
+
+// Walk one method body, collecting the facts above. Iterative (explicit stack) so a deeply nested body cannot
+// blow the call stack — the same reason the value evaluator carries MAX_AST_DEPTH.
+function walkMethodBody(fnNode) {
+  const calls = new Set(), kinds = new Set(), reads = new Set(), writes = new Set();
+  const publishes = new Set(), subscribes = new Set();
+  let nodes = 0, truncated = false;
+  const stack = [[fnNode.body, 0]];
+  while (stack.length) {
+    const [node, depth] = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (++nodes > MAX_WALK_NODES || depth > MAX_WALK_DEPTH) { truncated = true; break; }
+    // `new Terrasoft.EntitySchemaQuery({…})` is a NewExpression, NOT a CallExpression — handling only the latter
+    // missed the single most common classic data-access idiom, so an ESQ-querying method reported no calls at all
+    // and fell back to the name heuristic. Both node types carry `callee` + `arguments`, so one branch covers them.
+    if (node.type === "CallExpression" || node.type === "NewExpression") {
+      const p = calleePath(node.callee);
+      if (p) {
+        calls.add(p);
+        for (const k of classifyCall(p)) kinds.add(k);
+        const arg = firstStringArg(node);
+        if (arg) {
+          if (/(?:^|\.)get$/.test(p)) reads.add(arg);
+          else if (/(?:^|\.)set$/.test(p)) writes.add(arg);
+          else if (/(?:^|\.)sandbox\.publish$/.test(p)) publishes.add(arg);
+          else if (/(?:^|\.)sandbox\.subscribe$/.test(p)) subscribes.add(arg);
+        }
+      }
+    }
+    // generic child traversal: every own value that is a node or an array of nodes
+    for (const key of Object.keys(node)) {
+      if (key === "loc" || key === "range" || key === "start" || key === "end" || key === "type") continue;
+      const v = node[key];
+      if (Array.isArray(v)) { for (const el of v) if (el && typeof el === "object" && el.type) stack.push([el, depth + 1]); }
+      else if (v && typeof v === "object" && v.type) stack.push([v, depth + 1]);
+    }
+  }
+  const sorted = (s) => [...s].sort(byLocale);
+  // `this.get("Resources.Strings.X")` is a RESOURCE read, not an attribute read — the classic API uses the same
+  // accessor for both. Splitting them keeps `readsAttrs` a true list of view-model attributes (what a Freedom
+  // handler binds to) and gives the localization step its own list.
+  const isRes = (n) => /^Resources\.Strings\./.test(n);
+  return { calls: sorted(calls), kinds: sorted(kinds),
+    readsAttrs: sorted(reads).filter((n) => !isRes(n)), readsResources: sorted(reads).filter(isRes),
+    writesAttrs: sorted(writes),
+    publishes: sorted(publishes), subscribes: sorted(subscribes), truncated };
+}
+
+// A pure passthrough override (`f: function(){ this.callParent(arguments); }`) declares NO behaviour of its own.
+// Recognising it is what keeps the worklist honest: a real base-template chain contributes hundreds of such
+// overrides, and listing each as "imperative logic — review" would bury the methods that actually do something.
+function isCallParentOnly(fnNode, facts) {
+  const body = fnNode.body?.type === "BlockStatement" ? fnNode.body.body : null;
+  if (!body || body.length !== 1) return false;
+  const st = body[0];
+  const expr = st.type === "ExpressionStatement" ? st.expression : st.type === "ReturnStatement" ? st.argument : null;
+  if (expr?.type !== "CallExpression") return false;
+  return /(?:^|\.)callParent$/.test(calleePath(expr.callee) || "") && facts.calls.length === 1;
+}
+
+// Resolve the factory's return node to an inline ObjectExpression, following a single-level scope alias
+// (`var cfg = {…}; return cfg;`) exactly as the value evaluator does. Returns null when the return is not
+// statically an object literal — the same case that already produces an `unresolved-return` diagnostic.
+function returnObjectNode(retArg, scope) {
+  if (retArg?.type === "ObjectExpression") return retArg;
+  if (retArg?.type === "Identifier") {
+    const m = scope.get(retArg.name);
+    if (m?.kind === "node" && m.node.type === "ObjectExpression") return m.node;
+  }
+  return null;
+}
+
+// `methods: { … }` facts for one schema body. Empty array when the block is absent or not statically readable —
+// the method NAMES still come from the evaluated object, so an unreadable body loses evidence, never members.
+function methodFactsFromAst(retArg, scope) {
+  const obj = returnObjectNode(retArg, scope);
+  if (!obj) return [];
+  const methodsProp = obj.properties.find((p) =>
+    p.type !== "SpreadElement" && !p.computed
+    && (p.key?.type === "Identifier" ? p.key.name : String(p.key?.value)) === "methods");
+  const mo = methodsProp?.value;
+  if (mo?.type !== "ObjectExpression") return [];
+  const out = [];
+  for (const p of mo.properties) {
+    if (p.type === "SpreadElement" || p.computed) continue;
+    const name = p.key?.type === "Identifier" ? p.key.name : String(p.key?.value);
+    if (!name) continue;
+    const fn = p.value;
+    if (fn?.type !== "FunctionExpression" && fn?.type !== "ArrowFunctionExpression") {
+      // `sendToVisa: VisaHelper.SendToVisaMethod` — the method is ASSIGNED FROM another module, so its body is
+      // not in this schema at all. That is not "no evidence": it says exactly where the behaviour lives, and the
+      // module is a define() dependency the ledger already tracks. Recording it as an external reference is the
+      // difference between a blank cell the reader skips and "port this from VisaHelper".
+      const ref = calleePath(fn) || (fn?.type === "Identifier" ? fn.name : null);
+      out.push({ name, lines: null, sloc: null, params: [], calls: [], kinds: [], readsAttrs: [], readsResources: [],
+        writesAttrs: [], publishes: [], subscribes: [], truncated: false,
+        externalRef: ref || "(not statically resolvable)", callParentOnly: false, isEmpty: false });
+      continue;
+    }
+    const facts = walkMethodBody(fn);
+    const startLine = fn.loc?.start?.line ?? null, endLine = fn.loc?.end?.line ?? null;
+    out.push({
+      name,
+      lines: startLine == null ? null : { start: startLine, end: endLine },
+      sloc: startLine == null ? null : endLine - startLine + 1,
+      params: (fn.params || []).filter((x) => x.type === "Identifier").map((x) => x.name),
+      ...facts,
+      callParentOnly: isCallParentOnly(fn, facts),
+      isEmpty: fn.body?.type === "BlockStatement" && fn.body.body.length === 0,
+    });
+  }
+  return out;
 }
 
 // Extract a named function/method BODY by brace-matching (a regex can't balance braces) — used to scope
@@ -515,6 +714,77 @@ const numOrNull = (v) => (isNum(v) ? v : null);
 function safeKeys(o) { return o && typeof o === "object" ? Object.keys(o).filter(k => typeof k === "string") : []; }
 function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? o : {}; }
 
+// ---- Imperative-member capture: `attributes` / `messages` / `mixins` ------------------------------------
+// These three blocks used to be read for their KEYS at most (`attributes`) or not at all (`messages`, `mixins`),
+// so the behaviour they declare could not be reported, let alone accounted for. The values are ordinary object
+// literals, so the SAME static evaluator that already resolved `diff`/`businessRules` has them in hand — no
+// function body is executed or read here. Only the sub-keys whose value is a FUNCTION collapse to the AST_FN
+// placeholder, and those are recorded as names (`fnKeys`) rather than dropped.
+
+// Is this evaluated value the function placeholder? (`AST_FN` is a Symbol, so it would vanish from JSON —
+// every sink below converts it to a name instead of letting it disappear.)
+const isFnPlaceholder = (v) => v === AST_FN;
+
+// One `attributes` entry → the facts that decide its Freedom target. `lookupListConfig.filters` and
+// `dependencies` are the two imperative shapes with an exact Freedom analog (filter handler / on-change
+// handler), so they are surfaced explicitly instead of being folded into an opaque "attribute exists".
+function attributeFact(name, def) {
+  const d = plainObj(def);
+  const llc = plainObj(d.lookupListConfig);
+  const filters = Array.isArray(llc.filters) ? llc.filters : [];
+  const columns = Array.isArray(llc.columns) ? llc.columns.filter(isStr) : [];
+  // `dependencies: [{ columns: [...], methodName: "x" }]` — the classic "recompute Y when X changes" wiring.
+  const deps = (Array.isArray(d.dependencies) ? d.dependencies : []).map((raw) => {
+    const e = plainObj(raw);
+    return { columns: (Array.isArray(e.columns) ? e.columns : []).filter(isStr), methodName: strOrNull(e.methodName) };
+  }).filter((e) => e.columns.length || e.methodName);
+  return {
+    name,
+    // a function-valued sub-key (`value: function(){…}`, a `dependencies[].methodName` body elsewhere) is
+    // imperative logic on the attribute itself — name it so the ledger can account for it.
+    fnKeys: Object.keys(d).filter((k) => isFnPlaceholder(d[k])),
+    lookupFilters: filters.length,
+    // each filter object's own keys — enough for the plan to say WHAT is filtered without reading a function
+    lookupFilterKeys: [...new Set(filters.flatMap((f) => safeKeys(f)))].sort(byLocale),
+    lookupColumns: columns,
+    dependencies: deps,
+    dataValueType: numOrNull(d.dataValueType),
+    // `value` may be a static default, a function, or unresolved — keep the three cases distinct
+    value: ["number", "string", "boolean"].includes(typeof d.value) ? d.value : null,
+    valueIsFn: isFnPlaceholder(d.value),
+    isRequired: typeof d.isRequired === "boolean" ? d.isRequired : null,
+    isCollection: d.isCollection === true,
+    caption: strOrNull(d.caption),
+    // `isVirtual`-style marker used by some schemas; the mapper also infers virtuality from the entity columns
+    isLookup: d.isLookup === true || !!llc.entitySchemaName,
+    referenceSchema: strOrNull(llc.entitySchemaName),
+  };
+}
+
+function attributeFacts(attrs) {
+  const o = plainObj(attrs);
+  return safeKeys(o).map((k) => attributeFact(k, o[k]));
+}
+
+// `messages: { "Name": { mode, direction } }` — the sandbox contract. `mode`/`direction` resolve to their
+// SYMBOLIC name (PTP / BROADCAST / PUBLISH / SUBSCRIBE / …) via the TAG_SYMBOLIC terminal; a numeric literal
+// in the body is kept as the number, and anything unresolved stays null (never guessed).
+function messageFacts(messages) {
+  const o = plainObj(messages);
+  return safeKeys(o).map((k) => {
+    const m = plainObj(o[k]);
+    const pick = (v) => (isStr(v) ? v : isNum(v) ? v : null);
+    return { name: k, mode: pick(m.mode), direction: pick(m.direction) };
+  });
+}
+
+// `mixins: { LocalName: "Terrasoft.SomeMixin" }` — behaviour mixed in from ANOTHER schema. The mixin's own
+// members are outside this page body entirely, so the act of mixing in is the member we can account for.
+function mixinFacts(mixins) {
+  const o = plainObj(mixins);
+  return safeKeys(o).map((k) => ({ name: k, module: strOrNull(o[k]) }));
+}
+
 function normalizeDiff(diff) {
   if (!Array.isArray(diff)) return [];
   // pass the index explicitly rather than handing `normalizeDiffOp` straight to `.map` — the second parameter
@@ -575,8 +845,28 @@ function normalizeDiffOp(op, i) {
     hint: hintKey(v),
     generator: strOrNull(v.generator),
     visible: visibility(v),
+    // Handler bindings on the item (`click: {bindTo:"onSaveClick"}`, `change: "onXChange"`, `changeMethod`, …).
+    // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
+    // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
+    handlers: handlerBindings(v),
     astIndex: i, // original AST diff position — for diagnostic→element matching after filtering (E3)
   };
+}
+
+// Every `values` property that names a view-model METHOD, as `{ <property>: <methodName> }`. Accepts both the
+// `{bindTo:"m"}` wrapper and the bare-string form, on the classic event/handler property vocabulary.
+const HANDLER_PROPS = new Set(["click", "change", "changeMethod", "handler", "onChange", "onClick",
+  "enabled", "visible", "readonly", "required", "getSrc", "onPhotoChange", "selectionChanged", "onKeyDown"]);
+function handlerBindings(v) {
+  const out = {};
+  for (const [k, raw] of Object.entries(plainObj(v))) {
+    if (!HANDLER_PROPS.has(k)) continue;
+    const name = isStr(raw) ? raw : isStr(plainObj(raw).bindTo) ? plainObj(raw).bindTo : null;
+    // a bound METHOD name, not a bound attribute: attribute bindings are resolved elsewhere (visibility/rules),
+    // and a name that matches no method simply yields no trigger — the caller cross-references the method map.
+    if (name) out[k] = name;
+  }
+  return out;
 }
 
 function normalizeLayout(l) {
@@ -649,6 +939,7 @@ function makeItem(op, seed, pkg) {
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
     tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
+    handlers: op.handlers || {}, // control→method bindings; the CONTROL end of a method's trigger
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
   };
 }
@@ -675,6 +966,9 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   }
   for (const k of ["order", "contentType", "itemType", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
   for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) { if (op[k]) cur[k] = op[k]; }
+  // handler bindings ACCUMULATE across layers (a later schema can add a click handler to a base control without
+  // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
+  if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...(cur.handlers || {}), ...op.handlers };
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
 }
@@ -745,12 +1039,62 @@ function mergeDetails(L, seed, details) {
   }
 }
 
-// methods (override stack) — track whether any schema schema contributed
+// methods (override stack) — track whether any schema schema contributed, and carry the TOP layer's body facts.
+// The facts follow last-write-wins (the effective implementation is the topmost override's), while `pkgs`
+// accumulates the whole stack — so the plan can say both "what it does" and "who overrode it".
 function mergeMethods(L, seed, methods) {
+  const factsByName = new Map((L.methodFacts || []).map((f) => [f.name, f]));
   for (const m of L.methods) {
     const prev = methods.get(m);
-    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed });
+    const facts = factsByName.get(m) || prev?.facts || null;
+    methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed, facts });
   }
+}
+
+// Imperative members (attributes / messages / mixins / module deps) — one override stack each, keyed by name,
+// EXACTLY like mergeMethods: `schemaTouched` records that at least one non-seed schema contributed, which is
+// what separates a client customization from inherited base-template context. The ledger keys on this rather
+// than on `fromTemplate` alone, so a client OVERRIDE of a base member is payload, not context — the same
+// distinction `base-field-override` already makes for template-owned fields a client reconfigured.
+// The later layer's facts win (last write) while provenance accumulates, mirroring mergeDetails.
+function mergeNamedFacts(defs, seed, pkg, sink) {
+  for (const def of defs || []) {
+    if (!def || !isStr(def.name)) continue;
+    const prev = sink.get(def.name);
+    sink.set(def.name, {
+      ...def,
+      provenance: [...(prev?.provenance || []), pkg],
+      schemaTouched: (prev?.schemaTouched || false) || !seed,
+    });
+  }
+}
+
+// module deps are bare strings, not named objects — same stack, keyed by the module id itself
+function mergeModuleDeps(L, seed, sink) {
+  for (const dep of L.moduleDeps || []) {
+    const prev = sink.get(dep);
+    sink.set(dep, { name: dep, provenance: [...(prev?.provenance || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed });
+  }
+}
+
+// Where a method is called FROM, resolved against the merged attribute + layout maps rather than guessed from
+// the method's name. `04-units.md` makes this the difference between a described behaviour and an open thread:
+// "the trigger must be traced to its concrete origin — the actual control, the actual hook, the actual message —
+// and never inferred from schema or method names".
+function methodTriggers(name, attributes, items) {
+  const out = [];
+  for (const a of attributes.values()) {
+    for (const d of a.dependencies || [])
+      if (d.methodName === name)
+        out.push({ kind: "attribute-dependency", attribute: a.name, columns: d.columns });
+  }
+  // a diff item binding a handler: `values: { click: { bindTo: "onX" } }` / `changeMethod` / a bound property.
+  for (const i of items.values()) {
+    if (i.removed) continue;
+    for (const [prop, handler] of Object.entries(i.handlers || {}))
+      if (handler === name) out.push({ kind: "control", element: i.name, property: prop });
+  }
+  return out;
 }
 
 // modules (widgets/charts) — merge by key
@@ -768,6 +1112,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const rules = new Map();     // "attr::ruleKey" -> record
   const details = new Map();   // key -> record
   const methods = new Map();   // name -> [pkgs] (override stack)
+  const attributes = new Map(); // name -> attribute facts + override stack (lookup filters / dependencies / …)
+  const messages = new Map();   // name -> { mode, direction } + override stack (the sandbox contract)
+  const mixins = new Map();     // local name -> { module } + override stack (behaviour from another schema)
+  const moduleDeps = new Map(); // define() dep id -> override stack (constants / utility / mixin modules)
   const components = new Map(); // module key -> {moduleName, provenance} (widgets/charts → B9/B10)
   // Non-fatal diagnostics. A merge/move/remove that targets an item NO lower schema defined means
   // either the schemas were passed out of dependency order (F1) or the base-template element it
@@ -796,6 +1144,10 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     mergeRuleBlocks(L, seed, rules);
     mergeDetails(L, seed, details);
     mergeMethods(L, seed, methods);
+    mergeNamedFacts(L.attributeDefs, seed, L.pkg, attributes);
+    mergeNamedFacts(L.messageDefs, seed, L.pkg, messages);
+    mergeNamedFacts(L.mixinDefs, seed, L.pkg, mixins);
+    mergeModuleDeps(L, seed, moduleDeps);
     mergeModules(L, seed, components);
   }
 
@@ -868,7 +1220,25 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     }),
     rules: activeRules.map(r => ({ ...r, fromTemplate: !r.schemaTouched })),
     removed: removed.map(i => ({ name: i.name, removedBy: i.removedBy, fromTemplate: !!i.removedBySeed })),
-    methods: [...methods.entries()].map(([n, m]) => ({ name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched })),
+    methods: [...methods.entries()].map(([n, m]) => ({
+      name: n, stack: m.pkgs, fromTemplate: !m.schemaTouched,
+      // body evidence (calls / attribute reads-writes / message traffic / line span), null when the layer's body
+      // was not statically readable — the NAME still survives, so a member is never lost for lack of evidence
+      facts: m.facts || null,
+      // Where the method is INVOKED FROM, sourced from data rather than inferred from its name:
+      //  • `attributes.<Col>.dependencies[].methodName` → the classic "recompute when these columns change" wiring
+      //  • a diff item's click/change binding → a control on the page
+      //  • `messages` + a subscribe call in the body → a sandbox message
+      // A method with a resolved trigger needs no guess in the plan; one with none is honestly "trigger unresolved".
+      triggers: methodTriggers(n, attributes, items),
+    })),
+    // Imperative members, now reaching the effective model. `attributes` in particular used to be parsed and
+    // then dropped here, which is why an imperatively filtered lookup (`lookupListConfig.filters`) had no member
+    // in the plan at all while the declarative FILTRATION equivalent was fully mapped.
+    attributes: [...attributes.values()].map(a => ({ ...a, fromTemplate: !a.schemaTouched })),
+    messages: [...messages.values()].map(m => ({ ...m, fromTemplate: !m.schemaTouched })),
+    mixins: [...mixins.values()].map(m => ({ ...m, fromTemplate: !m.schemaTouched })),
+    moduleDeps: [...moduleDeps.values()].map(m => ({ ...m, fromTemplate: !m.schemaTouched })),
     components: [...components.values()].map(c => ({ ...c, fromTemplate: !c.schemaTouched })),
     warnings,
     unresolvedParents,

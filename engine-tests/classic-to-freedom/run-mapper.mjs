@@ -5,7 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { runMigration } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -970,8 +970,18 @@ check("RV10: result.payload exposes the emitted (payload-filtered) counts",
 // #3 — set/clear<X>Info helpers fold into on<X>Change (not separate Logic rows)
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("#3 Logic: set/clear<X>Info helpers folded into on<X>Change (not separate rows)",
-  /onContactChange[^\n]*\+ setContactInfo, clearContactInfo/.test(foldCs.designSpec) && !/\| setContactInfo \| /.test(foldCs.designSpec));
+// The fold is about the LOGIC table's readability (one row per behaviour, helpers as a parenthetical), so the
+// assertion is scoped to that table. It must NOT be scoped to the whole spec: the ⚠ Imperative-logic worklist
+// deliberately carries a row for EVERY method, helpers included — that list is the completeness guarantee, and
+// `set<Lookup>Info`/`clear<Lookup>Info` helpers silently disappearing is the documented Known Trap (a companion
+// field loaded by such a helper gets dropped, leaving a lone-field island).
+const foldLogicTable = (foldCs.designSpec.split("#### Logic")[1] || "").split("####")[0];
+check("#3 Logic: set/clear<X>Info helpers folded into on<X>Change (not separate rows in the Logic table)",
+  /onContactChange[^\n]*\+ setContactInfo, clearContactInfo/.test(foldLogicTable) && !/\| setContactInfo \| /.test(foldLogicTable));
+check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
+  /#### ⚠ Imperative logic/.test(foldCs.designSpec)
+  && ["onContactChange", "setContactInfo", "clearContactInfo"].every((m) =>
+    new RegExp(`\\| ${m} \\|`).test((foldCs.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0])));
 // #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
@@ -1859,6 +1869,214 @@ const gcTop = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANM
 check("#8 grandchild embedding: the plan nests BOTH the child and the grandchild spec recursively (##### Child page: GC)",
   /#### Child page: CH/.test(gcTop.plan) && /##### Child page: GC/.test(gcTop.plan),
   () => gcTop.plan.split("\n").filter((l) => /Child page:/.test(l)));
+
+/* ---- MEMBER COVERAGE: the imperative blocks (`attributes` / `messages` / `mixins` / `define()` deps) and the
+   ⛔ coverage gate. Before this, `attributes` was parsed for its KEYS and then never reached the effective page
+   at all, `messages`/`mixins` were not read anywhere in the engine, and `methods` produced a decision that the
+   design spec filtered OUT of the ⚠ worklist — so a page could ship with all of its imperative logic
+   unaccounted for while both other gates stayed green. ---- */
+const IMP_BODY = `define("IMP",["terrasoft","ConfigurationConstants","VisaHelper"],function(Terrasoft){return{entitySchemaName:"X",
+  mixins:{ PrintUtils:"Terrasoft.PrintUtilities" },
+  messages:{ "CalcTotal":{ mode:Terrasoft.MessageMode.PTP, direction:Terrasoft.MessageDirectionType.PUBLISH } },
+  attributes:{
+    Owner:{ lookupListConfig:{ filters:[{ ownerFilter:1 }], entitySchemaName:"Contact" } },
+    Amount:{ dependencies:[{ columns:["Quantity","Price"], methodName:"recalcAmount" }] },
+    CanEdit:{ dataValueType:12, value:false },
+    Computed:{ value:function(){ return 1; } }
+  },
+  methods:{
+    recalcAmount:function(){ this.set("Amount", 1); },
+    loadOwner:function(){ var esq=new Terrasoft.EntitySchemaQuery({rootSchemaName:"Contact"}); this.get("Owner"); },
+    announce:function(){ this.sandbox.publish("CalcTotal", null); },
+    passthrough:function(){ this.callParent(arguments); },
+    external:VisaHelper.SendToVisa
+  },
+  diff:[{operation:"insert",name:"OwnerField",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Owner"}}]};});`;
+const impRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+  seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }] }, { baseDir: FIX });
+const impKinds = new Set(impRun.changeSet.needsDecision.map((n) => n.kind));
+const impLedger = (kind) => impRun.coverage.rows.filter((r) => r.kind === kind);
+
+// `effective.*` counts include the base-template SEED by design (CLEAN_SEED contributes init + getActions), so
+// 5 client methods + 2 seed methods = 7. The payload filter (`fromTemplate`) is what separates them downstream.
+check("coverage: the imperative blocks reach the effective page (methods/attributes/messages/mixins/moduleDeps counted)",
+  impRun.effective.methods === 7 && impRun.effective.attributes === 4
+  && impRun.effective.messages === 1 && impRun.effective.mixins === 1 && impRun.effective.moduleDeps === 3
+  && impRun.changeSet.handlerStubs.length === 5,
+  () => impRun.effective);
+check("coverage: an IMPERATIVE lookup filter (lookupListConfig.filters) gets its own decision — not silence, and not a business rule",
+  impKinds.has("attribute-lookup-filter")
+  && impRun.changeSet.needsDecision.some((n) => n.kind === "attribute-lookup-filter" && n.item === "Owner")
+  && !impRun.changeSet.entityBusinessRules.some((r) => r.targetAttribute === "Owner"));
+check("coverage: attributes.dependencies surfaces as a decision naming the trigger COLUMNS",
+  impRun.changeSet.needsDecision.some((n) => n.kind === "attribute-dependency" && /Quantity, Price/.test(n.item + n.reason)));
+check("coverage: a VIRTUAL attribute (no entity column behind it) is surfaced, a column-backed one is not",
+  impRun.changeSet.needsDecision.some((n) => n.kind === "attribute-virtual" && n.item === "CanEdit")
+  && !impRun.changeSet.needsDecision.some((n) => n.kind === "attribute-virtual" && n.item === "Owner"));
+check("coverage: a function-valued attribute sub-key is surfaced as imperative (not read as a static default)",
+  impRun.changeSet.needsDecision.some((n) => n.kind === "attribute-imperative" && n.item === "Computed"));
+check("coverage: a sandbox message is a member, with its direction resolved SYMBOLICALLY (PUBLISH, not a number)",
+  impRun.changeSet.needsDecision.some((n) => n.kind === "message" && n.item === "CalcTotal" && /PUBLISH/.test(n.reason))
+  && impLedger("message").length === 1);
+check("coverage: a mixin is a member with a decision (its behaviour is defined in another schema)",
+  impKinds.has("mixin") && impLedger("mixin").some((r) => r.name === "PrintUtils" && r.disposition === "decision"));
+check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and the framework root is context not a gap",
+  impRun.changeSet.needsDecision.filter((n) => n.kind === "module-dep").length === 1
+  && /ConfigurationConstants/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "module-dep").item)
+  && impLedger("module-dep").find((r) => r.name === "terrasoft")?.disposition === "context");
+
+// ---- method body EVIDENCE replaces name-guessing ----
+const stubOf = (n) => impRun.changeSet.handlerStubs.find((h) => h.sourceMethod === n);
+check("method evidence: body facts carry the calls made, the attributes written, and a line span",
+  stubOf("recalcAmount").evidence.writesAttrs.includes("Amount")
+  && stubOf("loadOwner").evidence.kinds.includes("esq")
+  && stubOf("announce").evidence.publishes.includes("CalcTotal")
+  && stubOf("recalcAmount").lines.start > 0,
+  () => impRun.changeSet.handlerStubs.map((h) => ({ m: h.sourceMethod, k: h.evidence?.kinds, l: h.lines })));
+check("method evidence: the TRIGGER comes from attributes.dependencies, not from the method name",
+  stubOf("recalcAmount").triggers.some((t) => t.kind === "attribute-dependency" && t.attribute === "Amount" && t.columns.includes("Quantity")));
+check("method evidence: a callParent-only override is marked trivial (so real logic is not buried under passthroughs)",
+  stubOf("passthrough").trivial === true && stubOf("recalcAmount").trivial === false);
+check("method evidence: a method ASSIGNED FROM another module names that module instead of showing an empty body",
+  stubOf("external").externalRef === "VisaHelper.SendToVisa"
+  && /ASSIGNED FROM 'VisaHelper.SendToVisa'/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "method" && n.item === "external").reason));
+check("method evidence: categorize() prefers body evidence over the name heuristic (esq → query/filter, not 'helper')",
+  stubOf("loadOwner").category === "query/filter" && stubOf("announce").category === "message-publish"
+  && stubOf("passthrough").category === "passthrough");
+
+// Idioms that were being reported as "no call recognised" while doing real work. A method that BUILDS a filter is
+// doing filtering even when it creates no ESQ itself (the filter is handed to a detail); a system-setting read
+// gates behaviour by configuration; a field/detail refresh becomes a Freedom data-source reload. `new X()` is a
+// NewExpression, not a CallExpression — handling only the latter missed the commonest classic data-access idiom.
+const idiomRun = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "I", body: `define("I",["terrasoft"],function(Terrasoft){return{entitySchemaName:"X",methods:{
+    buildFilter:function(){ var g=this.Terrasoft.createFilterGroup(); g.add("a", this.Terrasoft.createColumnFilterWithParameter(1,"C",2)); return g; },
+    readSetting:function(){ this.Terrasoft.SysSettings.querySysSettingsItem("SomeSetting"); },
+    refreshIt:function(){ this.refreshFields(["A"]); this.updateDetail({}); },
+    queryIt:function(){ var esq = new Terrasoft.EntitySchemaQuery({ rootSchemaName:"Contact" }); esq.getEntityCollection(function(){}, this); }
+  },diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+const idiomStub = (n) => idiomRun.changeSet.handlerStubs.find((h) => h.sourceMethod === n);
+check("method evidence: filter construction / system-setting read / data refresh are recognised kinds, not 'no call recognised'",
+  idiomStub("buildFilter").evidence.kinds.includes("filter-build")
+  && idiomStub("readSetting").evidence.kinds.includes("sys-setting")
+  && idiomStub("refreshIt").evidence.kinds.includes("refresh"),
+  () => idiomRun.changeSet.handlerStubs.map((h) => ({ m: h.sourceMethod, k: h.evidence?.kinds })));
+check("method evidence: `new Terrasoft.EntitySchemaQuery(…)` (a NewExpression) is recognised as an ESQ query",
+  idiomStub("queryIt").evidence.kinds.includes("esq") && idiomStub("queryIt").category === "query/filter");
+
+// ---- the ⚠ Imperative logic worklist: EVERY method reaches a binding list ----
+const impSpecSection = (impRun.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0];
+check("⚠ Imperative logic: EVERY client method has a row — the defect was methods reaching NO binding worklist",
+  /#### ⚠ Imperative logic/.test(impRun.designSpec)
+  && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(`\\| ${m} \\|`).test(impSpecSection)),
+  () => impSpecSection);
+check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
+  /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
+check("member ledger: rendered with per-kind dispositions AND counted zeros (a kind with no members is recorded, not omitted)",
+  /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec));
+
+// ---- the ⛔ COVERAGE GATE: blocks on an unaccounted member, clears on a recorded disposition ----
+// A schema whose ONLY content is an unmappable member: the mapper produces no artifact for a bare `rules` block
+// keyed on a column with no field and no recognised shape, so the ledger has nothing to attribute it to.
+const gapBody = `define("G",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Orphan",parentName:"ProfileContainer",propertyName:"items",values:{itemType:15}},{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});`;
+const gapArgs = { entity: "X", entityColumns: { F: { type: "Text" } }, seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "G", body: gapBody }] };
+const gapRun = runMigration(gapArgs, { baseDir: FIX });
+// `Orphan` is a childless container: mapUnmappedDrop surfaces it, so it is a DECISION, not a gap. Assert the
+// invariant that matters instead of manufacturing a synthetic gap: nothing may be `unaccounted` on a clean run.
+check("coverage gate: a clean run leaves NO member unaccounted (every member mapped / decided / context)",
+  gapRun.coverage.complete === true && (gapRun.coverage.byDisposition.unaccounted || 0) === 0,
+  () => gapRun.coverage.byDisposition);
+check("coverage gate: every ledger row carries one of the four known dispositions (no silent 'other')",
+  gapRun.coverage.rows.every((r) => ["mapped", "decision", "context", "resolved"].includes(r.disposition)));
+// The gate's blocking half, driven directly: an unaccounted row must block, and a recorded disposition must clear it.
+const synthetic = buildCoverage({
+  eff: { items: [], methods: [{ name: "ghostMethod", fromTemplate: false, stack: ["G"], facts: null, triggers: [] }],
+    attributes: [], messages: [], mixins: [], moduleDeps: [], details: [] },
+  changeSet: { needsDecision: [], accountedFor: [] }, manifest: {} });
+check("coverage gate: an unaccounted member BLOCKS, and the issue text names manifest.memberDispositions as the fix",
+  synthetic.complete === false && synthetic.issues.length === 1
+  && /ghostMethod/.test(synthetic.issues[0]) && /memberDispositions/.test(synthetic.issues[0]));
+const syntheticResolved = buildCoverage({
+  eff: { items: [], methods: [{ name: "ghostMethod", fromTemplate: false, stack: ["G"], facts: null, triggers: [] }],
+    attributes: [], messages: [], mixins: [], moduleDeps: [], details: [] },
+  changeSet: { needsDecision: [], accountedFor: [] },
+  manifest: { memberDispositions: { ghostMethod: { resolved: true, disposition: "dropped", note: "dead code, nothing calls it" } } } });
+check("coverage gate: a RECORDED disposition clears the member (verified answer beats silence), and is reported as `resolved`",
+  syntheticResolved.complete === true && syntheticResolved.rows[0].disposition === "resolved"
+  && syntheticResolved.rows[0].agentDisposition === "dropped" && /dead code/.test(syntheticResolved.rows[0].note));
+check("coverage gate: a disposition WITHOUT resolved:true does not clear it (a half-filled entry is not an answer)",
+  buildCoverage({ eff: { items: [], methods: [{ name: "ghostMethod", fromTemplate: false, stack: ["G"], facts: null, triggers: [] }],
+    attributes: [], messages: [], mixins: [], moduleDeps: [], details: [] },
+    changeSet: { needsDecision: [], accountedFor: [] },
+    manifest: { memberDispositions: { ghostMethod: { disposition: "dropped" } } } }).complete === false);
+// CLI wiring: a coverage-incomplete run must exit 2 with the ⛔ banner, exactly like the other completeness gates.
+const covCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--spec"], {
+  input: JSON.stringify({ entity: "X", seed: CLEAN_SEED,
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{ghost:function(){this.doSomething();}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }),
+  encoding: "utf8" });
+check("coverage gate: the CLI reports coverage in the JSON/spec path and stays exit-0 when every member is accounted for",
+  covCli.status === 0 && /Member ledger/.test(covCli.stdout || ""),
+  () => ({ status: covCli.status, stderr: (covCli.stderr || "").slice(0, 300) }));
+
+/* ---- The coverage gate's FALSE-PASS directions. The three ways a gate whose whole value is "no member silently
+   ignored" can silently pass one: a decision's name list leaking onto unrelated members, one disposition clearing
+   two members that share a name across kinds, and a sub-page's gaps never reaching the parent. ---- */
+const ghost = (name) => ({ name, fromTemplate: false, stack: ["G"], facts: null, triggers: [] });
+const emptyEff = { items: [], methods: [], attributes: [], messages: [], mixins: [], moduleDeps: [], details: [] };
+
+// (a) a comma list inside a NON-aggregated decision must not clear members named in it. `attribute-dependency`
+// items read "Amount ← Quantity, Price", so splitting every item marked a bare `Price` decided.
+check("coverage gate(false-pass): a comma list in a non-aggregated decision does NOT clear unrelated members",
+  buildCoverage({ eff: { ...emptyEff, methods: [ghost("Price")] },
+    changeSet: { accountedFor: [], needsDecision: [{ kind: "attribute-dependency", item: "Amount ← Quantity, Price", reason: "" }] },
+    manifest: {} }).complete === false);
+check("coverage gate(false-pass): the ONE aggregated kind (module-dep) still clears each module it lists",
+  buildCoverage({ eff: { ...emptyEff, moduleDeps: [{ name: "MoneyModule", fromTemplate: false, provenance: ["G"] }] },
+    changeSet: { accountedFor: [], needsDecision: [{ kind: "module-dep", item: "MoneyModule, VisaHelper", reason: "" }] },
+    manifest: {} }).complete === true);
+
+// (b) a diff item is usually named for the column it binds, so `attribute:Amount` and `diff-op:Amount` coexist —
+// one bare-name disposition must not clear both.
+const collide = buildCoverage({
+  eff: { ...emptyEff, methods: [ghost("Amount")], attributes: [{ name: "Amount", fromTemplate: false, provenance: ["G"], lookupFilters: 0, dependencies: [], fnKeys: [] }] },
+  changeSet: { accountedFor: [], needsDecision: [] },
+  manifest: { memberDispositions: { "method:Amount": { resolved: true, disposition: "dropped", note: "dead" } } } });
+check("coverage gate(false-pass): a kind-qualified disposition clears ONLY its own kind (name collisions across kinds)",
+  collide.complete === false && collide.rows.find((r) => r.kind === "method").disposition === "resolved"
+  && collide.rows.find((r) => r.kind === "attribute").disposition === "unaccounted",
+  () => collide.rows.map((r) => ({ id: r.id, d: r.disposition })));
+check("coverage gate: ledger rows carry a kind-qualified id, and the issue text names THAT id as the key to use",
+  collide.rows.every((r) => r.id === `${r.kind}:${r.name}`) && /memberDispositions\["attribute:Amount"\]/.test(collide.issues[0]));
+
+// (c) subtree aggregation — the migration is a page TREE, and every other gate aggregates it. A child whose own
+// members are unaccounted must block the PARENT, or the parent asserts a coverage its children do not have.
+check("coverage gate(false-pass): a sub-page's unaccounted members BLOCK the parent (subtree aggregation)",
+  buildCoverage({ eff: emptyEff, changeSet: { accountedFor: [], needsDecision: [] }, manifest: {},
+    childCoverage: [{ role: "child page", label: "ReqPage", coverage: { complete: false, issues: ["method 'ghostChild' is UNACCOUNTED — …"] } }] })
+    .complete === false);
+check("coverage gate: a COMPLETE sub-page does not block the parent (no false positive from aggregation)",
+  buildCoverage({ eff: emptyEff, changeSet: { accountedFor: [], needsDecision: [] }, manifest: {},
+    childCoverage: [{ role: "child page", label: "ReqPage", coverage: { complete: true, issues: [] } }] })
+    .complete === true);
+// End-to-end WIRING: a child page's own ledger must actually reach the parent run. Together with the two checks
+// above (an incomplete child ledger blocks, a complete one does not) this closes the chain. Asserted as wiring
+// rather than by synthesising a gap on purpose: with every member kind now mapped or decided, a genuine
+// `unaccounted` is a BACKSTOP for a future member kind added without a mapping path — not a state a normal
+// fixture can reach, and faking one would test the fake, not the propagation.
+const childCovMani = { schemas: [{ pkg: "CG", body: `define("CG",[],function(){return{entitySchemaName:"CG",attributes:{GhostState:{}},methods:{childOnly:function(){this.set("GF",1);}},diff:[{operation:"insert",name:"GF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"GF"}}]};});` }], seed: CLEAN_SEED };
+const parentWithChild = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PT",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"PD",parentName:"PT",values:{itemType:2}}],details:{PD:{schemaName:"CGDetail",entitySchemaName:"CG",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
+  detailSchemas: { CGDetail: { entity: "CG", columns: ["GF"], editPage: "CGPage" } },
+  childPageSchemas: { CG: childCovMani, CGPage: childCovMani } }, { baseDir: FIX });
+const childRow = parentWithChild.childPages.find((c) => c.entity === "CG");
+check("coverage gate(e2e wiring): a child page's OWN member ledger is built and carried up to the parent run",
+  !!childRow?.childCoverage && childRow.childCoverage.total > 0
+  && childRow.childCoverage.rows.some((r) => r.id === "method:childOnly" && r.disposition === "decision")
+  && childRow.childCoverage.rows.some((r) => r.id === "attribute:GhostState" && r.disposition === "decision"),
+  () => childRow?.childCoverage?.rows?.map((r) => ({ id: r.id, d: r.disposition })));
+check("coverage gate(e2e wiring): the parent stays complete when the child's ledger is complete",
+  parentWithChild.coverage.complete === true && childRow.childCoverage.complete === true);
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

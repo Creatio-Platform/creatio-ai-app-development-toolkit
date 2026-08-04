@@ -402,7 +402,112 @@ export function renderDesignSpec(result, opts = {}) {
     L.push("");
   }
 
+  // ---- ⚠ Imperative logic: the METHOD worklist, and a BINDING one ----
+  // Methods stay out of the ⚠ Confirm list above (that list holds open questions needing an on-stand answer),
+  // but they were previously in NO binding list at all: `method` is in SHOWN_ELSEWHERE, so the only place a
+  // method surfaced was a Logic row reading "review". Contract rule 7 and the step-8 Plan-vs-Done table are
+  // scoped to the ⚠ worklist, so nothing forced an account of a single line of imperative logic. This section
+  // is that worklist — one row per method, with the evidence the engine read from the body, so it can be worked
+  // rather than skimmed. Both sections together are "the ⚠ worklist" the SKILL's rules refer to.
+  L.push(...renderImperativeLogic(cs));
+  // ---- Member ledger: the completeness proof ----
+  L.push(...renderMemberLedger(result.coverage));
+
   return L.join("\n");
+}
+
+// One row per client-authored method: what calls it, what its body does, and where it lives in the classic body.
+// A passthrough override is listed too (never silently filtered) but marked as carrying no behaviour of its own,
+// so the reader can tell "nothing to port" from "not looked at".
+function renderImperativeLogic(cs) {
+  const stubs = cs.handlerStubs || [];
+  if (!stubs.length) return [];
+  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
+    "> Each row is a method the classic page defines. Mark it **ported** (name the Freedom handler / converter /",
+    "> virtual attribute you built), **dropped** (with the reason), or **blocked** — the same standard as an",
+    "> ⚠ Confirm item. `Trigger: unresolved` means the engine could not trace what calls it; trace it from the",
+    "> control / hook / message, never from the method's name.", "",
+    "| Method | Source | Trigger | Body does | Reads → writes | Freedom target |",
+    "| --- | --- | --- | --- | --- | --- |"];
+  for (const h of stubs) {
+    const ev = h.evidence;
+    const where = h.lines ? `L${h.lines.start}-${h.lines.end}` : DASH;
+    const trigger = (h.triggers || []).length
+      ? (h.triggers || []).map((t) => t.kind === "attribute-dependency"
+          ? `${esc(t.attribute)} changes${t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : ""}`
+          : `${esc(t.element)}.${esc(t.property)}`).join(" / ")
+      : "⚠ unresolved";
+    // an externally-assigned method has no body HERE — say where the body is, instead of leaving a blank the
+    // reader mistakes for "nothing to port"
+    const source = h.externalRef ? `⚠ from ${esc(h.externalRef)}` : where;
+    const does = h.externalRef ? "defined in another module"
+      : h.trivial ? "passthrough (base only)"
+      : (ev?.kinds?.length ? ev.kinds.map(esc).join(", ") : `⚠ no call recognised (${esc(h.category)})`);
+    const io = ev && (ev.readsAttrs.length || ev.writesAttrs.length)
+      ? `${ev.readsAttrs.map(esc).join(", ") || DASH} → ${ev.writesAttrs.map(esc).join(", ") || DASH}` : DASH;
+    const target = h.externalRef ? "read that module, then port its behaviour"
+      : h.trivial ? "confirm template provides it" : freedomTargetFor(h.category);
+    L.push(`| ${esc(h.sourceMethod)} | ${source} | ${trigger} | ${does} | ${io} | ${target} |`);
+  }
+  L.push("");
+  return L;
+}
+
+// The Freedom construct a method's (evidence-backed) category maps onto. A category the table does not know
+// falls back to the generic handler wording rather than asserting a target the engine cannot justify.
+const FREEDOM_TARGET = {
+  validator: "validator (or backend validation if it must block persistence)",
+  "query/filter": "handler issuing the data query / a data-source filter",
+  "service-call": "handler calling the service",
+  "process-launch": "`crt.RunBusinessProcessRequest` from a handler",
+  "message-publish": "handler-mediated request (replaces the sandbox publish)",
+  "message-subscribe": "handler on the corresponding request (replaces the sandbox subscribe)",
+  dialog: "handler showing the dialog",
+  lookup: "lookup handler / business rule filter",
+  save: "`crt.SaveRecordRequest` handler",
+  "feature-gate": "feature check in a handler — confirm the feature exists on the target stand",
+  "mixin-call": "port the mixin's contribution, then call it from a handler",
+  "set-values": "handler setting the view-model attribute(s)",
+  "filter-build": "data-source filter (built in a handler when it is dynamic)",
+  "sys-setting": "read the system setting on the Freedom side — do not inline its current value",
+  refresh: "`crt.LoadDataRequest` / data-source reload from a handler",
+  "attribute-change": "on-change request handler",
+  init: "page-init request handler",
+  passthrough: "confirm template provides it",
+};
+const freedomTargetFor = (cat) => FREEDOM_TARGET[cat] || "request handler / converter / virtual attribute";
+
+// The member ledger — the completeness proof, per `03-member-ledger.md`: every member of every layer is
+// attributed, or it is a gap. Rendered as counts per kind plus the full list of anything still unaccounted,
+// because a ledger the reader cannot check is not a proof.
+function renderMemberLedger(coverage) {
+  if (!coverage || !Array.isArray(coverage.rows)) return [];
+  const byKind = {};
+  for (const r of coverage.rows) {
+    byKind[r.kind] = byKind[r.kind] || { mapped: 0, decision: 0, context: 0, resolved: 0, unaccounted: 0 };
+    byKind[r.kind][r.disposition] = (byKind[r.kind][r.disposition] || 0) + 1;
+  }
+  const L = [`#### Member ledger (${coverage.total} members)`, "",
+    "> Every member of every merged schema layer, and what happened to it. **mapped** = the ChangeSet carries a",
+    "> Freedom artifact · **decision** = it is on a ⚠ worklist above · **resolved** = you recorded a disposition in",
+    "> `manifest.memberDispositions` · **context** = inherited base-template content, excluded by design ·",
+    "> **unaccounted** = a gap, and the coverage gate blocks on it.", "",
+    "| Member kind | Mapped | Decision | Resolved | Context | Unaccounted |",
+    "| --- | --- | --- | --- | --- | --- |"];
+  for (const kind of Object.keys(byKind).sort()) {
+    const c = byKind[kind];
+    L.push(`| ${esc(kind)} | ${c.mapped || 0} | ${c.decision || 0} | ${c.resolved || 0} | ${c.context || 0} | ${c.unaccounted || 0} |`);
+  }
+  // counted zeros: a kind with no members is RECORDED as verified-empty, never omitted — otherwise "the plan
+  // says nothing about messages" is indistinguishable from "nobody looked at messages".
+  if ((coverage.zeros || []).length)
+    L.push("", `**Verified empty** (no members of this kind in the merged chain): ${coverage.zeros.map(esc).join(", ")}.`);
+  if (!coverage.complete) {
+    L.push("", `> ⛔ **${coverage.issues.length} member(s) UNACCOUNTED — this plan is NOT approvable.**`);
+    for (const it of coverage.issues) L.push(`> - ${esc(it)}`);
+  }
+  L.push("");
+  return L;
 }
 
 // renderPlan — the WHOLE plan skeleton the agent presents at the gate: an Overview/What-it-does/Pages
@@ -429,6 +534,14 @@ function renderPlanBanners(result, opts) {
   if (!structure.complete) {
     P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
     for (const it of structure.issues) P.push(`> - ${esc(it)}`);
+    P.push("");
+  }
+  // COVERAGE banner — a schema member with no Freedom artifact and no decision. Same standing as the two above:
+  // a plan that leaves a member unaccounted asserts a completeness it does not have.
+  const coverage = result.coverage || { complete: true, issues: [] };
+  if (!coverage.complete) {
+    P.push(`> ⛔ **COVERAGE INCOMPLETE — this plan is NOT ready.** ${coverage.issues.length} schema member(s) are unaccounted: the engine produced no Freedom artifact and no decision for them. Map each, or record its disposition in \`manifest.memberDispositions\`, and re-run \`migrate.mjs --plan\`:`);
+    for (const it of coverage.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
   // planMeta completeness banner — an unfilled Overview/Main-scope value is not an approvable plan (finding 8).

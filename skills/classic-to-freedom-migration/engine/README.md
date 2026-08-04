@@ -19,13 +19,23 @@ node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to 
 of hand-pasting stdout (its Overview/Main-scope values come from `manifest.planMeta`).
 
 **Exit codes & gates.** Bad input (missing/invalid manifest, unreadable schema `file`) → exit **1**. Otherwise
-the run computes two gates — `gate.blocked` (correctness: parse errors / unresolved parents / merge warnings /
-skeletal seed) and `structure.complete` (input completeness: unresolved detail / child-page schemas) — plus, in
-`--plan` mode only, a third **plan-completeness** check: required `manifest.planMeta` still `<FILL: …>`
+the run computes three gates — `gate.blocked` (correctness: parse errors / unresolved parents / merge warnings /
+skeletal seed), `structure.complete` (input completeness: unresolved detail / child-page schemas) and
+`coverage.complete` (member coverage: every schema member accounted for) — plus, in
+`--plan` mode only, a fourth **plan-completeness** check: required `manifest.planMeta` still `<FILL: …>`
 (`planMetaMissing`) or unresolved on-stand `signals` (`signalsMissing`). If any of these is bad the CLI prints a
 `⛔` banner to stderr and exits **2** (the artifact is still written/printed, with the banner at the top, so you
 see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan. (`--spec`/default runs need no
-`planMeta`, so the third check applies only to `--plan`.)
+`planMeta`, so the plan check applies only to `--plan`.)
+
+**The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
+`attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a
+disposition: `mapped` (the ChangeSet has a Freedom artifact for it), `decision` (it is on a `⚠` worklist),
+`resolved` (the agent recorded one in `manifest.memberDispositions`), `context` (inherited base-template content,
+excluded by design but COUNTED) — or `unaccounted`, which blocks. Kinds with no members are reported as counted
+zeros, so "the plan says nothing about messages" cannot mean "nobody looked". Methods additionally carry body
+evidence read from the AST (framework calls made, attributes read/written, messages published/subscribed, line
+span, passthrough-vs-real, assigned-from-another-module) — the parser still never EXECUTES a body.
 
 ## Files
 
