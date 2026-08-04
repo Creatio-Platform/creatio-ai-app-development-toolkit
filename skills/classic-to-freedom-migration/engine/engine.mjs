@@ -506,9 +506,10 @@ const CALL_KIND_RX = [
   ["sandbox-load", /(?:^|\.)sandbox\.(?:load|unload)$/],
   ["process-launch", /ProcessModuleUtilities|executeProcess|RunProcessRequest|(?:^|\.)runProcess$|showProcessPage|openProcessByRecord/],
   ["service", /(?:^|\.)callService$|AjaxProvider|(?:^|\.)ServiceHelper\.|(?:^|\.)callConfigurationService$/],
-  // the unanchored name alternatives are grouped so the trailing `$` visibly belongs ONLY to the anchored one
-  ["dialog", /(?:showInformationDialog|showConfirmationDialog|showMessageDialog)|(?:^|\.)utils\.showMessage$/],
-  ["validator", /(?:addColumnValidator)|(?:^|\.)validate$/],
+  // each ANCHORED alternative carries its own group, so the trailing `$` visibly belongs only to that
+  // alternative and never reads as applying to the whole alternation (S5850)
+  ["dialog", /showInformationDialog|showConfirmationDialog|showMessageDialog|(?:(?:^|\.)utils\.showMessage$)/],
+  ["validator", /addColumnValidator|(?:(?:^|\.)validate$)/],
   ["save", /(?:^|\.)save$|(?:^|\.)saveEntity$/],
   ["lookup", /openLookup|LookupUtilities|(?:^|\.)openCard$|(?:^|\.)getLookupValue$/],
   // Filter CONSTRUCTION is filtering logic even when no ESQ is created in the same method (the filter is often
@@ -598,7 +599,7 @@ function loneExpression(st) {
 }
 function isCallParentOnly(fnNode, facts) {
   const body = fnNode.body?.type === "BlockStatement" ? fnNode.body.body : null;
-  if (!body || body.length !== 1) return false;
+  if (body?.length !== 1) return false;
   const expr = loneExpression(body[0]);
   if (expr?.type !== "CallExpression") return false;
   return /(?:^|\.)callParent$/.test(calleePath(expr.callee) || "") && facts.calls.length === 1;
@@ -911,7 +912,10 @@ function handlerBindings(v) {
   const out = {};
   for (const [k, raw] of Object.entries(plainObj(v))) {
     if (!HANDLER_PROPS.has(k)) continue;
-    const name = isStr(raw) ? raw : isStr(plainObj(raw).bindTo) ? plainObj(raw).bindTo : null;
+    const bound = plainObj(raw).bindTo;
+    let name = null;
+    if (isStr(raw)) name = raw;
+    else if (isStr(bound)) name = bound;
     // a bound METHOD name, not a bound attribute: attribute bindings are resolved elsewhere (visibility/rules),
     // and a name that matches no method simply yields no trigger — the caller cross-references the method map.
     if (name) out[k] = name;

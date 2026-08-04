@@ -515,7 +515,7 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
   // are entirely unaccounted produced a parent run with coverage.complete:true and exit 0 — the parent asserting
   // a coverage its own children do not have, which is precisely the inconsistency this change exists to remove.
   for (const sub of childCoverage) {
-    if (!sub || !sub.coverage || sub.coverage.complete) continue;
+    if (!sub?.coverage || sub.coverage.complete) continue;
     issues.push(`${sub.role} '${sub.label}': ${sub.coverage.issues.length} of its OWN member(s) are unaccounted — a sub-page's spec is not a valid mapping while its members are unaccounted; fix it, then re-run the parent. First: ${sub.coverage.issues[0]}`);
   }
   return { complete: issues.length === 0, issues, rows, byDisposition, zeros, total: rows.length };
