@@ -5,15 +5,19 @@ class WorkflowError(Exception):
     pass
 
 
+UX_HEADING = "## 6. UX Expectations"
+ANALYTICS_HEADING = "## 7. Analytics"
+EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
+
 REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 1. Business Outcome",
     "## 2. Roles and Permissions",
     "## 3. Object Model",
     "## 4. Lifecycle and Statuses",
     "## 5. Business Logic",
-    "## 6. UX Expectations",
-    "## 7. Analytics",
-    "## 8. Edge Cases and Exceptions",
+    UX_HEADING,
+    ANALYTICS_HEADING,
+    EDGE_CASES_HEADING,
 ]
 REQUIRED_REQUIREMENTS_MARKERS = [
     "Minimum to create:",
@@ -73,7 +77,7 @@ DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:")
 # Section analytics (7.1) must be grouped by section under a
 # `#### <Section> section dashboards` heading, so it is explicit which section
 # hosts each dashboard — never a flat list. Match the grouping heading.
-SECTION_DASHBOARD_GROUP_RE = re.compile(r"(?im)^\s*#{3,6}\s+.+\bsection dashboards\b")
+SECTION_DASHBOARD_GROUP_RE = re.compile(r"(?im)^\s*#{3,6}[ \t]+\S[^\n]*\bsection dashboards\b")
 
 
 def extract_section(text, start_heading, end_heading=None):
@@ -119,10 +123,9 @@ def validate_requirements_doc(content: str) -> None:
     section2_text = extract_section(text, "## 2. Roles and Permissions", "## 3. Object Model")
     section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
     section4_text = extract_section(text, "## 4. Lifecycle and Statuses", "## 5. Business Logic")
-    section5_text = extract_section(text, "## 5. Business Logic", "## 6. UX Expectations")
-    section6_text = extract_section(text, "## 6. UX Expectations", "## 7. Analytics")
-    section7_analytics_text = extract_section(text, "## 7. Analytics", "## 8. Edge Cases and Exceptions")
-    section8_text = extract_section(text, "## 8. Edge Cases and Exceptions")
+    section5_text = extract_section(text, "## 5. Business Logic", UX_HEADING)
+    section6_text = extract_section(text, UX_HEADING, ANALYTICS_HEADING)
+    section7_analytics_text = extract_section(text, ANALYTICS_HEADING, EDGE_CASES_HEADING)
     lines = section3_text.splitlines()
     object_indices = [index for index, line in enumerate(lines) if OBJECT_HEADING_RE.search(line)]
     if not object_indices:
@@ -189,10 +192,22 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.1 Section analytics' subsection")
     if not ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text):
         raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.2 Workplace analytics' subsection")
-    if not DASHBOARD_LABEL_RE.search(section7_analytics_text):
+    dashboard_positions = [m.start() for m in DASHBOARD_LABEL_RE.finditer(section7_analytics_text)]
+    if not dashboard_positions:
         raise WorkflowError("Requirements doc failed: section 7 Analytics must describe at least one 'dashboard:' (the section is mandatory and must be populated, not left empty)")
-    if not DASHBOARD_WIDGETS_LABEL_RE.search(section7_analytics_text):
-        raise WorkflowError("Requirements doc failed: each dashboard in section 7 Analytics must list its 'widgets:'")
-    if not SECTION_DASHBOARD_GROUP_RE.search(section7_analytics_text):
+    # Enforce `widgets:` per dashboard, not once for the whole section: each block
+    # runs from one `dashboard:` label to the next, and each must carry its own
+    # `widgets:` line (a two-dashboard plan where only one lists widgets is invalid).
+    for i, start in enumerate(dashboard_positions):
+        end = dashboard_positions[i + 1] if i + 1 < len(dashboard_positions) else len(section7_analytics_text)
+        if not DASHBOARD_WIDGETS_LABEL_RE.search(section7_analytics_text[start:end]):
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must list its own 'widgets:' line")
+    # The section-grouping rule applies to 7.1 only, so scope the check to the 7.1
+    # slice (between the 7.1 and 7.2 subheadings). Searching the whole §7 body would
+    # let a flat 7.1 pass whenever any grouping heading appears anywhere under 7.2.
+    m71 = ANALYTICS_SECTION_SUBHEADING_RE.search(section7_analytics_text)
+    m72 = ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text)
+    section_71_text = section7_analytics_text[m71.end():(m72.start() if m72 else len(section7_analytics_text))]
+    if not SECTION_DASHBOARD_GROUP_RE.search(section_71_text):
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must group dashboards by section under a '#### <Section> section dashboards' heading (so it is explicit which section hosts each dashboard), not a flat list")
 

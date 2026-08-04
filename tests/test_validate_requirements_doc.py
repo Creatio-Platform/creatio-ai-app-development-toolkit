@@ -175,6 +175,28 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("section dashboards", str(ctx.exception))
 
+    def test_grouping_heading_only_under_72_does_not_satisfy_71(self):
+        # The 7.1 grouping check must be scoped to the 7.1 slice: a flat 7.1 must
+        # NOT pass just because a `... section dashboards` heading exists under 7.2.
+        doc = VALID_DOC.replace("#### Tasks section dashboards\n\n", "")  # 7.1 now flat
+        doc = doc.replace(
+            "### 7.2 Workplace analytics\n",
+            "### 7.2 Workplace analytics\n\n#### Company section dashboards\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.1", str(ctx.exception))
+
+    def test_widgets_missing_on_one_of_two_dashboards_is_rejected(self):
+        # `widgets:` is enforced per dashboard, not once for the whole section: the
+        # 7.1 dashboard keeps its widgets, the 7.2 dashboard loses its widgets line.
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — total tasks; list — tasks due this week", ""
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
+
 
 class TestValidateRequirementsDocTables(unittest.TestCase):
     def test_missing_field_table_in_entity_block(self):

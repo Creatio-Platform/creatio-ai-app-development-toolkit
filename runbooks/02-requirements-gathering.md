@@ -105,7 +105,7 @@ The Business Plan is the business-facing requirements document.
 
 The Business Plan is presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
 
-Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 7-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
+Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 8-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
 
 Required sections:
 
@@ -138,7 +138,7 @@ Sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` must use short paragraphs and bul
 
 ## Pre-Write Self-Check
 
-Before presenting the Business Plan to the developer, verify the assembled draft contains all seven sections in the exact order:
+Before presenting the Business Plan to the developer, verify the assembled draft contains all eight sections in the exact order:
 
 1. `## 1. Business Outcome`
 2. `## 2. Roles and Permissions`
@@ -386,7 +386,7 @@ The BA draft is incomplete if any of the following is true:
 
 ## Technical Implementation Handoff
 
-Present the Technical Implementation Handoff immediately after the 7-section Business Plan in the same message, before asking for approval.
+Present the Technical Implementation Handoff immediately after the 8-section Business Plan in the same message, before asking for approval.
 
 This block is **not** a BA section. It is not numbered and not subject to BA format rules.
 It is consumed by the implementation stage that runs after Gate R approval with clio MCP tools.
