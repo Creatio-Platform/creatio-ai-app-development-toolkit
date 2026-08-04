@@ -150,9 +150,17 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    - **Data sections — paste the prebuilt diffs, do NOT rebuild by hand.** Both metadata sections have
      identical structural support on mobile, and the guide hands them to you ready to paste:
      - Paste `guide.modelConfigDiff` VERBATIM as the page's `modelConfigDiff`, and `guide.viewModelConfigDiff`
-       as the page's `viewModelConfigDiff`. Each is a single root merge carrying the full config (every
-       attribute's `type` and `path` intact). `guide.modelConfig` / `guide.viewModelConfig` are the same data
-       in full-object form, for reference only.
+       as the page's `viewModelConfigDiff`. Each is a set of TARGETED diff operations diffed against the mobile
+       template's own base — a `merge` for a changed/new value and an `insert` for each new element of an array
+       the template already carries (e.g. a converted quick filter appended to the template's
+       `Items.modelConfig.filterAttributes`) — so the template's native array entries are preserved and the
+       page's converted entries are ADDED, not replaced. Every attribute keeps its `type` and `path`. (Only when
+       the guide reports no template base was available — a `constraints` note — does it degrade to a single root
+       `merge`.) Do NOT rebuild these by hand and do NOT collapse the targeted operations into one root merge: a
+       root merge makes the mobile diff engine REPLACE arrays and silently drop entries (list columns,
+       `filterAttributes`), which renders an empty list and crashes Mobile Designer with `Cannot read properties
+       of undefined (reading 'attributes')`. `guide.modelConfig` / `guide.viewModelConfig` are the same data in
+       full-object form, for reference only.
      - **HARD RULE:** NEVER source the data-source section (`modelConfigDiff`) from a pre-existing or
        reference mobile body — that is exactly how an attribute's `type` (e.g. `ForwardReference` on a
        related/lookup column) gets dropped, making the binding unresolvable in Mobile Designer (`Item with the
