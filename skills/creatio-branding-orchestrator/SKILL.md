@@ -187,6 +187,15 @@ exact normalized name you would pass to build-theme.
 Note that neither this check nor clio's tells you which weights the family ships; that stays yours to
 confirm, since a family offering only one weight renders the heavier ones as the nearest available
 fallback.
+
+Whichever outcome you get, clio probes again at build time — from its own host and its own network — so
+its verdict can disagree with yours: a blocked or stale probe on either side, a catalogue change between
+the two checks, or a normalization mismatch. So after every build, whatever your own check concluded,
+read clio's warnings back and correlate them by family name, following *Reading clio's warnings* below.
+That includes the published case, which is where an unexpected warning costs the most: your check told
+the user the font downloads, so a "was not found" naming it means the theme shipped WITHOUT the web-font
+import they are expecting.
+
 - **Published on Google Fonts** — go ahead and build; the theme downloads it as a web font.
 - **404** — before concluding anything, retry the probe once with the published spelling you know from your
   own knowledge: the exact casing ("roboto" is published as "Roboto", "pt sans" as "PT Sans") or the
@@ -260,8 +269,10 @@ warn, and those never fail the build. Correlate each warning by the family name 
 fact that a warning arrived: this skill can set separate heading and body families, so a warning may be
 about the other one. A "was not found in Google Fonts" warning naming exactly the family the user
 explicitly confirmed as LOCALLY INSTALLED is the expected echo of that confirmation — the import was
-suppressed exactly as announced, so acknowledge it and move on. The same warning for a family the user
-called a Google font is the opposite: a contradiction to surface and settle, not an echo to acknowledge.
+suppressed exactly as announced, so acknowledge it and move on. The same warning for a family your own
+probe resolved as published, or one the user called a Google font, is the opposite: clio's probe
+disagreed with yours and the theme shipped with no web-font import for that family. Surface it as a
+contradiction and settle it — never acknowledge it as an echo.
 A warning naming any other family, or one whose family you cannot identify, is NOT covered by that
 confirmation and must be relayed and settled with the user, not swallowed — your own check may have used
 a different spelling, or reached the network differently. A "could not verify" warning means the web-font

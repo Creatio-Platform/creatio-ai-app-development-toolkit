@@ -81,6 +81,16 @@ class BrandingFontsDocTests(unittest.TestCase):
         self.assertIn("contradicts the user's answer", content)
         self.assertIn("LOCALLY INSTALLED", content)
 
+    def test_every_outcome_reads_clio_warnings_back_including_the_published_one(self):
+        # clio re-probes at build time from its own host, so its verdict can disagree with the agent's. The
+        # published branch is the majority path and the one where an unexpected "was not found" costs most:
+        # the user was told the font downloads, and the theme actually shipped without the import. The
+        # read-back instruction is a single lead-in covering all four outcomes rather than a per-branch copy.
+        content = read_skill_unwrapped()
+        self.assertIn("after every build, whatever your own check concluded", content)
+        self.assertIn("That includes the published case", content)
+        self.assertIn("probe resolved as published", content)
+
     def test_import_rule_is_stated_once(self):
         # Kept as a single closing rule for the whole Fonts step rather than repeated per branch.
         self.assertEqual(read_skill().count("hand-author an `@import`"), 1)
