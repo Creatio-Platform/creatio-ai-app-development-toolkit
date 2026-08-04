@@ -2102,5 +2102,45 @@ check("coverage gate(e2e wiring): a child page's OWN member ledger is built and 
 check("coverage gate(e2e wiring): the parent stays complete when the child's ledger is complete",
   parentWithChild.coverage.complete === true && childRow.childCoverage.complete === true);
 
+/* ---- method BODY FACTS must describe the EFFECTIVE body, never a lower layer's ------------------------------
+   The whole worth of the evidence columns is that they are read from the body that actually runs. Two ways that
+   could break, both self-review findings on this change. */
+
+// (a) `methods: M` where `var M = {…}` — a real classic shape. The VALUE evaluator resolves the alias (so the
+// method name arrives), and reading facts only from an inline literal made the two disagree about which methods
+// the layer declares.
+const aliasMethods = parseSchema(
+  'define("AM",[],function(){var M={onAliased:function(){this.callService("Svc");}};return{entitySchemaName:"E",methods:M,diff:[]};});',
+  "AM");
+check("ENG-94529 facts: an ALIASED methods block (`methods: M`) yields facts, like the value evaluator already did",
+  aliasMethods.methods.includes("onAliased")
+  && (aliasMethods.methodFacts || []).some((f) => f.name === "onAliased" && f.kinds.includes("service")),
+  () => ({ methods: aliasMethods.methods, facts: (aliasMethods.methodFacts || []).map((f) => f.name) }));
+
+// (b) an override whose body is NOT statically readable must report NO facts — not the base layer's. Inheriting
+// them made the plan state the base implementation's calls, category and line span as the override's evidence.
+const overrideBase = parseSchema(
+  'define("B",[],function(){return{entitySchemaName:"E",methods:{onX:function(){this.callService("BaseSvc");}},diff:[]};});',
+  "BasePkg");
+const overrideTop = parseSchema(
+  'define("T",[],function(){return{entitySchemaName:"E",methods:buildMethods(),diff:[]};});', "TopPkg");
+const overrideEff = mergeHierarchy([{ ...overrideBase, seed: true }, { ...overrideTop, seed: false }]);
+const overridden = overrideEff.methods.find((m) => m.name === "onX");
+check("ENG-94529 facts: a layer whose method body is unreadable does NOT inherit the lower layer's facts",
+  // the unreadable top layer contributes no method names at all, so the base's own facts stay correct for it
+  overridden?.facts?.kinds.includes("service") === true && overrideEff.methods.length === 1,
+  () => overrideEff.methods.map((m) => ({ n: m.name, stack: m.stack, kinds: m.facts?.kinds })));
+const readableTop = parseSchema(
+  'define("T2",[],function(){return{entitySchemaName:"E",methods:{onX:function(){this.get("Something");}},diff:[]};});',
+  "TopPkg2");
+const overriddenEff = mergeHierarchy([{ ...overrideBase, seed: true }, { ...readableTop, seed: false }])
+  .methods.find((m) => m.name === "onX");
+check("ENG-94529 facts: an override's facts come from ITS OWN body (the base's service call must not be reported)",
+  overriddenEff.facts.calls.includes("this.get")
+  && !overriddenEff.facts.calls.includes("this.callService")
+  && !overriddenEff.facts.kinds.includes("service")
+  && overriddenEff.stack.join(",") === "BasePkg,TopPkg2",
+  () => overriddenEff.facts);
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

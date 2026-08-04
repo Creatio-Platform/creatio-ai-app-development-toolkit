@@ -605,13 +605,16 @@ function isCallParentOnly(fnNode, facts) {
   return /(?:^|\.)callParent$/.test(calleePath(expr.callee) || "") && facts.calls.length === 1;
 }
 
-// Resolve the factory's return node to an inline ObjectExpression, following a single-level scope alias
-// (`var cfg = {…}; return cfg;`) exactly as the value evaluator does. Returns null when the return is not
-// statically an object literal — the same case that already produces an `unresolved-return` diagnostic.
-function returnObjectNode(retArg, scope) {
-  if (retArg?.type === "ObjectExpression") return retArg;
-  if (retArg?.type === "Identifier") {
-    const m = scope.get(retArg.name);
+// Resolve a node to an inline ObjectExpression, following a single-level scope alias (`var cfg = {…}; … cfg`)
+// exactly as the value evaluator does. Returns null when it is not statically an object literal — for the
+// factory return that is the same case which already produces an `unresolved-return` diagnostic.
+// Used for BOTH the factory return and the `methods:` value: `methods: M` (an aliased object) is a real classic
+// shape, and the value evaluator resolves it, so reading facts only from an inline literal made the two disagree
+// about which methods the layer declares (see mergeMethods).
+function objectNodeOf(node, scope) {
+  if (node?.type === "ObjectExpression") return node;
+  if (node?.type === "Identifier") {
+    const m = scope.get(node.name);
     if (m?.kind === "node" && m.node.type === "ObjectExpression") return m.node;
   }
   return null;
@@ -655,10 +658,10 @@ function ownMethodFact(name, fn) {
 }
 
 function methodFactsFromAst(retArg, scope) {
-  const obj = returnObjectNode(retArg, scope);
+  const obj = objectNodeOf(retArg, scope);
   if (!obj) return [];
-  const mo = obj.properties.find((p) => staticPropKey(p) === "methods")?.value;
-  if (mo?.type !== "ObjectExpression") return [];
+  const mo = objectNodeOf(obj.properties.find((p) => staticPropKey(p) === "methods")?.value, scope);
+  if (!mo) return [];
   const out = [];
   for (const p of mo.properties) {
     const name = staticPropKey(p);
@@ -1100,7 +1103,11 @@ function mergeMethods(L, seed, methods) {
   const factsByName = new Map((L.methodFacts || []).map((f) => [f.name, f]));
   for (const m of L.methods) {
     const prev = methods.get(m);
-    const facts = factsByName.get(m) || prev?.facts || null;
+    // The facts belong to THIS layer's body, and this layer's body is the effective one — so a layer that
+    // declares the method but whose body was not statically readable yields NULL, never the lower layer's facts.
+    // Inheriting them would report the base implementation's line span, calls and category as the effective
+    // method's evidence: a plan stating "body does: service-call" about a body that makes no service call.
+    const facts = factsByName.get(m) ?? null;
     methods.set(m, { pkgs: [...(prev?.pkgs || []), L.pkg], schemaTouched: (prev?.schemaTouched || false) || !seed, facts });
   }
 }
