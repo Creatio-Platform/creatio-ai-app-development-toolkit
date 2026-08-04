@@ -202,12 +202,21 @@ def validate_requirements_doc(content: str) -> None:
         end = dashboard_positions[i + 1] if i + 1 < len(dashboard_positions) else len(section7_analytics_text)
         if not DASHBOARD_WIDGETS_LABEL_RE.search(section7_analytics_text[start:end]):
             raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must list its own 'widgets:' line")
-    # The section-grouping rule applies to 7.1 only, so scope the check to the 7.1
-    # slice (between the 7.1 and 7.2 subheadings). Searching the whole §7 body would
-    # let a flat 7.1 pass whenever any grouping heading appears anywhere under 7.2.
+    # Both subsections must be independently populated: a section-wide dashboard
+    # count would let a hollow 7.1 (grouping heading, zero dashboards, all dashboards
+    # under 7.2) or an empty 7.2 pass. Slice §7 at the subheadings and require at
+    # least one `dashboard:` in EACH region.
     m71 = ANALYTICS_SECTION_SUBHEADING_RE.search(section7_analytics_text)
     m72 = ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text)
     section_71_text = section7_analytics_text[m71.end():(m72.start() if m72 else len(section7_analytics_text))]
+    section_72_text = section7_analytics_text[m72.end():] if m72 else ""
+    if not DASHBOARD_LABEL_RE.search(section_71_text):
+        raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must contain at least one 'dashboard:' (per-section dashboards are mandatory, not just a grouping heading)")
+    if not DASHBOARD_LABEL_RE.search(section_72_text):
+        raise WorkflowError("Requirements doc failed: section 7.2 Workplace analytics must contain at least one 'dashboard:' (it must not be left empty)")
+    # The section-grouping rule applies to 7.1 only, so scope the check to the 7.1
+    # slice. Searching the whole §7 body would let a flat 7.1 pass whenever any
+    # grouping heading appears anywhere under 7.2.
     if not SECTION_DASHBOARD_GROUP_RE.search(section_71_text):
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must group dashboards by section under a '#### <Section> section dashboards' heading (so it is explicit which section hosts each dashboard), not a flat list")
 

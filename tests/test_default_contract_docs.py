@@ -668,6 +668,21 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("connect-native option first and marked recommended", mirror, str(path))
             self.assertIn("never lead with the wrapper", mirror, str(path))
 
+    def test_workplace_analytics_flow_anchors_survive_in_impl_runbook(self):
+        # §7.2 (workplace analytics) is prose in the implementation runbook. Pin the
+        # load-bearing steps of the flow so a future rewrite cannot silently drop the
+        # home-page-to-workplace binding and regress to the shared FreedomDashboards.
+        # We anchor the FLOW (not exact clio tool call names, which are resolved at
+        # runtime via get-tool-contract), plus the "do not use FreedomDashboards" guard.
+        impl = read_text(ROOT / "runbooks/03-app-implementation.md")
+        self.assertTrue(contains_all(impl, [
+            "BaseHomePage",
+            "SysWorkplace.HomePageUId",
+            "SysModuleInWorkplace",
+        ]), "03-app-implementation.md must keep the §7.2 home-page-to-workplace binding flow")
+        self.assertIn("FreedomDashboards", impl)
+        self.assertIn("Known limitation (shared workplace)", impl)
+
 
 if __name__ == "__main__":
     unittest.main()

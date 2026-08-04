@@ -94,6 +94,13 @@ For each dashboard in the plan:
   **Do NOT** place app-level analytics on the shared platform page `FreedomDashboards` (schema in the
   core `CrtNUI` package). It is a generic, OOTB dashboards page that is not scoped to this app's
   workplace, so the app's analytics would land there instead of on the app's own home page.
+
+  **Known limitation (shared workplace).** When the target workplace is a shared one such as
+  "My applications", `SysWorkplace.HomePageUId` is a single per-workplace value: binding it is
+  last-writer-wins across every composable app that shares that workplace, and the home page is visible
+  to everyone with access to it — a wider audience than just this app's users. This is accepted for now;
+  an app-scoped workplace (so each app owns its own home page and audience) depends on the
+  create-workplace capability tracked under ENG-88474.
 - **Access** — dashboards are created with the default `All Employees` read grant (access for
   everyone). Ship those grants with the package per `dashboard-rights` so they survive a package
   transfer (grants are data, not schema, and are otherwise lost on transfer).

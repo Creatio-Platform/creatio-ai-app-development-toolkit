@@ -189,13 +189,52 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
 
     def test_widgets_missing_on_one_of_two_dashboards_is_rejected(self):
         # `widgets:` is enforced per dashboard, not once for the whole section: the
-        # 7.1 dashboard keeps its widgets, the 7.2 dashboard loses its widgets line.
+        # 7.1 dashboard keeps its widgets, the 7.2 (trailing) dashboard loses its
+        # widgets line — exercises the terminal block boundary (end == len(text)).
         doc = VALID_DOC.replace(
             "  - widgets: metric — total tasks; list — tasks due this week", ""
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("widgets:", str(ctx.exception))
+
+    def test_widgets_missing_on_leading_dashboard_is_rejected(self):
+        # Symmetric to the above but strips the 7.1 (leading) dashboard's widgets,
+        # exercising the non-terminal block boundary (end == next dashboard start).
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — open tasks count; chart — tasks by status (bar)", ""
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
+
+    def test_empty_section_analytics_71_is_rejected(self):
+        # 7.1 must carry at least one dashboard, not just a grouping heading. Drop
+        # the only 7.1 dashboard block (keep its heading); the 7.2 dashboard remains.
+        doc = VALID_DOC.replace(
+            "- dashboard: Task overview\n"
+            "  - serves role: Team member\n"
+            "  - scope: open tasks by status\n"
+            "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n",
+            "",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.1", str(ctx.exception))
+
+    def test_empty_workplace_analytics_72_is_rejected(self):
+        # 7.2 must not be empty: drop its only dashboard block, leaving the 7.1
+        # dashboard (and its grouping heading) intact.
+        doc = VALID_DOC.replace(
+            "- dashboard: Team workload\n"
+            "  - serves role: Team member\n"
+            "  - scope: tasks across the whole app\n"
+            "  - widgets: metric — total tasks; list — tasks due this week\n",
+            "",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.2", str(ctx.exception))
 
 
 class TestValidateRequirementsDocTables(unittest.TestCase):
