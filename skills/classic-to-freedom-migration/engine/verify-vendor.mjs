@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+// Supply-chain integrity gate for the engine's vendored third-party code.
+//
+// `parseSchema` runs UNTRUSTED classic schema-body through the bundled acorn parser (vendor/acorn.mjs) —
+// the one executable component standing between a hostile stand input and the engine. A vendored bundle
+// gets no automatic security patching AND no automatic tamper detection: a swapped or silently-drifted
+// parser would execute unnoticed. This script pins each vendored file to a known-good SHA-256 recorded
+// in vendor/provenance.json and FAILS (exit 1) on any mismatch. Zero dependencies (node:crypto/fs/path) —
+// runs anywhere the engine does, on Linux (LF) and Windows (CRLF) alike.
+//
+// THREAT MODEL (be honest about what this does and does NOT prove). The pin lives in the SAME repo/commit as
+// the file it pins, so this is tamper-EVIDENCE within the repo, not authenticity against upstream npm: it
+// catches an ACCIDENTAL swap/drift (a rebuild picked up a different acorn, a botched edit) and a change to the
+// file WITHOUT a matching provenance bump — but NOT a determined attacker who edits both the file and the pin
+// in one commit. To also assert authenticity, a CI step must independently fetch `acorn@<pinned version>` from
+// npm and compare its LF-normalized hash to provenance.json (not done here — this script only checks the repo
+// against its own recorded pin). The provenance version field records which upstream release the pin claims.
+//
+// The pin is over LF-NORMALIZED bytes so it equals the upstream npm artifact's hash and is immune to
+// line-ending churn between platforms/checkouts — a CRLF checkout verifies identically to an LF one.
+import { readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+
+// Vendor dir defaults to the one co-located with this script. The optional argv[2] override is a TEST-ONLY hook
+// (the negative goldens point the SAME integrity check at a tampered fixture). The CLI-controlled path is
+// VALIDATED before use: honored ONLY when it canonicalizes under the OS temp dir — otherwise ignored and the
+// real co-located vendor is used. This keeps the tests working while closing the path-traversal surface (S8707).
+const DEFAULT_VENDOR = path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor");
+// Resolve BOTH sides through the real filesystem before the containment check: path.resolve does NOT follow
+// symlinks, and on macOS os.tmpdir() (/var/folders/…) is a symlink to /private/var/folders/…. A caller that
+// builds its override via fs.realpathSync/mkdtemp (landing under /private/…) would then fail the prefix check
+// and silently fall back to the REAL vendor dir — so a negative tamper-detection golden would pass VACUOUSLY
+// against the genuine files. realpathSync needs the path to exist; fall back to the resolved path if it doesn't.
+const realpathSafe = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+const overrideArg = process.argv[2] ? realpathSafe(process.argv[2]) : null;
+const tmpReal = realpathSafe(os.tmpdir());
+const tmpRoot = tmpReal + path.sep;
+const VENDOR_DIR = overrideArg && (overrideArg === tmpReal || overrideArg.startsWith(tmpRoot)) ? overrideArg : DEFAULT_VENDOR;
+const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
+
+const sha256Lf = (buf) =>
+  createHash("sha256").update(Buffer.from(buf.toString("utf8").replaceAll("\r\n", "\n"), "utf8")).digest("hex");
+
+function main() {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  } catch (e) {
+    console.error(`verify-vendor: cannot read ${MANIFEST}: ${e.message}`);
+    return 1;
+  }
+  const files = manifest.files || {};
+  const names = Object.keys(files);
+  if (names.length === 0) {
+    console.error("verify-vendor: provenance.json lists no files — nothing pinned");
+    return 1;
+  }
+  let failed = 0;
+  for (const name of names) {
+    const pin = files[name];
+    const file = path.join(VENDOR_DIR, name);
+    let actual;
+    try {
+      actual = sha256Lf(readFileSync(file));
+    } catch (e) {
+      console.error(`  ✗ ${name}: cannot read (${e.message})`);
+      failed++;
+      continue;
+    }
+    if (actual === pin.sha256) {
+      console.log(`  ✓ ${name}  ${pin.package}@${pin.version}  sha256 ${actual.slice(0, 16)}…`);
+    } else {
+      console.error(`  ✗ ${name}: SHA-256 MISMATCH — vendored file does not match its pinned ${pin.package}@${pin.version} provenance`);
+      console.error(`      expected ${pin.sha256}`);
+      console.error(`      actual   ${actual}`);
+      console.error(`      If this change is intentional, re-vendor from the pinned upstream artifact and update vendor/provenance.json.`);
+      failed++;
+    }
+  }
+  if (failed) {
+    console.error(`\nverify-vendor: ${failed} of ${names.length} vendored file(s) FAILED integrity check`);
+    return 1;
+  }
+  console.log(`verify-vendor: ${names.length} vendored file(s) verified`);
+  return 0;
+}
+
+process.exit(main());
