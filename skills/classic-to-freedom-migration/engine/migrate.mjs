@@ -28,6 +28,7 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan } from "./designspec.mjs";
+import { discoverCards } from "./cards.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -567,6 +568,11 @@ export function runMigration(manifest, opts = {}) {
   const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
   out.signals = signals;
   out.signalsMissing = SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true);
+  // Behaviour-card discovery (ENG-94529, engine/cards.mjs): screen this manifest's customization layers
+  // against the shipped card registry — every run, unconditionally (the members cards describe often
+  // produce no needsDecision flag, so there is nothing to trigger on). TOP-LEVEL run only for the PoC:
+  // nested child/typed/mini folds pass `opts.visited`, and scanning them is declared future work.
+  out.cardMatches = opts.visited ? [] : discoverCards(manifest);
   const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta, planMetaMissing: out.planMetaMissing, signals: out.signals, signalsMissing: out.signalsMissing };
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);

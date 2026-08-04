@@ -296,6 +296,51 @@ function buildLogicRows(cs) {
   return logic;
 }
 
+// ---- Recognized customizations (ENG-94529 discovery, engine/cards.mjs) ----
+// A discovered behaviour renders split by AUDIENCE. The USER (plan reader) sees one ordinary Logic-table
+// row describing the behaviour itself — what it is, what triggers it, what it does — with no card
+// mechanics: the reader wants the logic, not where the migrator learned it. The BUILDER gets the
+// implementation requirements (acceptance criteria + the reference code to confirm the recognition) in
+// the standalone design spec, at the implementation stage. Card text is authored content shipped with
+// this skill (trusted); match evidence (schema/pkg names) is stand-derived → esc.
+function cardLogicRows(matches) {
+  return (matches || []).map((m) => [
+    `✍ **${m.behaviour}**`,
+    m.trigger,
+    m.effect,
+    "⚠ to design — implementation requirements in the design spec (Recognized customizations)",
+  ]);
+}
+// One legend line under the Logic table when recognized rows are present — the only user-visible hint
+// that these rows carry builder requirements elsewhere.
+const CARD_LEGEND = "> ✍ = customization recognized by the migrator; described above in behaviour terms. The builder's implementation requirements are in the design spec's **Recognized customizations** section.";
+function renderCardAppendix(matches) {
+  if (!(matches || []).length) return [];
+  const L = [
+    "### Recognized customizations — implementation requirements (build stage)",
+    "",
+    "> ✍ The migrator recognized the customization(s) below from its known-customization records. The",
+    "> recognition is a **candidate**: before building, confirm it by comparing the matched layer's code",
+    "> with the reference code here. Then **each acceptance criterion is its own deliverable** — build",
+    "> it, or record it in your Plan-vs-Done as deferred with the concrete reason. The record never names",
+    "> a Freedom construct — deriving the target is part of the plan.",
+    "",
+  ];
+  for (const m of matches) {
+    L.push(`#### ${m.id} — ${m.behaviour}`, "",
+      `**Recognized in:** \`${esc(m.schemaName)}\` [${esc(m.pkg)}] — matched on: ${m.anchorsHit.map((a) => "`" + esc(a) + "`").join(", ")} · record: \`${m.file}\``, "");
+    if (m.card?.whatItIs) L.push("**What it is:** " + m.card.whatItIs, "");
+    if (m.card?.acs?.length) {
+      L.push("**Acceptance criteria:**", "");
+      for (const ac of m.card.acs) L.push(`- [ ] ${ac}`);
+      L.push("");
+    }
+    if (m.card?.code) L.push("**Reference code (confirm the matched layer against this):**", "", m.card.code, "");
+    if (!m.card?.whatItIs && !m.card?.acs?.length) L.push(`> ⚠ record file \`${m.file}\` could not be read — open it manually before building.`, "");
+  }
+  return L;
+}
+
 // `embedded` (rendered inside renderPlan): the plan's Overview already carries entity/template/package/
 // size, so skip this preamble to avoid duplicating it — the `### List page` / `### <entity> form page`
 // headings are the divider. Standalone (`--spec`) keeps the full header. The gate banners are
@@ -365,13 +410,15 @@ export function renderDesignSpec(result, opts = {}) {
   L.push("");
 
   const logic = buildLogicRows(cs);
-  if (logic.length) {
+  const cardRows = cardLogicRows(result.cardMatches); // discovered behaviour cards (top-level run only)
+  if (logic.length || cardRows.length) {
     L.push(
       "#### Logic",
       "| Behaviour | Trigger | Effect | Freedom target |",
       "| --- | --- | --- | --- |",
     );
-    for (const row of logic) L.push(`| ${row.join(" | ")} |`);
+    for (const row of [...cardRows, ...logic]) L.push(`| ${row.join(" | ")} |`);
+    if (cardRows.length) L.push(CARD_LEGEND);
     L.push("");
   }
 
@@ -401,6 +448,11 @@ export function renderDesignSpec(result, opts = {}) {
     for (const line of confirm) L.push(line);
     L.push("");
   }
+
+  // Recognized-customizations requirements — BUILDER-facing, so they live in the standalone design spec
+  // only (the implementation-stage document). The user's plan carries just the Logic row + legend; the
+  // embedded (in-plan) spec therefore never renders this block.
+  if (!opts.embedded) L.push(...renderCardAppendix(result.cardMatches));
 
   return L.join("\n");
 }
