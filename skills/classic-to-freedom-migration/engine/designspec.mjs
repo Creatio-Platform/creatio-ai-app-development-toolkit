@@ -164,6 +164,9 @@ function cardActionNote(name) {
 // its own Layout row in the region it sat in (the side profile on every real page), with the Freedom component
 // and its `referenceColumn` wiring in Source — the full instructions stay in the ⚠ Confirm item.
 function profileCardRow(pc, regionOf) {
+  // Known limitation, shared with every other row builder that calls regionOf: when the card sat in a tab the
+  // template declares (e.g. `ESNTab`), regionOf has no human label for it and returns the raw schema identifier.
+  // Not specific to profile cards, so it is left consistent rather than special-cased here.
   const region = pc.region === "SideAreaProfileContainer" ? "Side profile" : regionOf(pc.region);
   const label = esc(pc.schemaName || pc.classic);
   const src = pc.freedom

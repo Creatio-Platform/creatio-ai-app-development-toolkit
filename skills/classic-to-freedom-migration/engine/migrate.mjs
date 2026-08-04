@@ -100,6 +100,10 @@ function parseProfileSchemas(manifest, bodyOf) {
 // schema to read (the card's config names none, or it is unreadable) — a resolved answer, exactly like
 // `addRecordMiniPage: false` / `editPage: false`, so the gate can tell "verified none" from "never checked"
 // and the mapper falls back to the by-hand recipe cleanly.
+// Deliberately NOT carried over from detailSchemaRecord: `title`, `editPage`, `editable`, `editableVerified`.
+// Those are detail-only concerns — a detail governs a child edit page and an add-record workflow, so it needs a
+// resolved title and an edit-page answer. A profile card renders a compact view of an ALREADY-linked record; it
+// opens the record itself, never a child edit page. Do not mirror the detail template here without that changing.
 function profileSchemaRecord(name, e, bodyOf) {
   const verifiedNone = e === false;
   const eObj = (!verifiedNone && e && typeof e === "object") ? e : {};

@@ -2019,5 +2019,59 @@ check("ENG-93928 entity resolution: the master lookup's referenced schema resolv
   (pcByRef.changeSet.profileCards || [])[0]?.freedom === "crt.ContactCompactProfile",
   () => pcByRef.changeSet.profileCards);
 
+// (9) parseErrors GATE — the convention every schema type wired into parseErrors follows (main schema ~line 380,
+// detail schema ~line 1312, section schema ~line 706). Without this check, dropping `profileSchemas` out of the
+// parseErrors spread would leave every test above green while a broken body silently resolves to `entity: null`,
+// produces the no-native-component fallback, and the plan reads as gate-clean.
+const pcBroken = runMigration(profileMani({ profileSchemas: { RequesterProfilePage: { body: "define(" } } }));
+check("ENG-93928 parseErrors gate: a broken profileSchema body reaches parseErrors → gate blocks",
+  pcBroken.gate.blocked === true
+  && (pcBroken.parseErrors || []).some((e) => /RequesterProfilePage/.test(e.pkg)),
+  () => ({ blocked: pcBroken.gate.blocked, parseErrors: pcBroken.parseErrors }));
+
+// (10) the schema-NAME heuristic is the third and weakest entity-resolution tier: no profile-schema body and no
+// entity metadata, so `<Account|Contact>Profile` in the schema name is all there is. Untested it could silently
+// stop matching and every card would fall to the polymorphic branch.
+const pcByName = runMigration({ entity: "InternalRequest", seed: PROFILE_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "WorkHrBase", body: PROFILE_BODY.replace('"RequesterProfilePage"', '"ContactProfileSchema"') }],
+  profileSchemas: { ContactProfileSchema: false } });
+check("ENG-93928 entity resolution (tier 3): the schema NAME resolves the profiled entity when no body and no metadata exist",
+  (pcByName.changeSet.profileCards || [])[0]?.entity === "Contact"
+  && (pcByName.changeSet.profileCards || [])[0]?.freedom === "crt.ContactCompactProfile",
+  () => pcByName.changeSet.profileCards);
+
+// (11) MULTI-CARD — a real page can embed more than one profile card (the OOTB Opportunities_FormPage does).
+// A single-card fixture would hide an accumulation bug: a card overwritten instead of pushed, or one card's
+// decision reused for both.
+const TWO_CARD_BODY = PROFILE_BODY.replace(
+  '"ActionsDashboardModule"',
+  `"ManagerProfile":{"config":{"schemaName":"ManagerProfilePage","parameters":{"viewModelConfig":{
+      masterColumnName:"Owner","profileColumnName":"Contact"}}}},
+    "ActionsDashboardModule"`,
+).replace(
+  '{operation:"insert",name:"OtherModuleBlock"',
+  `{operation:"insert",name:"ManagerProfile",parentName:"LeftModulesContainer",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MODULE}},
+    {operation:"insert",name:"OtherModuleBlock"`,
+);
+const pcTwo = runMigration({ entity: "InternalRequest", seed: PROFILE_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "WorkHrBase", body: TWO_CARD_BODY }],
+  profileSchemas: {
+    RequesterProfilePage: { body: REQ_PROFILE_SCHEMA },
+    ManagerProfilePage: { body: REQ_PROFILE_SCHEMA.replace('"RequesterProfilePage"', '"ManagerProfilePage"') },
+  } });
+const pcTwoCards = pcTwo.changeSet.profileCards || [];
+check("ENG-93928 multi-card: two embedded profile cards on one page both map, each with its own master column and decision",
+  pcTwoCards.length === 2
+  && pcTwoCards.map((c) => c.masterColumn).sort().join(",") === "Owner,Requester"
+  && pcTwo.changeSet.needsDecision.filter((d) => d.kind === "profile-card").length === 2
+  && pcTwo.structure.complete === true,
+  () => pcTwoCards);
+
+// (12) the classic config's display flags must reach the DECISION text end to end (parse → mapper → reason), not
+// just the parsed record: they are the only signal that a value the native card hides was visible before.
+check("ENG-93928 displayFlags: a truthy classic display flag reaches the decision reason end to end",
+  /Display flags on the classic config: IsPhoneVisible/.test(pcDecision?.reason || ""),
+  () => pcDecision?.reason);
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

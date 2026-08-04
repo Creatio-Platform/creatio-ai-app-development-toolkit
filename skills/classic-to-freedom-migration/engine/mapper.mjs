@@ -1119,10 +1119,12 @@ function mapProfileCards(ctx) {
   const profileCards = [], needsDecision = [], accountedFor = new Set();
   for (const c of (eff.components || [])) {
     if (!isProfileCardModule(c)) continue;
-    accountedFor.add(c.key);                       // the module AND its host diff item (same name)
+    accountedFor.add(c.key);                       // the module AND its host diff item (usually the same name)
     // the profile schema may be supplied under its own name OR — when the classic config names no schemaName —
     // under the module key, which is then the only key the agent can key it by (see the structure gate).
-    const decl = profileSchemas[c.schemaName] ?? profileSchemas[c.key];
+    // The `!= null` guard matches `has` in profileSchemaIssues: a null schemaName would otherwise index the
+    // literal key "null", which happens to miss today but only by accident.
+    const decl = (c.schemaName != null ? profileSchemas[c.schemaName] : undefined) ?? profileSchemas[c.key];
     // `verifiedNone` (manifest `false`) = the agent verified there is no separate schema to read → no info to use,
     // but a RESOLVED state, so the plan says that instead of "not supplied".
     const verifiedNone = decl === false || !!decl?.verifiedNone;
@@ -1134,6 +1136,10 @@ function mapProfileCards(ctx) {
     // where the classic card sat: its host diff item climbs to the profile/left area on every real page, but
     // resolve it rather than assume — a card inside a tab must be reported in that tab.
     const host = index.get(c.key);
+    // account for the host diff item under ITS OWN name too: the Creatio convention aligns the diff-item name
+    // with the `modules` key (every OOTB example does), but nothing enforces it — and when they differ,
+    // mapUnmappedDrop would flag the host item as an unknown dropped component.
+    if (host?.name) accountedFor.add(host.name);
     const own = host?.parent ? resolveOwner(host.parent, index, profileAnchors) : { kind: "profile" };
     profileCards.push({
       classic: c.key, schemaName: c.schemaName || null, entity: entity || null,
