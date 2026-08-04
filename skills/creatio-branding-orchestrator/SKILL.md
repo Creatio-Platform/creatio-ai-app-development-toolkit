@@ -194,13 +194,24 @@ clio is old, and take the safe branch either way — do not build this family, o
 or a published family instead. This check belongs to this branch only: never block an ordinary
 change between published families on clio's version.
 
-**Act on a warning that disagrees with what you told the user.** Correlate by family name, then:
+**Act on a warning that disagrees with what you told the user.** Two different outcomes each produce
+a warning naming the family, and they do OPPOSITE things to the import, so the family name alone
+never tells you what shipped — read the warning's own text first: "was not found in Google Fonts"
+means the import was dropped, "could not verify" means it was kept. Then correlate by family name
+and cause:
 
-- Names a family the user confirmed as locally installed — the expected echo. Move on.
-- Names a family your probe resolved as published, or one the user called a Google font — clio's
-  probe disagreed with yours and the theme shipped with no import for it. Surface the
+- **Not found**, naming a family the user confirmed as locally installed — the expected echo: the
+  import was dropped exactly as announced. Move on.
+- **Not found**, naming a family your probe resolved as published, or one the user called a Google
+  font — clio's probe disagreed with yours and the theme shipped with no import for it. Surface the
   contradiction and settle it; do not accept it as an echo.
-- Expected but missing, for a family confirmed as local — ambiguous, and "old clio" is the less
+- **Could not verify**, for a family the user confirmed as locally installed — this resembles the
+  echo above but is its opposite: the import was KEPT, so the suppression they were promised did not
+  happen. Never report it as done. Say the catalogue was unreachable and offer to restyle once it is
+  reachable again.
+- **Could not verify**, for a family meant to be a Google font — keeping the import is the right
+  outcome, so nothing is broken; say the verdict was unverified rather than confirmed, and move on.
+- **No warning at all**, for a family confirmed as local — ambiguous, and "old clio" is the less
   likely reading once the capability check has passed. Re-probe the normalized name first: a 200
   means your earlier 404 was wrong and the theme is correct, so say so and prompt for nothing.
   Only a second 404 means a real gap — then say the theme may carry an unwanted import and prompt

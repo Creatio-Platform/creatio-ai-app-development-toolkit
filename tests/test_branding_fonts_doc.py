@@ -42,6 +42,15 @@ def fonts_step():
     return content[start : content.index("## Theme name — after fonts", start)]
 
 
+def conversation_rules():
+    # The Fonts step's approval-gate carve-out is stated here rather than in the step itself, so
+    # fonts_step() cannot see it and it would otherwise be the one normative sentence this PR added
+    # with no test behind it.
+    content = read_skill_unwrapped()
+    start = content.index("## Conversation rules")
+    return content[start : content.index("## Build and apply", start)]
+
+
 class BrandingFontsDocTests(unittest.TestCase):
     def test_skill_exists(self):
         self.assertTrue(SKILL.exists(), str(SKILL))
@@ -111,6 +120,33 @@ class BrandingFontsDocTests(unittest.TestCase):
         self.assertIn('exception to "font steps are not approval gates"', step)
         self.assertIn("neither 200 nor 404", step)
         self.assertIn("never guess on the user's behalf", step)
+
+    def test_the_conversation_rules_carve_out_survives(self):
+        # "font steps are not approval gates" is the general rule; building a family Google Fonts does
+        # not publish is the one exception, and it is a separate, EARLIER gate than the single
+        # pre-build confirmation. Dropping or inverting this sentence would quietly remove the
+        # confirmation this whole slice exists to add.
+        rules = conversation_rules()
+        self.assertIn("One exception inside the Fonts step", rules)
+        self.assertIn("does not replace", rules)
+
+    def test_import_state_is_read_from_the_warning_text_not_the_family_name(self):
+        # Both availability outcomes emit a warning naming the family, and they do opposite things to
+        # the import: not-published drops it, unverifiable keeps it. Correlating by family name alone
+        # lets the agent assert an import state that never happened — observed live, where a
+        # "could not verify" warning named a family the user had confirmed as locally installed and
+        # the import was in fact still there.
+        step = fonts_step()
+        self.assertIn("read the warning's own text first", step)
+        self.assertIn('"was not found in Google Fonts" means the import was dropped', step)
+        self.assertIn('"could not verify" means it was kept', step)
+
+    def test_an_unverifiable_warning_is_never_reported_as_suppression_done(self):
+        # The dangerous near-miss: it names the same family as the expected echo, so it reads like
+        # confirmation while meaning the opposite.
+        step = fonts_step()
+        self.assertIn("this resembles the echo above but is its opposite", step)
+        self.assertIn("Never report it as done", step)
 
     def test_all_three_warning_outcomes_carry_an_action(self):
         # Reading a warning is not enough — each outcome needs a next step. The missing-warning case
