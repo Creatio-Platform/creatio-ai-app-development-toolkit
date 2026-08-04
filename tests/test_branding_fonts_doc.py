@@ -5,16 +5,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SKILL = ROOT / "skills/creatio-branding-orchestrator/SKILL.md"
 
-# The exact strings the Fonts step's runtime behavior is keyed on. Each is a trip-wire shared with a
-# system this repo does not build: clio's tool description, clio's error codes, and Google's endpoint.
-# A silent reword here does not fail anything until a live agent run misbehaves, which is what these
-# assertions exist to prevent.
+# The Fonts step deliberately delegates the shared font rules — the family-name contract, the probe
+# URL, the 404 retry, the warning vocabulary — to clio's theming guidance, which owns them and pins
+# them with clio's own tests. What stays here is only what that guidance cannot carry, and these
+# assertions pin exactly that. Markers that moved out are deliberately NOT pinned here; asserting
+# them again would recreate the duplication this step was trimmed to remove.
 CAPABILITY_PHRASE = "checked against Google Fonts"
-PROBE_URL_TEMPLATE = "https://fonts.google.com/metadata/fonts/<Family>"
-RESOLVER_URL_TEMPLATE = "https://fonts.google.com/?query=<family>"
-MALFORMED_FAMILY_CODE = "INVALID_FONT_FAMILY"
-NOT_PUBLISHED_WARNING = "was not found in Google Fonts"
-UNVERIFIABLE_WARNING = "could not verify"
 
 
 def read_skill():
@@ -23,76 +19,81 @@ def read_skill():
 
 def read_skill_unwrapped():
     # The markers below are prose sentences, and prose re-wraps on every edit. Collapsing whitespace
-    # keeps these assertions about the wording rather than about where the line happens to break.
+    # keeps these assertions about the wording rather than about where the line breaks.
     return " ".join(read_skill().split())
+
+
+def fonts_step():
+    content = read_skill_unwrapped()
+    start = content.index("## Fonts — after the background")
+    return content[start : content.index("## Theme name — after fonts", start)]
 
 
 class BrandingFontsDocTests(unittest.TestCase):
     def test_skill_exists(self):
         self.assertTrue(SKILL.exists(), str(SKILL))
 
+    def test_the_step_delegates_the_shared_rules_to_clio_guidance(self):
+        # Load-bearing after the trim: the name contract, probe URL, retry and warning vocabulary now
+        # live only in clio's theming guidance. Losing this pointer would silently strip them from the
+        # flow, so it is pinned harder than any single rule it replaces.
+        step = fonts_step()
+        self.assertIn("clio's theming guidance owns the font rules", step)
+        self.assertIn("Follow it.", step)
+
+    def test_clio_capabilities_are_summarised_without_restating_the_rules(self):
+        # A short capability summary keeps the step readable on its own. It states what build-theme
+        # does, not how the agent should probe — that is the guidance's job.
+        step = fonts_step()
+        self.assertIn("no web-font `@import` plus a warning", step)
+        self.assertIn("keeps the import plus a warning", step)
+        self.assertIn("only a malformed name fails the build", step)
+
     def test_capability_handshake_phrase_is_pinned(self):
         # clio pins this phrase on both the tool attribute and the get-tool-contract projection. The
-        # agent-side half of that handshake lives here, and nothing else in this repo would catch a reword.
-        self.assertIn(CAPABILITY_PHRASE, read_skill())
+        # agent-side half of that handshake lives here, and nothing else in this repo catches a reword.
+        self.assertIn(CAPABILITY_PHRASE, fonts_step())
 
-    def test_capability_check_is_scoped_to_the_unpublished_font_branch(self):
-        # Regression guard: the check once sat in the Fonts step preamble, where "this section" read as the
-        # whole step — which refused EVERY font change (including two already-published Google families) on
-        # any clio predating probe-driven suppression. It must stay inside the one branch that needs it.
-        content = read_skill()
-        fonts_step = content.index("## Fonts — after the background")
-        unpublished_branch = content.index("### Building a family Google Fonts does not publish")
-        capability_check = content.index(CAPABILITY_PHRASE)
-        self.assertLess(fonts_step, unpublished_branch)
-        self.assertGreater(
-            capability_check,
-            unpublished_branch,
-            "the clio capability check must live inside the not-published branch, not gate the whole Fonts step",
+    def test_capability_check_stays_scoped_to_the_unpublished_font_path(self):
+        # Regression guard: a broader placement once refused EVERY font change — including a switch
+        # between two published Google families — on any clio predating probe-driven suppression.
+        step = fonts_step()
+        self.assertIn("This check belongs to this branch only", step)
+        self.assertIn(
+            "never block an ordinary change between published families on clio's version", step
         )
 
-    def test_probe_and_resolver_urls_are_pinned(self):
-        # The metadata endpoint is the only one that classifies correctly (css2 answers 200 for unpublished
-        # families with a look-alike), and the resolver link is what hands spelling back to the user.
-        content = read_skill()
-        self.assertIn(PROBE_URL_TEMPLATE, content)
-        self.assertIn(RESOLVER_URL_TEMPLATE, content)
+    def test_the_normalized_name_probe_trap_is_stated(self):
+        # clio normalizes before building, so a padded name builds fine but 404s on a raw probe. The
+        # guidance says to URL-encode; it does not warn about this mismatch.
+        step = fonts_step()
+        self.assertIn("Probe the normalized name, not the raw one", step)
 
-    def test_clio_error_code_and_warning_markers_are_pinned(self):
-        # The agent branches on these clio-side strings: one build-failing error code and the two
-        # availability warnings it must tell apart.
-        content = read_skill()
-        self.assertIn(MALFORMED_FAMILY_CODE, content)
-        self.assertIn(NOT_PUBLISHED_WARNING, content)
-        self.assertIn(UNVERIFIABLE_WARNING, content)
+    def test_a_non_google_family_is_its_own_approval_gate(self):
+        # Skill policy, not clio's: this gate is separate from and earlier than the single pre-build
+        # confirmation, and an inconclusive probe of the agent's own must not be resolved by guessing.
+        step = fonts_step()
+        self.assertIn('exception to "font steps are not approval gates"', step)
+        self.assertIn("neither 200 nor 404", step)
+        self.assertIn("never guess on the user's behalf", step)
 
-    def test_absent_warning_requires_disambiguation_before_prompting_an_upgrade(self):
-        # Once the capability check has passed, a missing not-found warning most likely means clio found the
-        # family published and the agent's own 404 was wrong. Concluding "old clio" first would send users to
-        # upgrade an already-current clio instead of learning their font is available.
-        content = read_skill_unwrapped()
-        self.assertIn("re-probe the normalized name", content)
-        self.assertIn("do not prompt for an upgrade or a rebuild", content)
+    def test_all_three_warning_outcomes_carry_an_action(self):
+        # Reading a warning is not enough — each outcome needs a next step. The missing-warning case
+        # must disambiguate first: after the capability check has passed, "old clio" is the less likely
+        # reading, and concluding it would send users to upgrade an already-current clio.
+        step = fonts_step()
+        self.assertIn("the expected echo", step)
+        self.assertIn("Surface the contradiction and settle it", step)
+        self.assertIn("Re-probe the normalized name first", step)
+        self.assertIn("Only a second 404 means a real gap", step)
 
-    def test_contradicting_verdict_is_not_treated_as_the_expected_echo(self):
-        # A "was not found" warning for a family the user called a Google font contradicts their answer; the
-        # echo rule covers only families they confirmed as locally installed.
-        content = read_skill_unwrapped()
-        self.assertIn("contradicts the user's answer", content)
-        self.assertIn("LOCALLY INSTALLED", content)
-
-    def test_every_outcome_reads_clio_warnings_back_including_the_published_one(self):
-        # clio re-probes at build time from its own host, so its verdict can disagree with the agent's. The
-        # published branch is the majority path and the one where an unexpected "was not found" costs most:
-        # the user was told the font downloads, and the theme actually shipped without the import. The
-        # read-back instruction is a single lead-in covering all four outcomes rather than a per-branch copy.
-        content = read_skill_unwrapped()
-        self.assertIn("after every build, whatever your own check concluded", content)
-        self.assertIn("That includes the published case", content)
-        self.assertIn("probe resolved as published", content)
+    def test_the_verdict_is_judged_by_warnings_not_by_css(self):
+        # Neither real flow hands the agent the CSS: workspace-write returns a path, and the no-code
+        # flow builds inside create-theme.
+        self.assertIn("never by the CSS", fonts_step())
 
     def test_import_rule_is_stated_once(self):
-        # Kept as a single closing rule for the whole Fonts step rather than repeated per branch.
+        # Kept as a single rule rather than repeated per branch.
         self.assertEqual(read_skill().count("hand-author an `@import`"), 1)
 
 
