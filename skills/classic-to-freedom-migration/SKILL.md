@@ -26,7 +26,6 @@ These seven rules are non-negotiable. Everything else in this skill serves them.
 - A Creatio section/page URL, or a section/page/entity name.
 - A Creatio package or application name, when the whole package/app must be migrated.
 - Optional Creatio environment name.
-- Optional local repository or workspace with Creatio package sources.
 
 ## Migration Scope
 
@@ -65,12 +64,11 @@ If the scope is genuinely ambiguous (e.g. a name that is both a section and its 
 
 ## Source Policy
 
-Hybrid discovery with fallback:
+Discovery is runtime-only, through Clio MCP:
 
-1. Prefer Creatio runtime metadata through Clio MCP when an environment resolves.
-2. Use the local repository when available for source schemas, package structure, tests, and hardcoded logic.
-3. If runtime metadata or repo sources are unavailable, continue only if the target can still be identified; record the missing source as a risk in the plan.
-4. Stop and ask for the missing identifier only when the target cannot be resolved from the URL, name, runtime metadata, or repository search.
+1. Resolve all metadata through Creatio runtime via Clio MCP; an environment must resolve first.
+2. If the runtime metadata for a target is unavailable, continue only if the target can still be identified; record the gap as a risk in the plan.
+3. Stop and ask for the missing identifier only when the target cannot be resolved from the URL, name, or runtime metadata.
 
 ## Documentation
 
@@ -91,10 +89,10 @@ Decide the scope from "Migration Scope" above. For **whole-package** scope, buil
 ### 1. Resolve The Target
 
 1. Parse the input: a URL → host, route, section/page hints, record Ids, page/designer UIds; a name → possible section caption/code, entity/page/package/app name, or schema prefix. Whole-package → the set of sections from the step-0 inventory.
-2. Resolve the environment: `list-environments`, match the URL host; if no match, continue repository-only and record the gap.
+2. Resolve the environment: `list-environments`, match the URL host; if no match, record the gap and request an environment (runtime discovery needs one).
 3. Resolve the target inventory: section schema + code, edit pages, mini pages, details/related schemas, entity schema, the Classic parent/template chain per page, existing Freedom pages for the same entity/app, package/app ownership, and whether the owning package is editable or needs a new/replacing package.
 
-### 2. Discover Runtime And Source Metadata
+### 2. Discover Runtime Metadata
 
 Read-only operations first.
 
@@ -103,7 +101,7 @@ Read-only operations first.
 > 2. **Resolve a tool's argument shape with `get-tool-contract` BEFORE calling it — never invent a payload.** This prevents the whole class of wasted round-trips (wrong arg names, object-vs-JSON-string, inline-body vs `body-file`, a tool on a different MCP server).
 > Arg-facts: `get-classic-page-sources` takes **`schema-name`** (+ optional `entity`, `output-file`) and writes the whole manifest to disk — the one-call path in step 4.0; `list-entity-client-schemas` takes **`entity-name`** and returns `sections` + `editPages` (each with `kind: classic|freedom`, per-type `typeColumnValue`, and `miniPageSchema`). Do **NOT** offload the fetch to a general-purpose sub-agent — it just duplicates this context.
 
-Runtime discovery, when available:
+Runtime discovery:
 
 - `list-app-sections`, `list-pages` + `get-page` (existing Freedom pages), `get-client-unit-schema` (Classic client-unit schemas).
 - `list-entity-client-schemas` (entity → its Classic sections, edit pages incl. per-type/typed cards, and add mini pages, each classified `classic`/`freedom`) — the entity-first, one-call way to resolve an entity's page-role graph. Use it here for the TARGET entity, and per CHILD entity in step 4.2.
@@ -111,14 +109,12 @@ Runtime discovery, when available:
 - `get-schema` / `get-sql-schema` for referenced C#/SQL; package/app tools (`list-packages`, `list-apps`, `get-app-info`) for ownership/lock/editability; `get-component-info` / `list-page-templates` for Freedom capabilities.
 - For every Classic page/detail, resolve the parent schema chain and the effective template structure before choosing a Freedom target template.
 
-Repository discovery, when available: `rg` for schema names/captions/entities/section codes/messages; read `*Section`/`*Page`/`*Detail`/`*MiniPage`, mixins, replacing schemas, data bindings, descriptors; inspect project files/manifests/dependencies to classify the package (source / locked / vendor-base / editable); read parent schemas and nearby Freedom schemas + repo instructions before proposing patterns.
-
 ### 3. Decide Package Placement
 
 Decide *where* Freedom artifacts can be created before choosing templates. Follow `./references/classic-to-freedom-mapping.md` (Package Placement Mapping) for the decision table and the evidence to collect.
 
-1. Identify the Classic owning package/app: name, UId, maintainer, installed app, dependencies, repo presence, lock/read-only state; whether existing Freedom pages for the entity already live in an editable app/package.
-2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, missing locally, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable and touching it risks a shared/base package).
+1. Identify the Classic owning package/app: name, UId, maintainer, installed app, dependencies, lock/read-only state; whether existing Freedom pages for the entity already live in an editable app/package.
+2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable and touching it risks a shared/base package).
 3. Record evidence + decision in the plan. If the user specified a strategy, still verify it is technically possible and call out conflicts. Whole-package → decide once and reuse (a vendor/locked owning package ⇒ new package/app for the app's own sections + replacing deltas for base sections it extends).
 
 ### 4. Reconstruct The Effective Classic Page (engine)
@@ -129,7 +125,7 @@ Decide *where* Freedom artifacts can be created before choosing templates. Follo
 `clio-run { "command": "get-classic-page-sources", "args": { "schema-name": "<PageSchema>", "output-file": "<scratch>/manifest.json" } }` does 4.1–4.2 server-side: it enumerates the same-named schema chain (base→top), loads every body, walks the parent-template seed, and gathers `entity`/`entityColumns`/`columnTitles`/`resources`/`detailSchemas`/`section`/`childPageSchemas` — then writes `manifest.json` to disk. The bodies live in that file, **never in the response** (you get back only the path + counts), so multi-KB schema bodies never pass through you and there is no transcription slip to corrupt the fold. Point `--output-file` at your scratch dir, never the repo (4.2's temp policy). **It does NOT gather the agent-supplied fields** — after the file is written, add `clientEditableSchemas`, `template`, `targetPackage`, and `planMeta` (4.2 / step 6) before you run the engine (4.3). Resolve the arg shape with `get-tool-contract` first. This is the ONLY manifest-assembly command and there is no granular per-layer fetch tool — if the bundle cannot run (older clio, or it errors on an edge-case page), fall back to reconstructing the bodies by hand (4.1) from the surviving reads.
 
 **4.1 — Acquire the schema bodies, base→top, INCLUDING the parent-template chain (the F2 seed is mandatory).**
-*(4.0 does all of this in one call — do 4.1 by hand only when the bundle cannot run.)* Read each layer body from the surviving reads — `get-client-unit-schema` (the top replacing schema's own body) plus `download-configuration-by-environment` / the repo sources / the designer for the rest of the chain (per `./references/classic-to-freedom-mapping.md`). Then follow the page's `parentName` up the platform template chain (e.g. `Applicant1Page` → `BaseModulePageV2` → `BasePageV2` → `BaseEntityPage`) and fetch those base-template schemas too. The base template defines the base containers (`LeftModulesContainer`, `Tabs`, `ProfileContainer`), the base actions (the `ProcessButton` = Run process), and the ESN/Feed tab. **The seed MUST be the real fetched bodies pasted verbatim — NOT a hand-authored skeleton.** A skeleton listing only container names clears the parent check yet silently drops base actions and the true container nesting (the engine detects this as `seedQuality.looksSkeletal` and blocks — see 4.3). If you truly cannot fetch a base body, say so and stop; do not fabricate one. (Tools unavailable → enumerate + read each body via `get-client-unit-schema` / `download-configuration-by-environment` / the designer, per `./references/classic-to-freedom-mapping.md`.)
+*(4.0 does all of this in one call — do 4.1 by hand only when the bundle cannot run.)* Read each layer body from the surviving reads — `get-client-unit-schema` (the top replacing schema's own body) plus `download-configuration-by-environment` / the designer for the rest of the chain (per `./references/classic-to-freedom-mapping.md`). Then follow the page's `parentName` up the platform template chain (e.g. `Applicant1Page` → `BaseModulePageV2` → `BasePageV2` → `BaseEntityPage`) and fetch those base-template schemas too. The base template defines the base containers (`LeftModulesContainer`, `Tabs`, `ProfileContainer`), the base actions (the `ProcessButton` = Run process), and the ESN/Feed tab. **The seed MUST be the real fetched bodies pasted verbatim — NOT a hand-authored skeleton.** A skeleton listing only container names clears the parent check yet silently drops base actions and the true container nesting (the engine detects this as `seedQuality.looksSkeletal` and blocks — see 4.3). If you truly cannot fetch a base body, say so and stop; do not fabricate one. (Tools unavailable → enumerate + read each body via `get-client-unit-schema` / `download-configuration-by-environment` / the designer, per `./references/classic-to-freedom-mapping.md`.)
 
 **4.2 — Build the manifest and supply the resolution inputs.**
 *(Ran 4.0? The bundle already wrote every field below except the agent-supplied ones — you only ADD `clientEditableSchemas` / `template` / `targetPackage` / `planMeta`. Building the whole manifest by hand instead:)* Write `{ "entity", "entityColumns", "schemas":[{pkg,body}], "seed":[{pkg,body}], "clientEditableSchemas":[…], "resources":{…}, "columnTitles":{…}, "detailSchemas":{…}, "section":[…], "childPageSchemas":{…}, "template", "targetPackage", "planMeta":{…} }` — paste each fetched layer body inline. (`planMeta` = the plan's Overview/Main-scope values; see step 6.) **Write the manifest and the fetched Classic bodies to a temporary directory OUTSIDE the migration repository's working tree** (your agent's scratch/temp area, or the OS temp dir — never inside the repo), and pass that path to `migrate.mjs`. They carry stand-sourced customer captions/values, so keeping them outside the repo means there is nothing to `.gitignore` and nothing that can be accidentally committed. **Delete that temp directory once the migration is complete** (step 8) — the raw inputs have no further use. (Only the OUTPUT is versioned in the project's migration folder: the `--out plan.md` file plus the doc set `plan.md`/`worklog.md`/….) Supply these so the spec shows real names, not codes, and both gates can clear:
@@ -208,9 +204,9 @@ The default strategy is a **parallel Freedom analog**: do not remove or disable 
 
 ### 8. Validate
 
-Validate narrowest-reliable-first, then broaden: page schema validation → repository/package build → unit tests for helper logic → **render the built page in the browser** (schema validation + a save `success` do NOT catch runtime/render failures) → E2E for user-visible flows. Do this per page before anything depends on it, not just at the end.
+Validate narrowest-reliable-first, then broaden: page schema validation → package build → unit tests for helper logic → **render the built page in the browser** (schema validation + a save `success` do NOT catch runtime/render failures) → E2E for user-visible flows. Do this per page before anything depends on it, not just at the end.
 
-Report what passed, what could not run, and what stays risky (missing runtime, repository, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
+Report what passed, what could not run, and what stays risky (missing runtime, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
 
 **End every task with a Plan-vs-Done table (mandatory) — this is how swallowed parts become visible.** One row per PLAN item — each Main-scope page, each Layout field/island/tab/group, each detail / standard feature (Approvals, Attachments, Activities, Communication options…), each ⚠ Confirm item, each business rule, and each action (Run process, Print) — with **Status** (`Done` / `Partial` / `Not done` / `Deferred`) and a one-line **reason/evidence**. Anything not `Done` needs its reason. Present it in chat at the end and mirror it in `worklog.md`. Do NOT summarise "all done" in prose — the table is the report, so a dropped field/feature/handler shows as a `Not done`/`Partial` row instead of vanishing silently.
 
