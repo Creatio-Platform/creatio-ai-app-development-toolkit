@@ -10,6 +10,19 @@ SKILL = ROOT / "skills/creatio-branding-orchestrator/SKILL.md"
 # them with clio's own tests. What stays here is only what that guidance cannot carry, and these
 # assertions pin exactly that. Markers that moved out are deliberately NOT pinned here; asserting
 # them again would recreate the duplication this step was trimmed to remove.
+#
+# CAPABILITY_PHRASE is the one string this repo does not own: it is prose in clio's build-theme tool
+# description, read back through get-tool-contract. This test pins only our half. The other half is
+# pinned in the clio repo, and a reword there fails those tests rather than reaching an agent:
+#   clio.tests/Command/McpServer/BuildThemeToolTests.cs
+#     -> BuildThemeTool_Should_DeclareBuildSafetyFlags_WhenInspectingMcpServerToolAttribute
+#        (the [Description] attribute)
+#   clio.mcp.e2e/BuildThemeToolE2ETests.cs
+#     -> BuildTheme_Should_Be_Discoverable_And_Build
+#        (the get-tool-contract PROJECTION — the surface the skill actually reads)
+# Changing the phrase means changing it in all three places. A drift that somehow lands anyway is
+# fail-safe by construction: the skill treats an absent phrase as "cannot confirm" and refuses to
+# build an unpublished family, never as permission to proceed.
 CAPABILITY_PHRASE = "checked against Google Fonts"
 
 
@@ -62,6 +75,28 @@ class BrandingFontsDocTests(unittest.TestCase):
         self.assertIn(
             "never block an ordinary change between published families on clio's version", step
         )
+
+    def test_a_missing_capability_phrase_is_fail_safe(self):
+        # The gate keys on prose owned by another repo, so it can go missing on a perfectly capable
+        # clio. Absence must therefore refuse the build rather than being read as permission to
+        # proceed — that direction is the whole reason the gate is safe to key on a string at all.
+        step = fonts_step()
+        self.assertIn("do not build this family", step)
+        self.assertIn("offer a clio upgrade or a published family instead", step)
+
+    def test_a_missing_capability_phrase_is_not_diagnosed_as_an_old_clio(self):
+        # Absence does not distinguish an old clio from a reworded description on a current one, so
+        # the step must say it cannot tell rather than assert a cause and send the user to upgrade
+        # something already up to date.
+        step = fonts_step()
+        self.assertIn("you cannot tell an old clio from a reworded contract on a current one", step)
+        self.assertIn("rather than asserting their clio is old", step)
+
+    def test_the_capability_match_tolerates_cosmetic_drift(self):
+        # Casing and line-wrap differences in clio's description are not capability changes; only a
+        # genuine reword is, and that fails clio's own tests first.
+        step = fonts_step()
+        self.assertIn("match that case-insensitively and ignore how the text wraps", step)
 
     def test_the_normalized_name_probe_trap_is_stated(self):
         # clio normalizes before building, so a padded name builds fine but 404s on a raw probe. The

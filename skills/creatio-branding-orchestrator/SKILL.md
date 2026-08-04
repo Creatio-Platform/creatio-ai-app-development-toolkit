@@ -182,14 +182,17 @@ gate, and the single pre-build confirmation does not stand in for it. Do not dec
 user. If your own probe answers neither 200 nor 404, say so and ask whether the family is a
 Google font or a locally installed one before building — never guess on the user's behalf.
 
-**Check clio can suppress the import before building such a family.** Older clio emits an
-`@import` for every family, which would download a look-alike that shadows the user's installed
-font. Read `get-tool-contract` for `build-theme` (that one tool name, not the full index) and
-require its description to say font families are **checked against Google Fonts**. clio pins that
-phrase with tests, so a reword breaks a clio test rather than disarming this check; if it is
-absent, do not build the family — offer a clio upgrade or a published family instead. This check
-belongs to this branch only: never block an ordinary change between published families on clio's
-version.
+**Check clio can suppress the import before building such a family.** Older clio emits an `@import`
+for every family, which would download a look-alike that shadows the user's installed font. Read
+`get-tool-contract` for `build-theme` (that one tool name, not the full index) and require its
+description to say font families are **checked against Google Fonts** — match that
+case-insensitively and ignore how the text wraps, so casing or line-break drift never reads as an
+old clio. clio pins that phrase with tests on both the tool attribute and this projection, so a
+reword breaks a clio test rather than silently disarming this check. If it is absent you cannot
+tell an old clio from a reworded contract on a current one: say that rather than asserting their
+clio is old, and take the safe branch either way — do not build this family, offer a clio upgrade
+or a published family instead. This check belongs to this branch only: never block an ordinary
+change between published families on clio's version.
 
 **Act on a warning that disagrees with what you told the user.** Correlate by family name, then:
 
