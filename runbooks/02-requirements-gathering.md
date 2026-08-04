@@ -198,8 +198,8 @@ Use this exact visible skeleton for the Business Plan:
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
 - `## 7. Analytics`
-  - `### 7.1 Section analytics` — dashboards shown on a section, one block per dashboard
-  - `### 7.2 Workplace analytics` — app/workplace-level dashboards
+  - `### 7.1 Section analytics` — grouped by section: `#### <Section> section dashboards`, then one block per dashboard beneath each
+  - `### 7.2 Workplace analytics` — app/workplace-level dashboards on the app home page
 - `## 8. Edge Cases and Exceptions`
 
 `## 1. Business Outcome` must include:
@@ -287,8 +287,8 @@ If a technical carrier is needed for internal reasoning or pre-analysis, keep it
 
 Organize `## 7. Analytics` into two required subsections:
 
-- `### 7.1 Section analytics` — dashboards surfaced on a section, immediately useful to the role that works with that section. There may be several per section (different data slices or different roles). Default to 2-3 dashboards per section, each sized to fit roughly one screen; if the developer asks for more, that limit does not apply. Include one block per dashboard.
-- `### 7.2 Workplace analytics` — more general, app/workplace-level dashboards: overall indicators describing how the whole app is working, useful to the roles that work with the app. Include one block per dashboard.
+- `### 7.1 Section analytics` — dashboards surfaced on a section, immediately useful to the role that works with that section. There may be several per section (different data slices or different roles). Default to 2-3 dashboards per section, each sized to fit roughly one screen; if the developer asks for more, that limit does not apply. **Group the dashboards by section**: under `### 7.1` add one `#### <Section> section dashboards` heading per section that gets analytics (e.g. `#### Appointments section dashboards`), and list that section's dashboard blocks beneath it. The grouping makes it explicit which section each dashboard is added to.
+- `### 7.2 Workplace analytics` — more general, app/workplace-level dashboards: overall indicators describing how the whole app is working, useful to the roles that work with the app. These are hosted on the app's **home page** (a `BaseHomePage` bound to the app's workplace), not on any one section. Include one block per dashboard.
 
 Describe each dashboard with these labels (colon included) — the validator checks `dashboard:` and `widgets:` verbatim:
 
@@ -296,6 +296,8 @@ Describe each dashboard with these labels (colon included) — the validator che
 - `serves role:` — the role from `## 2. Roles and Permissions` this dashboard is for, e.g. `serves role: Sales manager`
 - `scope:` — the data slice / question it answers, e.g. `scope: open orders by stage this quarter`
 - `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
+
+In `### 7.1`, each dashboard sits under the `#### <Section> section dashboards` heading of the section whose list page hosts it, so the section binding is unambiguous. Do not list section-analytics dashboards as a flat list without their section grouping.
 
 Widgets may draw on any business object visible on the site — the app's own objects from `## 3. Object Model` and standard platform objects (for example Activity, Contact, Account) — whichever a domain expert would use to answer the dashboard's question. Keep the analytics business-facing: name metrics and charts by what they measure, not by widget schema or platform mechanics.
 
@@ -311,6 +313,7 @@ Before finalizing the BA draft, verify at minimum:
 - sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
 - `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, and at least one dashboard block with its `dashboard:` title and `widgets:` line — it is never left empty or `TBD`
+- `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list without the section grouping)
 - each dashboard `serves role:` names a role that exists in `## 2. Roles and Permissions`
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:

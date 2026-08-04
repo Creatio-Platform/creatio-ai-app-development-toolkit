@@ -63,6 +63,8 @@ Tasks move through New, Active, and Done.
 
 ### 7.1 Section analytics
 
+#### Tasks section dashboards
+
 - dashboard: Task overview
   - serves role: Team member
   - scope: open tasks by status
@@ -164,6 +166,14 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("widgets:", str(ctx.exception))
+
+    def test_flat_section_analytics_without_section_grouping_is_rejected(self):
+        # 7.1 must group dashboards by section under a `#### <Section> section
+        # dashboards` heading; a flat list (grouping heading removed) must fail.
+        doc = VALID_DOC.replace("#### Tasks section dashboards\n\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("section dashboards", str(ctx.exception))
 
 
 class TestValidateRequirementsDocTables(unittest.TestCase):

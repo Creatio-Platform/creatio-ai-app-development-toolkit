@@ -70,6 +70,10 @@ ANALYTICS_SECTION_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.1\s+Section 
 ANALYTICS_WORKPLACE_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.2\s+Workplace analytics\b")
 DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:")
 DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:")
+# Section analytics (7.1) must be grouped by section under a
+# `#### <Section> section dashboards` heading, so it is explicit which section
+# hosts each dashboard — never a flat list. Match the grouping heading.
+SECTION_DASHBOARD_GROUP_RE = re.compile(r"(?im)^\s*#{3,6}\s+.+\bsection dashboards\b")
 
 
 def extract_section(text, start_heading, end_heading=None):
@@ -189,4 +193,6 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: section 7 Analytics must describe at least one 'dashboard:' (the section is mandatory and must be populated, not left empty)")
     if not DASHBOARD_WIDGETS_LABEL_RE.search(section7_analytics_text):
         raise WorkflowError("Requirements doc failed: each dashboard in section 7 Analytics must list its 'widgets:'")
+    if not SECTION_DASHBOARD_GROUP_RE.search(section7_analytics_text):
+        raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must group dashboards by section under a '#### <Section> section dashboards' heading (so it is explicit which section hosts each dashboard), not a flat list")
 

@@ -72,10 +72,24 @@ For each dashboard in the plan:
   `DashboardsClientUnitSchemaUId` = the ROOT host-page schema UId) from that list page per
   `dashboard-creation`. Lay out and size the widgets per `dashboard-and-home-page-layout`, and bind
   every data-bound widget to the hidden `DashboardDS` source per `dashboard-design`.
-- **Workplace analytics (`### 7.2`)** — host app-level dashboards on the shared home dashboards page
-  `FreedomDashboards` (leave `DashboardsEntitySchemaName` empty). If the app has no workplace of its
-  own yet, create a **"My application"** workplace and set its home page per `home-page`
-  (`BaseHomePage` + `SysWorkplace.HomePageUId`); otherwise reuse the existing workplace.
+- **Workplace analytics (`### 7.2`)** — host app-level dashboards on the app's **own home page**, per
+  `home-page`. Create a `BaseHomePage` page (capture its `schemaUId`), add the `### 7.2` widgets to
+  it, and lay them out per `dashboard-and-home-page-layout` (a home page hosts its widgets directly —
+  it has no `DashboardDS` page-data filter, so skip that binding). Then make it the app's home page:
+  find the workplace where the app's sections are registered (`SysModuleInWorkplace`; typically the
+  app's own workplace, e.g. "My applications"/"Studio"), set `SysWorkplace.HomePageUId` to the new
+  page's `schemaUId` via `odata-update`, and ship it as a package data binding with
+  `create-data-binding-db` (schema `SysWorkplace`) so the binding survives transfer; read
+  `SysWorkplace.HomePageUId` back to confirm. If the app has no workplace of its own yet, create a
+  **"My application"** workplace and bind the home page to it — resolve the workplace-creation tool
+  through `get-tool-contract` (that capability is tracked under ENG-88474; it is picked up
+  automatically once available). Until a workplace-creation tool exists, if no suitable workplace is
+  found, **stop and ask the developer to create the workplace in the Creatio UI**, then bind — clio
+  cannot create a workplace (`SysWorkplace` + `SysModuleInWorkplace` + `SysAdminUnitInWorkplace` span
+  tables set up in the UI).
+  **Do NOT** place app-level analytics on the shared platform home page `FreedomDashboards`: that page
+  is the default Home shown for every app on the site, so dashboards added there leak into every app's
+  Home instead of being scoped to this app's workplace.
 - **Access** — dashboards are created with the default `All Employees` read grant (access for
   everyone). Ship those grants with the package per `dashboard-rights` so they survive a package
   transfer (grants are data, not schema, and are otherwise lost on transfer).
@@ -151,8 +165,10 @@ diagnostic — no change is required here when the clio-side wording lands.
 ## Completion Criteria
 
 ✅ The application and all planned sections exist and are verified against `list-app-sections`
-✅ Every dashboard in the plan's `## 7. Analytics` (section-level and workplace-level) exists on its
-   host page, with its widgets laid out and (for entity-scoped hosts) bound to `DashboardDS`
+✅ Every section dashboard (`### 7.1`) exists on its section list page's `crt.Dashboards` element with
+   its widgets laid out and bound to `DashboardDS`; every workplace dashboard (`### 7.2`) lives on the
+   app's `BaseHomePage`, which is bound to the app's workplace via `SysWorkplace.HomePageUId`
+   (confirmed by reading it back) — never dumped onto the shared `FreedomDashboards`
 ✅ No section was created by varying its caption, and no `compile-creatio` was run speculatively
 ✅ Execution, page, and acceptance evidence is reported inline in the conversation
 ✅ When support mode is on and the run returns a final response, include the canonical final support
