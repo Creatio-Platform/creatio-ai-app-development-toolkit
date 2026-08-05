@@ -220,6 +220,7 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
     c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
     c.childReasons = res.gate?.reasons || [];
     c.childStructIncomplete = !!(res.structure && !res.structure.complete);
+    c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
     c.treeCyclic = !!res.treeCyclic;
   }
 }
@@ -242,6 +243,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.spec = res.designSpec; t.mappedEntity = res.entity; t.resolved = "fold";
     t.blocked = !!res.gate?.blocked; t.reasons = res.gate?.reasons || [];
     t.structIncomplete = !!(res.structure && !res.structure.complete); t.treeCyclic = !!res.treeCyclic;
+    t.coverage = res.coverage || null;        // aggregated into the parent's coverage gate
   }
 }
 
@@ -270,6 +272,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
   miniPage.spec = res.designSpec; miniPage.blocked = !!res.gate?.blocked;
   miniPage.reasons = res.gate?.reasons || [];
   miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
+  miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
   return miniPage;
 }
 
@@ -329,6 +332,196 @@ function validateStructure({ manifest, changeSet, childPages, typedPages, sectio
   ];
   return { complete: issues.length === 0, issues };
 }
+
+// ---- MEMBER LEDGER + ⛔ COVERAGE GATE --------------------------------------------------------------------
+// Implements the completeness test the sibling classic-ui-expert skill specifies in `03-member-ledger.md`:
+// "every member is attributed to exactly one unit, or to a recorded zero — any member without a unit is a unit
+// you have not found". Here a "unit" is a DISPOSITION:
+//
+//   mapped      — the ChangeSet carries a concrete Freedom artifact for it (field, rule, detail, feature, widget)
+//   decision    — it reached needsDecision[], so it is on the agent's worklist
+//   context     — inherited base-template content, excluded from the payload BY DESIGN (counted, never dropped)
+//   unaccounted — nothing produced it. This is what the gate blocks on.
+//
+// The point of `context` being a real disposition rather than an omission: a template-owned member a CLIENT
+// schema touched is NOT context (that is the `base-field-override` distinction), so the ledger keys on
+// `fromTemplate`, which the engine derives from `schemaTouched`, not on template ownership alone.
+const MEMBER_KINDS = ["diff-op", "method", "attribute", "message", "mixin", "module-dep", "resource", "detail"];
+// modules that carry no page behaviour of their own (framework root / pure styling) — mirrors the mapper's own
+// list; a module wrongly called inert is a silently dropped member, so it stays deliberately short.
+const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
+// what a method contributes to its ledger row — kept out of the source table so the table stays scannable
+const methodLedgerDetail = (m) =>
+  m.facts ? { lines: m.facts.lines, kinds: m.facts.kinds, trivial: m.facts.callParentOnly || m.facts.isEmpty } : null;
+
+// A member's disposition, decided by what the pipeline actually produced for it.
+function disposition(name, { fromTemplate, mapped, decided }) {
+  if (mapped) return "mapped";
+  if (decided) return "decision";
+  if (fromTemplate) return "context";
+  return "unaccounted";
+}
+
+// The nearest ANCESTOR of a layout item that the pipeline accounted for, or null.
+// A unit is often multi-member (04-units.md): the mapper deliberately emits ONE `unmapped-component` decision per
+// dropped SUBTREE ROOT — its text says "and its sub-items" — so a child of an accounted block is attributed to
+// that block's unit, not a gap of its own. Without this the ledger reports a block's leaves as unaccounted while
+// the worklist has already covered the whole block: on a real Opportunity page that was the radio options inside
+// a client `IsPrimary` control, flagged as gaps although their parent carried the decision.
+function accountedAncestor(name, parentOf, isAccounted) {
+  const seen = new Set([name]);
+  let cur = parentOf.get(name);
+  while (cur && !seen.has(cur)) {          // `seen` guards a malformed parent cycle in an untrusted body
+    if (isAccounted(cur)) return cur;
+    seen.add(cur);
+    cur = parentOf.get(cur);
+  }
+  return null;
+}
+
+// Everything the ChangeSet demonstrably produced an artifact for, as a name set — the `mapped` evidence.
+// The primary source is the mapper's OWN `accountedFor` list (it is what `mapUnmappedDrop` already trusts to
+// decide what silently vanished). The extra sweeps below cover names the mapper keys differently from the diff
+// item — a rule's target column, a detail's schema name, a resource key.
+function mappedNames(changeSet) {
+  const s = new Set(changeSet.accountedFor || []);
+  const addAll = (list, ...keys) => {
+    for (const entry of list || []) for (const k of keys) { const v = entry?.[k]; if (v) s.add(String(v)); }
+  };
+  for (const op of changeSet.viewConfigDiff || []) {
+    if (op?.name) s.add(op.name);
+    if (op?.values?.bindTo) s.add(String(op.values.bindTo).replace(/^\$/, ""));
+  }
+  addAll(changeSet.pageBusinessRules, "element");
+  addAll(changeSet.entityBusinessRules, "targetAttribute");
+  addAll(changeSet.details, "detailSchema", "classic");
+  addAll(changeSet.standardFeatures, "classic", "detailSchema");
+  addAll(changeSet.widgets, "classic");
+  addAll(changeSet.chromeWidgets, "classic");
+  for (const k of Object.keys(changeSet.resources || {})) s.add(k);
+  return s;
+}
+
+// Kinds whose `item` is a deliberately AGGREGATED comma list, so each name in it really is decided. Splitting
+// EVERY item on commas over-clears badly: `attribute-dependency` items read `"Amount ← Quantity, Price"`, and
+// `process-launch`/`feature-toggle` items are joined name lists — so a bare `Price` (or any member whose name
+// happens to match a leaked token) would be marked decided without anyone deciding it. On a real page, dependency
+// column names and field names overlap heavily, so this silently cleared genuine gaps.
+const AGGREGATED_DECISION_KINDS = new Set(["module-dep"]);
+
+// The set of member names a decision covers. Plain `split(",")` + trim rather than a `\s*,\s*` pattern: the
+// whitespace-padded separator backtracks super-linearly on a long run of spaces, and `item` carries stand-derived
+// text — the same ReDoS discipline the process-launch scan already follows.
+function decidedNames(needsDecision) {
+  const decided = new Set();
+  for (const d of needsDecision || []) {
+    if (d.item == null) continue;
+    const item = String(d.item);
+    if (!AGGREGATED_DECISION_KINDS.has(d.kind)) { decided.add(item.trim()); continue; }
+    for (const part of item.split(",")) {
+      const name = part.trim();
+      if (name) decided.add(name);
+    }
+  }
+  return decided;
+}
+
+export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) {
+  const decided = decidedNames(changeSet.needsDecision);
+  const mapped = mappedNames(changeSet);
+  // The agent's own dispositions, supplied like `manifest.signals`: `{ "<member>": { "resolved": true,
+  // "disposition": "ported"|"dropped"|"blocked"|"n/a", "note": "…" } }`. This is how a member that the engine
+  // can only flag gets CLOSED — the same "verified answer beats a guess" contract the signals gate uses.
+  const declared = plainObject(manifest.memberDispositions);
+  const rows = [];
+  // Members are keyed `<kind>:<name>`, not by bare name: a Classic diff item is usually named for the column it
+  // binds, so attribute `Amount` and diff-op `Amount` coexist in one ledger. A bare-name key would let ONE
+  // disposition entry clear both — over-clearing across kinds is the same silent pass the gate exists to stop.
+  // A bare-name key is still accepted as a fallback so a disposition can be written either way.
+  // parent links + "did the pipeline account for this name at all", for the ancestor walk below
+  const parentOf = new Map((eff.items || []).filter((i) => i.parent).map((i) => [i.name, i.parent]));
+  const isAccounted = (n) => mapped.has(n) || decided.has(n);
+  const add = (kind, name, opts) => {
+    const id = `${kind}:${name}`;
+    const dec = plainObject(declared[id] ?? declared[name]);
+    const agentResolved = dec.resolved === true && typeof dec.disposition === "string";
+    let disp = agentResolved ? "resolved" : disposition(name, opts);
+    // Only a LAYOUT member can inherit its attribution — a method/attribute/message has no parent chain.
+    let via = null;
+    if (disp === "unaccounted" && kind === "diff-op") {
+      via = accountedAncestor(name, parentOf, isAccounted);
+      if (via) disp = "decision";
+    }
+    rows.push({
+      kind, name, id,
+      disposition: disp,
+      agentDisposition: agentResolved ? dec.disposition : null,
+      // recorded, never silent: the ledger says WHICH unit absorbed this member, so the attribution is auditable
+      viaAncestor: via,
+      note: typeof dec.note === "string" ? dec.note : null,
+      provenance: opts.provenance || null,
+      fromTemplate: !!opts.fromTemplate,
+      detail: opts.detail || null,
+    });
+  };
+
+  // One declarative row per member KIND: where its members come from, how each is named, and what counts as
+  // `mapped` for it. A table rather than eight near-identical loops so adding a kind is one entry — and so the
+  // "did anyone account for this?" logic stays in ONE readable place.
+  const SOURCES = [
+    { kind: "diff-op", list: eff.items, name: (i) => i.name, prov: (i) => i.provenance,
+      tpl: (i) => i.templateOwned, mapped: (i) => mapped.has(i.name) || (!!i.bindTo && mapped.has(i.bindTo)) },
+    { kind: "method", list: eff.methods, name: (m) => m.name, prov: (m) => m.stack,
+      tpl: (m) => m.fromTemplate, mapped: () => false, detail: methodLedgerDetail },
+    { kind: "attribute", list: eff.attributes, name: (a) => a.name, prov: (a) => a.provenance,
+      tpl: (a) => a.fromTemplate, mapped: (a) => mapped.has(a.name),
+      // an `attribute-dependency` decision is keyed "<attr> ← <cols>", so match on that prefix too
+      extraDecided: (a) => [...decided].some((d) => d.startsWith(a.name + " ")),
+      detail: (a) => ({ lookupFilters: a.lookupFilters, dependencies: a.dependencies.length, fnKeys: a.fnKeys }) },
+    { kind: "message", list: eff.messages, name: (m) => m.name, prov: (m) => m.provenance,
+      tpl: (m) => m.fromTemplate, mapped: () => false, detail: (m) => ({ mode: m.mode, direction: m.direction }) },
+    { kind: "mixin", list: eff.mixins, name: (m) => m.name, prov: (m) => m.provenance,
+      tpl: (m) => m.fromTemplate, mapped: () => false, detail: (m) => ({ module: m.module }) },
+    // the framework root / pure styling carries no page behaviour — a recorded `context` zero, not a gap
+    { kind: "module-dep", list: eff.moduleDeps, name: (d) => d.name, prov: (d) => d.provenance,
+      tpl: (d) => d.fromTemplate || INERT_MODULE_RX.test(d.name), mapped: () => false },
+    { kind: "detail", list: eff.details, name: (d) => d.key, prov: (d) => d.provenance,
+      tpl: (d) => d.fromTemplate, mapped: (d) => mapped.has(d.key) || mapped.has(d.schemaName) },
+  ];
+  for (const src of SOURCES) {
+    for (const entry of src.list || []) {
+      const name = src.name(entry);
+      add(src.kind, name, {
+        fromTemplate: src.tpl(entry),
+        mapped: src.mapped(entry),
+        decided: decided.has(name) || (src.extraDecided ? src.extraDecided(entry) : false),
+        provenance: src.prov(entry),
+        detail: src.detail ? src.detail(entry) : null,
+      });
+    }
+  }
+
+  const byDisposition = {};
+  for (const r of rows) byDisposition[r.disposition] = (byDisposition[r.disposition] || 0) + 1;
+  const unaccounted = rows.filter((r) => r.disposition === "unaccounted");
+  // Counted zeros are ledger entries too (03-member-ledger.md): a kind with no members is recorded as verified
+  // empty rather than omitted, so "the plan says nothing about messages" can never mean "nobody looked".
+  const zeros = MEMBER_KINDS.filter((k) => !rows.some((r) => r.kind === k));
+  const issues = unaccounted.map((r) =>
+    `${r.kind} '${r.name}' is UNACCOUNTED — the engine produced no Freedom artifact and no decision for it. Either it maps (then the mapping must appear in the ChangeSet) or it needs a recorded answer: add manifest.memberDispositions["${r.id}"] = { "resolved": true, "disposition": "ported"|"dropped"|"blocked"|"n/a", "note": "<why>" }. Do NOT leave it silent.`);
+  // SUBTREE AGGREGATION — the migration is a page TREE (Contract rule 4, step 7.3), and every other gate
+  // aggregates it: `gate` blocks on `childBlocked`/`blockedTyped`/`miniPage.blocked`, `structure` on each
+  // sub-page's own structure issues. Without the same here, a `Rebuild (child)` page whose methods and attributes
+  // are entirely unaccounted produced a parent run with coverage.complete:true and exit 0 — the parent asserting
+  // a coverage its own children do not have, which is precisely the inconsistency this change exists to remove.
+  for (const sub of childCoverage) {
+    if (!sub?.coverage || sub.coverage.complete) continue;
+    issues.push(`${sub.role} '${sub.label}': ${sub.coverage.issues.length} of its OWN member(s) are unaccounted — a sub-page's spec is not a valid mapping while its members are unaccounted; fix it, then re-run the parent. First: ${sub.coverage.issues[0]}`);
+  }
+  return { complete: issues.length === 0, issues, rows, byDisposition, zeros, total: rows.length };
+}
+
+const plainObject = (o) => (o && typeof o === "object" && !Array.isArray(o) ? o : {});
 
 // Pure core — no process/argv, so it is unit-testable and the golden runner can call it directly.
 export function runMigration(manifest, opts = {}) {
@@ -501,6 +694,16 @@ export function runMigration(manifest, opts = {}) {
   // exit, and the renderer prints it into the plan — the agent literally can't present a clean plan without
   // supplying the schemas. This is INPUT completeness (distinct from the correctness `gate` above).
   const structure = validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified });
+  // ⛔ COVERAGE — the MEMBER LEDGER and its gate. Every other category in this engine is gated (seed,
+  // detailSchemas, childPageSchemas, typedPages, addRecordMiniPage, signals, planMeta); imperative logic was the
+  // one category with neither a gate nor a worklist entry, so a page could ship with its methods, its
+  // imperatively filtered lookups, its sandbox contract and its mixins entirely unaccounted for — and both gates
+  // stayed green. This makes "no member silently ignored" a machine check instead of a rule in prose.
+  const coverage = buildCoverage({ eff, changeSet, manifest, childCoverage: [
+    ...childPages.map((c) => ({ role: "child page", label: c.resolvedFrom || c.editPage || c.entity, coverage: c.childCoverage })),
+    ...typedPages.map((t) => ({ role: "typed page", label: t.schema, coverage: t.coverage })),
+    ...(miniPage ? [{ role: "add mini page", label: miniPage.schema, coverage: miniPage.coverage }] : []),
+  ] });
   // treeCyclic — did THIS run (or any nested child/typed/mini in its subtree) hit a cycle? Only acyclic subtrees
   // are safe to memoize (a cyclic node's "already mapped above" status depends on the branch that reached it).
   const treeCyclic =
@@ -513,6 +716,7 @@ export function runMigration(manifest, opts = {}) {
     memoStats,    // internal: { hits, misses } — child/typed/mini fold cache hits across the whole tree
     gate,        // ⛔ blocked:true ⇒ do NOT build; reasons[] lists every non-empty correctness signal
     structure,   // ⛔ complete:false ⇒ plan is structurally incomplete (missing detail/child schemas); issues[]
+    coverage,    // ⛔ complete:false ⇒ a schema MEMBER is unaccounted (no artifact, no decision); rows[] = the ledger
     parseErrors, // non-empty ⇒ a schema body failed to parse: FIX before trusting the ChangeSet
     parseDiagnostics, // AST constructs not statically resolved (advisory; review during battle-testing)
     // RV10 — the Freedom PAYLOAD actually emitted into the ChangeSet/design-spec (F9-filtered: template-owned
@@ -531,6 +735,12 @@ export function runMigration(manifest, opts = {}) {
     effective: {
       fields: eff.fields.length, tabs: eff.tabs.length, details: eff.details.length,
       rules: eff.rules.length, removed: eff.removed.length,
+      // Imperative members, now reported alongside the structural ones. `methods` and `attributes` were both
+      // absent from this block, so a reader of the JSON could not even see HOW MANY there were — which is why
+      // "the plan mentions no attributes" and "the page has no attributes" were indistinguishable.
+      methods: eff.methods.length, attributes: (eff.attributes || []).length,
+      messages: (eff.messages || []).length, mixins: (eff.mixins || []).length,
+      moduleDeps: (eff.moduleDeps || []).length,
       warnings: eff.warnings,                 // op hit a missing item ⇒ schema order (F1) / seed (F2) wrong
       unresolvedParents: eff.unresolvedParents, // non-empty ⇒ base template not fully seeded (F2)
       seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton (#19)
@@ -622,7 +832,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
   const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0));
-  const notReady = gateBad || structBad || planIncomplete;
+  // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
+  // checks: an unaccounted member means the plan claims a coverage it does not have.
+  const coverageBad = result.coverage && !result.coverage.complete;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -639,6 +852,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
+  if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
   if (result.parseDiagnostics?.length)

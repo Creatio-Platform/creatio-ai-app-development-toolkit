@@ -257,6 +257,26 @@ Freedom target differs:
   `methods` (ESQ queries, `on*Changed`, `onEntityInitialized`, save overrides) → migrate as
   Freedom handlers (`crt.HandlerChainService`), converters, or virtual attributes, NOT as
   business rules.
+  - `lookupListConfig.filters` is the IMPERATIVE twin of a FILTRATION rule: the same
+    user-visible behaviour ("this lookup is filtered"), but it needs a filter handler, not
+    `create-entity-business-rules`. Reporting the page as "no lookup filters" because the
+    `businessRules` block has none is the error this distinction exists to prevent.
+  - `dependencies: [{ columns, methodName }]` names the TRIGGER of a method directly — use it
+    instead of reading intent out of the method's name.
+  - An attribute with NO entity column behind it is page UI state (an editability/mode flag, a
+    collection backing a menu). No field insert carries it, so it must be created as a Freedom
+    view-model attribute with its default, and whatever read it re-wired.
+- `messages` (the sandbox contract, with `mode`/`direction`) and `mixins` are members too:
+  a message's counterpart lives in ANOTHER schema, and a mixin's members are defined outside the
+  page body entirely. Neither is visible in the page's own `diff`/`methods`, and neither may be
+  reported as absent — resolve the counterpart, then choose the Freedom shape (handler-mediated
+  request / shared service / ported behaviour).
+- A method written as `name: SomeModule.Method` has no body in this schema at all. The behaviour
+  to port lives in that `define()` dependency; read it there.
+
+The engine enforces all of the above through its `coverage` gate (the member ledger): every
+`diff` op, method, attribute, message, mixin, `define()` dependency and details entry is either
+mapped, on a `⚠` worklist, recorded as base-template context, or the plan is blocked.
 
 Report the two categories separately in the Business Logic Analysis section so declarative
 rules are not silently converted into custom handlers (or vice versa).

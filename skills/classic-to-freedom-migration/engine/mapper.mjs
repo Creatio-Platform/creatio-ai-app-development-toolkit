@@ -306,9 +306,15 @@ export function mapToFreedom(eff, opts = {}) {
   const handlerStubs = _rl.handlerStubs;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
 
+  // ---- imperative MEMBERS the engine used to read for their names at most (attributes) or not at all
+  // (messages / mixins / the full define() dep list) ----
+  mapImperativeMembers(eff, cols).needsDecision.forEach(d => needsDecision.push(d));
+
   // ---- Fix 2: LOUD unmapped-component drop ----
   const _drop = mapUnmappedDrop(eff, accountedFor);
   _drop.needsDecision.forEach(d => needsDecision.push(d));
+  // structure another builder owns (tabs / groups / details / scaffolding) — accounted for, not dropped
+  _drop.structural.forEach(a => accountedFor.add(a));
 
   return {
     entity: eff.entity,
@@ -334,6 +340,14 @@ export function mapToFreedom(eff, opts = {}) {
     referencedModules: eff.referencedModules || [],
     // F9: how many effective elements were platform-template context excluded from the payload.
     baseContextExcluded,
+    // The mapper's OWN record of which classic elements it produced something for. `mapUnmappedDrop` already
+    // relies on it to decide what silently vanished; the member ledger needs the same evidence, and re-deriving
+    // it from `viewConfigDiff` gets it wrong (a tab becomes a structural container under a different name, a
+    // detail is keyed by its schema, not its diff-item name) — which shows up as the ledger crying wolf over
+    // elements that ARE mapped. One source of truth, consumed by both.
+    // explicit comparator, not Array#sort's default: the ledger consumes this list, and a golden test asserts
+    // byte-identical output across two runs of the same manifest.
+    accountedFor: [...accountedFor].sort((a, b) => String(a).localeCompare(String(b))),
   };
 }
 
@@ -870,6 +884,123 @@ function mapCardActions(eff) {
   return { cardActions, needsDecision, accountedFor };
 }
 
+// ---- Imperative MEMBERS: attributes / messages / mixins / module deps -----------------------------------
+// These blocks reach the effective page now (see engine.mjs `mergeNamedFacts`). Each carries behaviour with a
+// documented Freedom target, and each previously produced NOTHING — no ChangeSet entry, no decision, no count.
+// A `lookupListConfig.filters` filter and a declarative FILTRATION rule are the same user-visible behaviour
+// ("this lookup is filtered") reached two ways; only the declarative one was ever mapped, so the imperative one
+// could not even be compared against it.
+//
+// Only CLIENT-authored members produce decisions (`fromTemplate` = inherited base-template context). The full
+// set — context included — still reaches the member ledger, so nothing is dropped for being inherited.
+
+// Modules that carry no page behaviour of their own: the framework root and pure styling. Everything else is a
+// real dependency (constants modules hold the lookup GUIDs a rule compares against, utility modules hold logic)
+// and is surfaced. Kept deliberately SHORT — a module wrongly called inert is a silently dropped member.
+const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
+
+// (a) an imperatively filtered lookup — the imperative twin of a FILTRATION business rule
+function lookupFilterDecision(a) {
+  const keys = a.lookupFilterKeys.length ? ", keys: " + a.lookupFilterKeys.join(", ") : "";
+  const on = a.referenceSchema ? " on " + a.referenceSchema : "";
+  return { kind: "attribute-lookup-filter", item: a.name,
+    reason: `attribute '${a.name}' filters its lookup IMPERATIVELY via lookupListConfig.filters (${a.lookupFilters} filter(s)${keys})${on} — this is NOT a declarative businessRules FILTRATION and does NOT come across as one. Rebuild it as a Freedom lookup filter handler (or an entity business rule when the filter is static); resolve any lookup-record GUID in the filter to its display name on-stand first` };
+}
+
+// (b) `dependencies` — the classic "these columns changed → call this method" wiring. This IS the trigger.
+function dependencyDecision(a, d) {
+  const cols = d.columns.join(", ");
+  const handled = d.methodName ? ` handled by '${d.methodName}'` : "";
+  return { kind: "attribute-dependency", item: `${a.name} ← ${cols || "?"}`,
+    reason: `attribute '${a.name}' declares a dependency on column(s) ${cols || "(unnamed)"}${handled} — in Freedom this is an on-change request handler (or a converter when the value is purely derived). The TRIGGER is this dependency, not the method's name` };
+}
+
+// (d) a VIRTUAL attribute — on the view model with NO entity column behind it and none of the imperative shapes
+// above. It is the page's own UI STATE (an editability/mode flag, a collection backing a menu), read by bindings
+// and rule conditions. The field pipeline never emits it because there is no column to bind, so without this it
+// was the single largest silent drop after the methods themselves.
+function virtualAttributeDecision(a) {
+  const dvt = a.dataValueType == null ? "" : ` (dataValueType ${a.dataValueType})`;
+  const def = a.value == null ? "" : `, default ${JSON.stringify(a.value)}`;
+  const coll = a.isCollection ? ", a COLLECTION" : "";
+  return { kind: "attribute-virtual", item: a.name,
+    reason: `virtual view-model attribute '${a.name}'${dvt}${def}${coll} — declared on the classic view model with NO entity column behind it, so no field insert carries it. It is page UI state (an editability/mode flag, a collection backing a menu or list): create it as a Freedom view-model attribute (with its default) and re-wire whatever read it — a binding, a business rule condition, or a handler. Confirm what reads it before deciding it is unused` };
+}
+
+function messageDecision(m) {
+  const dir = m.direction == null ? "direction unresolved" : String(m.direction);
+  const mode = m.mode == null ? "" : ", " + m.mode;
+  return { kind: "message", item: m.name,
+    reason: `sandbox message '${m.name}' (${dir}${mode}) — cross-surface wiring whose counterpart lives in ANOTHER schema (a detail, a module, a section), OUTSIDE this page's migration unit. Find the counterpart before building: in Freedom this becomes a handler-mediated request, a shared service, or an explicit event replacement — never a silent drop. A subscribe with no publisher found is an unresolved thread, not "no behaviour"` };
+}
+
+// every decision one attribute contributes — each shape is independent, so an attribute can raise several
+function attributeDecisions(a, hasColumn) {
+  const out = [];
+  if (a.lookupFilters > 0) out.push(lookupFilterDecision(a));
+  for (const d of a.dependencies) out.push(dependencyDecision(a, d));
+  // (c) a function-valued sub-key (a computed default, a dynamic caption) is imperative logic on the attribute
+  if (a.fnKeys.length) out.push({ kind: "attribute-imperative", item: a.name,
+    reason: `attribute '${a.name}' defines ${a.fnKeys.join(", ")} as a FUNCTION — a computed value/state the engine reads as present but cannot evaluate; implement it as a Freedom converter, virtual attribute or handler and confirm the computed result` });
+  if (!a.lookupFilters && !a.dependencies.length && !a.fnKeys.length && !hasColumn(a.name))
+    out.push(virtualAttributeDecision(a));
+  return out;
+}
+
+// ---- the per-method decision text, assembled from the body evidence ----
+// A trivial passthrough and an externally-assigned method each get a decision that SAYS SO, rather than asking
+// for a port that has nothing to port here. Suppressing either would re-create the silent drop this removes.
+const triggerPhrase = (t) =>
+  t.kind === "attribute-dependency" ? `${t.attribute} changes (${t.columns.join(", ")})` : `${t.element}.${t.property}`;
+
+// the evidence clauses appended to a real method's reason: what it does, what it reads/writes, what it publishes
+function evidenceClauses(ev) {
+  if (!ev) return "";
+  const parts = [];
+  if (ev.kinds.length) parts.push(`; body does: ${ev.kinds.join(", ")}`);
+  if (ev.readsAttrs.length || ev.writesAttrs.length)
+    parts.push(`; reads ${ev.readsAttrs.join(", ") || "—"} → writes ${ev.writesAttrs.join(", ") || "—"}`);
+  if (ev.publishes.length || ev.subscribes.length) {
+    const traffic = [...ev.publishes.map((p) => "publish " + p), ...ev.subscribes.map((s) => "subscribe " + s)];
+    parts.push(`; messages: ${traffic.join(", ")}`);
+  }
+  return parts.join("");
+}
+
+function methodReason(stub) {
+  const where = stub.lines ? ` (L${stub.lines.start}-${stub.lines.end})` : "";
+  const trig = stub.triggers.length ? stub.triggers.map(triggerPhrase).join(" / ") : null;
+  if (stub.externalRef) {
+    const alsoTrig = trig ? `; triggered by ${trig}` : "";
+    return `method '${stub.sourceMethod}' is ASSIGNED FROM '${stub.externalRef}' — its body is not in this schema, so the behaviour to port lives in that module (a define() dependency). Read it there${alsoTrig}, then implement the Freedom equivalent. Do NOT report it as "no logic" just because this body has none`;
+  }
+  if (stub.trivial)
+    return `method '${stub.sourceMethod}'${where} is a passthrough override (calls the base implementation only) — no behaviour of its own to port; confirm the Freedom template provides the base behaviour, then mark it accounted-for`;
+  const trigClause = trig
+    ? `, triggered by ${trig}`
+    : ", trigger unresolved — trace the control/hook/message that calls it, do not infer it from the name";
+  return `imperative logic${where}${trigClause}${evidenceClauses(stub.evidence)} — implement as a Freedom handler, converter or virtual attribute (a declarative business rule only when it is genuinely declarative)`;
+}
+
+function mapImperativeMembers(eff, cols) {
+  const needsDecision = [];
+  const client = (xs) => (xs || []).filter((x) => !x.fromTemplate);
+  const hasColumn = (n) => !!(cols && Object.hasOwn(cols, n));
+
+  for (const a of client(eff.attributes)) needsDecision.push(...attributeDecisions(a, hasColumn));
+  for (const m of client(eff.messages)) needsDecision.push(messageDecision(m));
+  for (const m of client(eff.mixins)) needsDecision.push({ kind: "mixin", item: m.name,
+    reason: `the page mixes in '${m.module || m.name}' — its members are defined in ANOTHER schema, so none of its behaviour appears in this page body. Read the mixin and port what it contributes to THIS page (an entity-parameterized mixin can also carry actions and messages); confirm whether the Freedom template already provides an equivalent` });
+
+  // module deps: ONE aggregated decision (the per-module rows live in the member ledger, which is where
+  // completeness is proven) — a decision per dep would bury the worklist in framework noise.
+  const deps = client(eff.moduleDeps).map((d) => d.name).filter((n) => !INERT_MODULE_RX.test(n));
+  if (deps.length) needsDecision.push({ kind: "module-dep", item: deps.join(", "),
+    reason: `the page declares ${deps.length} non-framework define() dependenc(ies) — constants/enum modules hold the lookup GUIDs its rules compare against, utility modules hold logic it calls, and mixin modules hold behaviour it mixes in. Confirm what each contributes to the page and where it goes in Freedom; a dependency whose contribution you cannot name is an unresolved thread` });
+
+  return { needsDecision };
+}
+
 // feature toggles, catalog-miss charts, methods → handler stubs, client removals, referenced UI modules.
 // Returns handlerStubs[] + its own needsDecision[].
 function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditableSchemas) {
@@ -885,10 +1016,29 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents, clientEditabl
     if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName])) needsDecision.push({ kind: "component", item: c.key,
       reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
-  // methods -> handler stubs (judgment)
-  const handlerStubs = payloadMethods.map(m => ({ sourceMethod: m.name, category: categorize(m.name), draft: true }));
-  for (const m of payloadMethods)
-    needsDecision.push({ kind: "method", item: m.name, reason: "imperative logic — implement as Freedom handler or set-values rule; review" });
+  // methods -> handler stubs. Each stub now carries the BODY EVIDENCE the engine read (which framework calls it
+  // makes, which attributes it reads/writes, which messages it moves, its line span) and its RESOLVED trigger,
+  // so the plan states what a method does instead of labelling every one of them "review". `category` keeps the
+  // name heuristic — it is what makes the Logic table's trigger column readable — with the evidence ON TOP of it.
+  const handlerStubs = payloadMethods.map(m => {
+    const f = m.facts || null;
+    return {
+      sourceMethod: m.name,
+      category: categorize(m.name, f),
+      // a pure `callParent(arguments)` passthrough / an empty body declares no behaviour of its own: it is a
+      // member (it stays in the ledger) but it is NOT work to port, and listing it as such buries the real logic.
+      trivial: !!(f && (f.callParentOnly || f.isEmpty)),
+      lines: f?.lines || null,
+      // the method is assigned from another module (`x: VisaHelper.Method`) — its behaviour is defined outside
+      // this page body, so the port target is that module, not a body the reader can look up in this schema
+      externalRef: f?.externalRef || null,
+      evidence: f ? { kinds: f.kinds, calls: f.calls.slice(0, 12), readsAttrs: f.readsAttrs, writesAttrs: f.writesAttrs,
+        publishes: f.publishes, subscribes: f.subscribes, readsResources: f.readsResources, truncated: f.truncated } : null,
+      triggers: m.triggers || [],
+      draft: true,
+    };
+  });
+  for (const stub of handlerStubs) needsDecision.push({ kind: "method", item: stub.sourceMethod, reason: methodReason(stub) });
 
   // removals (B6) — client removals only; template-internal removes are context (F9, C3)
   for (const rm of eff.removed.filter(x => !x.fromTemplate)) {
@@ -934,7 +1084,17 @@ function mapUnmappedDrop(eff, accountedFor) {
     return true;
   };
   const dropped = new Set();
-  for (const i of (eff.items || [])) if (isDropCandidate(i)) dropped.add(i.name);
+  // Elements this function deliberately SKIPS because another builder owns them: a tab / control group / detail
+  // (the container + detail builders emit these), and pure scaffolding the mapper rebuilds. They are accounted
+  // for — just not by THIS function — so they are reported as such instead of looking like silent drops to the
+  // member ledger, which would have it flag mapped elements as gaps and train the reader to ignore it.
+  const structural = new Set();
+  for (const i of (eff.items || [])) {
+    if (isDropCandidate(i)) { dropped.add(i.name); continue; }
+    if (accountedFor.has(i.name) || (i.templateOwned && !i.name.endsWith("Button")) || i.bindTo) continue;
+    if (i.isTab || i.itemType === VIEW_ITEM_TYPE.DETAIL || i.itemType === VIEW_ITEM_TYPE.CONTROL_GROUP
+        || HARD_SCAFFOLD_RX.test(i.name) || (SOFT_STRUCT_RX.test(i.name) && parents.has(i.name))) structural.add(i.name);
+  }
   // The decision text for a dropped item — a non-standard UI block, a template button outside the action set,
   // or a custom button — each needing a different Freedom follow-up.
   const unmappedReason = (i) => {
@@ -952,7 +1112,7 @@ function mapUnmappedDrop(eff, accountedFor) {
     if (!dropped.has(i.name) || (i.parent && dropped.has(i.parent))) continue;
     needsDecision.push({ kind: "unmapped-component", item: i.name, reason: unmappedReason(i) });
   }
-  return { needsDecision };
+  return { needsDecision, structural: [...structural] };
 }
 
 // Map ONE classic rule into its Freedom page/entity business rule, or a needsDecision when it can't be mapped.
@@ -1049,7 +1209,25 @@ function mapWidgets(eff) {
   return { widgets, chromeWidgets, needsDecision, accountedFor };
 }
 
-function categorize(name) {
+// A method's category. BODY EVIDENCE wins when there is any: `kinds` comes from the calls the method actually
+// makes, so it is a fact, whereas the name test below is a guess (it read `initSaveFilters` as "init" and a
+// method that loads a value with an ESQ as "set-values?"). The name heuristic is kept — it still produces the
+// readable label for a method whose body was not statically readable, and it is what the Logic table renders.
+// The `?` suffixes are retained on name-derived categories precisely to mark them as unconfirmed.
+const KIND_CATEGORY = [
+  ["validator", "validator"], ["esq", "query/filter"], ["filter-build", "filter-build"], ["service", "service-call"],
+  ["sys-setting", "sys-setting"], ["refresh", "refresh"],
+  ["process-launch", "process-launch"], ["publish", "message-publish"], ["subscribe", "message-subscribe"],
+  ["dialog", "dialog"], ["lookup", "lookup"], ["save", "save"], ["feature-toggle", "feature-gate"],
+  ["mixin-call", "mixin-call"],
+];
+function categorize(name, facts) {
+  const kinds = new Set(facts?.kinds || []);
+  // A pure passthrough is not a behaviour category at all — say so rather than mislabelling it "helper".
+  if (facts && (facts.callParentOnly || facts.isEmpty)) return "passthrough";
+  for (const [kind, cat] of KIND_CATEGORY) if (kinds.has(kind)) return cat;
+  // writes attributes but makes no notable call → it sets view-model state, CONFIRMED by the writes
+  if (facts?.writesAttrs.length) return "set-values";
   const n = name.toLowerCase();
   if (n.startsWith("on") && n.endsWith("changed")) return "attribute-change";
   if (n.includes("init")) return "init";
