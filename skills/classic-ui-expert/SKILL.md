@@ -42,15 +42,15 @@ Read the file that matches what you are doing. Do not read them all up front.
 
 | You are… | Read |
 |---|---|
-| starting — finding what pages/details the surface has | `references/01-surface-resolution.md` |
-| ordering layers, telling base from extension, reading diffs | `references/02-layer-model.md` |
-| listing members, proving the enumeration is complete | `references/03-member-ledger.md` |
-| grouping members into behaviour units | `references/04-units.md` |
-| chasing a mixin, a `bindTo`, a message with no publisher | `references/05-reference-following.md` |
-| seeing a platform idiom (tag relay, business rule, callService…) | `references/06-platform-patterns.md` |
-| hitting server C#, a process, a DB proc, an assembly | `references/07-boundaries.md` |
-| writing the output | `references/08-card-contract.md` |
-| unable to determine something | `references/09-refusal.md` |
+| starting — finding what pages/details the surface has | `./references/01-surface-resolution.md` |
+| ordering layers, telling base from extension, reading diffs | `./references/02-layer-model.md` |
+| listing members, proving the enumeration is complete | `./references/03-member-ledger.md` |
+| grouping members into behaviour units | `./references/04-units.md` |
+| chasing a mixin, a `bindTo`, a message with no publisher | `./references/05-reference-following.md` |
+| seeing a platform idiom (tag relay, business rule, callService…) | `./references/06-platform-patterns.md` |
+| hitting server C#, a process, a DB proc, an assembly | `./references/07-boundaries.md` |
+| writing the output | `./references/08-card-contract.md` |
+| unable to determine something | `./references/09-refusal.md` |
 
 **Recovery instruction:** if you cannot quote the section of this skill you are relying on,
 you have lost it — re-read the file before acting on memory.
@@ -76,7 +76,7 @@ Six phases, in order. Each phase's detail lives in the reference file above.
    mixins and module dependencies. Unresolvable → mark unresolved; never invent. Complete
    the **retrieval floor** — the entity's C# and event process, lookup/setting values,
    resource strings, detail wiring — fetched and logged on every run, zeros counted
-   (`references/05-reference-following.md`).
+   (`./references/05-reference-following.md`).
 6. **Write the output.** Cards + ledger + counted zeros + refusals, in the contract format.
    Close each card by cutting its sourceRef evidence into acceptance criteria — one checkable
    item per assertion, nothing that rests on an open assumption.
