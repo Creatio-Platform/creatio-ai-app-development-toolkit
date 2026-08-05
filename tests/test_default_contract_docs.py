@@ -680,7 +680,10 @@ class DefaultContractDocsTests(unittest.TestCase):
             "SysWorkplace.HomePageUId",
             "SysModuleInWorkplace",
         ]), "03-app-implementation.md must keep the §7.2 home-page-to-workplace binding flow")
-        self.assertIn("FreedomDashboards", impl)
+        # AC3's rule is NEGATIVE: app analytics must NOT be on FreedomDashboards. A
+        # presence-only check would still pass if a rewrite flipped the guidance to
+        # place analytics ON FreedomDashboards, so assert the prohibition phrasing.
+        self.assertRegex(impl, r"(?i)(never|do not|not)[^\n]{0,80}FreedomDashboards")
         self.assertIn("Known limitation (shared workplace)", impl)
 
 

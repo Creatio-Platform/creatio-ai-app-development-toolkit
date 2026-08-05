@@ -119,11 +119,7 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
-    section1_text = extract_section(text, "## 1. Business Outcome", "## 2. Roles and Permissions")
-    section2_text = extract_section(text, "## 2. Roles and Permissions", "## 3. Object Model")
     section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
-    section4_text = extract_section(text, "## 4. Lifecycle and Statuses", "## 5. Business Logic")
-    section5_text = extract_section(text, "## 5. Business Logic", UX_HEADING)
     section6_text = extract_section(text, UX_HEADING, ANALYTICS_HEADING)
     section7_analytics_text = extract_section(text, ANALYTICS_HEADING, EDGE_CASES_HEADING)
     lines = section3_text.splitlines()
