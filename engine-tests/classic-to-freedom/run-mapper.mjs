@@ -760,6 +760,26 @@ check("#3 custom methods: validateCareerPeriod / getRoleDetailFilter DO get hand
 // It resolves to `context` (excluded by design, counted) — the same treatment as an inert module dep. The client
 // layer is what makes this non-trivial: `fromTemplate` is false here, so only the STANDARD_CLASSIC_METHODS branch
 // keeps it out of `unaccounted`.
+// The other half of the same interaction, on the LAYOUT side: an element the unmapped-drop pass deliberately
+// SKIPS (it is owned by another builder, or it is a real container, or it is the native page title) must still be
+// accounted for. `mapUnmappedDrop` reports those as `structural` and the mapper folds them into `accountedFor`;
+// drop that fold and the ledger calls a MAPPED element a gap — a gate that cries wolf teaches the reader to
+// ignore it. `TitleLabel` (primary-display → native Freedom page title) is the case with no other path to
+// `accountedFor`, so it is the one that regresses first: verified by removing the fold, which turns it
+// `unaccounted` and blocks the gate.
+const skipRun = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body:
+  `define("XPage",[],function(){return{entitySchemaName:"X",diff:[
+    {operation:"insert",name:"PhotoBlock",parentName:"ProfileContainer",propertyName:"items",values:{itemType:15}},
+    {operation:"insert",name:"F",parentName:"PhotoBlock",propertyName:"items",values:{bindTo:"F"}},
+    {operation:"insert",name:"TitleLabel",parentName:"ProfileContainer",propertyName:"items",values:{caption:{bindTo:"getPrimaryDisplayColumnValue"}}}]};});` }] },
+  { baseDir: FIX });
+const skipRow = (n) => skipRun.coverage.rows.find((r) => r.kind === "diff-op" && r.name === n);
+check("drop-pass skips are ACCOUNTED, not gaps: a real container + the primary-display title stay out of the ledger's unaccounted",
+  skipRun.coverage.complete
+  && ["PhotoBlock", "F", "TitleLabel"].every((n) => skipRow(n)?.disposition === "mapped")
+  && !skipRun.changeSet.needsDecision.some((d) => d.kind === "unmapped-component"),
+  () => ({ complete: skipRun.coverage.complete, issues: skipRun.coverage.issues,
+    rows: skipRun.coverage.rows.filter((r) => r.kind === "diff-op").map((r) => `${r.name}:${r.disposition}`) }));
 const stdLedger = (n) => stdMethRun.coverage.rows.find((r) => r.kind === "method" && r.name === n);
 check("#3 standard methods are COUNTED as ledger `context`, never `unaccounted` — the gate stays green",
   stdMethRun.coverage.complete
