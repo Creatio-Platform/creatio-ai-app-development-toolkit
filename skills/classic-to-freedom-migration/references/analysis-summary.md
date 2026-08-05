@@ -50,7 +50,7 @@ Migration call vocabulary (the `Call` column in `Pages`):
 
 ### Overview
 **Scope:** <single-section | whole-package> ·
-**Environment:** <name or "repository only"> ·
+**Environment:** <name> ·
 **Package:** <owning package (lock state) → target package>
 
 - **Size:** <P> pages · <F> fields · <R> page rules · <D> details/features

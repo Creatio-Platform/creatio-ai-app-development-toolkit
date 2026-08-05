@@ -231,7 +231,18 @@ jobs:
           export GH_HOST="${GITHUB_SERVER_URL#http://}"
           export GH_HOST="${GH_HOST#https://}"
           export GH_HOST="${GH_HOST%/}"
+          # Product-style release TITLE: "<version> — <hook>", where <hook> is the leading **bold** lead
+          # sentence of the notes section (the announcement convention in RELEASE-NOTES.md). Without a title,
+          # `gh release create` names the release after the bare tag; a hook makes the Releases page read like
+          # product announcements. Falls back to just the version when the section has no bold lead line.
+          # `[^*]*` (not `.*`) captures only the FIRST **bold** span: the hook line can carry more `**bold**`
+          # runs later (e.g. `**layout, components, and business rules**`), and a greedy `.*` would swallow the
+          # whole paragraph up to the last `**`.
+          HOOK="$(sed -n 's/^\*\*\([^*]*\)\*\*.*/\1/p' /tmp/release_notes.md | head -1)"
+          HOOK="${HOOK%.}"   # trim one trailing period
+          if [ -n "$HOOK" ]; then TITLE="$RELEASE_VERSION — $HOOK"; else TITLE="$RELEASE_VERSION"; fi
           gh release create "$RELEASE_VERSION" \
+            --title "$TITLE" \
             --notes-file /tmp/release_notes.md \
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip" \
             "/tmp/creatio-ai-app-development-toolkit-${RELEASE_VERSION}.zip.sha256"
