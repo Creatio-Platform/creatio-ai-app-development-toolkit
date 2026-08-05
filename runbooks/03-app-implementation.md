@@ -80,10 +80,17 @@ For each dashboard in the plan:
   2. **Find the app's workplace and bind the home page to it.** A newly created app always registers
      its sections into a workplace — for a composable/Studio app that is normally **"My applications"**
      (or "Studio"), which already exists. Resolve it by reading `SysModuleInWorkplace` for the app's
-     section modules (join to `SysWorkplace` for the `Id`/`Name`). Set that workplace's
-     `SysWorkplace.HomePageUId` to the home page's `schemaUId` via `odata-update`, then ship it as a
-     package data binding with `create-data-binding-db` (schema `SysWorkplace`) so it survives a
-     transfer. Read `SysWorkplace.HomePageUId` back to confirm — do not trust the install log.
+     section modules (join to `SysWorkplace` for the `Id`/`Name`).
+     **Pre-write clobber check (MANDATORY, before writing).** Read the target workplace's current
+     `SysWorkplace.HomePageUId` first. If it is already set to a non-empty, non-zero
+     (`00000000-0000-0000-0000-000000000000`) value — another app already bound a home page to this
+     shared workplace — do **NOT** silently overwrite it: binding is last-writer-wins and would break
+     the other app's home page. Stop and surface it to the developer (report the existing
+     `HomePageUId` and, if resolvable, which page/app owns it), and get explicit confirmation before
+     overwriting. Only when it is unset (or the developer confirms the replacement) proceed to write.
+     Then set `SysWorkplace.HomePageUId` to the home page's `schemaUId` via `odata-update`, ship it as
+     a package data binding with `create-data-binding-db` (schema `SysWorkplace`) so it survives a
+     transfer, and read `SysWorkplace.HomePageUId` back to confirm — do not trust the install log.
   3. **Edge case only** — if no workplace hosts the app's sections at all, a workplace must be
      created. clio cannot create one today (`SysWorkplace` + `SysModuleInWorkplace` +
      `SysAdminUnitInWorkplace` span tables set up in the Creatio UI); a create-workplace tool is
@@ -96,14 +103,18 @@ For each dashboard in the plan:
   workplace, so the app's analytics would land there instead of on the app's own home page.
 
   **Known limitation (shared workplace).** When the target workplace is a shared one such as
-  "My applications", `SysWorkplace.HomePageUId` is a single per-workplace value: binding it is
+  "My applications", `SysWorkplace.HomePageUId` is a single per-workplace value, so it is
   last-writer-wins across every composable app that shares that workplace, and the home page is visible
-  to everyone with access to it — a wider audience than just this app's users. This is accepted for now;
-  an app-scoped workplace (so each app owns its own home page and audience) depends on the
-  create-workplace capability tracked under ENG-88474.
-- **Access** — dashboards are created with the default `All Employees` read grant (access for
-  everyone). Ship those grants with the package per `dashboard-rights` so they survive a package
-  transfer (grants are data, not schema, and are otherwise lost on transfer).
+  to everyone with access to it — a wider audience than just this app's users. The pre-write clobber
+  check above makes an overwrite explicit (surfaced and confirmed) instead of silent, but it does not
+  remove the limitation: a truly app-scoped workplace (each app owning its own home page and audience)
+  depends on the create-workplace capability tracked under ENG-88474.
+- **Access** — apply exactly the `access rights:` the plan states for each dashboard (the developer
+  saw and approved it per dashboard at Gate R). `All Employees` is the default; when the plan narrows
+  a dashboard to specific role(s) (for sensitive data), grant `dashboard-rights` to those role(s)
+  instead of `All Employees`. Do not hardcode `All Employees` regardless of the plan. Ship the grants
+  with the package per `dashboard-rights` so they survive a package transfer (grants are data, not
+  schema, and are otherwise lost on transfer).
 
 Widgets may draw on any site object named in the plan — the app's own entities and standard platform
 entities alike.

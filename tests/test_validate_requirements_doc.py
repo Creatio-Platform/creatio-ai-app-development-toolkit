@@ -66,6 +66,7 @@ Tasks move through New, Active, and Done.
 #### Tasks section dashboards
 
 - dashboard: Task overview
+  - access rights: All Employees
   - serves role: Team member
   - scope: open tasks by status
   - widgets: metric — open tasks count; chart — tasks by status (bar)
@@ -73,6 +74,7 @@ Tasks move through New, Active, and Done.
 ### 7.2 Workplace analytics
 
 - dashboard: Team workload
+  - access rights: All Employees
   - serves role: Team member
   - scope: tasks across the whole app
   - widgets: metric — total tasks; list — tasks due this week
@@ -213,6 +215,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         # the only 7.1 dashboard block (keep its heading); the 7.2 dashboard remains.
         doc = VALID_DOC.replace(
             "- dashboard: Task overview\n"
+            "  - access rights: All Employees\n"
             "  - serves role: Team member\n"
             "  - scope: open tasks by status\n"
             "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n",
@@ -222,11 +225,20 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("7.1", str(ctx.exception))
 
+    def test_access_rights_missing_on_a_dashboard_is_rejected(self):
+        # Every dashboard must state its access rights in the plan (surfaced to the
+        # developer). Drop the 7.1 dashboard's access-rights line; 7.2 keeps its own.
+        doc = VALID_DOC.replace("  - access rights: All Employees\n  - serves role: Team member\n  - scope: open tasks by status\n", "  - serves role: Team member\n  - scope: open tasks by status\n")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("access rights:", str(ctx.exception))
+
     def test_empty_workplace_analytics_72_is_rejected(self):
         # 7.2 must not be empty: drop its only dashboard block, leaving the 7.1
         # dashboard (and its grouping heading) intact.
         doc = VALID_DOC.replace(
             "- dashboard: Team workload\n"
+            "  - access rights: All Employees\n"
             "  - serves role: Team member\n"
             "  - scope: tasks across the whole app\n"
             "  - widgets: metric — total tasks; list — tasks due this week\n",

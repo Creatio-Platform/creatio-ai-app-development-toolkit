@@ -686,6 +686,31 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertRegex(impl, r"(?i)(never|do not|not)[^\n]{0,80}FreedomDashboards")
         self.assertIn("Known limitation (shared workplace)", impl)
 
+    def test_prose_section_count_matches_required_sections(self):
+        # The Business Plan section count is asserted in prose across several docs and
+        # already drifted once in this PR's history (a stale "7-section"). Bind the
+        # prose count to the single source of truth (REQUIRED_REQUIREMENTS_SECTIONS)
+        # so a future add/remove of a section fails here until the prose is updated.
+        import workflow_validators as wv  # runtime/scripts is on sys.path (set above)
+
+        n = len(wv.REQUIRED_REQUIREMENTS_SECTIONS)
+        count_docs = [
+            ROOT / "AGENTS.md",
+            ROOT / "context/business-checklist.md",
+            ROOT / "runbooks/02-requirements-gathering.md",
+        ]
+        for path in count_docs:
+            doc = read_text(path)
+            # the canonical numeric count must be stated ...
+            self.assertIn(f"{n}-section", doc, f"{path} must state the '{n}-section' count")
+            # ... and no stale off-by-one count may survive
+            for stale in (n - 1, n + 1):
+                self.assertNotIn(f"{stale}-section", doc, f"{path} has a stale '{stale}-section' count")
+        # the retired literal "7-section"/"seven sections" phrasing must be gone
+        for path in count_docs:
+            doc = read_text(path).lower()
+            self.assertNotIn("seven sections", doc, f"{path} has stale 'seven sections'")
+
 
 if __name__ == "__main__":
     unittest.main()

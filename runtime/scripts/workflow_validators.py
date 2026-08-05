@@ -74,6 +74,11 @@ ANALYTICS_SECTION_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.1\s+Section 
 ANALYTICS_WORKPLACE_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.2\s+Workplace analytics\b")
 DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:")
 DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:")
+# Every dashboard must state its access rights in the plan (default All Employees,
+# narrowed to serves role for sensitive data) so the developer sees who each
+# dashboard is visible to before approval, and the implementation applies exactly
+# that via dashboard-rights.
+DASHBOARD_ACCESS_RIGHTS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:")
 # Section analytics (7.1) must be grouped by section under a
 # `#### <Section> section dashboards` heading, so it is explicit which section
 # hosts each dashboard — never a flat list. Match the grouping heading.
@@ -196,8 +201,11 @@ def validate_requirements_doc(content: str) -> None:
     # `widgets:` line (a two-dashboard plan where only one lists widgets is invalid).
     for i, start in enumerate(dashboard_positions):
         end = dashboard_positions[i + 1] if i + 1 < len(dashboard_positions) else len(section7_analytics_text)
-        if not DASHBOARD_WIDGETS_LABEL_RE.search(section7_analytics_text[start:end]):
+        block = section7_analytics_text[start:end]
+        if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
             raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must list its own 'widgets:' line")
+        if not DASHBOARD_ACCESS_RIGHTS_LABEL_RE.search(block):
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must state its own 'access rights:' line (who it is visible to; default 'All Employees', narrowed to the serving role for sensitive data)")
     # Both subsections must be independently populated: a section-wide dashboard
     # count would let a hollow 7.1 (grouping heading, zero dashboards, all dashboards
     # under 7.2) or an empty 7.2 pass. Slice §7 at the subheadings and require at

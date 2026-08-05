@@ -290,12 +290,23 @@ Organize `## 7. Analytics` into two required subsections:
 - `### 7.1 Section analytics` — dashboards surfaced on a section, immediately useful to the role that works with that section. There may be several per section (different data slices or different roles). Default to 2-3 dashboards per section, each sized to fit roughly one screen; if the developer asks for more, that limit does not apply. **Group the dashboards by section**: under `### 7.1` add one `#### <Section> section dashboards` heading per section that gets analytics (e.g. `#### Appointments section dashboards`), and list that section's dashboard blocks beneath it. The grouping makes it explicit which section each dashboard is added to.
 - `### 7.2 Workplace analytics` — more general, app/workplace-level dashboards: overall indicators describing how the whole app is working, useful to the roles that work with the app. These are hosted on the app's **home page** (a `BaseHomePage` bound to the app's workplace), not on any one section. Include one block per dashboard.
 
-Describe each dashboard with these labels (colon included) — the validator checks `dashboard:` and `widgets:` verbatim:
+Describe each dashboard with these labels (colon included) — the validator checks `dashboard:`, `access rights:`, and `widgets:` verbatim:
 
 - `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
+- `access rights:` — **who the dashboard is created visible to**, stated in business terms so the developer sees and can adjust it before approval. Default to `All Employees`; narrow it to the role(s) from `serves role:` when the dashboard aggregates sensitive data (financials, HR, personal data) that should not be company-wide. This is the value the implementation applies via `dashboard-rights`, so what the plan shows is what gets created.
 - `serves role:` — the role from `## 2. Roles and Permissions` this dashboard is for, e.g. `serves role: Sales manager`
 - `scope:` — the data slice / question it answers, e.g. `scope: open orders by stage this quarter`
 - `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
+
+Render each dashboard block like this (the `access rights:` line is mandatory and sits right under the title):
+
+```
+- dashboard: Top clients
+  - access rights: All Employees
+  - serves role: Shop Owner / Administrator
+  - scope: which customers visit most often
+  - widgets: chart — top clients by number of work orders (bar); metric — total clients; list — clients ranked by visits
+```
 
 In `### 7.1`, each dashboard sits under the `#### <Section> section dashboards` heading of the section whose list page hosts it, so the section binding is unambiguous. Do not list section-analytics dashboards as a flat list without their section grouping.
 
@@ -312,8 +323,9 @@ Before finalizing the BA draft, verify at minimum:
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
-- `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, and at least one dashboard block with its `dashboard:` title and `widgets:` line — it is never left empty or `TBD`
+- `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, and at least one dashboard block with its `dashboard:` title, `access rights:` line, and `widgets:` line — it is never left empty or `TBD`
 - `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list without the section grouping)
+- every dashboard states its `access rights:` (default `All Employees`; narrowed to `serves role:` for sensitive data) so the developer sees, per dashboard, who it will be visible to before approving
 - each dashboard `serves role:` names a role that exists in `## 2. Roles and Permissions`
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
