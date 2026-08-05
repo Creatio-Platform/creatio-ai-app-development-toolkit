@@ -2062,7 +2062,7 @@ const pcTwo = runMigration({ entity: "InternalRequest", seed: PROFILE_SEED, plan
 const pcTwoCards = pcTwo.changeSet.profileCards || [];
 check("ENG-93928 multi-card: two embedded profile cards on one page both map, each with its own master column and decision",
   pcTwoCards.length === 2
-  && pcTwoCards.map((c) => c.masterColumn).sort().join(",") === "Owner,Requester"
+  && pcTwoCards.map((c) => c.masterColumn).sort((a, b) => String(a).localeCompare(String(b))).join(",") === "Owner,Requester"
   && pcTwo.changeSet.needsDecision.filter((d) => d.kind === "profile-card").length === 2
   && pcTwo.structure.complete === true,
   () => pcTwoCards);
