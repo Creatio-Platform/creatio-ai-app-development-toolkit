@@ -1,11 +1,68 @@
 // Merge engine. Pure Node module, no Creatio/stand dependency.
 // Parses classic ClientUnitSchema schema bodies and merges N schemas (base->top)
 // into one effective page model + provenance.
-import { parse as acornParse } from "./vendor/acorn.mjs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { checkVendorIntegrity } from "./verify-vendor.mjs";
+
+// Runtime supply-chain gate. parseSchema feeds UNTRUSTED classic bodies to the vendored acorn parser (the AST route
+// is chosen over `vm` precisely to deny RCE from a hostile body). CRITICAL: the parser is NOT statically imported —
+// a static top-level `import … from "./vendor/acorn…"` is HOISTED and EVALUATED before any module code, so a
+// tampered file's module-level payload would run at import time, BEFORE the check. Instead `getAcornParse()` loads
+// acorn LAZILY, via `createRequire`, and ONLY AFTER `ensureVendorIntegrity()` has passed — so a tampered/drifted
+// bundle is caught and the throw happens BEFORE its bytes are ever evaluated. The parser is vendored as the
+// CommonJS build (`vendor/acorn.cjs`), so a plain `require()` loads it SYNCHRONOUSLY on ANY supported Node (no
+// `require(esm)` >= 22.12 floor; a dynamic `import()` would have forced parseSchema — and everything above it —
+// to become async). This closes the import-time vector while keeping the whole parse pipeline synchronous.
+//
+// The check itself: verify vendor/ against the pinned provenance before the FIRST parse. Lazy + memoized at the
+// PARSE surface — NOT a top-level throw (that fails closed but every importer — mapper, designspec, all goldens —
+// would die at import on any integrity hiccup, e.g. a legitimate re-vendor before the pin is bumped). Memoize the
+// CHECK RESULT and throw on EVERY call when it failed — never fail open (a prior version stored `false` and threw
+// only on the first call, so a caller that caught parse #1 then parsed #2..N on the tampered parser silently).
+let __vendorCheck = null;
+function ensureVendorIntegrity() {
+  if (__vendorCheck === null) __vendorCheck = checkVendorIntegrity(path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor"));
+  if (!__vendorCheck.ok) throw new Error("classic-to-freedom engine: vendored parser integrity check FAILED — refusing to parse untrusted input:\n" + __vendorCheck.failures.join("\n"));
+  return true;
+}
+
+// Test seam (AC1 fail-closed regression): force or reset the memoized vendor-integrity result so a golden can prove
+// the PARSE surface throws on EVERY call when the check failed — not just the first (the fail-open a prior version
+// had). Pass a `{ ok, failures, results }` object to force a state, or `null` to restore the real memoized check on
+// the next parse. GATED behind `C2F_TEST_SEAM=1`: on the shipped runtime surface (no flag) it is an inert no-op, so
+// this control ships NO usable integrity-gate bypass (defense-in-depth — a security gate must not carry its own
+// disable switch). The golden runner sets the flag before using it.
+export function __setVendorIntegrityForTest(result) {
+  if (process.env.C2F_TEST_SEAM !== "1") return; // inert unless the test seam is explicitly enabled
+  __vendorCheck = result;
+  __acornParse = null;
+}
+
+// Lazily load the vendored acorn's `parse` — AFTER the integrity check, so a tampered module's top-level code never
+// runs. The CommonJS build (`vendor/acorn.cjs`) loads via a plain synchronous `require()` on ANY supported Node
+// (no `require(esm)` floor), keeping parseSchema sync. Memoized: the check + require run once per process.
+let __acornParse = null;
+function getAcornParse() {
+  if (__acornParse) return __acornParse;
+  ensureVendorIntegrity(); // MUST run before the require below — the whole point of the lazy load
+  // Defense-in-depth: the gate above passes when every LISTED pin matches, but never asserts that the file we are
+  // ABOUT to load (acorn.cjs) is itself one of the verified pins. A tampered provenance.json that DROPPED the
+  // acorn.cjs entry would leave the gate green while an unverified parser loads. Require acorn.cjs to be a verified
+  // ok-entry before require().
+  if (!(__vendorCheck.results || []).some((r) => r.name === "acorn.cjs" && r.ok))
+    throw new Error("classic-to-freedom engine: `acorn.cjs` is not a verified entry in vendor/provenance.json — refusing to load an unpinned parser (provenance may be tampered).");
+  const acorn = createRequire(import.meta.url)("./vendor/acorn.cjs");
+  if (typeof acorn.parse !== "function") throw new Error("classic-to-freedom engine: vendored acorn has no `parse` export");
+  __acornParse = acorn.parse;
+  return __acornParse;
+}
 
 // Build the parse RESULT from the extracted schema object `s` (+ text-scanned signals from `src`).
 // Kept separate from the AST extraction so the "what fields the merge consumes" shape lives in one place.
 function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
+  const methodKeys = safeKeys(s.methods); // reused for the name list AND the empty-body (stub) subset below
   return {
     pkg,
     error: parseError,
@@ -14,7 +71,8 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
     businessRules: plainObj(s.businessRules),
     rules: plainObj(s.rules),
     details: normalizeDetails(s.details),
-    methods: safeKeys(s.methods),
+    methods: methodKeys,
+    emptyMethods: methodKeys.filter(k => s.methods[k] === AST_FN_EMPTY), // stub methods `(){}` — the seed gate's structural signal
     attributes: safeKeys(s.attributes),
     modules: normalizeModules(s.modules),
     // feature toggles referenced in the body (getIsFeatureEnabled('X')) — which element each gates
@@ -138,7 +196,9 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 const MAX_AST_DEPTH = 500;
 const AST_RULE_TYPE = { BINDPARAMETER: 0, FILTRATION: 1 };
 const AST_PROPERTY = { VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 };
-const AST_FN = Symbol("fn"); // placeholder for function values (methods/attributes) — only their KEYS matter
+const AST_FN = Symbol("fn"); // placeholder for a function value with a NON-empty body (methods/attributes) — only its KEY matters downstream
+const AST_FN_EMPTY = Symbol("fn-empty"); // a function whose body is an EMPTY block `(){}` — a stub. Distinguished so the
+// seed-skeletal gate can tell a real fetched method (has a body) from a broken-fetch/hand stub (empty body), independent of count.
 
 // resolveMemberValue models a small finite automaton over a member-access chain (mirroring the old vm proxy
 // graph). TAG_TRANSITIONS[state][key] = the next state; any key absent from a state's map collapses to "proxy"
@@ -235,7 +295,12 @@ function makeAstEvaluator(scope, diagnostics, src) {
       case "ArrayExpression": return evalArray(node, path);
       case "MemberExpression": return evalMember(node, path);
       case "FunctionExpression":
-      case "ArrowFunctionExpression": return AST_FN; // methods/attributes: only keys are read downstream
+      case "ArrowFunctionExpression": {
+        // methods/attributes: only keys are read downstream — EXCEPT we note an EMPTY body `(){}` so the seed gate can
+        // distinguish a real fetched method from a stub. An arrow with an expression body (`() => x`) is never empty.
+        const b = node.body;
+        return (b?.type === "BlockStatement" && b.body.length === 0) ? AST_FN_EMPTY : AST_FN;
+      }
       case "Identifier": return evalIdentifier(node, path);
       case "UnaryExpression": return evalUnary(node, path);
       case "BinaryExpression": return evalBinary(node, path);
@@ -369,6 +434,7 @@ function findFactoryReturn(factory) {
 // Same output shape as the previous vm-based parser (via buildSchemaResult), plus `astDiagnostics`: every
 // construct the static evaluator could not resolve (fail-loud — surfaced for review, never silently guessed).
 export function parseSchema(src, pkg) {
+  const acornParse = getAcornParse(); // supply-chain gate — checks integrity, THEN loads the parser (never before)
   const astDiagnostics = [];
   let ast;
   try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
@@ -763,6 +829,38 @@ function mergeModules(L, seed, components) {
   }
 }
 
+// Replay each tagged schema (seed-template first, then the page's own schemas) into the merge stores: diff ops
+// into `items`, and the keyed rule/detail/method/module blocks into their maps. Extracted for Sonar CC 15.
+function replayTagged(tagged, stores, warnings) {
+  const { items, rules, details, methods, components } = stores;
+  for (const { L, seed } of tagged) {
+    for (const op of L.diff) {
+      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
+      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
+    }
+    mergeRuleBlocks(L, seed, rules);
+    mergeDetails(L, seed, details);
+    mergeMethods(L, seed, methods);
+    mergeModules(L, seed, components);
+  }
+}
+
+// CASCADE REMOVE (runtime parity): in Classic, removing a container removes its WHOLE SUBTREE. Propagate the
+// removal DOWN — an item whose parent is a TOMBSTONED (transitively) item is itself removed. Sweep ONLY
+// `templateOwned` (base) orphans through a parent that EXISTS and is `removed`; a genuinely-absent parent (seed
+// gap F2) and CLIENT-authored orphans are left to surface as unresolvedParents. Fixpoint over the item set (a
+// removed container's removed child can in turn orphan ITS children). Extracted from mergeHierarchy for Sonar CC 15.
+function cascadeRemove(items) {
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const it of items.values()) {
+      if (it.removed || !it.parent || !it.templateOwned) continue;
+      const p = items.get(it.parent);
+      if (p?.removed) { it.removed = true; it.removedBy = it.removedBy || p.removedBy; it.removedBySeed = p.removedBySeed; it.cascadeRemoved = true; changed = true; }
+    }
+  }
+}
+
 export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   const items = new Map();     // name -> item record
   const rules = new Map();     // "attr::ruleKey" -> record
@@ -788,19 +886,16 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   ];
   const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
-  for (const { L, seed } of tagged) {
-    for (const op of L.diff) {
-      if (!op) continue; // null slot (sparse hole / unresolved spread) — already flagged at parse time
-      replayDiffOp(op, items, { seed, pkg: L.pkg }, warnings);
-    }
-    mergeRuleBlocks(L, seed, rules);
-    mergeDetails(L, seed, details);
-    mergeMethods(L, seed, methods);
-    mergeModules(L, seed, components);
-  }
+  replayTagged(tagged, { items, rules, details, methods, components }, warnings);
+  // Propagate container removals down the subtree (runtime parity) — see cascadeRemove. This clears the false
+  // `unresolvedParents` that HARD-BLOCKED legitimate remove+re-layout pages (base children of a removed container).
+  cascadeRemove(items);
 
   const alive = [...items.values()].filter(i => !i.removed);
-  const removed = [...items.values()].filter(i => i.removed);
+  // cascade-removed items are structural cleanup (a removed container's subtree), NOT a client B6 decision — keep
+  // them out of `removed` so they don't flood the removals worklist; excluding them from `alive` already cleared
+  // the false unresolvedParents.
+  const removed = [...items.values()].filter(i => i.removed && !i.cascadeRemoved);
   const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);
 
   // Parent containers referenced by an ALIVE item but never defined by an ALIVE item == base-template
@@ -833,20 +928,49 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // building on it silently drops base actions + the true nesting. Surface it as a WARNING so the SKILL's
   // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
   const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
+  // INFORMATIONAL ONLY — surfaced in seedQuality for diagnostics; it NO LONGER gates `looksSkeletal` (that is now the
+  // kind-agnostic method-COUNT test below). Kept because a record-page seed defining `getActions` is useful context
+  // when reading a seedQuality dump; do NOT reintroduce it as a gate (keying on it false-blocked section/mini seeds).
   const hasGetActions = seedMethodNames.has("getActions");
-  // A real fetched base-template chain ALWAYS defines `getActions` (it surfaces the base ProcessButton / Run
-  // process). So the skeleton test keys on getActions, NOT merely a non-zero method count: a hand-typed stub
-  // with a token `dummy(){}` method has size 1 but still no getActions — it must NOT clear this gate.
-  const looksSkeletal = seedTemplate.length > 0 && !hasGetActions;
+  // #19 — the seed must be the REAL fetched base-template chain, not a broken/empty bundle fetch. Since the seed
+  // ALWAYS comes from `get-classic-page-sources` (real schema bodies read off the stand) — never hand-authored
+  // in the normal flow — the thing worth catching is a broken/near-empty FETCH, not a "hand skeleton". So the test
+  // is KIND-AGNOSTIC: a real fetched base chain of ANY kind defines MANY methods (verified on-stand: record ≈347,
+  // section `BaseSectionV2` = 428, mini `BaseMiniPage` = 152), while a broken/empty fetch has ≈0. Keying on the
+  // method COUNT (not a specific method) fixes the false-block this used to hit: it keyed on `getActions`, which
+  // ONLY record pages define — sections define `getSectionActions`, mini pages none — so real section/mini seeds
+  // were wrongly flagged, which pushed the agent into a workaround (bundling the section as `schemas` + a thin
+  // seed) that produced hollow folds. Count-based: 150–430 (real) all clear; ≈0 (broken fetch) blocks; a token
+  // 1-method stub still blocks (< 5).
+  const SEED_MIN_METHODS = 5;
+  // Structural stub signal (round-10 Major 1): the seed method names that have a REAL (non-empty) body in SOME layer.
+  // The PARSER sets `emptyMethods` from real body strings; L()-built test seeds carry none → treated as real-bodied.
+  const seedNonEmptyMethods = new Set(seedTemplate.flatMap(l => (l.methods || []).filter(m => !(l.emptyMethods || []).includes(m))));
+  // Skeletal if near-empty by COUNT (< 5) OR every seed method is an empty stub `(){}` (seedNonEmptyMethods empty) — the
+  // latter catches a >=5-method skeleton the count test alone would clear. A seed with >=5 REAL-bodied methods but < 150
+  // is NOT skeletal; it is the possiblyPartial advisory below (no false-block on a legitimately small real template).
+  const looksSkeletal = seedTemplate.length > 0 && (seedMethodNames.size < SEED_MIN_METHODS || seedNonEmptyMethods.size === 0);
+  // The mid-range partial-fetch blind spot the < 5 hard gate misses: a real base-template chain of ANY kind defines
+  // 150+ methods (mini 152, record ≈347, section 428), so a seed with 5..149 methods is likely a TRUNCATED fetch that
+  // silently folds onto an incomplete base. This is surfaced as an ADVISORY (`possiblyPartial`) — NOT a hard warning:
+  // a numeric floor as a hard block would false-block, and the seed layers are named by PACKAGE (CrtNUI / …), not by a
+  // recognizable "Base*" schema, so a name assertion is unreliable. The plan renders it so the agent confirms the full
+  // parent-template chain was captured instead of building on a partial one silently.
+  const SEED_PARTIAL_METHODS = 150;
+  const possiblyPartial = seedTemplate.length > 0 && !looksSkeletal && seedMethodNames.size < SEED_PARTIAL_METHODS;
   const seedQuality = {
     seeded: seedTemplate.length > 0, seedTemplate: seedTemplate.length,
-    seedMethods: seedMethodNames.size, hasGetActions,
-    looksSkeletal,
+    seedMethods: seedMethodNames.size, seedRealMethods: seedNonEmptyMethods.size, hasGetActions,
+    looksSkeletal, possiblyPartial,
   };
-  if (looksSkeletal) warnings.push({
-    op: "seed", name: "skeletal-seed", schema: "(seed)",
-    message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) but NO getActions — a real base-template body (BaseModulePageV2/BasePageV2/BaseEntityPage) always defines getActions (→ ProcessButton/Run process). This seed is almost certainly a hand-authored skeleton (or a partial chain), not the fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
-  });
+  if (looksSkeletal) {
+    const allStub = seedMethodNames.size >= SEED_MIN_METHODS && seedNonEmptyMethods.size === 0;
+    const detail = allStub ? "but ALL of them are EMPTY stubs (no bodies)" : `(below the ${SEED_MIN_METHODS}-method floor)`;
+    warnings.push({
+      op: "seed", name: "skeletal-seed", schema: "(seed)",
+      message: `SEED LOOKS SKELETAL (#19): the ${seedTemplate.length} seed schema(s) define ${seedMethodNames.size} method(s) ${detail} — a REAL fetched base-template chain of any kind defines many methods WITH bodies (record ≈347, section 428, mini 152). This is almost certainly a broken/empty or hand-authored seed, not the real fetched template body. Re-assemble the manifest via get-classic-page-sources so it reads the real parent-template bodies into \`seed\` — do NOT build on a skeleton.`,
+    });
+  }
 
   return {
     entity,
@@ -857,7 +981,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
       itemType: i.itemType, contentType: i.contentType, bindTo: i.bindTo || null,
       isTab: i.isTab, order: i.order, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, generator: i.generator || null,
-      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
+      visible: i.visible ?? null, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
