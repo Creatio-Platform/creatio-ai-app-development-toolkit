@@ -154,7 +154,11 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        template's own base — a `merge` for a changed/new value and an `insert` for each new element of an array
        the template already carries (e.g. a converted quick filter appended to the template's
        `Items.modelConfig.filterAttributes`) — so the template's native array entries are preserved and the
-       page's converted entries are ADDED, not replaced. Every attribute keeps its `type` and `path`. (Only when
+       page's converted entries are ADDED, not replaced. Every attribute keeps its `type` and `path`.
+       **Because these operations are computed against the template's base, paste them ONLY into a page created
+       from the SAME mobile template the guide was run against (the `recommendedMobileTemplate` used at
+       create-page); if the target page uses a different template, regenerate the guide first — otherwise the
+       merge/insert paths will not line up and can silently corrupt the config.** (Only when
        the guide reports no template base was available — a `constraints` note — does it degrade to a single root
        `merge`.) Do NOT rebuild these by hand and do NOT collapse the targeted operations into one root merge: a
        root merge makes the mobile diff engine REPLACE arrays and silently drop entries (list columns,
