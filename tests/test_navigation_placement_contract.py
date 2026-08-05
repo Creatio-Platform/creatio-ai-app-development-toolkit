@@ -67,6 +67,20 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         content = read_text(AGENTS)
         self.assertIn("Keep it in the FIRST batch", content)
 
+    def test_first_turn_scope_covers_a_new_section_not_only_a_new_app(self):
+        # The entrypoint trigger explicitly covers "add an Orders section", so scoping the first-batch
+        # requirement to a NEW app would let exactly the late/missed question this rule exists to prevent
+        # back in through the section path.
+        content = read_text(AGENTS)
+        self.assertNotIn("for a NEW app, navigation placement", content)
+        self.assertNotIn("for a NEW app — navigation placement", content)
+        self.assertIn("for a NEW app or a new section", content)
+
+    def test_first_turn_reason_names_the_section_path_too(self):
+        content = read_text(AGENTS)
+        self.assertIn("create-app-section", content)
+        self.assertIn("the entrypoint trigger covers both", content)
+
     def test_agents_states_why_the_checklist_cannot_carry_it(self):
         # Guards against a future edit that "tidies up" by moving this back into the checklist.
         content = read_text(AGENTS)
@@ -189,6 +203,59 @@ class NavigationPlacementContractTests(unittest.TestCase):
     def test_orchestrator_forbids_choosing_the_placement_silently(self):
         content = read_text(ORCHESTRATOR_SKILL)
         self.assertIn("do not silently choose the placement yourself", content)
+
+
+class PlacementRuleConsistencyTests(unittest.TestCase):
+    """The rule is deliberately written twice, and each file's own test pins only its own wording.
+
+    `AGENTS.md` carries it into the first discovery batch; `context/business-checklist.md` carries the
+    reference version that is read afterwards. Nothing previously compared the two, so they could drift
+    apart while both files' individual substring assertions still passed — and they had already drifted on
+    trigger scope before this test existed.
+    """
+
+    ESSENTIAL_FACTS = [
+        "My applications",
+        "System administrators",
+    ]
+
+    def test_both_copies_state_the_same_essential_facts(self):
+        agents = read_text(AGENTS)
+        checklist = read_text(CHECKLIST)
+        for fact in self.ESSENTIAL_FACTS:
+            self.assertIn(fact, agents, f"AGENTS.md must state {fact!r}")
+            self.assertIn(fact, checklist, f"business-checklist.md must state {fact!r}")
+
+    def test_neither_copy_scopes_the_rule_more_narrowly_than_the_trigger(self):
+        # The trigger covers new apps AND new sections; neither copy may restrict the rule to apps only.
+        for path in (AGENTS, CHECKLIST):
+            content = read_text(path)
+            self.assertNotIn("for a NEW app,", content, f"{path} scopes the rule to a new app only")
+            self.assertNotIn("for a NEW app —", content, f"{path} scopes the rule to a new app only")
+
+    def test_both_copies_require_the_audience_not_only_the_placement(self):
+        for path in (AGENTS, CHECKLIST):
+            content = read_text(path).lower()
+            self.assertIn("audience", content, f"{path} must require the audience decision too")
+
+
+class GuidanceTopicNameTests(unittest.TestCase):
+    """The runbook and the skill hard-require clio guidance topics by name.
+
+    A typo or a rename on either side surfaces only at runtime, because this repository cannot resolve
+    clio's guidance catalog. Pinning the exact names here at least makes a local typo a CI failure, and
+    documents which cross-repo names this toolkit depends on.
+    """
+
+    REQUIRED_TOPICS = ["get-guidance name=workplaces", "get-guidance name=home-page"]
+
+    def test_implementation_runbook_names_the_topics_exactly(self):
+        content = read_text(IMPLEMENTATION_RUNBOOK)
+        for topic in self.REQUIRED_TOPICS:
+            self.assertIn(topic, content, f"runbook must name {topic!r} exactly")
+
+    def test_orchestrator_names_the_workplaces_topic_exactly(self):
+        self.assertIn("get-guidance name=workplaces", read_text(ORCHESTRATOR_SKILL))
 
 
 if __name__ == "__main__":

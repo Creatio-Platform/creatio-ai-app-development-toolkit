@@ -157,7 +157,7 @@ First-turn latency rule:
 - The first turn should include:
   - a short "What I understood"
   - the main highest-priority business discovery questions, up to the 10-question ceiling — cover the full critical set in this one batch, since a follow-up batch often does not happen
-  - for a NEW app, navigation placement and its audience among those questions (see the business-discovery priorities below) — it is a plan-level decision, and the file that documents it is not readable this turn
+  - for a NEW app or a new section, navigation placement and its audience among those questions (see the business-discovery priorities below) — it is a plan-level decision, and the file that documents it is not readable this turn
 - The first discovery questions should appear in that same first user-facing interaction, whether via compact text or structured input.
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
 - Prefer to cover the full critical set in the first batch (up to the 10-question ceiling); ask a follow-up batch only if something critical genuinely remains, since a second round often does not happen.
@@ -169,8 +169,8 @@ Business discovery must follow a Business Analyst style:
 
 - ask only the minimum critical questions
 - keep the business discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest; technical questions stay limited to execution blockers)
-- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria, and — for a NEW app — navigation placement and its audience
-- navigation placement is always critical for a new app, never a "minor implementation question": ask which workplace the app's section (and its home page, if requested) belongs to — a new workplace named for the app, `My applications`, or a named existing one — and which roles should see it. It cannot be safely assumed: `create-app` places the section in `My applications`, which is granted to `System administrators` only, so a defaulted answer ships an app ordinary users cannot open. Keep it in the FIRST batch; the reference material that explains it (`context/business-checklist.md`) is deliberately not read until after that batch, so this line is the only thing carrying it there.
+- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria, and — for a NEW app or a new section — navigation placement and its audience
+- navigation placement is always critical for a NEW app or a new section, never a "minor implementation question": ask which workplace the section (and its home page, if requested) belongs to — a new workplace named for the app, `My applications`, or a named existing one — and which roles should see it. It cannot be safely assumed: `create-app` and `create-app-section` both place the section in `My applications`, which is granted to `System administrators` only, so a defaulted answer ships a section ordinary users cannot open. This applies to an added section as much as to a whole new app — the entrypoint trigger covers both, so the first batch must too. Keep it in the FIRST batch; the reference material that explains it (`context/business-checklist.md`) is deliberately not read until after that batch, so this line is the only thing carrying it there.
 - avoid minor implementation questions during approval of the business plan
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
