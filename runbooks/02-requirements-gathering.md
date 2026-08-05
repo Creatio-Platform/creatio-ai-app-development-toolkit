@@ -37,7 +37,7 @@ Read these repository files for the BA stage:
 5. Ask any remaining critical business questions in a follow-up batch only if needed — prefer to cover them all in the first batch.
 6. Show "What still needs clarification" only after the first clarification round if it still adds value.
 7. Ask technical questions only for true blockers.
-8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round.
+8. Run a pre-analysis pass on the draft against the full checklist and section contract only after the first clarification round. As part of this pass, invoke the **`creatio-schema-naming`** skill for every object/column code before it enters `## 3. Object Model` (see "Schema Naming (Mandatory)" below).
 9. Resolve any material contradictions or missing carriers before showing the draft.
 10. Present the full BA-style Business Plan followed immediately by the Technical Implementation Handoff in the same message.
 11. Ask for natural-language approval using this exact closing line:
@@ -64,6 +64,15 @@ Ground the plan in Creatio's real Freedom UI capabilities instead of inventing U
 - **Version scoping**: pass `environment-name` once the environment is configured (after Gate R) so the catalog matches the target platform version. During the BA stage the environment is usually still deferred; in that case the catalog falls back to the `latest` superset, which may list components not present in the target. Treat any non-trivial/advanced component as **provisional** until it is confirmed against the real environment version during implementation.
 - **Use it to shape the plan**: only propose tabs, widgets, lists, lookups, or specialized controls that exist in the catalog. If a requirement implies a control that is not available, flag it as a gap (and a possible non-AI implementation path) rather than silently planning it.
 - **Keep business language in the BA body**: the visible `## 6. UX Expectations` section stays business-facing (fields, filters, groups by Title). Concrete component type names (e.g. `crt.TabContainer`) belong in the Technical Implementation Handoff, not in the numbered BA sections.
+
+## Schema Naming (Mandatory)
+
+Naming is a required plan-formation step, not an implementation-only concern. Before any object or column code appears in `## 3. Object Model` — and therefore before the Business Plan is presented for approval — you MUST invoke the **`creatio-schema-naming`** skill and apply its rules together with `context/naming-conventions.md`. This is non-optional: the codes shown in the Business Plan must be the names produced or validated by `creatio-schema-naming`, not names invented from memory.
+
+- Route every object, title, column, field, lookup, Guid/UId, and relation-object name through the skill before it appears in the draft.
+- Do this during the pre-analysis pass (after the first clarification round), alongside `Component-Aware Planning` — not on the first turn, so first-turn latency is preserved.
+- Business Plan codes stay prefix-free PascalCase (see `Business Modeling Rules`); the skill governs the base names, and clio MCP applies the environment `SchemaNamePrefix` during implementation.
+- Inconsistent or non-conventional names are expensive to correct once the schema is published — fixing them at plan time is the whole point of this gate.
 
 ## Checklist Authority
 
@@ -149,6 +158,8 @@ Before presenting the Business Plan to the developer, verify the assembled draft
 
 If any required section is absent, renamed, or out of order, do not present the draft.
 Regenerate the missing section from conversation context or business discovery before presenting.
+
+Also confirm the `creatio-schema-naming` skill was invoked and that every object/column code in `## 3. Object Model` is a skill-produced or skill-validated name. If naming was skipped, run it and reconcile the codes before presenting.
 
 ## Hard Fail Conditions
 
@@ -334,7 +345,7 @@ If validation raises `WorkflowError`, fix the artifact and re-validate before pr
 
 ## Business Modeling Rules
 
-- Business Plan codes are plain PascalCase without any prefix (e.g., `TodoList`, `Status`). Do not add or assume a prefix — clio MCP applies it during implementation.
+- Business Plan codes are plain PascalCase without any prefix (e.g., `TodoList`, `Status`). Do not add or assume a prefix — clio MCP applies it during implementation. Codes must come from the mandatory `creatio-schema-naming` invocation (see "Schema Naming (Mandatory)"), not be invented ad hoc.
 - Do not add inherited base columns to requirements.
 - Enum-like fields must be separate lookup objects.
 - For canonical main-entity rules, record-title assumptions, and lookup display semantics, follow the current `clio` MCP app-modeling guidance instead of restating those mechanics here.
