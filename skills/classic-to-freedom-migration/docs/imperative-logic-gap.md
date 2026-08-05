@@ -365,5 +365,14 @@ precision the engine cannot defend.
 **Left for `classic-ui-expert`.** The engine can now enumerate and evidence every member, but it
 cannot say what a behaviour *is* when the trigger is unresolved, the message counterpart is in
 another schema, or the logic lives in a mixin. Step 5 of `SKILL.md` routes those rows to that skill
-(by name — no cross-skill file references) and, until it exists, requires the same reading be done
-by hand and recorded.
+(by name — no cross-skill file references).
+
+*Updated 2026-08-05:* that skill now exists in the toolkit, so the hand-off is no longer prose with
+a "until it is available, read it yourself" fallback — `SKILL.md` step **5.1** mandates a
+`classic-ui-expert` **sub-agent run at plan time** whenever any of the four unanswerable row types is
+present (`handlerStubs[].triggers` empty · `handlerStubs[].externalRef` · a `message` decision · a
+`mixin` decision), one invocation per surface, its report written to the migration folder and indexed
+into the plan's `Adjustments` list. Two boundaries the wiring deliberately keeps: the cards feed the
+`⚠ Imperative logic` *ported / dropped / blocked* marking, **not** `manifest.memberDispositions`
+(which stays scoped to `unaccounted` members); and the sub-agent is never asked for a Freedom target,
+because its own contract forbids target-platform advice.

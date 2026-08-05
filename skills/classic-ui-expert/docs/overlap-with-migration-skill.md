@@ -25,6 +25,17 @@ legitimately differ. Skills are self-contained installable units; cross-skill fi
 references would add a hidden install-layout coupling no test guards, so nothing is shared
 sideways.
 
+**The consumer edge now exists (added 2026-08-05).** The migration skill's step **5.1** runs this
+skill as a **sub-agent at plan time** whenever its engine produces a row it cannot explain — a
+method with no traced trigger, a method assigned from another module, a `message`, a `mixin` — one
+invocation per surface, with the report path passed in explicitly so it lands in that migration's
+folder. Two properties of this skill are what that wiring depends on, so a change to either breaks a
+live consumer: the **whole-surface** scope (a per-row invocation would break the member-ledger
+completeness proof, so the migration side indexes cards against its rows *after* the run), and the
+**no-target-advice** non-goal (the consumer selects the Freedom target itself and only reads the
+cards' acceptance criteria). Nothing about the output contract changed for it — cards + ledger +
+zeros + refusals in one file is exactly what a migration consumes.
+
 ## Per-file verdicts
 
 | classic-ui-expert file | Overlap in the project | Verdict |
