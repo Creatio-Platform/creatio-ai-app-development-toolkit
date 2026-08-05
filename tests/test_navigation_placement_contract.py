@@ -76,6 +76,15 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         self.assertNotIn("for a NEW app — navigation placement", content)
         self.assertIn("for a NEW app or a new section", content)
 
+    def test_option_order_depends_on_whether_the_app_already_exists(self):
+        # Broadening the rule to sections without reordering the options produced a real defect: a
+        # measured add-section run recommended creating a second workplace named after an app that
+        # already had one, which is the SysWorkplace.Name collision the clio guide warns about.
+        content = read_text(AGENTS)
+        self.assertIn("for a NEW app offer a new workplace named for the app first", content)
+        self.assertIn("EXISTING app offer the workplace that app's sections already live in first", content)
+        self.assertIn("is not unique", content)
+
     def test_first_turn_reason_names_the_section_path_too(self):
         content = read_text(AGENTS)
         self.assertIn("create-app-section", content)
