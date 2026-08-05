@@ -26,7 +26,7 @@ Section mapping rules:
 - `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
 - `Roles and Permissions` must include actors, responsibilities, personas, and access posture.
 - `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
-- `Analytics` is mandatory and always proposed by the agent as a domain expert (never generic filler). It contains `### 7.1 Section analytics` (per-section, role-targeted dashboards, ~2-3 per section unless the developer asks for more) and `### 7.2 Workplace analytics` (app/workplace-level dashboards). Each dashboard names its `dashboard:` title, the role it `serves role:`, its `scope:`, and its `widgets:` (metrics, charts, lists) in business terms; widgets may draw on any site object (the app's own objects and standard platform objects). The section must be populated, never left empty or `TBD`.
+- `Analytics` is mandatory and always proposed by the agent as a domain expert (never generic filler). It contains `### 7.1 Section analytics` (per-section, role-targeted dashboards, ~2-3 per section unless the developer asks for more) and `### 7.2 Workplace analytics` (app/workplace-level dashboards). Each dashboard names its `dashboard:` title, its `access rights: All Employees` (a static default — dashboards are created visible to everyone; the role a dashboard is for drives its content, not its access), its `scope:`, and its `widgets:` (metrics, charts, lists) in business terms; widgets may draw on any site object (the app's own objects and standard platform objects). The section must be populated, never left empty or `TBD`.
 
 ---
 

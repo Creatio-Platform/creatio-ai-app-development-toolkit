@@ -67,7 +67,6 @@ Tasks move through New, Active, and Done.
 
 - dashboard: Task overview
   - access rights: All Employees
-  - serves role: Team member
   - scope: open tasks by status
   - widgets: metric — open tasks count; chart — tasks by status (bar)
 
@@ -75,7 +74,6 @@ Tasks move through New, Active, and Done.
 
 - dashboard: Team workload
   - access rights: All Employees
-  - serves role: Team member
   - scope: tasks across the whole app
   - widgets: metric — total tasks; list — tasks due this week
 
@@ -216,7 +214,6 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         doc = VALID_DOC.replace(
             "- dashboard: Task overview\n"
             "  - access rights: All Employees\n"
-            "  - serves role: Team member\n"
             "  - scope: open tasks by status\n"
             "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n",
             "",
@@ -228,10 +225,66 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
     def test_access_rights_missing_on_a_dashboard_is_rejected(self):
         # Every dashboard must state its access rights in the plan (surfaced to the
         # developer). Drop the 7.1 dashboard's access-rights line; 7.2 keeps its own.
-        doc = VALID_DOC.replace("  - access rights: All Employees\n  - serves role: Team member\n  - scope: open tasks by status\n", "  - serves role: Team member\n  - scope: open tasks by status\n")
+        doc = VALID_DOC.replace("  - access rights: All Employees\n  - scope: open tasks by status\n", "  - scope: open tasks by status\n")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("access rights:", str(ctx.exception))
+
+    def test_empty_access_rights_value_is_rejected(self):
+        # Presence of the label is not enough: the value after `access rights:` must
+        # be non-empty (an agent leaving it blank must not pass).
+        doc = VALID_DOC.replace(
+            "- dashboard: Task overview\n  - access rights: All Employees\n",
+            "- dashboard: Task overview\n  - access rights:\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("access rights:", str(ctx.exception))
+
+    def test_non_all_employees_access_rights_is_rejected(self):
+        # Access is a STATIC default: the validator pins the exact value
+        # `All Employees`. A narrower/other grant (e.g. a role name) must fail, so an
+        # agent cannot silently invent a different access scope.
+        doc = VALID_DOC.replace(
+            "- dashboard: Task overview\n  - access rights: All Employees\n",
+            "- dashboard: Task overview\n  - access rights: Managers\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("All Employees", str(ctx.exception))
+
+    def test_empty_widgets_value_is_rejected(self):
+        # Same non-empty-value rule for widgets: a bare `widgets:` must fail.
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n",
+            "  - widgets:\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
+
+    def test_order_of_71_and_72_does_not_matter_when_both_populated(self):
+        # The requirement is "both subsections present AND both populated" — the
+        # order between 7.1 and 7.2 is irrelevant. A doc that lists 7.2 before 7.1,
+        # with both populated, must still PASS (not be rejected on layout).
+        sec71 = (
+            "### 7.1 Section analytics\n\n"
+            "#### Tasks section dashboards\n\n"
+            "- dashboard: Task overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: open tasks by status\n"
+            "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n\n"
+        )
+        sec72 = (
+            "### 7.2 Workplace analytics\n\n"
+            "- dashboard: Team workload\n"
+            "  - access rights: All Employees\n"
+            "  - scope: tasks across the whole app\n"
+            "  - widgets: metric — total tasks; list — tasks due this week\n\n"
+        )
+        assert sec71 in VALID_DOC and sec72 in VALID_DOC, "fixture blocks drifted"
+        doc = VALID_DOC.replace(sec71 + sec72, sec72 + sec71)  # 7.2 now precedes 7.1
+        validate_requirements_doc(doc)  # must not raise
 
     def test_empty_workplace_analytics_72_is_rejected(self):
         # 7.2 must not be empty: drop its only dashboard block, leaving the 7.1
@@ -239,7 +292,6 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         doc = VALID_DOC.replace(
             "- dashboard: Team workload\n"
             "  - access rights: All Employees\n"
-            "  - serves role: Team member\n"
             "  - scope: tasks across the whole app\n"
             "  - widgets: metric — total tasks; list — tasks due this week\n",
             "",

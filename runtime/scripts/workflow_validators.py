@@ -28,7 +28,7 @@ LOOKUPS_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Lookups\s*$", re.MULTILI
 SECTION_OBJECT_HEADING_RE = re.compile(r"^\s*#{3,6}\s+3\.\d+\s+Section object:", re.MULTILINE)
 TABLE_HEADER_RE = re.compile(
     r"^\s*\|\s*Title\s*\|\s*Code\s*\|\s*Description\s*\|\s*Data type\s*\|\s*Required\s*\|\s*Default\s*\|",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 UX_CARRIER_RE = re.compile(r"^[\s-]*list (columns|filters):", re.IGNORECASE)
 # `list columns:` must be present as a real line-anchored label. A plain
@@ -72,13 +72,19 @@ PAGE_FORM_LABEL_RE = re.compile(r"(?im)^[\s\-*`]*(?:form fields:|form groups:|ad
 # checks enforce "the section is filled", not merely "the heading exists".
 ANALYTICS_SECTION_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.1\s+Section analytics\b")
 ANALYTICS_WORKPLACE_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.2\s+Workplace analytics\b")
-DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:")
-DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:")
-# Every dashboard must state its access rights in the plan (default All Employees,
-# narrowed to serves role for sensitive data) so the developer sees who each
-# dashboard is visible to before approval, and the implementation applies exactly
-# that via dashboard-rights.
-DASHBOARD_ACCESS_RIGHTS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:")
+# Each dashboard field must carry a NON-EMPTY value, not just the label: the
+# trailing `[ \t]*\S` requires at least one non-space character after the colon,
+# so `access rights:` / `widgets:` / `dashboard:` with nothing (or only
+# whitespace) after them are rejected instead of passing as "present".
+DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:[ \t]*\S")
+DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:[ \t]*\S")
+# Dashboard access is a STATIC default: every generated dashboard is created
+# visible to `All Employees`. The plan surfaces it per dashboard for transparency,
+# and because the value is a known constant we pin the exact value (not just
+# "non-empty") — this both catches a typo/placeholder and prevents an agent from
+# silently inventing a narrower/other grant. (The role a dashboard is for drives
+# its CONTENT — which metrics/charts — not its access rights.)
+DASHBOARD_ACCESS_RIGHTS_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:[ \t]*All Employees[ \t]*$")
 # Section analytics (7.1) must be grouped by section under a
 # `#### <Section> section dashboards` heading, so it is explicit which section
 # hosts each dashboard — never a flat list. Match the grouping heading.
@@ -98,6 +104,17 @@ def extract_section(text, start_heading, end_heading=None):
         if capture:
             captured.append(line)
     return "\n".join(captured)
+
+
+def iter_labeled_blocks(text, start_re):
+    """Yield each block of `text` delimited by `start_re` matches: block i runs from
+    the i-th match's start to the next match's start (the last block runs to the end
+    of `text`). Shared by the section-3 object-block and section-7 dashboard-block
+    checks so the block-boundary logic lives in exactly one place."""
+    starts = [m.start() for m in start_re.finditer(text)]
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        yield text[start:end]
 
 
 def normalize_title_list(text):
@@ -127,22 +144,19 @@ def validate_requirements_doc(content: str) -> None:
     section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
     section6_text = extract_section(text, UX_HEADING, ANALYTICS_HEADING)
     section7_analytics_text = extract_section(text, ANALYTICS_HEADING, EDGE_CASES_HEADING)
-    lines = section3_text.splitlines()
-    object_indices = [index for index, line in enumerate(lines) if OBJECT_HEADING_RE.search(line)]
-    if not object_indices:
+    object_blocks = list(iter_labeled_blocks(section3_text, OBJECT_HEADING_RE))
+    if not object_blocks:
         raise WorkflowError("Requirements doc failed: section 3 must contain at least one Section object or Object heading")
-    for pos, start in enumerate(object_indices):
-        end = object_indices[pos + 1] if pos + 1 < len(object_indices) else len(lines)
-        block = lines[start:end]
-        block_text = "\n".join(block)
+    for block_text in object_blocks:
+        heading = block_text.splitlines()[0].strip()
         for marker in ("Title:", "Code:", "Primary display field:", "Description:"):
             if marker not in block_text:
                 raise WorkflowError(
-                    f"Requirements doc failed: object block starting at '{lines[start]}' is missing metadata marker '{marker}'"
+                    f"Requirements doc failed: object block starting at '{heading}' is missing metadata marker '{marker}'"
                 )
-        if not any(TABLE_HEADER_RE.search(line) for line in block):
+        if not TABLE_HEADER_RE.search(block_text):
             raise WorkflowError(
-                f"Requirements doc failed: object block starting at '{lines[start]}' must include its own field table"
+                f"Requirements doc failed: object block starting at '{heading}' must include its own field table"
             )
     ba_body = text.split("## Technical Implementation Handoff")[0] if "## Technical Implementation Handoff" in text else text
     checklist_match = CHECKLIST_SOURCE_RE.search(ba_body)
@@ -193,27 +207,34 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.1 Section analytics' subsection")
     if not ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text):
         raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.2 Workplace analytics' subsection")
-    dashboard_positions = [m.start() for m in DASHBOARD_LABEL_RE.finditer(section7_analytics_text)]
-    if not dashboard_positions:
+    dashboard_blocks = list(iter_labeled_blocks(section7_analytics_text, DASHBOARD_LABEL_RE))
+    if not dashboard_blocks:
         raise WorkflowError("Requirements doc failed: section 7 Analytics must describe at least one 'dashboard:' (the section is mandatory and must be populated, not left empty)")
-    # Enforce `widgets:` per dashboard, not once for the whole section: each block
-    # runs from one `dashboard:` label to the next, and each must carry its own
-    # `widgets:` line (a two-dashboard plan where only one lists widgets is invalid).
-    for i, start in enumerate(dashboard_positions):
-        end = dashboard_positions[i + 1] if i + 1 < len(dashboard_positions) else len(section7_analytics_text)
-        block = section7_analytics_text[start:end]
+    # Check each dashboard block independently, not once for the whole section:
+    # every block must carry its own `widgets:` line and the static `access rights:
+    # All Employees` line (a two-dashboard plan where only one is complete is invalid).
+    for block in dashboard_blocks:
         if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
-            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must list its own 'widgets:' line")
-        if not DASHBOARD_ACCESS_RIGHTS_LABEL_RE.search(block):
-            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must state its own 'access rights:' line (who it is visible to; default 'All Employees', narrowed to the serving role for sensitive data)")
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must list a non-empty 'widgets:' line")
+        if not DASHBOARD_ACCESS_RIGHTS_RE.search(block):
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must state 'access rights: All Employees' (dashboard access is a static default — every dashboard is created visible to All Employees; the role a dashboard is for drives its content, not its access)")
     # Both subsections must be independently populated: a section-wide dashboard
     # count would let a hollow 7.1 (grouping heading, zero dashboards, all dashboards
     # under 7.2) or an empty 7.2 pass. Slice §7 at the subheadings and require at
     # least one `dashboard:` in EACH region.
+    #
+    # The slicing is ORDER-INDEPENDENT: each subsection runs from its own heading to
+    # the NEXT subsection heading (whichever comes next), or the end of §7. The order
+    # of 7.1 vs 7.2 does not matter — what matters is that both are present and both
+    # are populated — so a doc that lists 7.2 before 7.1 is judged on content, not
+    # rejected on layout.
     m71 = ANALYTICS_SECTION_SUBHEADING_RE.search(section7_analytics_text)
     m72 = ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text)
-    section_71_text = section7_analytics_text[m71.end():(m72.start() if m72 else len(section7_analytics_text))]
-    section_72_text = section7_analytics_text[m72.end():] if m72 else ""
+    end_of_analytics = len(section7_analytics_text)
+    stop_71 = m72.start() if m72.start() > m71.start() else end_of_analytics
+    stop_72 = m71.start() if m71.start() > m72.start() else end_of_analytics
+    section_71_text = section7_analytics_text[m71.end():stop_71]
+    section_72_text = section7_analytics_text[m72.end():stop_72]
     if not DASHBOARD_LABEL_RE.search(section_71_text):
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must contain at least one 'dashboard:' (per-section dashboards are mandatory, not just a grouping heading)")
     if not DASHBOARD_LABEL_RE.search(section_72_text):

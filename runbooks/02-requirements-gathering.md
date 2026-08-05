@@ -293,9 +293,8 @@ Organize `## 7. Analytics` into two required subsections:
 Describe each dashboard with these labels (colon included) — the validator checks `dashboard:`, `access rights:`, and `widgets:` verbatim:
 
 - `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
-- `access rights:` — **who the dashboard is created visible to**, stated in business terms so the developer sees and can adjust it before approval. Default to `All Employees`; narrow it to the role(s) from `serves role:` when the dashboard aggregates sensitive data (financials, HR, personal data) that should not be company-wide. This is the value the implementation applies via `dashboard-rights`, so what the plan shows is what gets created.
-- `serves role:` — the role from `## 2. Roles and Permissions` this dashboard is for, e.g. `serves role: Sales manager`
-- `scope:` — the data slice / question it answers, e.g. `scope: open orders by stage this quarter`
+- `access rights:` — **who the dashboard is created visible to**. This is a **static default: always `All Employees`** (every generated dashboard is visible to everyone). It is stated per dashboard purely so the developer sees the grant in the plan; write it verbatim as `access rights: All Employees`. The role a dashboard is for drives its **content** (which metrics/charts/slices — see `scope:`/`widgets:`), **not** its access rights.
+- `scope:` — the data slice / question it answers, framed for the role that uses this dashboard, e.g. `scope: open orders by stage this quarter`
 - `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
 
 Render each dashboard block like this (the `access rights:` line is mandatory and sits right under the title):
@@ -303,7 +302,6 @@ Render each dashboard block like this (the `access rights:` line is mandatory an
 ```
 - dashboard: Top clients
   - access rights: All Employees
-  - serves role: Shop Owner / Administrator
   - scope: which customers visit most often
   - widgets: chart — top clients by number of work orders (bar); metric — total clients; list — clients ranked by visits
 ```
@@ -323,10 +321,9 @@ Before finalizing the BA draft, verify at minimum:
 - the visible document reads as a business plan, not a validator report or machine contract
 - sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
-- `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, and at least one dashboard block with its `dashboard:` title, `access rights:` line, and `widgets:` line — it is never left empty or `TBD`
+- `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, and every dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, and a non-empty `widgets:` line — the validator rejects a missing/value-less line (and an `access rights:` value other than `All Employees`), so none may be left empty or `TBD`
 - `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list without the section grouping)
-- every dashboard states its `access rights:` (default `All Employees`; narrowed to `serves role:` for sensitive data) so the developer sees, per dashboard, who it will be visible to before approving
-- each dashboard `serves role:` names a role that exists in `## 2. Roles and Permissions`
+- every dashboard states `access rights: All Employees` (the static default — dashboards are created visible to everyone; the validator pins this exact value). The role a dashboard is for shapes its **content** (`scope:`/`widgets:`), not its access
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 

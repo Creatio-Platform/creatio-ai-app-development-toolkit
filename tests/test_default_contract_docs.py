@@ -685,6 +685,16 @@ class DefaultContractDocsTests(unittest.TestCase):
         # place analytics ON FreedomDashboards, so assert the prohibition phrasing.
         self.assertRegex(impl, r"(?i)(never|do not|not)[^\n]{0,80}FreedomDashboards")
         self.assertIn("Known limitation (shared workplace)", impl)
+        # The pre-write clobber check is the safety-critical §7.2 fix. Names alone
+        # (BaseHomePage / SysWorkplace.HomePageUId) do not prove the guard survives a
+        # rewrite, so assert the actual safety SEMANTICS: read the current binding
+        # BEFORE writing, and require confirmation instead of silently overwriting.
+        # Use [\s\S] (not [^\n]): the runbook prose is hard-wrapped, so these phrases
+        # legitimately span source lines.
+        self.assertRegex(impl, r"(?i)pre-write clobber check")
+        self.assertRegex(impl, r"(?i)read[\s\S]{0,80}HomePageUId[\s\S]{0,40}first")
+        self.assertRegex(impl, r"(?i)(confirm|confirmation)[\s\S]{0,80}overwrit")
+        self.assertRegex(impl, r"(?i)(do\s*\*{0,2}\s*not|never)[\s\S]{0,60}silently[\s\S]{0,20}overwrit")
 
     def test_prose_section_count_matches_required_sections(self):
         # The Business Plan section count is asserted in prose across several docs and

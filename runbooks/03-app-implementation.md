@@ -109,12 +109,11 @@ For each dashboard in the plan:
   check above makes an overwrite explicit (surfaced and confirmed) instead of silent, but it does not
   remove the limitation: a truly app-scoped workplace (each app owning its own home page and audience)
   depends on the create-workplace capability tracked under ENG-88474.
-- **Access** — apply exactly the `access rights:` the plan states for each dashboard (the developer
-  saw and approved it per dashboard at Gate R). `All Employees` is the default; when the plan narrows
-  a dashboard to specific role(s) (for sensitive data), grant `dashboard-rights` to those role(s)
-  instead of `All Employees`. Do not hardcode `All Employees` regardless of the plan. Ship the grants
-  with the package per `dashboard-rights` so they survive a package transfer (grants are data, not
-  schema, and are otherwise lost on transfer).
+- **Access** — dashboard access is a **static default: `All Employees`**. Every dashboard is created
+  visible to everyone (the plan states `access rights: All Employees` per dashboard for transparency).
+  Ship the grant with the package per `dashboard-rights` so it survives a package transfer (grants are
+  data, not schema, and are otherwise lost on transfer). Role-scoped (least-privilege) access is out of
+  scope for now and belongs to the future roles work — do not attempt to derive per-role grants here.
 
 Widgets may draw on any site object named in the plan — the app's own entities and standard platform
 entities alike.
