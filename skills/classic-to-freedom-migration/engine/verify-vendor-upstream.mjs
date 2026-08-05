@@ -57,11 +57,10 @@ function integrityOk(tarball, integrity) {
   try { return createHash(m[1]).update(tarball).digest("base64") === m[2]; } catch { return false; }
 }
 
-// Anchor ONE pin to upstream npm: fetch <package>@<version>, verify the tarball against the registry's
-// own dist.integrity, extract the pinned dist file and assert its LF-normalized SHA-256 matches. Logs the
-// verdict; returns true on a match, false on any mismatch / network / registry failure. (Kept out of main()
-// so the per-pin fetch/verify branches don't stack up as one big function.)
-async function anchorPin(name, pin) {
+// Anchor ONE pin to upstream npm: fetch the published tarball, extract the vendored file, compare its
+// LF-normalized SHA-256 to the recorded pin. Returns { ok, detail } and never throws — network / registry
+// failures become ok:false with a diagnostic (so main() stays a simple loop; keeps each under Sonar CC 15).
+async function anchorOnePin(name, pin) {
   const spec = `${pin.package}@${pin.version}`;
   try {
     const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pin.package)}`, { headers: { accept: "application/json" } });
@@ -76,18 +75,10 @@ async function anchorPin(name, pin) {
     const entry = readTarEntry(gunzipSync(tgz), inTar);
     if (!entry) throw new Error(`'${inTar}' not found in ${spec} tarball`);
     const upstream = sha256Lf(entry);
-    if (upstream === pin.sha256) {
-      console.log(`  ✓ ${name}: pinned SHA-256 matches upstream npm ${spec} (${upstream.slice(0, 16)}…)`);
-      return true;
-    }
-    console.error(`  ✗ ${name}: pinned SHA-256 does NOT match upstream npm ${spec}`);
-    console.error(`      pinned   ${pin.sha256}`);
-    console.error(`      upstream ${upstream}`);
-    console.error(`      The vendored bytes (or the pin) diverge from what npm publishes for ${pin.version}. Re-vendor from the real release.`);
-    return false;
+    if (upstream === pin.sha256) return { ok: true, detail: `pinned SHA-256 matches upstream npm ${spec} (${upstream.slice(0, 16)}…)` };
+    return { ok: false, detail: `pinned SHA-256 does NOT match upstream npm ${spec}\n      pinned   ${pin.sha256}\n      upstream ${upstream}\n      The vendored bytes (or the pin) diverge from what npm publishes for ${pin.version}. Re-vendor from the real release.` };
   } catch (e) {
-    console.error(`  ✗ ${name}: could not anchor ${spec} to upstream npm (${e.message})`);
-    return false;
+    return { ok: false, detail: `could not anchor ${spec} to upstream npm (${e.message})` };
   }
 }
 
@@ -100,7 +91,11 @@ async function main() {
   if (!names.length) { console.error("verify-vendor-upstream: provenance.json lists no files — nothing to anchor"); return 1; }
 
   let failed = 0;
-  for (const name of names) if (!(await anchorPin(name, files[name]))) failed++;
+  for (const name of names) {
+    const r = await anchorOnePin(name, files[name]);
+    if (r.ok) console.log(`  ✓ ${name}: ${r.detail}`);
+    else { console.error(`  ✗ ${name}: ${r.detail}`); failed++; }
+  }
   if (failed) { console.error(`\nverify-vendor-upstream: ${failed} of ${names.length} pin(s) NOT anchored to upstream npm`); return 1; }
   console.log(`verify-vendor-upstream: ${names.length} pin(s) anchored to upstream npm`);
   return 0;
