@@ -41,6 +41,14 @@ function childPageIssue(c) {
   // could never become true for a mutually-referencing graph — the only escape being a FALSE editPage/editable
   // assertion, exactly the dodge the contract forbids. (The renderer marks the row "already mapped above (cycle)".)
   if (c.cyclic) return null;
+  // The child entity ALREADY has a shipped Freedom form page (e.g. a related Contact list opens
+  // `Contacts_FormPage`). Nothing is rebuilt — the Freedom related list opens the page that exists — so this is a
+  // RESOLVED "Reuse", not a gap. Without it the only escapes were `editPage:false` ("no Classic page exists") and
+  // `editable:false` ("view/attach-only"), both FALSE for such a child, so the honest answer could not be recorded
+  // and the gate forced folding the child's whole Classic tree (on a base entity: effectively the whole product).
+  // Positive evidence required: the agent supplies the Freedom page NAME, verified with list-entity-client-schemas
+  // (a `kind: "freedom"` section/edit page for the CHILD entity) — the absence of a working fold is NOT a reason.
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return null;
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
     : null;
@@ -224,6 +232,8 @@ function enumerateChildPages(changeSet, detailSchemas) {
       editPage: ds ? (ds.editPage ?? null) : null, // preserve an explicit `false` (agent verified: no page)
       editable: ds ? ds.editable : null,
       editableVerified: ds ? !!ds.editableVerified : false,
+      // agent-verified: the child entity already has a shipped Freedom form page → Reuse, nothing to rebuild
+      reuseFreedomPage: ds ? (ds.reuseFreedomPage ?? null) : null,
     };
   }).filter((c) => c.entity);
 }
@@ -232,6 +242,9 @@ function enumerateChildPages(changeSet, detailSchemas) {
 // isChildPage → child-scoped rendering (few-fields modal nudge, no section-level Print/Process). Extracted for CC.
 function foldChildPages(childPages, childSchemas, foldCtx) {
   for (const c of childPages) {
+    // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
+    // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
+    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) continue;
     const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
     if (!key) continue;
     const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
@@ -464,6 +477,9 @@ function parseDetailSchemas(manifest, bodyOf) {
       editPage: ("editPage" in eObj) ? eObj.editPage : editPageFromBody,
       editable: ("editable" in eObj) ? eObj.editable : editableFromBody,
       editableVerified: ("editable" in eObj),
+      // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
+      // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
+      reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
       addMode: detectAddMode(scanText), // custom add/edit mechanism (lookup / service / grid / add-disabled) across ALL layers, or null
       error: p.error || null,
       astDiagnostics: p.astDiagnostics || [],
@@ -762,7 +778,14 @@ export function runMigration(manifest, opts = {}) {
   // branch reached it), so reusing it under a different parent could mislabel a node — recompute those (rare).
   const memo = opts.memo instanceof Map ? opts.memo : new Map();
   const memoStats = opts.memoStats || { hits: 0, misses: 0 };
-  const foldCtx = { visited, memo, memoStats, baseDir }; // shared fold context for foldSubPage (child/typed/mini)
+  // THIS page's own identity must be on the branch before its children are folded, or a detail pointing back at the
+  // page itself (e.g. "related opportunities" on the Opportunity page) is never recognised as a cycle: `visited` is
+  // seeded by the CALLER, so at the ROOT it is empty and the page has no key of its own in it. The child keys are
+  // resolved as [editPage, entity, entity+"Page"], so the entity name is the identity a self-referencing child
+  // matches on. Seeded into the FOLD context only — `visited` itself stays as the caller passed it, because
+  // hollowFormIssue uses `visited.size === 0` to mean "this is the top-level page".
+  const selfKeys = [manifest.entity, manifest.entity && manifest.entity + "Page"].filter(Boolean);
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.

@@ -754,7 +754,9 @@ function renderChildMappings(childs) {
   const renderChild = (c, lvl) => {
     const h = "#".repeat(Math.min(6, lvl));
     P.push(`${h} Child page: ${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`);
-    if (c.cyclic) {
+    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
+      P.push(`> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. The Classic \`${esc(c.editPage || c.entity + "PageV2")}\` is NOT migrated — it is superseded, not skipped. Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`);
+    } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
     } else if (c.spec) {
       P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
@@ -871,7 +873,15 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
 function buildChildScopeRows(childs) {
   return childs.map((c) => {
     let target, call, label;
-    if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
+    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
+      target = `existing Freedom form \`${esc(c.reuseFreedomPage)}\``;
+      call = "Reuse (Freedom)"; label = esc(c.entity);
+    } else if (c.cyclic) {
+      // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
+      // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
+      target = "↩ already mapped above (cycle) — same page, mapped higher in this plan";
+      call = "Mapped above"; label = esc(c.resolvedFrom || c.editPage || c.entity);
+    } else if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
       // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
       // recommendation banner. Unknown count (unmapped real page) → generic.
       const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
@@ -978,7 +988,7 @@ export function renderPlan(result, opts = {}) {
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
   P.push(...buildChildScopeRows(childs), "");
-  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
+  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped). **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
   // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
   // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
   // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
@@ -1095,6 +1105,12 @@ function buildPageRows(result, opts, pm, typed, fill) {
       { label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).`, vk: { type: "onstand", evidence: "miniPageWired", what: "add-purpose RelatedPage binding check", miss: "'+ New' still opens the full form" } },
     );
   }
+  // A `Reuse (Freedom)` child is NOT a no-op deliverable: which page a related list opens is a RelatedPage binding —
+  // a config record, exactly like the mini-page "+ New" wiring — so without it the list falls back to whatever the
+  // platform picks and the reuse decision is silently lost. ONE gated row for the whole set (as with typed routing),
+  // so `reuseFreedomPage` cannot trade a false-red gate for a false-green close report.
+  const reused = (result.childPages || []).filter((c) => typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage);
+  if (reused.length) pages.push({ label: `Reused Freedom child pages bound (${reused.length}) — create the RelatedPage binding for each related list whose child already has a Freedom form (${reused.map((c) => "`" + esc(c.reuseFreedomPage) + "`").join(" · ")}); nothing is rebuilt, but an unbound list does not open the reused page.`, vk: { type: "onstand", evidence: "reuseBindings", what: "RelatedPage binding check per reused child list", miss: "a related list does not open the existing Freedom form" } });
   if (pm.sectionSchema || result.section) pages.push({ label: "Navigable section registered — the Freedom section appears in the app menu (`create-app-section`); the pages above are not reachable without it", vk: { type: "onstand", evidence: "sectionRegistered", what: "app-menu section-registration check", miss: "the section is not in the menu — its pages are unreachable" } });
   return pages;
 }

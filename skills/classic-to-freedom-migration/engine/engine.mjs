@@ -144,9 +144,12 @@ function buildSchemaResult(pkg, src, parseError, s, amdDeps) {
         // classic STANDARD shape: actionMenuItems.addItem(this.getButtonMenuItem({ "Click": {"bindTo": "handler"} }))
         // — the Click handler IS the action identity. Also the direct "Click": "handler" form. This is what the
         // old Tag/navigate-only patterns missed (e.g. `createRegistry`), so real section actions were dropped.
-        ...[...body.matchAll(/"Click"\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
+        // The key itself is UNQUOTED in most hand-written schemas (`Click: {bindTo: "setOwner"}`), so the quotes
+        // around Click / Tag must be optional — requiring them dropped every action written in that style, which is
+        // exactly the "section actions dropped" trap this pattern exists to prevent.
+        ...[...body.matchAll(/"?Click"?\s*:\s*(?:\{\s*"?bindTo"?\s*:\s*)?["']([A-Za-z]\w+)["']/g)].map(mt => mt[1]),
         // alternative/older shapes: menu-item handler Tags and navigate/run hints
-        ...[...body.matchAll(/"Tag"\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
+        ...[...body.matchAll(/"?Tag"?\s*:\s*"([^"]{2,})"/g)].map(mt => mt[1]),
         ...[...body.matchAll(/\b((?:navigateTo|goTo|run|open|process)[A-Z]\w+)/g)].map(mt => mt[1]),
       ])].filter((n) => n !== "callParent");
     })(),
