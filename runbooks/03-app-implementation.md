@@ -109,11 +109,14 @@ For each dashboard in the plan:
   check above makes an overwrite explicit (surfaced and confirmed) instead of silent, but it does not
   remove the limitation: a truly app-scoped workplace (each app owning its own home page and audience)
   depends on the create-workplace capability tracked under ENG-88474.
-- **Access** — dashboard access is a **static default: `All Employees`**. Every dashboard is created
-  visible to everyone (the plan states `access rights: All Employees` per dashboard for transparency).
-  Ship the grant with the package per `dashboard-rights` so it survives a package transfer (grants are
-  data, not schema, and are otherwise lost on transfer). Role-scoped (least-privilege) access is out of
-  scope for now and belongs to the future roles work — do not attempt to derive per-role grants here.
+- **Access** — this applies to **§7.1 dashboards only**. Section-dashboard access is a **static
+  default: `All Employees`**: every §7.1 dashboard is created visible to everyone (the plan states
+  `access rights: All Employees` per dashboard for transparency). Ship the grant with the package per
+  `dashboard-rights` so it survives a package transfer (grants are data, not schema, and are otherwise
+  lost on transfer). The **§7.2 home page has no per-page access grant** — its audience is the
+  workplace it is bound to (`SysAdminUnitInWorkplace`), so do not create `dashboard-rights` for it.
+  Role-scoped (least-privilege) access is out of scope for now and belongs to the future roles work —
+  do not attempt to derive per-role grants here.
 
 Widgets may draw on any site object named in the plan — the app's own entities and standard platform
 entities alike.

@@ -85,6 +85,13 @@ DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:[ \t]*\S")
 # silently inventing a narrower/other grant. (The role a dashboard is for drives
 # its CONTENT — which metrics/charts — not its access rights.)
 DASHBOARD_ACCESS_RIGHTS_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:[ \t]*All Employees[ \t]*$")
+# Any `access rights:` label (any value) — used to REJECT access rights under §7.2,
+# where the home page has no per-page grant (its audience is the workplace).
+ACCESS_RIGHTS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:")
+# §7.2 Workplace analytics is the app's single home page (a `BaseHomePage`) — one
+# `home page:` block with its widgets, not dashboards and not access-controlled per
+# page.
+HOME_PAGE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*home page:[ \t]*\S")
 # Section analytics (7.1) must be grouped by section under a
 # `#### <Section> section dashboards` heading, so it is explicit which section
 # hosts each dashboard — never a flat list. Match the grouping heading.
@@ -148,7 +155,11 @@ def validate_requirements_doc(content: str) -> None:
     if not object_blocks:
         raise WorkflowError("Requirements doc failed: section 3 must contain at least one Section object or Object heading")
     for block_text in object_blocks:
-        heading = block_text.splitlines()[0].strip()
+        # Use the first NON-BLANK line as the heading: OBJECT_HEADING_RE's leading
+        # `^\s*` can consume the blank line before the heading, so a block may start
+        # with an empty line — taking splitlines()[0] blindly would yield '' in the
+        # error message.
+        heading = next((ln for ln in block_text.splitlines() if ln.strip()), "").strip()
         for marker in ("Title:", "Code:", "Primary display field:", "Description:"):
             if marker not in block_text:
                 raise WorkflowError(
@@ -200,48 +211,50 @@ def validate_requirements_doc(content: str) -> None:
             raise WorkflowError(
                 "Requirements doc failed: an inline related list must not also list form fields / form groups / add page / edit page (inline add/edit happens in the grid; those labels imply a separate page)"
             )
-    # Section 7 Analytics must be populated, not a placeholder. The agent always
-    # proposes analytics as a domain expert, so both subsections must exist and at
-    # least one concrete dashboard with its widgets must be described.
-    if not ANALYTICS_SECTION_SUBHEADING_RE.search(section7_analytics_text):
-        raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.1 Section analytics' subsection")
-    if not ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text):
-        raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.2 Workplace analytics' subsection")
-    dashboard_blocks = list(iter_labeled_blocks(section7_analytics_text, DASHBOARD_LABEL_RE))
-    if not dashboard_blocks:
-        raise WorkflowError("Requirements doc failed: section 7 Analytics must describe at least one 'dashboard:' (the section is mandatory and must be populated, not left empty)")
-    # Check each dashboard block independently, not once for the whole section:
-    # every block must carry its own `widgets:` line and the static `access rights:
-    # All Employees` line (a two-dashboard plan where only one is complete is invalid).
-    for block in dashboard_blocks:
-        if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
-            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must list a non-empty 'widgets:' line")
-        if not DASHBOARD_ACCESS_RIGHTS_RE.search(block):
-            raise WorkflowError("Requirements doc failed: every dashboard in section 7 Analytics must state 'access rights: All Employees' (dashboard access is a static default — every dashboard is created visible to All Employees; the role a dashboard is for drives its content, not its access)")
-    # Both subsections must be independently populated: a section-wide dashboard
-    # count would let a hollow 7.1 (grouping heading, zero dashboards, all dashboards
-    # under 7.2) or an empty 7.2 pass. Slice §7 at the subheadings and require at
-    # least one `dashboard:` in EACH region.
-    #
-    # The slicing is ORDER-INDEPENDENT: each subsection runs from its own heading to
-    # the NEXT subsection heading (whichever comes next), or the end of §7. The order
-    # of 7.1 vs 7.2 does not matter — what matters is that both are present and both
-    # are populated — so a doc that lists 7.2 before 7.1 is judged on content, not
-    # rejected on layout.
+    # Section 7 Analytics must be present and populated. The two subsections have
+    # DIFFERENT shapes:
+    #   7.1 Section analytics = one or more dashboards (crt.Dashboards boards on section
+    #       list pages), grouped by section, each with a static `access rights: All
+    #       Employees` and its own `widgets:`.
+    #   7.2 Workplace analytics = the app's SINGLE home page (a BaseHomePage): one
+    #       `home page:` block with its widgets — NOT dashboards, and with NO per-page
+    #       `access rights:` (a home page's audience is the workplace it is bound to).
+    # Capture the subheading matches at the guard and reuse them for the slices below.
     m71 = ANALYTICS_SECTION_SUBHEADING_RE.search(section7_analytics_text)
+    if not m71:
+        raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.1 Section analytics' subsection")
     m72 = ANALYTICS_WORKPLACE_SUBHEADING_RE.search(section7_analytics_text)
+    if not m72:
+        raise WorkflowError("Requirements doc failed: section 7 Analytics is missing its '### 7.2 Workplace analytics' subsection")
+    # Order-independent slices: each subsection runs from its own heading to the next
+    # heading (whichever comes next) or the end of §7, so 7.1/7.2 order does not matter.
     end_of_analytics = len(section7_analytics_text)
     stop_71 = m72.start() if m72.start() > m71.start() else end_of_analytics
     stop_72 = m71.start() if m71.start() > m72.start() else end_of_analytics
     section_71_text = section7_analytics_text[m71.end():stop_71]
     section_72_text = section7_analytics_text[m72.end():stop_72]
-    if not DASHBOARD_LABEL_RE.search(section_71_text):
+
+    # 7.1: at least one dashboard, grouped by section, each block complete.
+    dashboard_blocks = list(iter_labeled_blocks(section_71_text, DASHBOARD_LABEL_RE))
+    if not dashboard_blocks:
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must contain at least one 'dashboard:' (per-section dashboards are mandatory, not just a grouping heading)")
-    if not DASHBOARD_LABEL_RE.search(section_72_text):
-        raise WorkflowError("Requirements doc failed: section 7.2 Workplace analytics must contain at least one 'dashboard:' (it must not be left empty)")
-    # The section-grouping rule applies to 7.1 only, so scope the check to the 7.1
-    # slice. Searching the whole §7 body would let a flat 7.1 pass whenever any
-    # grouping heading appears anywhere under 7.2.
     if not SECTION_DASHBOARD_GROUP_RE.search(section_71_text):
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must group dashboards by section under a '#### <Section> section dashboards' heading (so it is explicit which section hosts each dashboard), not a flat list")
+    for block in dashboard_blocks:
+        if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must list a non-empty 'widgets:' line")
+        if not DASHBOARD_ACCESS_RIGHTS_RE.search(block):
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must state 'access rights: All Employees' (dashboard access is a static default — every dashboard is created visible to All Employees; the role a dashboard is for drives its content, not its access)")
+
+    # 7.2: the app's single home page — a `home page:` block with widgets; NOT
+    # dashboards, and with NO per-page access rights.
+    if DASHBOARD_LABEL_RE.search(section_72_text):
+        raise WorkflowError("Requirements doc failed: section 7.2 Workplace analytics is the app's home page (a single page), not dashboards — describe it as one 'home page:' with its widgets, not 'dashboard:' blocks")
+    if ACCESS_RIGHTS_LABEL_RE.search(section_72_text):
+        raise WorkflowError("Requirements doc failed: the app home page (section 7.2) has no per-page 'access rights:' — its audience is the workplace it is bound to; remove the access-rights line")
+    home_page_blocks = list(iter_labeled_blocks(section_72_text, HOME_PAGE_LABEL_RE))
+    if len(home_page_blocks) != 1:
+        raise WorkflowError("Requirements doc failed: section 7.2 Workplace analytics must describe exactly one 'home page:' (the app's single home page) with its widgets")
+    if not DASHBOARD_WIDGETS_LABEL_RE.search(home_page_blocks[0]):
+        raise WorkflowError("Requirements doc failed: the section 7.2 home page must list its 'widgets:'")
 

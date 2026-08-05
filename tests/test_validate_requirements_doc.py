@@ -72,10 +72,9 @@ Tasks move through New, Active, and Done.
 
 ### 7.2 Workplace analytics
 
-- dashboard: Team workload
-  - access rights: All Employees
-  - scope: tasks across the whole app
-  - widgets: metric — total tasks; list — tasks due this week
+- home page: Team overview
+  - scope: how the whole team is performing right now
+  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week
 
 ## 8. Edge Cases and Exceptions
 
@@ -187,16 +186,16 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("7.1", str(ctx.exception))
 
-    def test_widgets_missing_on_one_of_two_dashboards_is_rejected(self):
-        # `widgets:` is enforced per dashboard, not once for the whole section: the
-        # 7.1 dashboard keeps its widgets, the 7.2 (trailing) dashboard loses its
-        # widgets line — exercises the terminal block boundary (end == len(text)).
+    def test_workplace_home_page_missing_widgets_is_rejected(self):
+        # The §7.2 home page must list its own widgets (it is the app's single home
+        # page — populated with metrics/charts, not left as a bare title).
         doc = VALID_DOC.replace(
-            "  - widgets: metric — total tasks; list — tasks due this week", ""
+            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n",
+            "",
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("widgets:", str(ctx.exception))
+        self.assertIn("widgets", str(ctx.exception).lower())
 
     def test_widgets_missing_on_leading_dashboard_is_rejected(self):
         # Symmetric to the above but strips the 7.1 (leading) dashboard's widgets,
@@ -277,28 +276,88 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         )
         sec72 = (
             "### 7.2 Workplace analytics\n\n"
-            "- dashboard: Team workload\n"
-            "  - access rights: All Employees\n"
-            "  - scope: tasks across the whole app\n"
-            "  - widgets: metric — total tasks; list — tasks due this week\n\n"
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n\n"
         )
-        assert sec71 in VALID_DOC and sec72 in VALID_DOC, "fixture blocks drifted"
+        assert sec71 in VALID_DOC, "fixture block 7.1 drifted"
+        assert sec72 in VALID_DOC, "fixture block 7.2 drifted"
         doc = VALID_DOC.replace(sec71 + sec72, sec72 + sec71)  # 7.2 now precedes 7.1
         validate_requirements_doc(doc)  # must not raise
 
     def test_empty_workplace_analytics_72_is_rejected(self):
-        # 7.2 must not be empty: drop its only dashboard block, leaving the 7.1
-        # dashboard (and its grouping heading) intact.
+        # 7.2 must not be empty: drop its home-page block, leaving 7.1 intact.
         doc = VALID_DOC.replace(
-            "- dashboard: Team workload\n"
-            "  - access rights: All Employees\n"
-            "  - scope: tasks across the whole app\n"
-            "  - widgets: metric — total tasks; list — tasks due this week\n",
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n",
             "",
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("7.2", str(ctx.exception))
+
+    def test_workplace_analytics_with_dashboard_is_rejected(self):
+        # 7.2 is the app's single home page, NOT dashboards. A `dashboard:` block
+        # under 7.2 (the mistake this guard exists for) must be rejected.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n",
+            "- dashboard: Team overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: how the whole team is performing right now\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.2", str(ctx.exception))
+
+    def test_workplace_home_page_with_access_rights_is_rejected(self):
+        # A home page has no per-page access rights (its audience is the workplace);
+        # an `access rights:` line under 7.2 must be rejected.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n",
+            "- home page: Team overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: how the whole team is performing right now\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("access rights", str(ctx.exception).lower())
+
+    def test_two_home_pages_in_72_is_rejected(self):
+        # 7.2 is a single page — more than one `home page:` block must be rejected.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n",
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n\n"
+            "- home page: Second page\n"
+            "  - scope: extra\n"
+            "  - widgets: metric — total tasks\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("home page", str(ctx.exception).lower())
+
+    def test_two_section_grouping_headings_in_71_pass(self):
+        # A real multi-section app has more than one `#### <Section> section
+        # dashboards` heading under §7.1, each with its own dashboards. The validator
+        # must accept several grouping headings and check every dashboard's own
+        # access-rights/widgets lines across all groups.
+        second_group = (
+            "\n#### Contacts section dashboards\n\n"
+            "- dashboard: Contact directory\n"
+            "  - access rights: All Employees\n"
+            "  - scope: contacts by owner\n"
+            "  - widgets: metric — total contacts; chart — contacts by owner (bar)\n"
+        )
+        anchor = "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n"
+        assert anchor in VALID_DOC, "fixture 7.1 dashboard drifted"
+        doc = VALID_DOC.replace(anchor, anchor + second_group)
+        validate_requirements_doc(doc)  # must not raise (two grouping headings in 7.1)
 
 
 class TestValidateRequirementsDocTables(unittest.TestCase):

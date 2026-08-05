@@ -28,7 +28,7 @@ Full checklist rules are in `context/business-checklist.md`. This section provid
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
-`Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries both section-level dashboards (`### 7.1 Section analytics`) and app/workplace-level dashboards (`### 7.2 Workplace analytics`).
+`Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
 
 Required BA-style Business Plan template:
 
