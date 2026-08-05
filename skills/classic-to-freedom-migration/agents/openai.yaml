@@ -1,0 +1,5 @@
+---
+display_name: "Classic To Freedom Migration"
+short_description: "Plan and execute Creatio UI migrations"
+default_prompt: "Use $classic-to-freedom-migration to analyze this Classic UI section and prepare an approval-gated Freedom UI migration plan."
+---

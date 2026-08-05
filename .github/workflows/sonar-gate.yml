@@ -1,0 +1,39 @@
+name: Sonar gate
+
+# Blocks a merge when the pull request introduces new SonarCloud issues.
+#
+# The `SonarCloud Code Analysis` required check reports the project's Quality Gate, and
+# that gate ("Sonar way", built-in) has no condition that counts issues -- only ratings,
+# duplication, hotspots and coverage. A PR can add a dozen CRITICAL code smells and still
+# get a green, mergeable check. The gate itself cannot be given an extra condition
+# (`isBuiltIn: true`) and replacing it needs organization-level Sonar admin rights, so the
+# missing `new_violations == 0` condition is enforced here instead.
+#
+# No secret is required: the SonarCloud project is public and its web API answers
+# anonymously, so this also works on pull requests from forks.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  new-issues:
+    name: No new Sonar issues
+    runs-on: ubuntu-latest
+    # Automatic Analysis is not sequenced by this workflow, so the job spends most of its
+    # life polling for the analysis of our head commit.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.11'
+      - name: Check for new Sonar issues
+        run: |
+          python3 scripts/sonar_new_issues_gate.py \
+            --project Creatio-Platform_creatio-ai-app-development-toolkit \
+            --pr "${{ github.event.pull_request.number }}" \
+            --sha "${{ github.event.pull_request.head.sha }}"

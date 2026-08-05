@@ -1,8 +1,15 @@
 import re
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Bind the ENG-92985 doc-token assertions to the gate script's own constants so a
+# rename in clio_mcp_preflight.py cannot pass both this suite and the behavioral suite
+# while the docs silently describe a sentinel/exit code the script no longer emits.
+sys.path.insert(0, str(ROOT / "runtime" / "scripts"))
+import clio_mcp_preflight as pf  # noqa: E402  (path set above)
 
 
 def existing(paths):
@@ -115,6 +122,25 @@ AUTO_REGISTER_PROMPT_URL_DOCS = [
 # confirmation turn when no custom app exists yet.
 DEFAULT_APP_CREATION_DOCS = [
     ROOT / "AGENTS.md",
+]
+
+# ENG-92985: run a clio MCP availability preflight before the first clio operation
+# and fail fast with a prerequisites blocker when clio MCP is unavailable — never
+# self-bootstrap the environment or silently degrade to the Python wrapper.
+CLIO_MCP_PREFLIGHT_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "runbooks/01-environment-setup.md",
+]
+
+# ENG-92985: the mcp_client.py wrapper is an explicit opt-in escape hatch, not the
+# default degraded path. Every transport-aware doc must frame it that way.
+OPT_IN_ESCAPE_HATCH_DOCS = [
+    ROOT / "AGENTS.md",
+    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "context/essentials.md",
+    ROOT / "context/INDEX.md",
 ]
 
 
@@ -461,6 +487,186 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("askuserquestion", content, str(path))
             # ENG-91558 (review RC-4): the "ambiguous" carve-out bounds the rule
             self.assertIn("ambiguous", content, str(path))
+
+    def test_docs_require_clio_mcp_availability_preflight_and_fail_fast(self):
+        # ENG-92985: before the first clio operation, run an availability preflight;
+        # when clio MCP is unavailable, stop with a prerequisites blocker (install
+        # .NET, install clio, reg-web-app) and do NOT self-bootstrap the environment.
+        for path in CLIO_MCP_PREFLIGHT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("availability preflight", content, str(path))
+            self.assertIn("prerequisites blocker", content, str(path))
+            # blocker enumerates the three developer-owned prerequisites
+            self.assertIn(".net", content, str(path))
+            self.assertIn("reg-web-app", content, str(path))
+            # AC4: no self-bootstrapping when clio MCP is unavailable
+            self.assertIn("do not install", content, str(path))
+            self.assertIn("executionpolicy", content, str(path))
+            self.assertIn("silently register", content, str(path))
+            # AC6: registered-but-unresponsive is treated as unavailable, no
+            # indefinite retry
+            self.assertIn("unresponsive", content, str(path))
+            self.assertIn("retry indefinitely", content, str(path))
+
+    def test_docs_mandate_deterministic_preflight_gate_script(self):
+        # ENG-92985 (elevation): the STOP decision is a deterministic gate, not prose
+        # the agent can reason past. Every contract doc must name the gate script and
+        # the three-state verdict (usable / blocked) with its sentinels + exit codes.
+        # Sentinel/exit tokens are derived from the script constants (M1) so a rename
+        # is caught here instead of drifting silently.
+        usable_token = pf.SENTINEL_USABLE.split(": ", 1)[1].lower()   # clio-mcp-usable
+        blocked_token = pf.SENTINEL_BLOCKED.split(": ", 1)[1].lower()  # clio-mcp-unavailable
+        for path in CLIO_MCP_PREFLIGHT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("clio_mcp_preflight.py", content, str(path))
+            self.assertIn("deterministic gate", content, str(path))
+            self.assertIn(usable_token, content, str(path))
+            self.assertIn(blocked_token, content, str(path))
+            self.assertIn(f"exit {pf.EXIT_USABLE}", content, str(path))
+            self.assertIn(f"exit {pf.EXIT_BLOCKED}", content, str(path))
+            self.assertIn("state b", content, str(path))
+            self.assertIn("state c", content, str(path))
+            # "no native tools surfaced" is explicitly NOT auto-blocking (challenge C5)
+            self.assertIn("not automatically a blocker", content, str(path))
+
+    def test_docs_state_preflight_probe_timeout_matches_script(self):
+        # ENG-92985 (M1): the "default 20s" probe bound stated in the docs is bound to
+        # the script constant, so changing DEFAULT_PROBE_TIMEOUT flags the stale docs.
+        timeout_token = f"{pf.DEFAULT_PROBE_TIMEOUT}s"
+        for path in [ROOT / "AGENTS.md", ROOT / "runbooks/01-environment-setup.md"]:
+            self.assertIn(timeout_token, read_text(path), str(path))
+
+    def test_docs_define_precise_wrapper_opt_in_signal(self):
+        # ENG-92985 (elevation, challenge C2): a generic approval is not opt-in; the
+        # escape hatch is unlocked only by an explicit developer instruction, and the
+        # contract-level doc (AGENTS.md) must say so.
+        content = read_text(ROOT / "AGENTS.md").lower()
+        self.assertIn("opt-in signal", content)
+        # markup-tolerant: matches "not opt-in" or "not** opt-in" (bold emphasis)
+        self.assertRegex(content, r"not\*{0,2}\s*opt-in")
+        self.assertIn("approved command prefix", content)
+
+    def test_docs_frame_mcp_client_as_opt_in_escape_hatch(self):
+        # ENG-92985 (AC5/AC7): the Python client is an explicit opt-in escape hatch,
+        # not the default degraded path. Keep the ENG-91276 native/fallback framing
+        # while removing any "silent fallback" legitimization.
+        for path in OPT_IN_ESCAPE_HATCH_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("explicit opt-in", content, str(path))
+            self.assertIn("escape hatch", content, str(path))
+            self.assertIn("mcp_client.py", content, str(path))
+
+    def test_docs_state_b_prefers_native_mcp_before_wrapper(self):
+        # ENG-92985 (State B refinement): in State B the agent must FIRST recommend
+        # connecting native clio MCP (host-agnostic) and defer the per-host how-to to
+        # the install docs — only then fall back to the wrapper. Every contract doc
+        # states the recommendation and points at the install docs.
+        for path in CLIO_MCP_PREFLIGHT_DOCS:
+            content = read_text(path).lower()
+            self.assertIn("native clio mcp", content, str(path))
+            self.assertIn("connect", content, str(path))
+            self.assertTrue(
+                "docs/install.md" in content or "install docs" in content,
+                f"{path}: State B must point to the install docs for per-host setup",
+            )
+        # Finding 3: prefer-native is an ORDERING guarantee, not just token presence —
+        # within AGENTS.md State B, the native recommendation must precede the wrapper.
+        agents = read_text(ROOT / "AGENTS.md")
+        sb_start = agents.index("**State B")
+        sb = agents[sb_start:agents.index("**State C", sb_start)]
+        self.assertLess(
+            sb.index("connect clio as a native MCP server"),
+            sb.index("mcp_client.py"),
+            "AGENTS.md State B must recommend native MCP before mentioning the wrapper",
+        )
+
+    def test_agents_preflight_section_has_no_hardcoded_per_agent_mcp_steps(self):
+        # ENG-92985 (State B refinement): how you connect native MCP drifts per agent,
+        # so the behavioral contract must NOT hardcode agent-specific steps (config.toml
+        # edits, installer commands) inside the preflight section — those belong in the
+        # install docs. Scope the check to the preflight section so the unrelated
+        # installer mention elsewhere in AGENTS.md does not trip it.
+        agents = read_text(ROOT / "AGENTS.md")
+        start = agents.index("clio MCP availability preflight")
+        end = agents.index("clio MCP transport preference", start)
+        section = agents[start:end].lower()
+        self.assertNotIn("config.toml", section)
+        self.assertNotIn("installer/install.py", section)
+        # the generic recommendation + docs pointer DO live in the section
+        self.assertIn("native mcp server", section)
+        self.assertIn("docs/install.md", section)
+
+    def test_docs_frame_wrapper_fallback_in_plain_language(self):
+        # ENG-92985 (State B refinement): the wrapper fallback must be framed in plain
+        # language — slower, no progress, not recommended — never buried behind jargon
+        # like "may appear to hang".
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        self.assertIn("slower", agents)
+        self.assertIn("no progress", agents)
+        self.assertIn("frozen", agents)
+        self.assertTrue(
+            "not the recommended" in agents or "not recommended" in agents, "AGENTS.md",
+        )
+        # Finding 4: the compact mirrors must carry the same plain-language framing so a
+        # mirror cannot silently drop it (repo's identical-rules-across-docs ethos).
+        for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+                     ROOT / "runbooks/01-environment-setup.md"):
+            mirror = read_text(path).lower()
+            self.assertIn("slower", mirror, str(path))
+            self.assertIn("no progress", mirror, str(path))
+            self.assertTrue(
+                "not the recommended" in mirror or "not recommended" in mirror, str(path),
+            )
+
+    def test_docs_state_b_gives_actionable_how_to_and_reload_caveat(self):
+        # ENG-92985 (#2/#3): State B must be actionable AND honest — surface WHERE the
+        # per-host connect steps live (install-docs pointer + optional paste-ready
+        # config snippet the developer applies), and be honest that enabling native MCP
+        # usually needs a session reload (fresh context), so "retry" is a new session,
+        # not this one — recommend native at task start, name the mid-task trade-off.
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        # #2 — actionable how-to (not just "what")
+        self.assertIn("config snippet", agents)
+        self.assertIn("docs/install.md", agents)
+        # #3 — reload honesty
+        self.assertIn("session reload", agents)
+        self.assertIn("mid-task", agents)
+        # Finding 2 (section-scoped) — the two safety invariants of this increment:
+        raw = read_text(ROOT / "AGENTS.md")
+        sb_start = raw.index("**State B")
+        sb = raw[sb_start:raw.index("**State C", sb_start)].lower()
+        # (a) snippet apply-boundary: showing is fine, APPLYING it is self-bootstrap —
+        # locks the config-editing axis of the no-self-bootstrap rule.
+        self.assertIn("config snippet", sb)
+        self.assertIn("the developer applies", sb)
+        self.assertIn("self-bootstrap", sb)
+        # (b) opt-in precedence: "mid-task" must NOT license a self-selected wrapper —
+        # the explicit-opt-in requirement is co-located in the same State B block.
+        self.assertIn("mid-task", sb)
+        self.assertIn("explicit opt-in", sb)
+
+
+    def test_docs_present_native_option_first_and_recommended(self):
+        # ENG-92985 (choice-presentation): when the agent asks the developer how to
+        # proceed in State B, the connect-native option must be listed FIRST and marked
+        # recommended, and the wrapper must never be the first/default choice — leading
+        # with the wrapper (even if native is offered second) violates prefer-native.
+        agents = read_text(ROOT / "AGENTS.md").lower()
+        self.assertIn("first choice and is labelled the recommended", agents)
+        self.assertIn("never list the wrapper as the first", agents)
+        # Finding 2 (self-review): selecting the labelled wrapper option IS the explicit
+        # opt-in; a generic yes outside such a choice is not — closes the offer-vs-opt-in
+        # circularity the presented choice introduces.
+        self.assertIn("counts as the developer's explicit opt-in", agents)
+        for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+                     ROOT / "runbooks/01-environment-setup.md"):
+            mirror = read_text(path).lower()
+            # Finding 1 (self-review): assert the SPECIFIC composite anchor (encodes
+            # native-listed-first) — not bare "first"/"recommended", which are satisfied
+            # by unrelated text ("before the first clio operation", "not the recommended
+            # path") and would let a wrapper-first regression pass.
+            self.assertIn("connect-native option first and marked recommended", mirror, str(path))
+            self.assertIn("never lead with the wrapper", mirror, str(path))
 
 
 if __name__ == "__main__":
