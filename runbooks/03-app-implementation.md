@@ -81,13 +81,17 @@ For each dashboard in the plan:
      its sections into a workplace — for a composable/Studio app that is normally **"My applications"**
      (or "Studio"), which already exists. Resolve it by reading `SysModuleInWorkplace` for the app's
      section modules (join to `SysWorkplace` for the `Id`/`Name`).
-     **Pre-write clobber check (MANDATORY, before writing).** Read the target workplace's current
-     `SysWorkplace.HomePageUId` first. If it is already set to a non-empty, non-zero
-     (`00000000-0000-0000-0000-000000000000`) value — another app already bound a home page to this
-     shared workplace — do **NOT** silently overwrite it: binding is last-writer-wins and would break
-     the other app's home page. Stop and surface it to the developer (report the existing
-     `HomePageUId` and, if resolvable, which page/app owns it), and get explicit confirmation before
-     overwriting. Only when it is unset (or the developer confirms the replacement) proceed to write.
+     **Pre-write clobber check — HARD STOP (MANDATORY, before writing).** Read the target workplace's
+     current `SysWorkplace.HomePageUId` first and **record the prior value in the implementation
+     report** (so an accidental overwrite is detectable and recoverable) — do this even when it is
+     unset. If it is already set to a non-empty, non-zero (`00000000-0000-0000-0000-000000000000`)
+     value — another app already bound a home page to this shared workplace — then **STOP: do NOT call
+     the write tool (`odata-update` / `create-data-binding-db`) until the developer has echoed back the
+     exact prior `HomePageUId` value being replaced and explicitly approved the overwrite.** General
+     "please confirm" is not enough — require the developer to repeat the exact prior UId, because
+     binding is last-writer-wins and a silent overwrite breaks the other app's home page with no signal.
+     Surface the existing `HomePageUId` and, if resolvable, which page/app owns it. Only when it is
+     unset, or the developer has echoed the prior value and approved, proceed to write.
      Then set `SysWorkplace.HomePageUId` to the home page's `schemaUId` via `odata-update`, ship it as
      a package data binding with `create-data-binding-db` (schema `SysWorkplace`) so it survives a
      transfer, and read `SysWorkplace.HomePageUId` back to confirm — do not trust the install log.

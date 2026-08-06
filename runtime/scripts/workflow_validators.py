@@ -238,8 +238,21 @@ def validate_requirements_doc(content: str) -> None:
     dashboard_blocks = list(iter_labeled_blocks(section_71_text, DASHBOARD_LABEL_RE))
     if not dashboard_blocks:
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must contain at least one 'dashboard:' (per-section dashboards are mandatory, not just a grouping heading)")
-    if not SECTION_DASHBOARD_GROUP_RE.search(section_71_text):
+    # Grouping must actually bind dashboards to headings — a single `.search()` for a
+    # grouping heading anywhere is not enough (it would pass a flat list that happens
+    # to carry one heading). Enforce, structurally: (a) at least one grouping heading;
+    # (b) no dashboard floats before the first grouping heading; (c) every grouping
+    # heading has at least one dashboard under it. (Which SECTION a dashboard belongs
+    # to is the author's judgment — the validator cannot read section names — so this
+    # enforces the structure, not the semantic section↔dashboard mapping.)
+    group_starts = [m.start() for m in SECTION_DASHBOARD_GROUP_RE.finditer(section_71_text)]
+    if not group_starts:
         raise WorkflowError("Requirements doc failed: section 7.1 Section analytics must group dashboards by section under a '#### <Section> section dashboards' heading (so it is explicit which section hosts each dashboard), not a flat list")
+    if DASHBOARD_LABEL_RE.search(section_71_text[:group_starts[0]]):
+        raise WorkflowError("Requirements doc failed: every section 7.1 dashboard must sit under a '#### <Section> section dashboards' heading — a 'dashboard:' appears before the first grouping heading")
+    for group_block in iter_labeled_blocks(section_71_text, SECTION_DASHBOARD_GROUP_RE):
+        if not DASHBOARD_LABEL_RE.search(group_block):
+            raise WorkflowError("Requirements doc failed: every '#### <Section> section dashboards' heading in section 7.1 must have at least one 'dashboard:' under it (no empty grouping headings)")
     for block in dashboard_blocks:
         if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
             raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must list a non-empty 'widgets:' line")

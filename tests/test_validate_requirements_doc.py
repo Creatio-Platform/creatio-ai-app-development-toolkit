@@ -359,6 +359,35 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         doc = VALID_DOC.replace(anchor, anchor + second_group)
         validate_requirements_doc(doc)  # must not raise (two grouping headings in 7.1)
 
+    def test_dashboard_before_first_grouping_heading_is_rejected(self):
+        # A dashboard that floats before the first `#### <Section> section dashboards`
+        # heading is not grouped — the grouping check must catch it (a lone heading
+        # elsewhere in §7.1 must not rescue a flat/floating dashboard).
+        floating = (
+            "- dashboard: Floating overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: everything\n"
+            "  - widgets: metric — everything\n\n"
+        )
+        anchor = "#### Tasks section dashboards\n"
+        assert anchor in VALID_DOC, "fixture 7.1 heading drifted"
+        doc = VALID_DOC.replace(anchor, floating + anchor)  # dashboard before the heading
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("before the first grouping heading", str(ctx.exception))
+
+    def test_empty_grouping_heading_is_rejected(self):
+        # A `#### <Section> section dashboards` heading with no dashboard under it
+        # (dashboards from several sections lumped under a single earlier heading,
+        # leaving later headings empty) must be rejected.
+        doc = VALID_DOC.replace(
+            "### 7.2 Workplace analytics",
+            "#### Contacts section dashboards\n\n### 7.2 Workplace analytics",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least one 'dashboard:' under it", str(ctx.exception))
+
 
 class TestValidateRequirementsDocTables(unittest.TestCase):
     def test_missing_field_table_in_entity_block(self):

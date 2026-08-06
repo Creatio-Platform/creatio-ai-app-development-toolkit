@@ -693,8 +693,18 @@ class DefaultContractDocsTests(unittest.TestCase):
         # legitimately span source lines.
         self.assertRegex(impl, r"(?i)pre-write clobber check")
         self.assertRegex(impl, r"(?i)read[\s\S]{0,80}HomePageUId[\s\S]{0,40}first")
-        self.assertRegex(impl, r"(?i)(confirm|confirmation)[\s\S]{0,80}overwrit")
-        self.assertRegex(impl, r"(?i)(do\s*\*{0,2}\s*not|never)[\s\S]{0,60}silently[\s\S]{0,20}overwrit")
+        self.assertRegex(impl, r"(?i)(confirm|confirmation|approv)[\s\S]{0,80}overwrit")
+        self.assertRegex(impl, r"(?i)silent(?:ly)?[\s\S]{0,30}overwrit")
+        # Hard-stop imperative (not just "please confirm"): a plain STOP + do-not-call-
+        # the-write-tool until the developer echoes back the exact prior HomePageUId,
+        # and recording the prior value so an accidental clobber is detectable.
+        self.assertRegex(impl, r"(?i)STOP[\s\S]{0,80}do\s*\*{0,2}\s*not[\s\S]{0,40}write\s+tool")
+        self.assertRegex(impl, r"(?i)echoed\s+back\s+the\s+exact\s+prior")
+        self.assertRegex(impl, r"(?i)record\s+the\s+prior\s+value\s+in\s+the\s+implementation\s+report")
+        # Criterion 6: dashboard access grants must ship as PACKAGE DATA via
+        # `dashboard-rights` (otherwise the grant is lost on transfer). This is the
+        # sibling §7 rule that otherwise had no drift protection.
+        self.assertRegex(impl, r"(?i)dashboard-rights[\s\S]{0,120}(survive|package|transfer)")
 
     def test_prose_section_count_matches_required_sections(self):
         # The Business Plan section count is asserted in prose across several docs and
@@ -720,6 +730,24 @@ class DefaultContractDocsTests(unittest.TestCase):
         for path in count_docs:
             doc = read_text(path).lower()
             self.assertNotIn("seven sections", doc, f"{path} has stale 'seven sections'")
+
+    def test_static_access_rights_literal_is_consistent(self):
+        # The static dashboard access grant `access rights: All Employees` is stated
+        # in several docs and pinned by the validator regex. Bind them together so a
+        # rename in one place cannot drift from the others (same drift-guard rationale
+        # as the section-count test above).
+        literal = "access rights: All Employees"
+        docs = [
+            ROOT / "runbooks/02-requirements-gathering.md",
+            ROOT / "runbooks/03-app-implementation.md",
+            ROOT / "context/business-checklist.md",
+            ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+        ]
+        for path in docs:
+            self.assertIn(literal, read_text(path), f"{path} must state '{literal}'")
+        # the validator pins the same literal value in DASHBOARD_ACCESS_RIGHTS_RE
+        validator = read_text(ROOT / "runtime/scripts/workflow_validators.py")
+        self.assertRegex(validator, r"DASHBOARD_ACCESS_RIGHTS_RE\s*=.*All Employees")
 
 
 if __name__ == "__main__":
