@@ -668,12 +668,64 @@ const IMPERATIVE_LOGIC_PREAMBLE = [
   "> ⚠ Confirm item. `Trigger: unresolved` means nothing in this schema calls it and no declaration binds it — trace",
   "> it from the control / hook / message, never from the method's name. An `internal call` trigger means the engine",
   "> found the CALLING method, and where the chain reaches one, the declaration or platform lifecycle hook that starts",
-  "> it: port such a row WITH its caller rather than as a handler of its own. **Described in** names the behaviour card and the",
+  "> it. A row marked **`↳`** is a helper the engine traced to the single row above it: port it WITH that caller as one",
+  "> unit — it still needs its own ported / dropped / blocked mark, but not a Freedom artifact of its own. A helper with",
+  "> SEVERAL callers is deliberately NOT folded: it is usually the row that becomes a shared converter.",
+  "> **Described in** names the behaviour card and the",
   "> acceptance criteria a step-5.1 `classic-ui-expert` run established for the row — port against those criteria,",
   "> not against the method's name; `⚠ not described` means no run has covered it yet.", "",
   "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
   "| --- | --- | --- | --- | --- | --- | --- |",
 ];
+
+// Fold a helper under the row that calls it. A method the inverse call graph traced to ONE caller present in this
+// same table is part of that caller's implementation, not a handler of its own — so it is ordered directly beneath it
+// and marked `↳`, and its Freedom target becomes "port with <caller>" instead of a generic handler suggestion that
+// would invite building a second Freedom artifact for half a behaviour.
+//
+// Nothing is HIDDEN. Collapsing a helper into its caller's cell is how imperative rows got lost before (a method
+// reached the plan only as prose beneath another and was never marked), and Contract rule 7 requires every row to
+// carry its own ported / dropped / blocked mark. The fold is therefore ordering + a marker, never a deletion.
+//
+// Two deliberate non-folds:
+//   · MORE THAN ONE caller — it cannot travel with "its" caller, and it is usually the row that becomes a shared
+//     converter, so it stays a unit of its own;
+//   · a caller that is NOT in this table (a standard lifecycle method, filtered out of the worklist) — there is no
+//     parent row to fold under, and the trigger cell already names the hook.
+function foldByCaller(stubs) {
+  const byName = new Map(stubs.map((h) => [h.sourceMethod, h]));
+  const parentOf = new Map();
+  for (const h of stubs) {
+    const t = (h.triggers || [])[0];
+    if (!t || t.kind !== "internal" || t.callers?.length > 1) continue;
+    if (!t.from || t.from === h.sourceMethod || !byName.has(t.from)) continue;
+    parentOf.set(h.sourceMethod, t.from);
+  }
+  // Break any parent chain that loops back on itself: mutual recursion would otherwise make both rows children and
+  // neither would ever be emitted by the walk below.
+  for (const name of [...parentOf.keys()]) {
+    const seen = new Set([name]);
+    for (let p = parentOf.get(name); p; p = parentOf.get(p)) {
+      if (seen.has(p)) { parentOf.delete(name); break; }
+      seen.add(p);
+    }
+  }
+  const childrenOf = new Map();
+  for (const [child, parent] of parentOf) {
+    if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+    childrenOf.get(parent).push(child);
+  }
+  const ordered = [], emitted = new Set();
+  const walk = (h, depth) => {
+    if (emitted.has(h.sourceMethod)) return;
+    emitted.add(h.sourceMethod);
+    ordered.push({ stub: h, depth, parent: parentOf.get(h.sourceMethod) || null });
+    for (const c of childrenOf.get(h.sourceMethod) || []) walk(byName.get(c), depth + 1);
+  };
+  for (const h of stubs) if (!parentOf.has(h.sourceMethod)) walk(h, 0);
+  for (const h of stubs) walk(h, 0); // safety net: a row no walk reached is still emitted, never dropped
+  return { ordered, folded: parentOf.size };
+}
 
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
@@ -686,17 +738,25 @@ function renderImperativeLogic(cs) {
   // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
   const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
   const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || (h.describedIn.ac || []).length)).length;
+  const { ordered, folded } = foldByCaller(stubs);
+  // Rows and PORT UNITS are different numbers once helpers are folded, and the difference is the useful one: 63 rows
+  // that are really 39 things to build reads very differently from 63 independent handlers.
+  const units = stubs.length - folded;
   const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
     `> ${unresolved} row(s) have no traced trigger` +
     (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
+    (folded ? ` · ${folded} are helpers folded under their caller (\`↳\`) → **${units} port unit(s)**` : "") +
     ` · ${described} of ${stubs.length} carry a behaviour card` +
     (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
   L.push(...IMPERATIVE_LOGIC_PREAMBLE);
-  for (const h of stubs) {
+  for (const { stub: h, depth, parent } of ordered) {
     const triggers = h.triggers || [];
     const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
-    const cells = [esc(h.sourceMethod), sourceText(h), trigger, bodyDoesText(h), readsWritesText(h.evidence),
-      targetText(h), describedInText(h)];
+    // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
+    const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
+    const target = parent ? `port with \`${esc(parent)}\`` : targetText(h);
+    const cells = [name, sourceText(h), trigger, bodyDoesText(h), readsWritesText(h.evidence),
+      target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
   L.push("");
@@ -1219,7 +1279,15 @@ function checklistGroups(result, opts = {}) {
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
   if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}` });
-  for (const h of cs.handlerStubs || []) logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` });
+  // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
+  // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
+  // artifact and the two documents would disagree about what "done" means for it.
+  const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
+    .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
+  for (const h of cs.handlerStubs || []) {
+    const parent = foldedUnder.get(h.sourceMethod);
+    logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
+  }
   G("Form — Logic", logicItems);
   // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
   const acts = cs.cardActions || [];

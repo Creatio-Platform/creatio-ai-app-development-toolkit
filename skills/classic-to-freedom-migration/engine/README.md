@@ -28,6 +28,14 @@ trigger is never replaced by an internal one, and every caller travels along whe
 knowing only their caller are counted apart (`internalCallOnly`) from true orphans (`unresolvedTrigger`): both are
 still behaviour-analysis work, and collapsing them would make the recovery look like work that no longer needs doing.
 
+The plan then **folds** each such helper under the row that calls it: ordered directly beneath it, marked `↳`, with
+its Freedom target replaced by `port with <caller>` so nobody builds a second artifact for half a behaviour. The
+worklist header reports rows AND port units (63 rows that are 44 things to build read very differently). Nothing is
+hidden — every row keeps its place and its own ported / dropped / blocked mark (Contract rule 7), and the
+`--checklist` row for a folded helper says `(ported with <caller>)` so the two documents agree. Two deliberate
+non-folds: a helper with SEVERAL callers (it is usually the row that becomes a shared converter) and one whose caller
+is a standard method filtered out of the worklist (no parent row exists to fold under).
+
 **The behaviour-analysis handoff (`--stubs` out, `manifest.behaviourIndex` back).** Four of the plan's imperative
 rows cannot be answered from the page bodies this engine reads — a method whose trigger it could not trace, a method
 assigned from another module, a `message`, a `mixin` — so SKILL.md step 5.1 sends them to the `classic-ui-expert`

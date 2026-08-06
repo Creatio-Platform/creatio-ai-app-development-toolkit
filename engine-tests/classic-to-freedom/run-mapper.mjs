@@ -3519,6 +3519,60 @@ check("inverse graph: the handoff digest counts `internalCallOnly` separately fr
   invDigest.unresolvedTrigger === 3 && invDigest.internalCallOnly === 3,
   () => JSON.stringify(invDigest));
 
+/* ---- folding a helper under the row that calls it ---- */
+// A helper traced to ONE caller present in the same table is part of that caller's implementation, so it is ordered
+// beneath it and marked. Nothing may be hidden: rows got LOST that way before, and Contract rule 7 needs every row
+// markable. These pin the fold, the two deliberate non-folds, and that the row count is unchanged.
+const foldPlan = renderPlan(invRun, {})
+const impTable = (md) => {
+  const lines = md.slice(md.indexOf('⚠ Imperative logic')).split('\n')
+  const out = []
+  let started = false
+  for (const l of lines) {
+    if (l.startsWith('| Method |')) { started = true; continue }
+    if (!started || l.startsWith('| --- ')) continue
+    if (l.startsWith('|')) out.push(l)
+    else if (out.length) break
+  }
+  return out
+}
+const foldRows = impTable(foldPlan)
+const rowOf = (m) => foldRows.find((r) => r.split('|')[1].replace(/↳/g, '').trim().replace(/`/g, '') === m)
+
+check("fold: NO row disappears — the table still carries one row per handler stub",
+  foldRows.length === invRun.changeSet.handlerStubs.length,
+  () => `${foldRows.length} rows vs ${invRun.changeSet.handlerStubs.length} stubs`)
+check("fold: a single-caller helper is marked ↳ and told to port WITH its caller, not as its own artifact",
+  /^\| ↳ /.test(rowOf('recalcTotals') || '') && /port with `onStageChanged`/.test(rowOf('recalcTotals') || ''),
+  () => rowOf('recalcTotals'))
+check("fold: the helper sits DIRECTLY beneath its caller",
+  foldRows.indexOf(rowOf('recalcTotals')) === foldRows.indexOf(rowOf('onStageChanged')) + 1)
+check("fold: a second-level helper nests deeper (↳↳) under its own caller",
+  /^\| ↳↳ /.test(rowOf('roundIt') || '') && /port with `recalcTotals`/.test(rowOf('roundIt') || ''),
+  () => rowOf('roundIt'))
+check("fold: a helper with SEVERAL callers is NOT folded — it is the row that becomes a shared converter",
+  !/^\| ↳/.test(rowOf('sharedHelper') || ''),
+  () => rowOf('sharedHelper'))
+check("fold: a helper whose caller is a STANDARD method (absent from this table) is not folded — no parent row exists",
+  !/^\| ↳/.test(rowOf('syncOwner') || ''),
+  () => rowOf('syncOwner'))
+check("fold: mutual recursion keeps BOTH rows (the cycle guard must not swallow one)",
+  !!rowOf('pingPongA') && !!rowOf('pingPongB'))
+check("fold: the header reports PORT UNITS alongside the row count — 63 rows that are 44 things to build read differently",
+  /helpers folded under their caller/.test(foldPlan) && /port unit\(s\)/.test(foldPlan),
+  () => foldPlan.split('\n').filter((l) => /port unit/.test(l)))
+// A table with nothing to fold must look exactly as before — no marker, no port-unit clause.
+const noFoldRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: `define("NoFold", [], function() { return {
+  entitySchemaName: "Deal",
+  attributes: { Amount: { dataValueType: 1, dependencies: [{ columns: ["Stage"], methodName: "onStageChanged" }] } },
+  methods: { onStageChanged: function() { return this.get("Stage"); }, lonelyOne: function() { return 1; } },
+  diff: [{ operation: "insert", name: "Amount", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Amount" } }]
+}; });` }] })
+const noFoldPlan = renderPlan(noFoldRun, {})
+check("fold: a surface with no body-called helper renders no ↳ and no port-unit clause",
+  !/port unit\(s\)/.test(noFoldPlan) && !impTable(noFoldPlan).some((r) => /^\| ↳/.test(r)),
+  () => impTable(noFoldPlan))
+
 /* ---- step-5.1 behaviour handoff: the stub index OUT, the behaviour index BACK (both legs) ---- */
 // The rows a behaviour-analysis run has to describe cannot be derived from the stand — `⚠ unresolved` is this
 // engine's verdict — so they travel as data. These goldens pin both directions of that handoff.
