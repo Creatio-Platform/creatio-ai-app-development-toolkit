@@ -3455,5 +3455,115 @@ const paChild = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["Proc
 check("#8 Process on a CHILD edit page → short 'no section-level' note, not the full ProcessInModules how-to",
   /no section-level Run-process/.test(paChild) && !/ProcessInModules/.test(paChild));
 
+
+/* ---- step-5.1 behaviour handoff: the stub index OUT, the behaviour index BACK (both legs) ---- */
+// The rows a behaviour-analysis run has to describe cannot be derived from the stand — `⚠ unresolved` is this
+// engine's verdict — so they travel as data. These goldens pin both directions of that handoff.
+const HANDOFF_BODY = `define("HandoffPage", [], function() { return {
+  entitySchemaName: "Deal",
+  messages: { "RefreshThing": { mode: 0, direction: 1 } },
+  mixins: { someMixin: "Terrasoft.SomeMixin" },
+  attributes: { Amount: { dataValueType: 1, dependencies: [{ columns: ["Stage"], methodName: "onStageChanged" }] } },
+  methods: {
+    init: function() { this.callParent(arguments); },
+    onStageChanged: function() { this.set("Amount", 0); },
+    privateHelper: function() { return this.get("Amount"); }
+  },
+  diff: []
+}; });`;
+const handoffManifest = { entity: "Deal", schemas: [{ pkg: "DealPkg", body: HANDOFF_BODY }] };
+const ho = runMigration(handoffManifest);
+const hoMain = ho.stubIndex[0];
+check("handoff OUT: stubIndex carries one scope per page, the main page first",
+  Array.isArray(ho.stubIndex) && ho.stubIndex.length >= 1 && hoMain.role === "main page");
+check("handoff OUT: a declaration-triggered method keeps its traced trigger; a body-called helper is unresolved",
+  hoMain.stubs.find(s => s.method === "onStageChanged")?.triggers.length === 1 &&
+  hoMain.stubs.find(s => s.method === "privateHelper")?.triggers.length === 0);
+check("handoff OUT: the standard-method filter publishes the NAMES it excluded (so 'N vs M' is a set difference)",
+  hoMain.standardMethodsFiltered.includes("init") && !hoMain.stubs.some(s => s.method === "init"));
+check("handoff OUT: the ⚠ Confirm member rows travel too, keyed `<kind>:<name>`",
+  hoMain.members.some(m => m.key === "message:RefreshThing") && hoMain.members.some(m => m.kind === "mixin"));
+check("handoff OUT: the digest drops `evidence` — it is a payload to hand over, not the full ChangeSet",
+  hoMain.stubs.every(s => !("evidence" in s)));
+
+// BACK: a reported trigger fills an EMPTY trigger only, and the card+AC reference lands on every matching row.
+const hoBack = runMigration({ ...handoffManifest, behaviourIndex: {
+  privateHelper: { trigger: "internal", from: "onStageChanged", card: "C01", ac: ["AC-1", "AC-2"] },
+  onStageChanged: { trigger: "should-not-replace", card: "C01", ac: ["AC-3"] },
+  "message:RefreshThing": { card: "C02", ac: ["AC-1"] },
+  ghostMethod: { trigger: "internal", card: "C99" },
+} });
+const backStub = (m) => hoBack.changeSet.handlerStubs.find(h => h.sourceMethod === m);
+check("handoff BACK: a reported trigger fills an unresolved row and is marked `reported`",
+  backStub("privateHelper").triggers[0].kind === "reported" &&
+  backStub("privateHelper").triggers[0].reportedKind === "internal" &&
+  backStub("privateHelper").triggers[0].from === "onStageChanged");
+check("handoff BACK: an engine-TRACED trigger is never overwritten by a reported one (body evidence wins)",
+  backStub("onStageChanged").triggers[0].kind === "attribute-dependency");
+check("handoff BACK: the card + AC reference attaches to a traced row as well as an unresolved one",
+  backStub("onStageChanged").describedIn.card === "C01" && backStub("privateHelper").describedIn.ac.length === 2);
+check("handoff BACK: a `<kind>:<name>` key describes its ⚠ Confirm member row",
+  hoBack.changeSet.needsDecision.find(n => n.kind === "message" && n.item === "RefreshThing")?.describedIn.card === "C02");
+check("handoff BACK: a key matching no row anywhere is reported, never swallowed",
+  hoBack.behaviourIndex.unmatched.includes("ghostMethod") && hoBack.behaviourIndex.unmatched.length === 1);
+
+// The plan is the artifact that has to CARRY the reference — an Adjustments section did not survive a re-run.
+const hoPlan = renderPlan(hoBack, {});
+check("handoff BACK: the generated ⚠ Imperative logic table carries a `Described in` cell per row",
+  /\| Method \| Source \| Trigger \| Body does \| Reads → writes \| Freedom target \| Described in \|/.test(hoPlan) &&
+  /C01 AC-1, AC-2/.test(hoPlan));
+check("handoff BACK: the worklist header counts described rows, so 'nobody described these' is visible",
+  /carry a behaviour card/.test(hoPlan));
+check("handoff BACK: an undescribed row reads ⚠, not a blank",
+  /⚠ not described/.test(renderPlan(ho, {})));
+check("handoff BACK: unmatched keys surface as a plan banner",
+  /matched no imperative row/.test(hoPlan));
+
+// A folded scope (mini page / child page) sees the SAME index: one report covers the whole surface.
+const hoMini = runMigration({ ...handoffManifest, addRecordMiniPage: { schema: "DealMiniPage" },
+  miniPageSchemas: { DealMiniPage: { entity: "Deal", schemas: [{ pkg: "DealPkg", body: HANDOFF_BODY.replace(/HandoffPage/g, "DealMiniPage") }] } },
+  behaviourIndex: { "DealMiniPage::privateHelper": { trigger: "internal", card: "C10", ac: ["AC-9"] } } });
+check("handoff: a scoped `<schema>::<method>` key reaches a FOLDED scope (mini page), not just the root",
+  hoMini.stubIndex.some(s => s.role === "mini page" && s.schema === "DealMiniPage"));
+check("handoff: a scoped key that matched inside a folded scope is NOT reported as unmatched",
+  !hoMini.behaviourIndex.unmatched.includes("DealMiniPage::privateHelper"));
+
+// A TYPED page is a scope of the surface too (step 5.1: "every record page including typed variants"), so its rows
+// must ride the handoff — and a scoped key that matched inside a typed fold must not be reported as unmatched.
+const hoTypedBody = (nm) => `define("${nm}",[],function(){return{entitySchemaName:"Deal",methods:{typedHelper:function(){return this.get("Amount");}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});`;
+const hoTyped = runMigration({ ...handoffManifest,
+  typedPages: [{ schema: "DealTypedPage", type: "Kind A" }],
+  typedPageSchemas: { DealTypedPage: { schemas: [{ pkg: "P", body: hoTypedBody("DealTypedPage") }] } },
+  behaviourIndex: { "DealTypedPage::typedHelper": { trigger: "internal", card: "C20", ac: ["AC-4"] } } });
+check("handoff OUT: a TYPED page gets its own scope in stubIndex (it renders its own imperative worklist)",
+  hoTyped.stubIndex.some(s => s.role === "typed page" && s.schema === "DealTypedPage"
+    && s.stubs.some(st => st.method === "typedHelper")));
+check("handoff BACK: a `<typedSchema>::<method>` key that matched inside the typed fold is NOT reported unmatched",
+  !hoTyped.behaviourIndex.unmatched.includes("DealTypedPage::typedHelper"));
+
+// ⚠ Confirm carries the same visible-gap rule as the imperative table: an undescribed message/mixin is not a blank.
+const hoConfirm = renderPlan(ho, {});
+check("⚠ Confirm: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
+  /\*\*\[message\]\*\*.*described in.*⚠ not described/.test(hoConfirm));
+check("⚠ Confirm: the header counts how many behaviour-analysis rows carry a card",
+  /behaviour-analysis row\(s\).*carry a card/.test(hoConfirm));
+check("⚠ Confirm: a described member row names its card + AC",
+  /\*\*\[message\]\*\*.*described in.*C02 AC-1/.test(renderPlan(hoBack, {})));
+
+// `--stubs` is a separate CLI artifact on purpose: the full result JSON carries megabytes the analysis run never reads.
+const stubsCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--stubs"],
+  { input: JSON.stringify(handoffManifest), encoding: "utf8" });
+const stubsOut = (() => { try { return JSON.parse(stubsCli.stdout); } catch { return null; } })();
+check("handoff OUT: `--stubs` prints ONLY the digest (entity + totals + scopes), no ChangeSet or rendered plan",
+  !!stubsOut && stubsOut.entity === "Deal" && typeof stubsOut.totals.unresolvedTrigger === "number" &&
+  Array.isArray(stubsOut.scopes) && !("changeSet" in stubsOut) && !("plan" in stubsOut));
+// The gates still apply to `--stubs`: a broken merge produces unreliable rows, so a digest taken from a blocked run
+// must not read as a clean handoff. (This fixture has no seed and no fields, so it IS blocked — same exit as a
+// plain run of it.) The digest is still printed, so the caller sees what it would have handed over.
+const stubsPlain = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"],
+  { input: JSON.stringify(handoffManifest), encoding: "utf8" });
+check("handoff OUT: `--stubs` does not mask the gates — same exit code as a plain run of the same manifest",
+  stubsCli.status === stubsPlain.status && stubsCli.status !== 0 && !!stubsOut);
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

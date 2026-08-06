@@ -432,14 +432,27 @@ function renderConfirmWorklist(cs) {
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
   const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}`);
+  // A `message` / `mixin` / `module-dep` / `attribute-*` row is unanswerable from this page body by definition, so
+  // it goes through the same step-5.1 run as an unresolved method — and carries the same card + AC reference once
+  // described. Appended to the row rather than replacing the reason: the reason says what is open, the card says
+  // where the behaviour is written down. An UNdescribed one of those kinds prints `⚠ not described` for the same
+  // reason the method rows do — a blank reads as "nothing expected here", which is how these rows got skipped.
+  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
+    (d.describedIn || HANDOFF_MEMBER_KINDS.has(d.kind) ? ` · **described in** ${describedInText(d)}` : ""));
+  const scoped = nd.filter((d) => HANDOFF_MEMBER_KINDS.has(d.kind));
+  const describedCount = scoped.filter((d) => d.describedIn).length;
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
   // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
     confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
-  return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+  // Counted where it is invisible otherwise: "7 messages, 0 described" and "7 messages, 7 described" read the same
+  // in a bullet list, and only one of them is an approvable plan.
+  const head = [`#### ⚠ Confirm before I build (${confirm.length})`];
+  if (scoped.length) head.push("", `> ${describedCount} of ${scoped.length} behaviour-analysis row(s) (\`message\` / \`mixin\` / \`module-dep\` / \`attribute-*\`) carry a card` +
+    (describedCount < scoped.length ? " — run step 5.1 for the rest." : "."), "");
+  return [...head, ...confirm, ""];
 }
 
 export function renderDesignSpec(result, opts = {}) {
@@ -575,9 +588,35 @@ export function renderDesignSpec(result, opts = {}) {
 // ONE trigger, rendered from its traced origin. `attribute-dependency` names the attribute and the columns whose
 // change fires it; a control trigger names the element and the bound property.
 function triggerText(t) {
+  // A trigger the step-5.1 behaviour analysis established, not the AST. Marked as such: the engine traced nothing
+  // here, so a reader must know the answer is a described one (and which run described it).
+  if (t.kind === "reported") {
+    const from = t.from ? ` (from ${esc(t.from)})` : "";
+    return `${esc(t.reportedKind || "resolved")}${from} — reported`;
+  }
   if (t.kind !== "attribute-dependency") return `${esc(t.element)}.${esc(t.property)}`;
   const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
   return `${esc(t.attribute)} changes${cols}`;
+}
+
+// The ⚠ Confirm rows a behaviour-analysis run (SKILL.md step 5.1) must describe, alongside the methods. That step
+// names four unanswerable row types and only two of them are method-shaped: a `message`'s counterpart lives in
+// ANOTHER schema by definition, a `mixin`'s members are defined outside this page body entirely. A handoff that
+// carried only the method rows would leave these silently out of scope — which is how a prompt ends up naming a row
+// type from prose instead of from the engine's own output. `attribute-*` joins them for the same reason: the
+// declaration is here, the behaviour it drives is not. Lives here (not in migrate.mjs) because both the renderer and
+// the handoff digest key off it, and migrate.mjs already imports this module.
+export const HANDOFF_MEMBER_KINDS = new Set(["message", "mixin", "module-dep", "attribute-virtual",
+  "attribute-imperative", "attribute-dependency", "attribute-lookup-filter", "referenced-module"]);
+
+// The behaviour card + acceptance criteria that DESCRIBE this row, once a step-5.1 run has indexed it. This is what
+// makes *ported* checkable against a described behaviour instead of against the method's name (Contract rule 7);
+// with no card it stays a ⚠ so the blank cannot read as "nothing to describe".
+function describedInText(h) {
+  const d = h.describedIn;
+  if (!d || (!d.card && !(d.ac || []).length)) return "⚠ not described";
+  const ac = (d.ac || []).length ? ` ${d.ac.map(esc).join(", ")}` : "";
+  return `${esc(d.card || "?")}${ac}`;
 }
 
 // Where the method's body lives. An externally-assigned method has none HERE — naming the module beats leaving a
@@ -614,19 +653,30 @@ const IMPERATIVE_LOGIC_PREAMBLE = [
   "> Each row is a method the classic page defines. Mark it **ported** (name the Freedom handler / converter /",
   "> virtual attribute you built), **dropped** (with the reason), or **blocked** — the same standard as an",
   "> ⚠ Confirm item. `Trigger: unresolved` means the engine could not trace what calls it; trace it from the",
-  "> control / hook / message, never from the method's name.", "",
-  "| Method | Source | Trigger | Body does | Reads → writes | Freedom target |",
-  "| --- | --- | --- | --- | --- | --- |",
+  "> control / hook / message, never from the method's name. **Described in** names the behaviour card and the",
+  "> acceptance criteria a step-5.1 `classic-ui-expert` run established for the row — port against those criteria,",
+  "> not against the method's name; `⚠ not described` means no run has covered it yet.", "",
+  "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
+  "| --- | --- | --- | --- | --- | --- | --- |",
 ];
 
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
-  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "", ...IMPERATIVE_LOGIC_PREAMBLE];
+  // Counted, not just listed: how many rows still have no traced trigger, and how many carry a behaviour card. The
+  // pair is the honest state of the worklist — "51 unresolved, 0 described" and "51 unresolved, 51 described" are
+  // very different plans, and the row-by-row table alone made them look identical.
+  const unresolved = stubs.filter((h) => !(h.triggers || []).length).length;
+  const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || (h.describedIn.ac || []).length)).length;
+  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
+    `> ${unresolved} row(s) have no engine-traced trigger · ${described} of ${stubs.length} carry a behaviour card` +
+    (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
+  L.push(...IMPERATIVE_LOGIC_PREAMBLE);
   for (const h of stubs) {
     const triggers = h.triggers || [];
     const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
-    const cells = [esc(h.sourceMethod), sourceText(h), trigger, bodyDoesText(h), readsWritesText(h.evidence), targetText(h)];
+    const cells = [esc(h.sourceMethod), sourceText(h), trigger, bodyDoesText(h), readsWritesText(h.evidence),
+      targetText(h), describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
   L.push("");
@@ -736,6 +786,14 @@ function renderPlanBanners(result, opts) {
     for (const it of coverage.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
+  // A step-5.1 answer whose method matches NO worklist row. Advisory, not a block — but never silent: it means the
+  // report and this manifest describe different surfaces (a renamed method, a stale report, a wrong scope), and a
+  // dropped key would let the plan look fully described while a row it named was never covered.
+  const rt = result.behaviourIndex || { unmatched: [] };
+  if ((rt.unmatched || []).length) P.push(
+    `> ⚠ **${rt.unmatched.length} \`manifest.behaviourIndex\` key(s) matched no imperative row:** ` +
+    rt.unmatched.map((k) => "`" + esc(k) + "`").join(", ") +
+    ". The behaviour report and this manifest disagree about the surface — check for a renamed method, a stale report, or a report run against a different scope.", "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const signalsMissing = opts.signalsMissing || [];

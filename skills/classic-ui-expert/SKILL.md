@@ -81,6 +81,32 @@ Six phases, in order. Each phase's detail lives in the reference file above.
    Close each card by cutting its sourceRef evidence into acceptance criteria — one checkable
    item per assertion, nothing that rests on an open assumption.
 
+## When a caller hands you a row list
+
+A caller (the `classic-to-freedom-migration` skill, step 5.1) may pass a **row digest** — a JSON
+file of the rows it needs described: per scope, each method with the trigger it could trace
+(`triggers: []` ⇒ it traced none), plus `<kind>:<name>` member rows (`message`, `mixin`,
+`module-dep`, `attribute-*`) and the standard-method names its worklist excluded.
+
+That list is **not your analysis scope** — rule 4 still binds: enumerate the whole surface and
+prove it with the member ledger. What the digest changes is your output. Read it, then:
+
+- **Index every row in it.** For each entry, name the card and the AC numbers that describe it.
+  A row you did not cover is a stated gap, not a silent omission.
+- **Answer the triggers it could not trace.** A caller's `triggers: []` usually means the method
+  is invoked from another method's body — something a caller that reads declarations cannot see,
+  and that you resolve while grouping units. Say what invokes it.
+- **Reconcile the counts explicitly.** Your method count is legitimately higher: the caller's
+  list excludes standard framework methods (it publishes those names) and your ledger counts
+  every member. State the difference as a set difference; do not trim your enumeration to match.
+- **Emit a second deliverable: `behaviour-index.json`** next to the report — one entry per row,
+  keyed exactly as the digest keys it (`"<method>"`, `"<schema>::<method>"`, `"<kind>:<name>"`),
+  each `{ "card": "C13", "ac": ["AC-21","AC-22"], "trigger": "internal", "from": "save" }`
+  (`trigger`/`from` only where you resolved one the caller could not). This is what lets the
+  caller's generated worklist carry your card reference; a prose report alone cannot be keyed.
+
+With no digest supplied, work exactly as the six phases say and skip this section.
+
 ## Non-goals
 
 - Not a planner or converter. Producing target designs, plans or code from the findings is

@@ -393,6 +393,7 @@ export function mapToFreedom(eff, opts = {}) {
   // feature toggles / charts / methods → handler stubs / removals / referenced modules
   const _rl = mapRemainingLogic(eff, payloadMethods, payloadComponents);
   const handlerStubs = _rl.handlerStubs;
+  const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
 
   // ---- imperative MEMBERS the engine used to read for their names at most (attributes) or not at all
@@ -411,7 +412,7 @@ export function mapToFreedom(eff, opts = {}) {
     viewConfigDiff: [...containers.structural, ...F.viewConfigDiff, ...(_img.viewConfigDiff || [])],
     viewModelConfigDiff: [{ operation: "merge", path: ["attributes"], values: F.attributes }],
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
-    pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, needsDecision,
+    pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, standardMethodsFiltered, needsDecision,
     ruleSourceCount: payloadRules.length, // # of declarative page/entity rule DEFINITIONS considered (before mapping) — lets a caller detect "rules existed but none mapped into Logic"
     // Major 4 — resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
@@ -1117,6 +1118,11 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   // config as "imperative → review" on every page. They remain MEMBERS — the coverage ledger counts them as
   // `context` via `STANDARD_CLASSIC_METHODS` (same treatment as an inert module dep), never as a silent drop.
   const customMethods = payloadMethods.filter(m => !STANDARD_CLASSIC_METHODS.has(m.name));
+  // The NAMES this filter removed, published rather than only counted. A behaviour-analysis run (SKILL.md step
+  // 5.1) enumerates every member of the surface, so its method count is legitimately HIGHER than the stub count;
+  // without the excluded names the difference reads as a contradiction and gets reconciled by hand. It is a
+  // deterministic filter — publishing the names makes the reconciliation a set difference instead of a diff.
+  const standardMethodsFiltered = payloadMethods.filter(m => STANDARD_CLASSIC_METHODS.has(m.name)).map(m => m.name);
   const handlerStubs = customMethods.map(m => {
     const f = m.facts || null;
     return {
@@ -1150,7 +1156,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   for (const rm of (eff.referencedModules || []))
     needsDecision.push({ kind: "referenced-module", item: rm,
       reason: `page composes UI from referenced module '${rm}' (declared in define() deps + own CSS) — its rendered controls (buttons/labels/timers) are OUTSIDE the page-schema migration unit and are NOT in this ChangeSet; port it manually to Freedom or confirm the target template provides it` });
-  return { handlerStubs, needsDecision };
+  return { handlerStubs, standardMethodsFiltered, needsDecision };
 }
 
 // Fix 2: LOUD unmapped-component drop — any alive CLIENT-authored item the mapper produced nothing for is

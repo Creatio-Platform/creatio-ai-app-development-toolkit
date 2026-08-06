@@ -12,8 +12,25 @@ Invoked by the skill as a CLI — see `../SKILL.md` step 4:
 node migrate.mjs <manifest.json>          # full JSON: effective page + ChangeSet + needsDecision[] + gates
 node migrate.mjs <manifest.json> --plan   # render the migration plan (Markdown)
 node migrate.mjs <manifest.json> --spec   # render just the per-page design spec (Markdown)
+node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
+
+**The behaviour-analysis handoff (`--stubs` out, `manifest.behaviourIndex` back).** Four of the plan's imperative
+rows cannot be answered from the page bodies this engine reads — a method whose trigger it could not trace, a method
+assigned from another module, a `message`, a `mixin` — so SKILL.md step 5.1 sends them to the `classic-ui-expert`
+skill. `--stubs` writes the payload for that: per scope (main page · mini page · each child page) every row's method
+name, traced trigger, `externalRef` and line span, the `<kind>:<name>` member rows, and the standard-method names the
+worklist excluded (so "63 stubs vs 70 members" is a set difference, not a contradiction). It is a digest, not the
+result JSON — `evidence` is dropped, because the analysis run reads bodies from the stand itself.
+
+The answers come back as `manifest.behaviourIndex`: `{ "<method>" | "<schema>::<method>" | "<kind>:<name>":
+{ trigger?, from?, card?, ac?: […], note? } }`. On the next run the engine folds each entry into the GENERATED
+tables — a **Described in** cell naming the card + AC on the `⚠ Imperative logic` row, the same reference on a
+described `⚠ Confirm` member row, and a reported trigger where the engine traced none (marked `reported`; an
+engine-traced trigger is never overwritten). A key that matches no row anywhere becomes a plan banner rather than a
+silent drop. This is why the reference belongs in the manifest and not in the plan's hand-written `Adjustments`
+section: `--plan --out` rewrites the file, so an appended index is lost on every regenerate.
 
 `--out <file>` writes the `--plan`/`--spec` output to a file so the agent presents the file verbatim instead
 of hand-pasting stdout (its Overview/Main-scope values come from `manifest.planMeta`).

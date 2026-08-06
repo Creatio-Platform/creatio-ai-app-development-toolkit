@@ -17,10 +17,14 @@
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
-//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate } // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
+//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
+//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Confirm rows (see applyBehaviourIndex)
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
+// `--stubs` = the step-5.1 handoff digest: the ⚠ Imperative logic rows per scope (method, traced trigger, externalRef,
+// line span) plus the standard-method names the worklist excluded — the payload a behaviour-analysis run indexes
+// its cards against. Pair it with `manifest.behaviourIndex` to fold that run's answers back into the plan.
 // `--verify --built <file>` = the VERIFIED done-gate: diff the actually-built page (clio get-page ownBodySummary)
 // against expected deliverables; exit 2 if any deliverable is MISSING or unverified.
 // Prefer inline "body" (get-classic-page-sources writes bodies inline into the manifest) over "file" to avoid path fragility.
@@ -29,7 +33,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom, STANDARD_CLASSIC_METHODS } from "./mapper.mjs";
-import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields } from "./designspec.mjs";
+import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -88,7 +92,12 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
   if (ctx.memo.has(memoKey)) { ctx.memoStats.hits++; return { status: "ok", res: ctx.memo.get(memoKey) }; }
   try {
     ctx.memoStats.misses++;
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, ...extra });
+    // `inheritedBehaviourIndex` + `scopeSchema`: one behaviour report covers the whole surface, so its answers are
+    // supplied ONCE on the root manifest and must reach every folded scope. The sub-run's own
+    // `manifest.behaviourIndex` still wins, and `scopeSchema` is what lets a `"<schema>::<method>"` key address
+    // this scope specifically. Neither needs a memo-key entry: `scopeSchema` IS the memo key's `key`, and the
+    // inherited map is one per run, so two folds of the same key always see the same answers.
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -238,6 +247,123 @@ function enumerateChildPages(changeSet, detailSchemas) {
   }).filter((c) => c.entity);
 }
 
+// The BEHAVIOUR-ANALYSIS handoff (SKILL.md step 5.1). A step-5.1 run has to index its behaviour cards against the
+// worklist rows this engine emitted, and it cannot derive that list from the stand: `⚠ unresolved` is this engine's
+// verdict, not a property of the source. Absent the list the run publishes its own enumeration and the two counts
+// have to be reconciled by hand (and a row type the engine counted ZERO — e.g. `externalRef` — gets asserted from
+// prose). So the list travels as DATA, in a digest that carries the keys an index needs and drops `evidence`
+// (bodies the analysis run reads from the stand itself) — the whole point is a payload small enough to hand over.
+function stubDigestOf(changeSet) {
+  return (changeSet?.handlerStubs || []).map((h) => ({
+    method: h.sourceMethod,
+    triggers: h.triggers || [],        // [] ⇒ the row reads `⚠ unresolved`: exactly the rows step 5.1 must describe
+    externalRef: h.externalRef || null,// non-null ⇒ assigned from another module (a counted ZERO on most surfaces)
+    lines: h.lines || null,
+    trivial: !!h.trivial,              // passthrough/empty: a member, but not work to port
+    category: h.category || null,
+  }));
+}
+
+function memberDigestOf(changeSet) {
+  return (changeSet?.needsDecision || []).filter((n) => HANDOFF_MEMBER_KINDS.has(n.kind))
+    .map((n) => ({ kind: n.kind, item: n.item, key: `${n.kind}:${n.item}` }));
+}
+
+// One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
+// than one merged array so a caller can hand over (or stage) a single page — the staged-processing direction of
+// ENG-94859 — without re-deriving which method belongs to which schema.
+function stubScope(role, schema, changeSet, standardMethodsFiltered) {
+  const stubs = stubDigestOf(changeSet);
+  const members = memberDigestOf(changeSet);
+  return {
+    role, schema: schema || null,
+    counts: {
+      stubs: stubs.length,
+      unresolvedTrigger: stubs.filter((s) => !s.triggers.length).length,
+      externalRef: stubs.filter((s) => s.externalRef).length,
+      trivial: stubs.filter((s) => s.trivial).length,
+      members: members.length,
+    },
+    // Names the engine excluded from the worklist as standard framework scaffolding. A behaviour-analysis run
+    // enumerates EVERY member, so its method count is legitimately higher; publishing the excluded names turns
+    // "63 vs 70" from a contradiction into a set difference.
+    standardMethodsFiltered: standardMethodsFiltered || [],
+    stubs,
+    members, // the ⚠ Confirm rows of the same handoff — keyed `<kind>:<name>`, the form an answer comes back under
+  };
+}
+
+// The RETURN leg of the step-5.1 handoff: answers the behaviour-analysis run established, folded back into the
+// worklist rows. Two distinct things arrive per method and they are kept apart on purpose:
+//
+//   · a TRIGGER the engine could not trace. The engine reads `triggers[]` off DECLARATIONS (attribute dependency,
+//     bound control property); a helper invoked from another method's body has none, so the row printed
+//     `⚠ unresolved` even where the answer is plain — the engine builds no reverse call graph (`evidence.calls` is
+//     outbound only). A reported trigger fills that blank and is marked `reported`, never merged into AST evidence:
+//     an engine-traced trigger always wins, because it was proven from the body rather than described.
+//   · the CARD + AC numbers that describe the behaviour. This is what makes *ported* checkable against a described
+//     behaviour instead of a method name (Contract rule 7), so it attaches to EVERY matching row — including rows
+//     whose trigger the engine already resolved.
+//
+// The card + acceptance criteria a behaviour-analysis run attached to one row, sanitized. Anything else in the
+// entry (a note, a trigger) is read at its own call site.
+function describedInOf(entry) {
+  const card = typeof entry.card === "string" ? entry.card : null;
+  const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
+  return card || ac.length ? { card, ac } : null;
+}
+
+// A behaviour report covers a whole SURFACE, so its answers span several scopes (the record page, the mini page,
+// each child edit page) while each engine run maps ONE of them — and they cover all FOUR unanswerable row types,
+// not just methods. So one index, three key forms, tried in this order per row:
+//
+//   "<schema>::<method>"   the scoped method form — disambiguates a name two scopes both define (`init`)
+//   "<method>"             the bare method form
+//   "<kind>:<name>"        a ⚠ Confirm member: `message:RefreshDecisionMaker`, `mixin:CompletenessMixin`, …
+//
+// Accepting both a scoped and a bare form is the rule `memberDispositions` already uses; without the scoped one,
+// a single answer would be folded onto two different bodies that happen to share a method name.
+function applyBehaviourIndex(changeSet, index, scopeSchema) {
+  const map = plainObject(index);
+  if (!Object.keys(map).length) return { triggersFilled: [], described: [] };
+  const triggersFilled = [], described = [];
+  for (const h of changeSet?.handlerStubs || []) {
+    const entry = (scopeSchema ? map[`${scopeSchema}::${h.sourceMethod}`] : undefined) ?? map[h.sourceMethod];
+    if (!entry || typeof entry !== "object") continue;
+    const d = describedInOf(entry);
+    if (d) { h.describedIn = d; described.push(h.sourceMethod); }
+    // Fill an EMPTY trigger only. A traced trigger is body-proven; a reported one is a description of it.
+    if (!(h.triggers || []).length && (entry.trigger || entry.from)) {
+      h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
+        note: typeof entry.note === "string" ? entry.note : null }];
+      triggersFilled.push(h.sourceMethod);
+    }
+  }
+  // ⚠ Confirm members — a `message` whose counterpart lives in another schema, a `mixin` whose members are defined
+  // outside this body, the aggregated `module-dep` row. These are the row types step 5.1 exists for just as much as
+  // an unresolved method, and they carry no trigger — only the card that describes them.
+  for (const n of changeSet?.needsDecision || []) {
+    const entry = map[`${n.kind}:${n.item}`];
+    if (!entry || typeof entry !== "object") continue;
+    const d = describedInOf(entry);
+    if (d) { n.describedIn = d; described.push(`${n.kind}:${n.item}`); }
+  }
+  return { triggersFilled, described };
+}
+
+// Which `behaviourIndex` keys reached no row, across EVERY scope of this run. Computed from the assembled index
+// (not per scope) because a key that misses the record page legitimately belongs to the mini page or a child.
+function unmatchedIndexKeys(index, stubIndex) {
+  const keys = Object.keys(plainObject(index));
+  if (!keys.length) return [];
+  const seen = new Set();
+  for (const s of stubIndex) {
+    for (const st of s.stubs) { seen.add(st.method); if (s.schema) seen.add(`${s.schema}::${st.method}`); }
+    for (const m of s.members) seen.add(m.key);
+  }
+  return keys.filter((k) => !seen.has(k));
+}
+
 // Fold each child page (recursive sub-migration) via foldSubPage, writing the mapping onto each childPages entry.
 // isChildPage → child-scoped rendering (few-fields modal nudge, no section-level Print/Process). Extracted for CC.
 function foldChildPages(childPages, childSchemas, foldCtx) {
@@ -266,6 +392,10 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
     c.childStructIncomplete = !!(res.structure && !res.structure.complete);
     c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
     c.treeCyclic = !!res.treeCyclic;
+    c.stubScope = stubScope("child page", key, res.changeSet, res.changeSet?.standardMethodsFiltered);
+    // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
+    // above as `c.stubScope` — so carrying the whole array would list every child page twice.
+    c.childStubScopes = (res.stubIndex || []).slice(1);
   }
 }
 
@@ -287,6 +417,10 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     t.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
     t.ruleCount = (res.changeSet?.pageBusinessRules || []).length + (res.changeSet?.entityBusinessRules || []).length;
     t.ruleSources = res.changeSet?.ruleSourceCount || 0;
+    // A typed page is a FIRST-CLASS scope of the surface (step 5.1: "every record page including typed variants"): it
+    // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
+    t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
+    t.childStubScopes = (res.stubIndex || []).slice(1); // drop the nested run's own main-page scope (captured above)
   }
 }
 
@@ -314,6 +448,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     miniPage.reasons = res.gate?.reasons || [];
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
+    miniPage.stubScope = stubScope("mini page", mkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
   }
   return miniPage;
 }
@@ -718,6 +853,12 @@ export function runMigration(manifest, opts = {}) {
     signals: manifest.signals || {},          // on-stand signals (dcm/…) — gate DCM widget emission on the resolved case
   });
   attachDetailAddModes(changeSet, detailSchemas);
+  // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
+  // carries them. Hand-appending them to the plan's `Adjustments` did not survive a re-run: `--plan --out` rewrites
+  // the file, so the only link from a worklist row to the behaviour that describes it was lost on every regenerate.
+  // A sub-run inherits the root manifest's answers (one report covers the whole surface) and may override them.
+  const behaviourIndexInput = { ...plainObject(opts.inheritedBehaviourIndex), ...plainObject(manifest.behaviourIndex) };
+  const behaviourIndex = applyBehaviourIndex(changeSet, behaviourIndexInput, opts.scopeSchema);
   const parseErrors = [
     ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
     // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
@@ -785,7 +926,7 @@ export function runMigration(manifest, opts = {}) {
   // matches on. Seeded into the FOLD context only — `visited` itself stays as the caller passed it, because
   // hollowFormIssue uses `visited.size === 0` to mean "this is the top-level page".
   const selfKeys = [manifest.entity, manifest.entity && manifest.entity + "Page"].filter(Boolean);
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -802,6 +943,20 @@ export function runMigration(manifest, opts = {}) {
   const miniPageVerified = mpDecl !== undefined || secMpExists; // explicit {schema}/false, or the section body names one
   const miniPage = foldMiniPage(mpName, mpDecl, manifest.miniPageSchemas || {}, foldCtx);
   const miniPageNone = mpDecl === false; // agent verified on-stand: no add mini page
+  // The step-5.1 handoff index — assembled once every scope has folded, so a `behaviourIndex` key can be checked
+  // against the WHOLE surface before it is reported as matching nothing.
+  const stubIndex = [
+    // No schema NAME for this scope on purpose: the engine parses layer BODIES (keyed by package), so the record
+    // page's own schema name is not something it knows. `planMeta.sectionSchema` names the SECTION, a different
+    // schema — putting it here would label record-page rows with the list page's name.
+    stubScope("main page", opts.scopeSchema || null, changeSet, changeSet.standardMethodsFiltered),
+    ...(miniPage?.stubScope ? [miniPage.stubScope] : []),
+    ...typedPages.flatMap((t) => [...(t.stubScope ? [t.stubScope] : []), ...(t.childStubScopes || [])]),
+    ...childPages.flatMap((c) => [...(c.stubScope ? [c.stubScope] : []), ...(c.childStubScopes || [])]),
+  ];
+  // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
+  // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
+  behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
@@ -876,6 +1031,10 @@ export function runMigration(manifest, opts = {}) {
     miniPage,        // add-record mini page (quick-add form) folded from manifest.miniPageSchemas, or null
     miniPageVerified,// whether the mini page presence/absence was actually resolved (vs assumed)
     miniPageNone,    // agent verified on-stand there is NO add mini page (manifest.addRecordMiniPage:false)
+    // The step-5.1 handoff, both legs. `stubIndex` is what goes OUT to the behaviour-analysis run (`--stubs`);
+    // `behaviourIndex` records what came BACK and was folded in — including keys that matched no row.
+    stubIndex,
+    behaviourIndex,
   };
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
@@ -914,6 +1073,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
+  const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   const builtIdx = argv.indexOf("--built");     // --built <file>: the get-page ownBodySummary of the built page(s)
   if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
@@ -952,6 +1112,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else if (checklistMode) output = result.checklist + "\n";
+  // `--stubs` ⇒ ONLY the handoff digest. Deliberately a separate artifact from the full result JSON: this is the
+  // payload a behaviour-analysis run receives, and the full JSON carries megabytes of schema bodies and rendered
+  // Markdown it has no use for. The correctness gates still apply — a broken merge produces unreliable rows, so a
+  // digest taken from a blocked run must not read as a clean handoff.
+  else if (stubsMode) {
+    output = JSON.stringify({
+      entity: result.entity,
+      // The SECTION schema, when the agent supplied it — the surface label a handoff prompt needs. It is not the
+      // record page's name (see stubIndex): it identifies which surface these scopes belong to.
+      sectionSchema: manifest.planMeta?.sectionSchema || null,
+      totals: {
+        scopes: result.stubIndex.length,
+        stubs: result.stubIndex.reduce((n, s) => n + s.counts.stubs, 0),
+        unresolvedTrigger: result.stubIndex.reduce((n, s) => n + s.counts.unresolvedTrigger, 0),
+        externalRef: result.stubIndex.reduce((n, s) => n + s.counts.externalRef, 0),
+      },
+      scopes: result.stubIndex,
+    }, null, 2) + "\n";
+  }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
@@ -977,6 +1156,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
+  else if (stubsMode) label = "imperative-row handoff digest";
   else if (verifyMode) label = "verification";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.

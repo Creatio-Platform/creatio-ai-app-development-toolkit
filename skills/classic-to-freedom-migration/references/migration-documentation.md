@@ -28,6 +28,8 @@ Match the user's language inside the documents.
 
 `customizations.md` is required **at both scopes** whenever the step-5.1 `classic-ui-expert` run applies (an `⚠ Imperative logic` row with an unresolved trigger or an `externalRef` method, or a `message` / `mixin` member). It is not part of the whole-package-only set: a single-section migration whose page carries such a row gets `plan.md` + `worklog.md` + `customizations.md`, and nothing else.
 
+That run also produces **`behaviour-index.json`** — the machine-readable half of the same deliverable (each handed-over row → its card, AC numbers and, where the analysis resolved one, the trigger the engine could not trace). It is not documentation to read: it is merged into the manifest as `behaviourIndex` so the regenerated `plan.md` carries the card reference in its own generated tables. Keep it in the folder next to the report — a plan re-run needs it again, and without it the link from a worklist row to the behaviour that describes it exists only in prose.
+
 Never skip `worklog.md`: it is the persisted memory of what actually happened.
 
 For single-section, this is deliberately light: **`plan.md` is engine-WRITTEN** (`migrate.mjs --plan --out plan.md`, its values supplied via `manifest.planMeta`), so the only hand-maintained document is `worklog.md`. Do not add `README.md`/`discovery.md`/`roadmap.md`/`decisions.md` for a single section — those are the whole-package set.
@@ -42,6 +44,8 @@ migrations/<app-or-section-slug>/
   discovery.md         # inventory and dependency graph (facts)
   plan.md              # approval-gated migration plan (frozen after approval)
   customizations.md    # Classic behaviour cards from the classic-ui-expert run (sub-agent-written)
+  handoff-rows.json    # engine-written (`migrate.mjs --stubs`): the rows handed TO that run
+  behaviour-index.json # the same run's row → card/AC index, merged into the manifest as `behaviourIndex`
   roadmap.md           # living execution tracker (status of every task)
   decisions.md         # decision and approval log (append-only)
   worklog.md           # session log and runtime read-back evidence (append-only)
