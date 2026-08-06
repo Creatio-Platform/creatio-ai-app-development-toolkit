@@ -98,7 +98,8 @@ members (plug-in, mapping) to the same card, and name the derived setting explic
 **Where next:** resolve the prefix resource to state the concrete setting name; note that
 sibling entities may host the same behaviour under sibling settings (a scope observation, not
 this card's subject). The setting's *value* on the stand is data — an assumption with a
-settling query unless queried.
+settling query unless queried — read `SysSettingsValue` (overrides), not only the All-Users
+default (`05-reference-following.md`).
 
 ## Feature flag gate
 

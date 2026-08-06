@@ -24,6 +24,12 @@ Per **extension** layer, enumerate:
 the layer is enumerated, walk the list: any member without a unit is a unit you have not found.
 That is the completeness test — nothing else in this skill substitutes for it.
 
+Write it **member → unit**, one line per member, and close each layer with the count
+(`N members · N attributed · 0 unattributed`). The inverse shape — a unit with a roster of the
+members it covers — reads as a ledger but cannot be checked: a member absent from every roster
+looks like no gap at all, and no coverage figure can be derived from it. Grouping members by family
+("the `save*` methods → these cards") fails the same way.
+
 ## Process members in source order
 
 Walk the layer **top to bottom, in file order** — deps, mixins, attributes, details, methods

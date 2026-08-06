@@ -84,7 +84,7 @@ query, run it now instead of writing the assumption.** Two mandatory cases:
 ## The retrieval floor (mandatory per surface)
 
 Name-driven fetching alone repeats a measured failure: with the source fully reachable,
-agents still leave reachable artifacts unfetched, and purpose accuracy drops. Four artifact
+agents still leave reachable artifacts unfetched, and purpose accuracy drops. Five artifact
 classes are therefore fetched on **every run** — not only when an unresolved name happens to
 point at them — and every fetch, or its counted zero, is logged:
 
@@ -96,11 +96,19 @@ point at them — and every fetch, or its counted zero, is logged:
 2. **Lookup and setting values.** Every condition a unit compares against a lookup row, a
    constant or a system setting gets its value query actually **run** (a read — one ESQ or
    settings query), not parked as an assumption. An assumption remains only for what a read
-   cannot reach.
-3. **Resource strings** — already mandatory through the ledger and the criteria rules
+   cannot reach. A setting's value is **per-audience**: read `SysSettingsValue` (per-role/user
+   overrides), not only the All-Users default, and report whose value it is ("All Users `false`;
+   Supervisor override `true`"). A `false` default is not "dormant".
+3. **Message counterparts.** For every message the surface declares or a body publishes/subscribes,
+   scan the client-schema census for the other side (`sandbox.publish` / `subscribe` of that name)
+   and record it, or record a counted zero ("no subscriber on this stand"). Do this per run, not per
+   unresolved name: a method whose body only publishes or subscribes has nothing to describe on its own,
+   so without the counterpart it lands in no unit at all — the measured failure. A thread left untraced
+   is a refusal with the scan as its settling action, never an omitted member.
+4. **Resource strings** — already mandatory through the ledger and the criteria rules
    (`03-member-ledger.md`, `08-card-contract.md`); listed here so the floor is complete in
    one place.
-4. **Detail wiring** — already mandatory through the ledger and the detail-wiring pattern
+5. **Detail wiring** — already mandatory through the ledger and the detail-wiring pattern
    (`03-member-ledger.md`, `06-platform-patterns.md`).
 
 "Nothing there" is a counted zero, recorded per class ("entity has no event process", "no
