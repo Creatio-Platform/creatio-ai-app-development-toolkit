@@ -1095,6 +1095,70 @@ export const STANDARD_CLASSIC_METHODS = new Set([
   "subscribeSandboxEvents", "initializeReferenceParametersValues", "getServiceRequest", "onSaveButtonClick",
 ]);
 
+// ---------------------------------------------------------------------------
+// The INVERSE call graph. `triggers[]` is read off DECLARATIONS — an attribute
+// dependency, a bound control property — so a method invoked from another
+// method's BODY had no trigger at all and its row printed `⚠ unresolved`. That
+// reads as "nobody knows what runs this" when the answer is one hop away and the
+// parser already recorded it: `facts.calls` holds every callee path the body
+// calls. Inverting that map costs one pass and turns an orphan row into a child
+// of the row that calls it — which is also how it should be PORTED (a helper
+// moves with its caller, not as a handler of its own).
+// ---------------------------------------------------------------------------
+
+// `this.foo` / `this.foo.bind` / `this.foo.call` → "foo". Only `this.`-rooted
+// paths: `esq.addColumn` or `Terrasoft.each` are framework calls, not siblings.
+function internalCallTarget(path) {
+  const m = /^this\.([A-Za-z_$][A-Za-z0-9_$]*)/.exec(path);
+  return m ? m[1] : null;
+}
+
+// callee name → the methods whose bodies call it. Built from ALL payload methods,
+// STANDARD ones included: a helper is very often invoked from `init` /
+// `onEntityInitialized`, and those are filtered out of the worklist — indexing
+// only custom methods would leave such a row `⚠ unresolved` while its caller sat
+// one hop away, which is the exact failure this inversion exists to fix.
+function buildCallerIndex(methods) {
+  const idx = new Map();
+  for (const m of methods) {
+    for (const c of m.facts?.calls || []) {
+      const target = internalCallTarget(c);
+      if (!target || target === m.name) continue; // self-recursion says nothing about what starts it
+      if (!idx.has(target)) idx.set(target, new Set());
+      idx.get(target).add(m.name);
+    }
+  }
+  return idx;
+}
+
+// Walk callers upward until something ANSWERS what starts the chain: a caller
+// with a declared trigger (then the row's real trigger is that declaration,
+// reached `via` the chain) or a standard lifecycle method (then the platform
+// calls it, which is itself the answer). Neither found → the honest partial
+// answer, "called from X", which still beats `⚠ unresolved`.
+//
+// `seen` breaks cycles (mutual recursion is common in classic helpers) and the
+// caller sets are sorted so the result never depends on iteration order.
+function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
+  if (seen.has(name)) return null;
+  seen.add(name);
+  const callers = [...(callerIdx.get(name) || [])].sort();
+  // EVERY caller travels with the answer, not just the one that resolved. A helper called from two places is ported
+  // differently from one called from a single site, and dropping the rest would hide that from the reader.
+  const all = callers.length > 1 ? { callers } : {};
+  let partial = null;
+  for (const caller of callers) {
+    const m = byName.get(caller);
+    const declared = m?.triggers || [];
+    if (declared.length) return { kind: "internal", from: caller, root: caller, rootTrigger: declared[0], ...all };
+    if (STANDARD_CLASSIC_METHODS.has(caller)) return { kind: "internal", from: caller, lifecycle: caller, ...all };
+    partial ||= { kind: "internal", from: caller, ...all };
+    const up = resolveInternalTrigger(caller, callerIdx, byName, seen);
+    if (up) return { ...up, from: caller, via: [caller, ...(up.via || [])].filter((v) => v !== up.root), ...all };
+  }
+  return partial;
+}
+
 // Returns handlerStubs[] + its own needsDecision[].
 function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   const needsDecision = [];
@@ -1141,6 +1205,15 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
       draft: true,
     };
   });
+  // Fill the trigger of every row the DECLARATION pass left empty, from the inverse call graph. Declared triggers
+  // are untouched: a declaration is what the platform actually binds, an internal call is one step below it.
+  const callerIdx = buildCallerIndex(payloadMethods);
+  const byName = new Map(payloadMethods.map((m) => [m.name, m]));
+  for (const stub of handlerStubs) {
+    if (stub.triggers.length) continue;
+    const t = resolveInternalTrigger(stub.sourceMethod, callerIdx, byName);
+    if (t) stub.triggers = [t];
+  }
   for (const stub of handlerStubs) needsDecision.push({ kind: "method", item: stub.sourceMethod, reason: methodReason(stub) });
 
   // removals (B6) — NOT surfaced as decisions. A removed element is simply OUT of the final effective scope: a

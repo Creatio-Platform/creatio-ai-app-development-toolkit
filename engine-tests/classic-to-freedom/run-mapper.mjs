@@ -3456,6 +3456,69 @@ check("#8 Process on a CHILD edit page → short 'no section-level' note, not th
   /no section-level Run-process/.test(paChild) && !/ProcessInModules/.test(paChild));
 
 
+/* ---- inverse call graph: a body-called method is not an orphan ---- */
+// `triggers[]` is read off DECLARATIONS, so a method invoked from another method's BODY used to print
+// `⚠ unresolved` — "nobody knows what runs this" — while the parser had already recorded the call. These pin the
+// three grades of recovered answer, the cycle guard, and the rule that a declaration always outranks a call.
+const INV_BODY = `define("InvPage", [], function() { return {
+  entitySchemaName: "Deal",
+  attributes: { Amount: { dataValueType: 1, dependencies: [{ columns: ["Stage"], methodName: "onStageChanged" }] } },
+  methods: {
+    onStageChanged: function() { this.recalcTotals(); },
+    recalcTotals: function() { this.roundIt(); },
+    roundIt: function() { return 1; },
+    onSaved: function() { this.callParent(arguments); this.syncOwner(); },
+    syncOwner: function() { return this.get("Owner"); },
+    orphanHelper: function() { return 2; },
+    pingPongA: function() { this.pingPongB(); },
+    pingPongB: function() { this.pingPongA(); },
+    sharedHelper: function() { return 3; },
+    callerOne: function() { this.sharedHelper(); },
+    callerTwo: function() { this.sharedHelper(); }
+  },
+  diff: [{ operation: "insert", name: "Amount", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Amount" } }]
+}; });`;
+const invRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: INV_BODY }] });
+const invStub = (m) => invRun.changeSet.handlerStubs.find(h => h.sourceMethod === m);
+const invTrig = (m) => (invStub(m)?.triggers || [])[0];
+
+check("inverse graph: a helper called from a DECLARATION-triggered method reports that declaration as its root",
+  invTrig("recalcTotals")?.kind === "internal" && invTrig("recalcTotals")?.root === "onStageChanged"
+  && invTrig("recalcTotals")?.rootTrigger?.kind === "attribute-dependency",
+  () => JSON.stringify(invTrig("recalcTotals")));
+check("inverse graph: the walk is TRANSITIVE — two hops still reach the declaration",
+  invTrig("roundIt")?.rootTrigger?.kind === "attribute-dependency" && invTrig("roundIt")?.from === "recalcTotals",
+  () => JSON.stringify(invTrig("roundIt")));
+check("inverse graph: a helper called from a STANDARD lifecycle method reports the lifecycle hook (those are filtered from the worklist, so indexing only custom methods would miss it)",
+  invTrig("syncOwner")?.lifecycle === "onSaved",
+  () => JSON.stringify(invTrig("syncOwner")));
+check("inverse graph: a method nothing calls stays honestly unresolved",
+  (invStub("orphanHelper")?.triggers || []).length === 0);
+check("inverse graph: mutual recursion does not hang or invent a root (cycle guard)",
+  (invTrig("pingPongA")?.kind === "internal") && !invTrig("pingPongA")?.rootTrigger && !invTrig("pingPongA")?.lifecycle);
+check("inverse graph: a declaration-triggered method keeps its OWN declared trigger, never an internal one",
+  invTrig("onStageChanged")?.kind === "attribute-dependency");
+check("inverse graph: every caller travels with the answer when there is more than one",
+  (invTrig("sharedHelper")?.callers || []).join(",") === "callerOne,callerTwo",
+  () => JSON.stringify(invTrig("sharedHelper")));
+
+const invPlan = renderPlan(invRun, {});
+check("inverse graph: the plan distinguishes a recovered internal call from a declarative trigger",
+  /\(internal call\)/.test(invPlan) && /platform lifecycle/.test(invPlan),
+  () => invPlan.split("\n").filter(l => /internal call|lifecycle/.test(l)).slice(0, 4));
+check("inverse graph: the worklist header counts caller-only rows apart from truly untriggered ones",
+  /know only their calling method/.test(invPlan),
+  () => invPlan.split("\n").filter(l => /no traced trigger/.test(l)));
+check("inverse graph: a multi-caller row says so in the plan",
+  /\+1 more caller/.test(invPlan));
+// The digest must keep the two states distinguishable for the handoff prompt.
+const invDigest = invRun.stubIndex[0].counts;
+// unresolved = the three nothing calls (orphanHelper, callerOne, callerTwo); internalCallOnly = the two halves of
+// the recursion pair plus sharedHelper, all of which know their caller but not what starts the chain.
+check("inverse graph: the handoff digest counts `internalCallOnly` separately from `unresolvedTrigger`",
+  invDigest.unresolvedTrigger === 3 && invDigest.internalCallOnly === 3,
+  () => JSON.stringify(invDigest));
+
 /* ---- step-5.1 behaviour handoff: the stub index OUT, the behaviour index BACK (both legs) ---- */
 // The rows a behaviour-analysis run has to describe cannot be derived from the stand — `⚠ unresolved` is this
 // engine's verdict — so they travel as data. These goldens pin both directions of that handoff.

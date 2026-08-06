@@ -594,6 +594,19 @@ function triggerText(t) {
     const from = t.from ? ` (from ${esc(t.from)})` : "";
     return `${esc(t.reportedKind || "resolved")}${from} — reported`;
   }
+  // Recovered from the inverse call graph: this method is invoked from another method's BODY. Deliberately NOT
+  // dressed up as a declarative trigger — the reader has to see the difference, because the Freedom target follows
+  // from what STARTS the chain, not from the call itself. Three grades of answer, most specific first: the chain
+  // reaches a declaration (name it), it reaches a platform lifecycle method, or only the immediate caller is known.
+  if (t.kind === "internal") {
+    const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
+    // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites
+    // is not the same port as one with a single caller.
+    const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${t.callers.length > 2 ? "s" : ""})` : "";
+    if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${more}`;
+    if (t.lifecycle) return `${esc(t.lifecycle)} (platform lifecycle) → internal call${more}`;
+    return `internal call from ${esc(t.from)}${via}${more}`;
+  }
   if (t.kind !== "attribute-dependency") return `${esc(t.element)}.${esc(t.property)}`;
   const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
   return `${esc(t.attribute)} changes${cols}`;
@@ -652,8 +665,10 @@ function targetText(h) {
 const IMPERATIVE_LOGIC_PREAMBLE = [
   "> Each row is a method the classic page defines. Mark it **ported** (name the Freedom handler / converter /",
   "> virtual attribute you built), **dropped** (with the reason), or **blocked** — the same standard as an",
-  "> ⚠ Confirm item. `Trigger: unresolved` means the engine could not trace what calls it; trace it from the",
-  "> control / hook / message, never from the method's name. **Described in** names the behaviour card and the",
+  "> ⚠ Confirm item. `Trigger: unresolved` means nothing in this schema calls it and no declaration binds it — trace",
+  "> it from the control / hook / message, never from the method's name. An `internal call` trigger means the engine",
+  "> found the CALLING method, and where the chain reaches one, the declaration or platform lifecycle hook that starts",
+  "> it: port such a row WITH its caller rather than as a handler of its own. **Described in** names the behaviour card and the",
   "> acceptance criteria a step-5.1 `classic-ui-expert` run established for the row — port against those criteria,",
   "> not against the method's name; `⚠ not described` means no run has covered it yet.", "",
   "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
@@ -667,9 +682,14 @@ function renderImperativeLogic(cs) {
   // pair is the honest state of the worklist — "51 unresolved, 0 described" and "51 unresolved, 51 described" are
   // very different plans, and the row-by-row table alone made them look identical.
   const unresolved = stubs.filter((h) => !(h.triggers || []).length).length;
+  // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
+  // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
+  const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
   const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || (h.describedIn.ac || []).length)).length;
   const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
-    `> ${unresolved} row(s) have no engine-traced trigger · ${described} of ${stubs.length} carry a behaviour card` +
+    `> ${unresolved} row(s) have no traced trigger` +
+    (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
+    ` · ${described} of ${stubs.length} carry a behaviour card` +
     (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
   L.push(...IMPERATIVE_LOGIC_PREAMBLE);
   for (const h of stubs) {

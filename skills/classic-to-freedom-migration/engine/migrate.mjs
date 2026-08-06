@@ -280,6 +280,11 @@ function stubScope(role, schema, changeSet, standardMethodsFiltered) {
     counts: {
       stubs: stubs.length,
       unresolvedTrigger: stubs.filter((s) => !s.triggers.length).length,
+      // Rows the inverse call graph reached but could not trace to a declaration or a lifecycle hook: we know the
+      // calling method, not what starts the chain. Still behaviour-analysis work — kept out of `unresolvedTrigger`
+      // so the two states are distinguishable, and published so a handoff prompt cannot mistake one for the other.
+      internalCallOnly: stubs.filter((s) => s.triggers.length &&
+        s.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length,
       externalRef: stubs.filter((s) => s.externalRef).length,
       trivial: stubs.filter((s) => s.trivial).length,
       members: members.length,

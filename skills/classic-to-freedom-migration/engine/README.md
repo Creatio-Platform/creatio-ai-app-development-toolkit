@@ -16,6 +16,18 @@ node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis hand
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
 
+**The inverse call graph.** `triggers[]` is read off DECLARATIONS (an attribute dependency, a bound control
+property), so a method invoked from another method's BODY had none and its row printed `⚠ unresolved` — which reads
+as "nobody knows what runs this" even though the parser had already recorded the call in `facts.calls`. Those calls
+are now inverted into a caller index and walked upward until something answers what starts the chain: a caller with a
+declared trigger (the row reports that declaration, reached `via` the chain), or a standard lifecycle method (the
+platform calls it, which is the answer). Neither found → `internal call from X`, the honest partial answer. The index
+is built from ALL methods including the standard ones the worklist filters out — a helper is very often invoked from
+`init` / `onEntityInitialized`. Cycles are guarded, callers are sorted so the result is order-independent, a declared
+trigger is never replaced by an internal one, and every caller travels along when there is more than one. Rows left
+knowing only their caller are counted apart (`internalCallOnly`) from true orphans (`unresolvedTrigger`): both are
+still behaviour-analysis work, and collapsing them would make the recovery look like work that no longer needs doing.
+
 **The behaviour-analysis handoff (`--stubs` out, `manifest.behaviourIndex` back).** Four of the plan's imperative
 rows cannot be answered from the page bodies this engine reads — a method whose trigger it could not trace, a method
 assigned from another module, a `message`, a `mixin` — so SKILL.md step 5.1 sends them to the `classic-ui-expert`
