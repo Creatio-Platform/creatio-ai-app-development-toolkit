@@ -43,7 +43,7 @@ migrations/<app-or-section-slug>/
   README.md            # dashboard and single entry point (status rollup)
   discovery.md         # inventory and dependency graph (facts)
   plan.md              # approval-gated migration plan (frozen after approval)
-  customizations.md    # Classic behaviour cards from the classic-ui-expert run (sub-agent-written)
+  customizations.md    # Classic behaviour cards from the step-5.1 classic-ui-expert run (sub-agent or workflow)
   handoff-rows.json    # engine-written (`migrate.mjs --stubs`): the rows handed TO that run
   behaviour-index.json # the same run's row → card/AC index, merged into the manifest as `behaviourIndex`
   roadmap.md           # living execution tracker (status of every task)
@@ -83,7 +83,7 @@ Holds the **verbatim `node engine/migrate.mjs <manifest> --plan` output** (SKILL
 - Any scope or strategy change requires a new entry in `decisions.md`, explicit re-approval, and a version bump in `plan.md` (for example `v2`), recording what changed and why.
 
 ### customizations.md — the Classic behaviour analysis
-Written by the **`classic-ui-expert`** sub-agent (SKILL.md step 5.1), not by hand. It answers the imperative rows the engine can enumerate but not explain — a method whose trigger is unresolved, a method assigned from another module, a `message` whose counterpart is in another schema, a `mixin`.
+Written by the **`classic-ui-expert`** run (SKILL.md step 5.1) — a workflow, a sub-agent, or that skill invoked inline — not by hand. It answers the imperative rows the engine can enumerate but not explain — a method whose trigger is unresolved, a method assigned from another module, a `message` whose counterpart is in another schema, a `mixin`.
 - behaviour cards: what each customization does and why, its verbatim source evidence, and **numbered acceptance criteria** — the part a rebuild is checked against
 - the surface's member ledger, counted zeros, and refusals (a refused unit is a recorded outcome, not an absent behaviour)
 - Classic-side facts only: no Freedom targets, no migration advice — those stay in `plan.md`

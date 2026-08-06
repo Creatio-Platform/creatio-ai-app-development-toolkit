@@ -107,6 +107,29 @@ prove it with the member ledger. What the digest changes is your output. Read it
 
 With no digest supplied, work exactly as the six phases say and skip this section.
 
+### When the digest covers ONE scope, not the surface
+
+A caller may also run you as one stage of a phased orchestration: a **shared-core package** (the
+stand-wide census, the base-page chain, mixin bodies, referenced modules and constants, the
+message publish/subscribe register) plus the digest slice for a **single scope** — one record
+page, the mini page, one child page. Rule 4 still binds, but its subject narrows to what you were
+given, and the narrowing must be stated, not assumed:
+
+- **Attribute every member of YOUR scope's extension layers.** That ledger is your completeness
+  proof for the scope. It is NOT a completeness proof for the surface, and you must say so — the
+  census that proves no scope was missed belongs to the phase that produced the package.
+- **Do not re-card the shared core.** A mixin, base-layer method or module body already carded in
+  the package is REFERENCED by its card id, not described again. Two cards for one mixin is the
+  failure this split exists to avoid; if the package's card is wrong or incomplete, say that
+  instead of writing a competing one.
+- **Namespace your card ids** (`<scope>/C03`) whenever the run is one of several. Bare `C01…`
+  collide across reports, and the caller's worklist would then point at two different cards.
+- **A reference you cannot resolve inside your scope is a stated gap, not a refusal to the
+  surface.** Name what would settle it (usually another scope's schema); the critique phase
+  reconciles it against a sibling's findings.
+- **Rule 1 is unchanged.** No live stand, or a package missing something you need — stop and name
+  it. A supplied package is context, never a substitute for the stand.
+
 ## Non-goals
 
 - Not a planner or converter. Producing target designs, plans or code from the findings is
