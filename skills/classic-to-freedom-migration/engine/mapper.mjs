@@ -1154,7 +1154,14 @@ function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
     if (STANDARD_CLASSIC_METHODS.has(caller)) return { kind: "internal", from: caller, lifecycle: caller, ...all };
     partial ||= { kind: "internal", from: caller, ...all };
     const up = resolveInternalTrigger(caller, callerIdx, byName, seen);
-    if (up) return { ...up, from: caller, via: [caller, ...(up.via || [])].filter((v) => v !== up.root), ...all };
+    if (up) {
+      // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat
+      // `from` (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the
+      // trigger already names. Build the chain from this caller upward, drop duplicates, then peel off the head.
+      const chain = [caller, ...(up.from && up.from !== caller ? [up.from] : []), ...(up.via || [])]
+        .filter((v, i, a) => v && a.indexOf(v) === i && v !== up.root);
+      return { ...up, from: caller, via: chain.slice(1), ...all };
+    }
   }
   return partial;
 }

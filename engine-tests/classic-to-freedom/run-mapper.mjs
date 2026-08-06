@@ -3498,6 +3498,31 @@ check("inverse graph: mutual recursion does not hang or invent a root (cycle gua
   (invTrig("pingPongA")?.kind === "internal") && !invTrig("pingPongA")?.rootTrigger && !invTrig("pingPongA")?.lifecycle);
 check("inverse graph: a declaration-triggered method keeps its OWN declared trigger, never an internal one",
   invTrig("onStageChanged")?.kind === "attribute-dependency");
+// Regression from a real Order-section run: the immediate caller must not also appear in `via`, and `via` must not
+// end on the root the trigger already names ("internal call from onContractInserted via onContractInserted").
+check("inverse graph: `via` lists the hops BETWEEN the caller and the root — never the caller itself",
+  !(invTrig("roundIt")?.via || []).includes(invTrig("roundIt")?.from),
+  () => JSON.stringify(invTrig("roundIt")))
+check("inverse graph: `via` never ends on the root, which the trigger already names",
+  !(invTrig("roundIt")?.via || []).includes(invTrig("roundIt")?.root))
+// A three-deep chain with NO declared root: each row names its own caller and the hops above it, without repeats.
+const CHAIN_BODY = `define("ChainPage", [], function() { return {
+  entitySchemaName: "Deal",
+  methods: {
+    top: function() { this.mid(); },
+    mid: function() { this.low(); },
+    low: function() { this.leaf(); },
+    leaf: function() { return 1; }
+  },
+  diff: []
+}; });`;
+const chainRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: CHAIN_BODY }] })
+const chainTrig = (m) => (chainRun.changeSet.handlerStubs.find(h => h.sourceMethod === m)?.triggers || [])[0]
+check("inverse graph: a three-deep chain reports caller + distinct hops, no duplicates",
+  chainTrig("leaf")?.from === "low" &&
+  JSON.stringify(chainTrig("leaf")?.via) === JSON.stringify(["mid", "top"]),
+  () => JSON.stringify(chainTrig("leaf")))
+
 check("inverse graph: every caller travels with the answer when there is more than one",
   (invTrig("sharedHelper")?.callers || []).join(",") === "callerOne,callerTwo",
   () => JSON.stringify(invTrig("sharedHelper")));
