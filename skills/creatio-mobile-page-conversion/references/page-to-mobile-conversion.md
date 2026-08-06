@@ -147,6 +147,12 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        components are ever `drop` entries (an unsupported type, or one bound to a non-primary data
        source); a container is never a `drop`, so an empty container comes through as its own
        `merge`/`insert` instead — the user can delete it in the designer if it is unwanted.
+     - **Whole non-converting web containers are dropped via a SEPARATE channel, NOT `elementMap`.** Components
+       inside a web template's non-converting container (e.g. the header action bar) never reach `elementMap` at
+       all — they are removed up front (the mobile template provides the equivalent header/actions chrome) and
+       listed in `guide.excludedComponents` (each with its `container`). Read that list to know exactly what was
+       left out; do NOT re-add them. (A nested subtree with its own conversion rule — e.g. tabs — is carved out
+       and still converts, so it is absent from the list.)
    - **Data sections — paste the prebuilt diffs, do NOT rebuild by hand.** Both metadata sections have
      identical structural support on mobile, and the guide hands them to you ready to paste:
      - Paste `guide.modelConfigDiff` VERBATIM as the page's `modelConfigDiff`, and `guide.viewModelConfigDiff`
@@ -265,7 +271,9 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
 - **What will be adapted** (`withAdaptation` / `alternativeAvailable`) — e.g. *"grid → mobile list"*,
   *"checkbox → toggle"*.
 - **What is NOT supported / will be dropped** — e.g. Dashboards, Summaries, bulk actions. State it
-  explicitly.
+  explicitly. Include `guide.excludedComponents` — the web-template chrome dropped up front (e.g. the
+  header action bar's Order/print buttons); name them (grouped by `container`) so the developer can confirm
+  nothing needed was lost.
 - **Needs a decision** (`requiresManualDecision`) — the items awaiting the developer's call.
 - **Section registration intent** (from `guide.sectionRegistration`) — whether the page is a section
   and whether it would be made available in mobile, and in which workplace (existing mobile one, a new
@@ -308,6 +316,10 @@ After `validate-page`, deliver a report:
   (`convertedRequests`, remapped where the mobile name differs). Components whose request the mobile app does
   NOT support were **dropped entirely** (their `elementMap` entry is `drop`, reason names the request) — list
   those removed action components for the developer.
+- **Excluded web-container components:** from `guide.excludedComponents` — the components dropped because they
+  live inside a non-converting web-template container (e.g. the header action bar), which the mobile template
+  replaces with its own chrome. List them grouped by `container` so the developer sees exactly what was left
+  out; never state "nothing was dropped" when this list is non-empty.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet), whether the developer adjusted or declined it, and that the child placement
   was applied via `mobileValues` and the container columns via each `adaptiveLayout[].adaptiveDiff`.
