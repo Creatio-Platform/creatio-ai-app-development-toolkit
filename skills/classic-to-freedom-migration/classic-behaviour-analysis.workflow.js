@@ -17,6 +17,8 @@ export const meta = {
 //     environment: string,   // REQUIRED: registered clio environment name (read-only against it)
 //     outDir:      string,   // REQUIRED: the migration folder — report + index land here
 //     sectionSchema?: string, // surface label for the prompts (e.g. 'OpportunitySectionV2')
+//     totals?: object,        // the digest's own `totals` — lets the run exit before spending any agent when the
+//                             //   surface has no imperative rows at all (measured: a real custom section reported 0)
 //     rowsPerAgent?: number,  // override the Describe batch target
 //     maxDescribeAgents?: number } // hard cap on the fan-out
 //
@@ -61,6 +63,24 @@ if (missing.length) {
 }
 
 const SURFACE = input.sectionSchema || '(surface not named)'
+
+// A surface with NO imperative rows is the common case, not an edge case: a section built in the wizard often carries
+// `methods: {}`, no `messages` and no `mixins` at all — measured on a real custom section, where the digest reported
+// 0 stubs across all five scopes. Step 5.1 does not apply there, and the caller can say so before any agent runs by
+// passing the digest's `totals` (which SKILL.md already has it read). Without this the run would spend a Context
+// agent and then report `complete: false` on a surface that had nothing to describe — an empty worklist is DONE, not
+// incomplete. The same check runs again after Context for a caller that did not pass `totals`.
+const declaredTotals = input.totals && typeof input.totals === 'object' ? input.totals : null
+if (declaredTotals && !declaredTotals.stubs && !declaredTotals.members) {
+  log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
+  return {
+    surface: SURFACE,
+    skipped: true,
+    reason: 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply',
+    coverage: { described: 0, total: 0, complete: true, uncovered: [] },
+    describeAgents: 0,
+  }
+}
 
 // Batch sizing. THEORETICAL DEFAULTS — no measured profile exists yet: the only
 // observed run (a product section: 63 rows on the record page, 16 on the mini
@@ -265,6 +285,22 @@ const worked = scopes.filter((s) => s.rows > 0)
 const empty = scopes.filter((s) => s.rows === 0)
 const totalRows = worked.reduce((n, s) => n + s.rows, 0)
 if (empty.length) log(`${empty.length} scope(s) carry no rows and get no agent: ${empty.map((s) => s.label).join(', ')}`)
+
+// Same verdict as the pre-Context check above, for a caller that did not pass `totals`: an empty worklist is DONE.
+// Reached only when Context has already run, so its census and shared-core reading are still reported back.
+if (!worked.length) {
+  log(`no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
+  return {
+    surface: SURFACE,
+    skipped: true,
+    reason: 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply',
+    coverage: { described: 0, total: 0, complete: true, uncovered: [] },
+    describeAgents: 0,
+    scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: 0 })),
+    censusNote: ctx?.censusNote || null,
+    refusals: ctx?.refusals || [],
+  }
+}
 
 // Greedy packing, largest scope first. A scope is never SPLIT: the analysis
 // contract's completeness proof is a per-scope member ledger, so half a scope
