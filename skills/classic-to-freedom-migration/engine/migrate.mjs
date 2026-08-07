@@ -15,6 +15,7 @@
 //     "resources": { "SomeTabCaption": "Localized text", … }, // optional; localizable strings → tab/group/detail captions (#5/#13)
 //     "columnTitles": { "MobilePhone": "Mobile phone", … }, // optional; entity column titles → field LABELS (#5/#13)
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
+//     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate } // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
@@ -147,6 +148,62 @@ function typedPageIssue(t) {
   return `typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`;
 }
 
+// ENG-93928 — parse each supplied EMBEDDED PROFILE schema (the little declarative page a profile card renders,
+// e.g. `AccountProfileSchema`) so the mapper knows the PROFILED entity and which columns the classic card
+// displayed. Same shape as a detail record, minus the detail-only concerns (no child edit page / FK).
+function parseProfileSchemas(manifest, bodyOf) {
+  const out = {};
+  for (const [name, e] of Object.entries(manifest.profileSchemas || {})) {
+    out[name] = profileSchemaRecord(name, e, bodyOf);
+  }
+  return out;
+}
+
+// ONE profile-schema entry → its record (always the same shape, so callers never type-check the return).
+// A manifest value of `false` becomes `verifiedNone: true`: the agent VERIFIED there is no separate profile
+// schema to read (the card's config names none, or it is unreadable) — a resolved answer, exactly like
+// `addRecordMiniPage: false` / `editPage: false`, so the gate can tell "verified none" from "never checked"
+// and the mapper falls back to the by-hand recipe cleanly.
+// Deliberately NOT carried over from detailSchemaRecord: `title`, `editPage`, `editable`, `editableVerified`.
+// Those are detail-only concerns — a detail governs a child edit page and an add-record workflow, so it needs a
+// resolved title and an edit-page answer. A profile card renders a compact view of an ALREADY-linked record; it
+// opens the record itself, never a child edit page. Do not mirror the detail template here without that changing.
+function profileSchemaRecord(name, e, bodyOf) {
+  const verifiedNone = e === false;
+  const eObj = (!verifiedNone && e && typeof e === "object") ? e : {};
+  const hasBody = !verifiedNone && (typeof e === "string" || e?.body != null || !!e?.file);
+  let p = { entitySchemaName: "?", diff: [] };
+  if (hasBody) p = parseSchema(typeof e === "string" ? e : bodyOf(e), name);
+  const parsedEntity = p.entitySchemaName && p.entitySchemaName !== "?" ? p.entitySchemaName : null;
+  return {
+    verifiedNone,
+    entity: eObj.entity || parsedEntity,
+    columns: [...new Set((p.diff || []).filter((d) => d?.bindTo).map((d) => d.bindTo))],
+    error: p.error || null,
+    astDiagnostics: p.astDiagnostics || [],
+  };
+}
+
+// A recognised profile card whose profile schema was NOT supplied is an INPUT gap: without that body the engine
+// cannot say which entity the card profiled or which values it showed, so the plan would ship a card with no
+// contents. Same doctrine as detail/child-page schemas — fetch it, do not defer. A card is RESOLVED when the
+// manifest declares its profile schema under the schema name OR under the module key (the only available key when
+// the config names no schemaName) — either with a body, or as `false`. Anything else is "never checked", and blocks.
+function profileSchemaIssues(manifest, changeSet) {
+  const declared = manifest.profileSchemas && typeof manifest.profileSchemas === "object" ? manifest.profileSchemas : {};
+  const has = (k) => k != null && Object.hasOwn(declared, k);
+  return (changeSet.profileCards || [])
+    .filter((pc) => !has(pc.schemaName) && !has(pc.classic))
+    .map((pc) => {
+      const key = pc.schemaName || pc.classic;
+      const schemaNote = pc.schemaName
+        ? `its profile schema '${pc.schemaName}'`
+        : `its profile schema (the classic config names no schemaName — key the entry by the module name '${pc.classic}')`;
+      return `embedded profile card '${pc.classic}': ${schemaNote} is NOT supplied — fetch it (\`get-client-unit-schema --schema-name ${key}\`) into manifest.profileSchemas["${key}"] so the profiled entity and the columns the card displayed are resolved, or record \`manifest.profileSchemas["${key}"]: false\` once you have VERIFIED there is no separate profile schema to read (then rebuild the card by hand per the mapping reference). Without one of the two the Freedom side profile would be built empty; "recreate it at build" is not a resolution.`;
+    });
+}
+
+
 // The structure issue the add-record mini page contributes (only when this migration has a section), or null.
 function miniPageIssue(miniPage, miniPageVerified) {
   if (miniPage) {
@@ -186,7 +243,7 @@ function detailSchemaIssues(changeSet, suppliedDetailKeys) {
 
 function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited }) {
   const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
-  const issues = [...detailSchemaIssues(changeSet, suppliedDetailKeys)];
+  const issues = [...detailSchemaIssues(changeSet, suppliedDetailKeys), ...profileSchemaIssues(manifest, changeSet)];
   const hollow = hollowFormIssue(changeSet, typedPages, manifest, visited);
   if (hollow) issues.push(hollow);
   for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
@@ -496,11 +553,14 @@ export function runMigration(manifest, opts = {}) {
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
+  // ENG-93928 — the embedded profile schemas a profile card renders (profiled entity + displayed columns).
+  const profileSchemas = parseProfileSchemas(manifest, bodyOf);
   const changeSet = mapToFreedom(eff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
+    profileSchemas,                           // ENG-93928 — parsed embedded-profile bodies (entity + displayed columns)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: manifest.signals || {},          // on-stand signals (dcm/…) — gate DCM widget emission on the resolved case
@@ -511,6 +571,9 @@ export function runMigration(manifest, opts = {}) {
     // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
     // page silently resolve to null while the plan stays green. Its error was captured per-detail above.
     ...Object.entries(detailSchemas).filter(([, d]) => d.error).map(([name, d]) => ({ pkg: `detail:${name}`, error: d.error })),
+    // ENG-93928 — same rule for a profile-schema body: if it failed to parse, the card's entity/columns are
+    // silently null while the plan stays green. Gate it.
+    ...Object.entries(profileSchemas).filter(([, p]) => p.error).map(([name, p]) => ({ pkg: `profile:${name}`, error: p.error })),
   ];
   // Section schemas are NOT part of the effective page — `mergeHierarchy` never receives them; only their
   // regex-derived list-page signals (addRecordMiniPage / sectionActions / listColumns / processLaunch) are used,
@@ -527,6 +590,9 @@ export function runMigration(manifest, opts = {}) {
     // Major 4 — detail-schema diagnostics join the pool tagged `detail:<name>`; a structural one (an unresolved
     // detail `diff`) then blocks the gate just like a main-schema one, instead of silently emptying its columns.
     ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
+    // profile-schema diagnostics join the pool tagged `profile:<name>` — a structural one (its `diff` built via
+    // an unresolved construct) blocks the gate, instead of emptying the card's column list unnoticed.
+    ...Object.entries(profileSchemas).flatMap(([name, p]) => (p.astDiagnostics || []).map((x) => ({ pkg: `profile:${name}`, ...x }))),
     // Section diagnostics are tagged `role:"section"` and are EXCLUDED from the structural gate below (their
     // `diff` is never merged) — advisory only, so they surface without hard-blocking a valid form-page plan.
     ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),

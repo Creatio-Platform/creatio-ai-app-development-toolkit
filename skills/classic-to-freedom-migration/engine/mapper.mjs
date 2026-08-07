@@ -237,6 +237,37 @@ const WIDGET_BY_CONTAINER = {
   DuplicatesWidgetContainer: [{ widget: "Duplicates", freedom: "Freedom duplicates widget" }],
   ESNFeedContainer: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }],
 };
+// EMBEDDED PROFILE CARDS — a classic page can embed a compact card of a LINKED record (a "requester" block
+// on a request page, the account card on ContactPageV2). It is a page-within-a-page: the `modules` config
+// names a small declarative profile schema plus the master/profile wiring — nothing bespoke. Freedom's home
+// for the pattern is a native compact-profile component in the SIDE PROFILE, keyed by the PROFILED entity.
+// PROVENANCE (be precise — E1 lesson): the component types and their `referenceColumn`/`readonly` contract are
+// READ FROM the Freedom component catalog (`get-component-info`), not invented here — but that catalog answered
+// from the `latest` superset (`requiresVersionConfirmation`), so presence on a TARGET stand is NOT established
+// by this table. That is why the emitted decision always carries the `list-packages` package check.
+// `pkg` = the package the component needs as a page-package dependency.
+const PROFILE_CARD_BY_ENTITY = {
+  Contact: { type: "crt.ContactCompactProfile", pkg: "CrtCustomer360App", shows: "photo, name parts, birth date, country, city, time zone" },
+  Account: { type: "crt.AccountCompactProfile", pkg: "CrtCustomer360App", shows: "photo, name, alternative name, country, city, time zone" },
+  SysAdminUnit: { type: "crt.UserCompactProfile", pkg: null, shows: "photo and first/middle/last name" },
+  VwSysAdminUnit: { type: "crt.UserCompactProfile", pkg: null, shows: "photo and first/middle/last name" },
+};
+// The profiled entity from the profile SCHEMA NAME — last-resort only, and deliberately narrow: `Account` and
+// `Contact` are the two unambiguous OOTB families (AccountProfileSchema / ClientContactProfileSchema). A name
+// like `RequesterProfilePage` or `UserProfilePage` says nothing reliable about the entity, so it stays
+// unresolved and the mapper raises a decision instead of guessing a component that would render empty.
+function guessProfiledEntity(schemaName) {
+  const m = /(Account|Contact)Profile/.exec(schemaName || "");
+  return m ? m[1] : null;
+}
+// STRUCTURAL recognition (not a name list): the module carries `masterColumnName` DIRECTLY on its
+// viewModelConfig, is not the actions/DCM dashboard shape (which nests masterColumnName under
+// dashboardConfig), and is not a module the widget catalog already owns. This is why ONE rule covers every
+// embedded profile on every site — the pattern is uniform even when each site names its schemas differently.
+function isProfileCardModule(c) {
+  if (!c.masterColumnName || c.hasDashboardConfig) return false;
+  return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
+}
 // standard card actions (from the classic ACTIONS menu / toolbar) -> Freedom card actions (B7).
 const KNOWN_ACTION_ITEMS = new Set([
   "PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton",
@@ -295,6 +326,9 @@ export function mapToFreedom(eff, opts = {}) {
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
   // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
   const detailSchemas = opts.detailSchemas || {};
+  // ENG-93928 — parsed EMBEDDED PROFILE schemas { "AccountProfileSchema": { entity, columns } } from the
+  // manifest, so a profile card's profiled entity and the columns it displayed are known facts, not guesses.
+  const profileSchemas = opts.profileSchemas || {};
   // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from get-entity-schema-properties, so a field's
   // LABEL is the human title, not the raw column code. Falls back to the page resources, then the code.
   const columnTitles = opts.columnTitles || {};
@@ -350,7 +384,7 @@ export function mapToFreedom(eff, opts = {}) {
 
   const index = new Map((eff.items || []).map(i => [i.name, i])); // layout tree for F3 routing (never null)
   const profileAnchors = deriveProfileAnchors(eff.items);         // RV14 — structural side-profile anchors
-  const ctx = { eff, cols, resources, resolveText, caption, detailSchemas, columnTitles, colMeta, labelFor,
+  const ctx = { eff, cols, resources, resolveText, caption, detailSchemas, profileSchemas, columnTitles, colMeta, labelFor,
     index, profileAnchors, payloadFields, payloadDetails, isMiniPage: !!opts.isMiniPage };
   // ---- fields (3-part binding) routed into a shared container builder (tabs/groups/islands, emitted once) ----
   const containers = createContainers(ctx);
@@ -368,6 +402,12 @@ export function mapToFreedom(eff, opts = {}) {
   const D = mapDetails(ctx, containers, F.profileRegion);
   D.needsDecision.forEach(d => needsDecision.push(d));
   D.accountedFor.forEach(a => accountedFor.add(a));
+
+  // ---- embedded profile cards (linked-record blocks) → the Freedom side profile (ENG-93928) ----
+  const _pc = mapProfileCards(ctx);
+  const profileCards = _pc.profileCards;
+  _pc.needsDecision.forEach(d => needsDecision.push(d));
+  _pc.accountedFor.forEach(a => accountedFor.add(a));
 
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
   const _w = mapWidgets(eff, { signals: opts.signals });
@@ -412,6 +452,9 @@ export function mapToFreedom(eff, opts = {}) {
     resources: resourceStrings,
     // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
     standardFeatures: D.standardFeatures,
+    // embedded profile cards (a compact card of a LINKED record) → the Freedom side profile: the native
+    // compact-profile component wired by `referenceColumn`, or the read-only-fields island fallback.
+    profileCards,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
     widgets,
     // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
@@ -969,10 +1012,14 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   if ((eff.features || []).length) needsDecision.push({ kind: "feature-toggle", item: eff.features.join(", "),
     reason: `page uses feature toggles (${eff.features.join(", ")}) that gate element visibility — mapping is the full union of blocks/fields; the live page renders one feature-state. Review which feature-gated blocks/fields to migrate (gating is in method bodies).` });
 
-  // charts/widgets not in the catalog -> B9/B10 (generic)
+  // charts/widgets not in the catalog -> B9/B10 (generic). An embedded PROFILE CARD is excluded: mapProfileCards
+  // already mapped it to a concrete component, so repeating it here as "propose the closest component" would both
+  // duplicate the worklist and read as if the target were still unknown.
   for (const c of payloadComponents)
-    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName])) needsDecision.push({ kind: "component", item: c.key,
-      reason: `module '${c.moduleName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
+    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName]) && !isProfileCardModule(c)) needsDecision.push({ kind: "component", item: c.key,
+      // name the embedded schema when the config carries one (`config.schemaName`) — a real classic body rarely
+      // sets `moduleName`, so the old text degraded to a useless "module '?'".
+      reason: `module '${c.moduleName || c.schemaName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
 
   // methods -> handler stubs (judgment). STANDARD framework/scaffolding methods are dropped — only CUSTOM business
   // methods reach the Logic table + `method` decisions, so the plan stops listing init/onSaved/validators-config
@@ -1246,6 +1293,91 @@ function mapImages(eff, ctx, F) {
     needsDecision.push(...r.decisions);
   }
   return { images, viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor };
+}
+
+// The Freedom wiring for ONE recognised profile card + the decision text the agent acts on. Split out so the
+// native-component branch and the no-native-analog fallback each read as one thing.
+function profileCardTarget(c, entity, info) {
+  const native = entity ? PROFILE_CARD_BY_ENTITY[entity] : null;
+  // F9 — a card declared by a SEED (parent-template) layer is template context, not client payload: the Freedom
+  // counterpart template may already ship it. Say so instead of claiming it as content to build (mirrors how
+  // mapWidgets marks a base-provided widget).
+  const baseNote = c.fromTemplate
+    ? " This card comes from the parent-template layer, not the page's own schema — confirm whether the Freedom counterpart template already provides it before adding a second one."
+    : "";
+  // the columns the CLASSIC card displayed (from the profile schema's own diff, when its body was supplied) —
+  // this is what tells the agent which values the native card does NOT cover and must be added beside it.
+  const cols = info?.columns?.length ? info.columns : null;
+  const colsNote = cols ? ` The classic card showed: ${cols.join(", ")}.` : "";
+  const flags = Object.keys(c.displayFlags || {}).filter((k) => c.displayFlags[k]);
+  const flagsNote = flags.length ? ` Display flags on the classic config: ${flags.join(", ")} — check the corresponding value is still visible.` : "";
+  // `profileColumnName` is NOT a display concern: the classic blank slate used it to pre-fill the back-reference
+  // when the user ADDED a new linked record. Say that plainly so it is not mistaken for a second binding.
+  const backRef = c.profileColumnName
+    ? ` The classic blank slate could CREATE the linked record, pre-filling '${c.profileColumnName}' on the new ${entity || "profiled"} record with the master record — reproduce that only if the Freedom page must offer creating it (otherwise the lookup's own select is enough).`
+    : "";
+  if (native) {
+    const pkgNote = native.pkg
+      ? ` Requires package '${native.pkg}' as a dependency of the page's package — confirm it is installed on the target environment (list-packages) BEFORE building; the component does not render without it.`
+      : "";
+    return {
+      freedom: native.type, package: native.pkg, fields: cols,
+      reason: `embedded profile card '${c.key}' (classic '${c.schemaName || "?"}', profiled entity '${entity}') → Freedom '${native.type}' in the SIDE PROFILE: insert it into the side-profile container (e.g. 'SideAreaProfileFieldFlexContainer') with 'readonly': true and 'referenceColumn' pointing at a view-model attribute over the master lookup — declare '{ modelConfig: { path: "PDS.${c.masterColumnName}" } }' and set 'referenceColumn': '$<thatAttribute>' (this is exactly how the OOTB Opportunities_FormPage wires its account/contact cards). The master lookup '${c.masterColumnName}' holds the profiled record's Id and the component loads the record itself — no extra data source.${pkgNote} It renders ${native.shows}.${colsNote}${flagsNote} Any classic value the component does not render must be added BESIDE the card as read-only fields over a lookup-path data-source attribute: merge into the PDS attributes a '{ path: "${c.masterColumnName}.<column>", type: "ForwardReference" }' entry per value and bind a read-only field to it.${backRef}${baseNote}`,
+    };
+  }
+  const entityNote = entity ? `profiled entity '${entity}'` : "profiled entity NOT resolved";
+  // A POLYMORPHIC client profile (the profile schema declares no entitySchemaName — it profiles an Account OR a
+  // Contact depending on the record, e.g. `ClientProfileSchema` on OpportunityPageV2) has no single Freedom
+  // counterpart: the OOTB Opportunities_FormPage carries BOTH compact profiles, each shown by its own condition.
+  // Say so, because "no native component" would otherwise read as "rebuild it by hand" for a case Freedom covers.
+  const polyNote = entity ? "" : ` If the classic profile schema declares NO entitySchemaName it is POLYMORPHIC (it profiles an Account OR a Contact per record — as '${c.schemaName || "the client profile"}' does): then the Freedom answer is BOTH native cards (crt.AccountCompactProfile + crt.ContactCompactProfile), each over its own lookup and shown conditionally — the OOTB Opportunities_FormPage does exactly that. Resolve which it is on-stand before falling back to hand-built fields.`;
+  return {
+    freedom: null, package: null, fields: cols,
+    reason: `embedded profile card '${c.key}' (classic '${c.schemaName || "?"}', ${entityNote}) has NO native Freedom compact-profile component — rebuild it as its OWN 'crt.GridContainer' island in 'SideAreaProfileContainer' (single-column, styled like the island the template already provides) holding READ-ONLY fields of the linked record: per shown column merge a lookup-path attribute into the PDS attributes — '{ path: "${c.masterColumnName}.<column>", type: "ForwardReference" }' — and bind a read-only field to it, plus the record link (the classic header was a hyperlink opening the profiled record).${polyNote}${colsNote}${flagsNote}${backRef}${baseNote} Do NOT drop the card and do NOT collapse it into the master's own fields.`,
+  };
+}
+
+// ENG-93928 — embedded profile cards (linked-record blocks) → the Freedom side profile. Runs as its OWN phase
+// (not through the name-keyed widget catalog) and, critically, marks each module key as accounted for: the host
+// diff item shares that name, so this is what stops mapUnmappedDrop reporting the card as an "unknown embedded
+// module" — the exact failure this rule exists to fix. Returns profileCards[] + needsDecision[]/accountedFor[].
+function mapProfileCards(ctx) {
+  const { eff, colMeta, profileSchemas, index, profileAnchors } = ctx;
+  const profileCards = [], needsDecision = [], accountedFor = new Set();
+  for (const c of (eff.components || [])) {
+    if (!isProfileCardModule(c)) continue;
+    accountedFor.add(c.key);                       // the module AND its host diff item (usually the same name)
+    // the profile schema may be supplied under its own name OR — when the classic config names no schemaName —
+    // under the module key, which is then the only key the agent can key it by (see the structure gate).
+    // The `!= null` guard matches `has` in profileSchemaIssues: a null schemaName would otherwise index the
+    // literal key "null", which happens to miss today but only by accident.
+    const decl = (c.schemaName != null ? profileSchemas[c.schemaName] : undefined) ?? profileSchemas[c.key];
+    // `verifiedNone` (manifest `false`) = the agent verified there is no separate schema to read → no info to use,
+    // but a RESOLVED state, so the plan says that instead of "not supplied".
+    const verifiedNone = decl === false || !!decl?.verifiedNone;
+    const info = (!verifiedNone && decl && typeof decl === "object") ? decl : null;
+    // profiled entity, most authoritative first: the profile schema's own entitySchemaName → the master
+    // lookup column's referenced schema (entity metadata) → the schema-name family. Never a blind guess.
+    const entity = info?.entity || colMeta(c.masterColumnName).ref || guessProfiledEntity(c.schemaName);
+    const t = profileCardTarget(c, entity, info);
+    // where the classic card sat: its host diff item climbs to the profile/left area on every real page, but
+    // resolve it rather than assume — a card inside a tab must be reported in that tab.
+    const host = index.get(c.key);
+    // account for the host diff item under ITS OWN name too: the Creatio convention aligns the diff-item name
+    // with the `modules` key (every OOTB example does), but nothing enforces it — and when they differ,
+    // mapUnmappedDrop would flag the host item as an unknown dropped component.
+    if (host?.name) accountedFor.add(host.name);
+    const own = host?.parent ? resolveOwner(host.parent, index, profileAnchors) : { kind: "profile" };
+    profileCards.push({
+      classic: c.key, schemaName: c.schemaName || null, entity: entity || null,
+      masterColumn: c.masterColumnName, profileColumn: c.profileColumnName || null,
+      freedom: t.freedom, package: t.package, fields: t.fields,
+      region: own.kind === "tab" ? own.tab : "SideAreaProfileContainer",
+      displayFlags: c.displayFlags || {}, schemaSupplied: !!info, schemaVerifiedNone: verifiedNone, base: !!c.fromTemplate,
+    });
+    needsDecision.push({ kind: "profile-card", item: c.key, reason: t.reason });
+  }
+  return { profileCards, needsDecision, accountedFor };
 }
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
