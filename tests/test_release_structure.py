@@ -407,6 +407,36 @@ class ReleaseStructureTests(unittest.TestCase):
                 self.assertIn(key, data, f"{skill_dir.name}: openai.yaml missing `{key}`")
                 self.assertTrue(data[key].strip(), f"{skill_dir.name}: `{key}` is empty")
 
+    def test_orchestrator_openai_manifest_carries_the_same_load_bearing_triggers(self):
+        """`agents/openai.yaml` is the ONLY trigger surface an OpenAI-format host reads.
+
+        `LOAD_BEARING_DESCRIPTION_SUBSTRINGS` is enforced above against the SKILL.md front matter
+        only, and `test_every_skill_openai_manifest_has_consistent_shape` checks this file's keys but
+        never a word of their content. So the entrypoint-trigger fix reached SKILL.md and the Cursor
+        rule while this manifest kept the artifact-name-only wording, and nothing failed.
+
+        Scoped to the ENTRYPOINT skill on purpose. It is the one that must fire from a cold request,
+        so its three copies have to say the same thing. The other skills' manifests carry deliberately
+        shorter summaries than their SKILL.md descriptions, and holding them to the same substring
+        list is a separate decision, not this fix.
+
+        `Apply proactively` is excluded: it instructs a Claude-style skill router and has no meaning
+        in an OpenAI manifest, which routes on `short_description` / `default_prompt`.
+        """
+        skill_name = "creatio-app-orchestrator"
+        manifest_path = ROOT / "skills" / skill_name / "agents" / "openai.yaml"
+        data = parse_fenced_flat_mapping(manifest_path.read_text(encoding="utf-8"))
+        manifest_text = " ".join(
+            data.get(key, "") for key in ("short_description", "default_prompt"))
+        for phrase in LOAD_BEARING_DESCRIPTION_SUBSTRINGS[skill_name]:
+            if phrase == "Apply proactively":
+                continue
+            self.assertIn(
+                phrase, manifest_text,
+                f"{skill_name}: openai.yaml lost load-bearing trigger substring '{phrase}' — "
+                f"OpenAI-format hosts would stop matching a plain request",
+            )
+
     def test_skill_relative_references_are_anchored_and_resolve(self):
         """Every link inside a skill's SKILL.md that points to a file the skill
         ships (any folder, not just `references/`) must use an explicit `./`

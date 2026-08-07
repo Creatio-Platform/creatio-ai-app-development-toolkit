@@ -68,6 +68,14 @@ improvise these writes from the tool contracts alone: a workplace bound with the
 installs on the next environment as an empty, unreachable entry, and one of the binding tools deletes
 live records.
 
+If `get-guidance name=workplaces` returns an unknown-topic error, STOP — do not fall back to
+improvising the writes, because that is the exact failure the guidance exists to prevent. The topic is
+delivered by clio's knowledge library, so an unknown topic means the installed clio is older than the
+release that carries it, or the library is not active. Read the `availableGuides` list the error
+returns to confirm, tell the developer the placement cannot be applied safely until clio is updated,
+and leave the section where it is rather than half-applying a navigation change. The same holds for
+`name=home-page`: without it, report the home page as created but not reachable.
+
 If the plan does not state a placement, that is a Gate R defect, not something to decide here: stop and
 ask the developer (see `../context/business-checklist.md`, "Users, access and ownership").
 

@@ -127,8 +127,10 @@ Two consequences that decide whether a newly created app is usable:
 
 Do not improvise these tables. clio owns the model, the recipes, and the data-binding column sets:
 read `get-guidance name=workplaces` (and `name=home-page` for `HomePageUId`) before any navigation
-write. Navigation changes are cached — the user must log out and back in to see them; a browser
-refresh is not enough.
+write. If that returns an unknown-topic error the installed clio predates the knowledge release that
+carries it, or the library is inactive: STOP and tell the developer, rather than improvising the
+writes — see `runbooks/03-app-implementation.md`, "Place the app in the navigation". Navigation
+changes are cached — the user must log out and back in to see them; a browser refresh is not enough.
 
 ---
 

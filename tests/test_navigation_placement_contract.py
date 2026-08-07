@@ -242,6 +242,16 @@ class NavigationPlacementContractTests(unittest.TestCase):
         self.assertIn("says nothing about which workplace it is in", content)
         self.assertIn("survives a", content)
 
+    def test_missing_guidance_topic_has_a_documented_stop(self):
+        # get-guidance name=workplaces is delivered by clio's knowledge library, not by this repo, so
+        # an older clio or an inactive library answers unknown-topic. Without a stated degrade the
+        # agent falls back to improvising the writes from tool contracts — the precise failure the
+        # guidance exists to prevent, and one that ships a broken binding to the next environment.
+        for path in (ESSENTIALS, IMPLEMENTATION_RUNBOOK):
+            content = read_text(path)
+            self.assertIn("unknown-topic", content)
+            self.assertIn("STOP", content)
+
     def test_implementation_runbook_requires_telling_the_developer_about_re_login(self):
         content = read_text(IMPLEMENTATION_RUNBOOK)
         self.assertIn("re-login", content)
