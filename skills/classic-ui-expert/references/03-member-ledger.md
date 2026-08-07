@@ -25,7 +25,10 @@ the layer is enumerated, walk the list: any member without a unit is a unit you 
 That is the completeness test — nothing else in this skill substitutes for it.
 
 Write it **member → unit**, one line per member, and close each layer with the count
-(`N members · N attributed · 0 unattributed`). The inverse shape — a unit with a roster of the
+(`N members · N attributed · K unattributed`), where `K` is the count you actually found, not a
+placeholder — a nonzero `K` is a live gap: it means the walk found a member with no unit, exactly
+what the completeness test above exists to catch, and the layer is not closed until every member
+is on a roster. The inverse shape — a unit with a roster of the
 members it covers — reads as a ledger but cannot be checked: a member absent from every roster
 looks like no gap at all, and no coverage figure can be derived from it. Grouping members by family
 ("the `save*` methods → these cards") fails the same way.
