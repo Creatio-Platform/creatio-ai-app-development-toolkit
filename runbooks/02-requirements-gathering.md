@@ -294,10 +294,10 @@ Describe each **§7.1 dashboard** with these labels (colon included) — the val
 
 - `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
 - `access rights:` — **who the dashboard is created visible to**. This is a **static default: always `All Employees`** (every generated dashboard is visible to everyone). It is stated per dashboard purely so the developer sees the grant in the plan; write it verbatim as `access rights: All Employees`. The role a dashboard is for drives its **content** (which metrics/charts/slices — see `scope:`/`widgets:`), **not** its access rights.
-- `scope:` — in plain, human language, **what the dashboard shows / describes** (the question it answers for the role that uses it). Phrase it as a natural sentence starting with `shows` or `describes`, e.g. `scope: shows open orders by stage this quarter` or `scope: describes how quickly the team closes requests`.
+- `scope:` — a short, natural human sentence, **in the plan's language**, saying **what the dashboard shows / describes** (the question it answers for the role that uses it). Lead with a verb like *shows* / *describes* — and when the plan is not in English, use that language's equivalent (e.g. English `scope: shows open orders by stage this quarter`; Ukrainian `scope: показує відкриті замовлення за стадіями цього кварталу`). Do not write a bare noun phrase or a machine-style tag.
 - `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
 
-Render each §7.1 dashboard block like this (the `access rights:` line is mandatory and sits right under the title):
+**Layout:** render each label on its **own line** as an indented sub-bullet under the `dashboard:` / `home page:` title — do **not** put them inline on one line separated by `·`, `—`, or commas. Each dashboard/home-page block looks like this (the `access rights:` line is mandatory for §7.1 dashboards and sits right under the title):
 
 ```
 - dashboard: Top clients
