@@ -2702,6 +2702,223 @@ check("#8 grandchild embedding: the plan nests BOTH the child and the grandchild
   /#### Child page: CH/.test(gcTop.plan) && /##### Child page: GC/.test(gcTop.plan),
   () => gcTop.plan.split("\n").filter((l) => /Child page:/.test(l)));
 
+/* ---- ENG-93928: embedded profile cards (linked-record blocks) → the Freedom side profile ---- */
+// The `modules` block is VERBATIM from the task (workenu · InternalRequestEmployeeTransferPage): the embedded
+// profile schema + the two wiring properties. Its host diff item (`RequesterProfile`, itemType MODULE — a value
+// the AST enum table does not resolve, exactly as on a real stand) is what used to surface as an
+// "unknown embedded module" and lose the card. `OtherModuleBlock` is the CONTROL: an unrecognised client block
+// must STILL be flagged, so the fix cannot be mistaken for a blanket suppression of unmapped components.
+const PROFILE_BODY = `define("InternalRequestEmployeeTransferPage",[],function(){return{
+  entitySchemaName:"InternalRequest",
+  modules:{
+    "RequesterProfile":{"config":{"schemaName":"RequesterProfilePage","parameters":{"viewModelConfig":{
+      masterColumnName:"Requester","profileColumnName":"Contact","IsPhoneVisible":true}}}},
+    "ActionsDashboardModule":{"config":{"schemaName":"SectionActionsDashboard","parameters":{"viewModelConfig":{
+      "entitySchemaName":"InternalRequest","dashboardConfig":{"Activity":{"masterColumnName":"Id","referenceColumnName":"Request"}}}}}}
+  },
+  diff:[
+    // A real page that embeds a profile card also has its OWN fields. One is enough here and it is required: the
+    // hollow-form gate (PR #58) blocks a fold that produced 0 fields, and a field-less fixture would trip it for a
+    // reason that has nothing to do with profile cards.
+    {operation:"insert",name:"Subject",parentName:"Header",propertyName:"items",values:{bindTo:"Subject"}},
+    {operation:"insert",name:"RequesterProfile",parentName:"LeftModulesContainer",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MODULE}},
+    {operation:"insert",name:"OtherModuleBlock",parentName:"LeftModulesContainer",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MODULE}}
+  ]};});`;
+const PROFILE_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"LeftModulesContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){}}};});' }];
+// the profile schema body the manifest must supply — its entitySchemaName IS the profiled entity, and its
+// bindTo items are the columns the classic card displayed.
+const REQ_PROFILE_SCHEMA = `define("RequesterProfilePage",[],function(){return{entitySchemaName:"Contact",diff:[
+  {operation:"insert",name:"ProfileJob",parentName:"ProfileContentContainer",propertyName:"items",values:{bindTo:"JobTitle"}},
+  {operation:"insert",name:"ProfilePhone",parentName:"ProfileContentContainer",propertyName:"items",values:{bindTo:"MobilePhone"}}]};});`;
+const profileMani = (extra = {}) => ({ entity: "InternalRequest", seed: PROFILE_SEED,
+  schemas: [{ pkg: "WorkHrBase", body: PROFILE_BODY }], planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, ...extra });
+
+// (1) the PARSER must keep the config the mapper recognises the pattern by — dropping it was the defect.
+const pcParsed = parseSchema(PROFILE_BODY, "WorkHrBase").modules.find((m) => m.key === "RequesterProfile");
+check("ENG-93928 parse: the module config survives — schemaName + masterColumnName + profileColumnName + display flags",
+  pcParsed?.schemaName === "RequesterProfilePage" && pcParsed?.masterColumnName === "Requester"
+  && pcParsed?.profileColumnName === "Contact" && pcParsed?.displayFlags?.IsPhoneVisible === true,
+  () => pcParsed);
+
+// (2) recognition + Freedom wiring, with the profiled entity resolved from the SUPPLIED profile schema.
+const pcRun = runMigration(profileMani({ profileSchemas: { RequesterProfilePage: { body: REQ_PROFILE_SCHEMA } } }));
+const pcCard = (pcRun.changeSet.profileCards || [])[0];
+check("ENG-93928 mapper: the embedded profile card maps to the native Freedom compact profile in the side profile",
+  (pcRun.changeSet.profileCards || []).length === 1 && pcCard.classic === "RequesterProfile"
+  && pcCard.entity === "Contact" && pcCard.freedom === "crt.ContactCompactProfile"
+  && pcCard.masterColumn === "Requester" && pcCard.profileColumn === "Contact"
+  && pcCard.region === "SideAreaProfileContainer" && pcCard.package === "CrtCustomer360App",
+  () => pcRun.changeSet.profileCards);
+check("ENG-93928 mapper: the profile schema resolves the columns the classic card displayed",
+  JSON.stringify(pcCard?.fields) === JSON.stringify(["JobTitle", "MobilePhone"]) && pcCard?.schemaSupplied === true,
+  () => pcCard?.fields);
+const pcDecision = pcRun.changeSet.needsDecision.find((d) => d.kind === "profile-card");
+check("ENG-93928 decision: names the component, the referenceColumn wiring, the package and the back-reference column",
+  pcDecision && /crt\.ContactCompactProfile/.test(pcDecision.reason) && /master lookup 'Requester' holds the profiled record's Id/.test(pcDecision.reason)
+  && /CrtCustomer360App/.test(pcDecision.reason) && /pre-filling 'Contact'/.test(pcDecision.reason),
+  () => pcDecision?.reason);
+
+// (3) THE FIX: the card is no longer reported as an unknown embedded module — while an unrecognised block still is.
+const pcUnmapped = pcRun.changeSet.needsDecision.filter((d) => d.kind === "unmapped-component").map((d) => d.item);
+check("ENG-93928 no silent drop: the profile card's host module item is accounted for, the control block is STILL flagged",
+  !pcUnmapped.includes("RequesterProfile") && pcUnmapped.includes("OtherModuleBlock"),
+  () => pcUnmapped);
+
+// (3b) and it is not double-reported as a generic chart/widget either — mapProfileCards already named a concrete
+// component, so a second "propose the closest component" line would read as if the target were still unknown.
+check("ENG-93928 no duplicate worklist item: a mapped profile card raises no generic `component` decision",
+  !pcRun.changeSet.needsDecision.some((d) => d.kind === "component" && d.item === "RequesterProfile"),
+  () => pcRun.changeSet.needsDecision.filter((d) => d.kind === "component"));
+
+// (4) the actions/DCM dashboard module ALSO carries masterColumnName (nested under dashboardConfig) — it must
+// NOT be mistaken for a profile card, or every dashboard page would grow a phantom card.
+check("ENG-93928 precision: the actions-dashboard module (masterColumnName under dashboardConfig) is NOT a profile card",
+  !(pcRun.changeSet.profileCards || []).some((c) => c.classic === "ActionsDashboardModule"),
+  () => (pcRun.changeSet.profileCards || []).map((c) => c.classic));
+
+// (5) the design spec must SHOW the card as page content in the side profile (not only as a Confirm line).
+check("ENG-93928 design spec: a `Profile card` Layout row in the Side profile carries the component + referenceColumn",
+  /\| Side profile \| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
+  () => pcRun.designSpec.split("\n").filter((l) => /Profile card/.test(l)));
+
+// (6) STRUCTURE GATE: a recognised card whose profile schema is missing blocks the plan (its contents are
+// unknowable), and supplying the schema clears it — the same doctrine as detail/child-page schemas.
+const pcNoSchema = runMigration(profileMani());
+check("ENG-93928 structure gate: a profile card with NO profile schema supplied blocks the plan",
+  !pcNoSchema.structure.complete
+  && pcNoSchema.structure.issues.some((i) => /profile card 'RequesterProfile'/.test(i) && /manifest\.profileSchemas/.test(i)),
+  () => pcNoSchema.structure.issues);
+check("ENG-93928 structure gate: supplying the profile schema clears the profile-card issue",
+  !pcRun.structure.issues.some((i) => /profile card/i.test(i)), () => pcRun.structure.issues);
+
+// (6b) ESCAPE HATCH — `false` is a RESOLVED answer (verified: no separate profile schema to read), so the gate
+// clears without a body. Without this the gate had only "never checked" and a card could never be resolved.
+const pcNoneVerified = runMigration(profileMani({ profileSchemas: { RequesterProfilePage: false } }));
+check("ENG-93928 structure gate: `profileSchemas[name]: false` (verified none) resolves the card, like editPage:false",
+  !pcNoneVerified.structure.issues.some((i) => /profile card/i.test(i))
+  && pcNoneVerified.changeSet.needsDecision.some((d) => d.kind === "profile-card")
+  // and the plan states it as VERIFIED, not as "not supplied" — the two must not read the same
+  && (pcNoneVerified.changeSet.profileCards || [])[0]?.schemaVerifiedNone === true
+  && /no separate profile schema \(verified\)/.test(pcNoneVerified.designSpec),
+  () => pcNoneVerified.structure.issues);
+
+// (6c) a card whose config names NO schemaName must still be resolvable — keyed by the MODULE name, otherwise
+// the gate would name a key the agent cannot supply and the page could never become approvable (Contract rule 3).
+const NO_SCHEMA_BODY = PROFILE_BODY.replace('"schemaName":"RequesterProfilePage",', "");
+const noSchemaMani = (extra = {}) => ({ entity: "InternalRequest", seed: PROFILE_SEED,
+  schemas: [{ pkg: "WorkHrBase", body: NO_SCHEMA_BODY }], planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, ...extra });
+const pcNoSchemaName = runMigration(noSchemaMani());
+check("ENG-93928 structure gate: a card with no schemaName is still recognised and names the MODULE key to supply",
+  (pcNoSchemaName.changeSet.profileCards || [])[0]?.schemaName === null
+  && pcNoSchemaName.structure.issues.some((i) => /profileSchemas\["RequesterProfile"\]/.test(i)),
+  () => pcNoSchemaName.structure.issues);
+check("ENG-93928 structure gate: that card resolves via the module-keyed entry (no un-satisfiable gate)",
+  runMigration(noSchemaMani({ profileSchemas: { RequesterProfile: { body: REQ_PROFILE_SCHEMA } } })).structure.complete === true
+  && runMigration(noSchemaMani({ profileSchemas: { RequesterProfile: false } })).structure.complete === true);
+
+// (6d) F9 — a card declared by the parent-template SEED is template context, not client payload: it is marked
+// `base` and the decision says to confirm the Freedom template does not already provide it (mirrors mapWidgets).
+const pcSeedCard = runMigration({ entity: "InternalRequest", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  profileSchemas: { RequesterProfilePage: { body: REQ_PROFILE_SCHEMA } },
+  seed: [{ pkg: "BaseModulePageV2", body: PROFILE_BODY.replace('"InternalRequestEmployeeTransferPage"', '"BaseModulePageV2"') }],
+  schemas: [{ pkg: "WorkHrBase", body: 'define("P",[],function(){return{entitySchemaName:"InternalRequest",diff:[]};});' }] });
+check("ENG-93928 F9: a template-layer profile card is flagged `base` + told to confirm the Freedom template provides it",
+  (pcSeedCard.changeSet.profileCards || [])[0]?.base === true
+  && /parent-template layer/.test(pcSeedCard.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || ""),
+  () => pcSeedCard.changeSet.profileCards);
+
+// (7) FALLBACK — a profiled entity with no native compact profile keeps the card as a read-only-fields island
+// in the side profile (never dropped), and says so in plain build steps.
+const pcCustom = runMigration(profileMani({
+  profileSchemas: { RequesterProfilePage: { body: REQ_PROFILE_SCHEMA.replace('entitySchemaName:"Contact"', 'entitySchemaName:"UsrPartner"') } } }));
+const pcCustomCard = (pcCustom.changeSet.profileCards || [])[0];
+check("ENG-93928 fallback: no native compact profile for the profiled entity → read-only-fields island, not a drop",
+  pcCustomCard?.entity === "UsrPartner" && pcCustomCard.freedom === null
+  && /crt\.GridContainer' island in 'SideAreaProfileContainer'/.test(pcCustom.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || "")
+  && /path: "Requester\.<column>", type: "ForwardReference"/.test(pcCustom.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || "")
+  && /no native compact profile/.test(pcCustom.designSpec),
+  () => ({ card: pcCustomCard, spec: pcCustom.designSpec.split("\n").filter((l) => /Profile card/.test(l)) }));
+
+// (7b) POLYMORPHIC client profile — the profile schema declares no entitySchemaName (it profiles an Account OR a
+// Contact per record, e.g. ClientProfileSchema on OpportunityPageV2). The Freedom answer is BOTH native cards
+// (as the OOTB Opportunities_FormPage does), so the unresolved-entity decision must say that rather than sending
+// the agent straight to hand-built fields.
+const pcPoly = runMigration(profileMani({
+  profileSchemas: { RequesterProfilePage: { body: 'define("RequesterProfilePage",[],function(){return{mixins:{},diff:[]};});' } } }));
+check("ENG-93928 polymorphic profile: an unresolved profiled entity points at BOTH native cards, not straight to hand-built fields",
+  (pcPoly.changeSet.profileCards || [])[0]?.entity === null
+  && /POLYMORPHIC/.test(pcPoly.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || "")
+  && /crt\.AccountCompactProfile \+ crt\.ContactCompactProfile/.test(pcPoly.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason || ""),
+  () => pcPoly.changeSet.needsDecision.find((d) => d.kind === "profile-card")?.reason);
+
+// (7c) the native wiring must be the PRODUCT-verified shape: an attribute over `PDS.<masterColumn>` that
+// referenceColumn points at (how Opportunities_FormPage wires its cards), not a bare `$<column>` guess.
+check("ENG-93928 native wiring: the decision gives the attribute-over-PDS shape for referenceColumn",
+  /modelConfig: \{ path: "PDS\.Requester" \}/.test(pcDecision?.reason || "")
+  && /'referenceColumn': '\$<thatAttribute>'/.test(pcDecision?.reason || ""),
+  () => pcDecision?.reason);
+
+// (8) with NO profile schema, the profiled entity still resolves from the master lookup's referenced schema
+// (entity metadata) — so the card is wired correctly even before the schema body is fetched.
+const pcByRef = runMigration(profileMani({ entityColumns: { Requester: { type: "Lookup", ref: "Contact" } } }));
+check("ENG-93928 entity resolution: the master lookup's referenced schema resolves the profiled entity without the body",
+  (pcByRef.changeSet.profileCards || [])[0]?.freedom === "crt.ContactCompactProfile",
+  () => pcByRef.changeSet.profileCards);
+
+// (9) parseErrors GATE — the convention every schema type wired into parseErrors follows (main schema ~line 380,
+// detail schema ~line 1312, section schema ~line 706). Without this check, dropping `profileSchemas` out of the
+// parseErrors spread would leave every test above green while a broken body silently resolves to `entity: null`,
+// produces the no-native-component fallback, and the plan reads as gate-clean.
+const pcBroken = runMigration(profileMani({ profileSchemas: { RequesterProfilePage: { body: "define(" } } }));
+check("ENG-93928 parseErrors gate: a broken profileSchema body reaches parseErrors → gate blocks",
+  pcBroken.gate.blocked === true
+  && (pcBroken.parseErrors || []).some((e) => /RequesterProfilePage/.test(e.pkg)),
+  () => ({ blocked: pcBroken.gate.blocked, parseErrors: pcBroken.parseErrors }));
+
+// (10) the schema-NAME heuristic is the third and weakest entity-resolution tier: no profile-schema body and no
+// entity metadata, so `<Account|Contact>Profile` in the schema name is all there is. Untested it could silently
+// stop matching and every card would fall to the polymorphic branch.
+const pcByName = runMigration({ entity: "InternalRequest", seed: PROFILE_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "WorkHrBase", body: PROFILE_BODY.replace('"RequesterProfilePage"', '"ContactProfileSchema"') }],
+  profileSchemas: { ContactProfileSchema: false } });
+check("ENG-93928 entity resolution (tier 3): the schema NAME resolves the profiled entity when no body and no metadata exist",
+  (pcByName.changeSet.profileCards || [])[0]?.entity === "Contact"
+  && (pcByName.changeSet.profileCards || [])[0]?.freedom === "crt.ContactCompactProfile",
+  () => pcByName.changeSet.profileCards);
+
+// (11) MULTI-CARD — a real page can embed more than one profile card (the OOTB Opportunities_FormPage does).
+// A single-card fixture would hide an accumulation bug: a card overwritten instead of pushed, or one card's
+// decision reused for both.
+const TWO_CARD_BODY = PROFILE_BODY.replace(
+  '"ActionsDashboardModule"',
+  `"ManagerProfile":{"config":{"schemaName":"ManagerProfilePage","parameters":{"viewModelConfig":{
+      masterColumnName:"Owner","profileColumnName":"Contact"}}}},
+    "ActionsDashboardModule"`,
+).replace(
+  '{operation:"insert",name:"OtherModuleBlock"',
+  `{operation:"insert",name:"ManagerProfile",parentName:"LeftModulesContainer",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MODULE}},
+    {operation:"insert",name:"OtherModuleBlock"`,
+);
+const pcTwo = runMigration({ entity: "InternalRequest", seed: PROFILE_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+  schemas: [{ pkg: "WorkHrBase", body: TWO_CARD_BODY }],
+  profileSchemas: {
+    RequesterProfilePage: { body: REQ_PROFILE_SCHEMA },
+    ManagerProfilePage: { body: REQ_PROFILE_SCHEMA.replace('"RequesterProfilePage"', '"ManagerProfilePage"') },
+  } });
+const pcTwoCards = pcTwo.changeSet.profileCards || [];
+check("ENG-93928 multi-card: two embedded profile cards on one page both map, each with its own master column and decision",
+  pcTwoCards.length === 2
+  && pcTwoCards.map((c) => c.masterColumn).sort((a, b) => String(a).localeCompare(String(b))).join(",") === "Owner,Requester"
+  && pcTwo.changeSet.needsDecision.filter((d) => d.kind === "profile-card").length === 2
+  && pcTwo.structure.complete === true,
+  () => pcTwoCards);
+
+// (12) the classic config's display flags must reach the DECISION text end to end (parse → mapper → reason), not
+// just the parsed record: they are the only signal that a value the native card hides was visible before.
+check("ENG-93928 displayFlags: a truthy classic display flag reaches the decision reason end to end",
+  /Display flags on the classic config: IsPhoneVisible/.test(pcDecision?.reason || ""),
+  () => pcDecision?.reason);
+
 /* ---- typed-form plan completeness (session review): template on rows + DCM progress-bar note + field GROUPS
    in Layout + a Shared section (inherited details/features) + mini-page mapping right after the List page ---- */
 const cmbBase = `define("XPage",[],function(){return{entitySchemaName:"X",diff:[],details:{FD:{schemaName:"FileDetailV2",entitySchemaName:"File"}}};});`; // base carries a SHARED feature (Attachments)
