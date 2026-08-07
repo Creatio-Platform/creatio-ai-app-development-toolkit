@@ -283,6 +283,24 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("at least 5 widgets", str(ctx.exception))
 
+    def test_too_few_widgets_on_a_later_71_dashboard_is_rejected(self):
+        # The min-widgets rule is per dashboard, not just the first one: keep the
+        # first §7.1 dashboard valid (5 widgets) and add a SECOND dashboard (its own
+        # section group) with only 4 widgets — it must still be rejected.
+        second_group = (
+            "\n#### Contacts section dashboards\n\n"
+            "- dashboard: Contact directory\n"
+            "  - access rights: All Employees\n"
+            "  - scope: shows who owns which contacts\n"
+            "  - widgets: metric — total contacts; metric — new this month; chart — by owner (bar); list — recent contacts\n"  # 4 widgets
+        )
+        anchor = "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n"
+        assert anchor in VALID_DOC, "fixture 7.1 dashboard drifted"
+        doc = VALID_DOC.replace(anchor, anchor + second_group)
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least 5 widgets", str(ctx.exception))
+
     def test_missing_scope_on_71_dashboard_is_rejected(self):
         # `scope:` is a mandatory §7.1 dashboard field (never empty/TBD), enforced
         # like `widgets:`. Dropping it must fail.
