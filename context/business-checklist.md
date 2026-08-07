@@ -87,6 +87,13 @@ Do not suggest optional restrictions without a business reason.
 Also required, and NOT covered by the sentence above — navigation placement and audience:
 - where the app belongs in the left navigation: a NEW workplace named for the app (recommend this when
   scaffolding a new app), the default `My applications`, or an existing workplace the developer names
+- when the section is being added to an app that ALREADY exists, read where that app's sections live
+  and recommend that workplace instead — except when it is `My applications`, which
+  must not be recommended: an app sitting there is the very defect this question exists to catch, so
+  recommend a new workplace named for the app and say the current placement is administrators-only. A section can
+  legitimately sit in more than one workplace (`SysModuleInWorkplace` is one row per placement); when
+  the app's sections span several, recommend the one holding most of them and list the others, and
+  ask rather than choose when it is a tie
 - who should see that workplace (which roles)
 
 These are separate questions from record-level access, and the "no specific access restrictions"

@@ -82,8 +82,31 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         # already had one, which is the SysWorkplace.Name collision the clio guide warns about.
         content = read_text(AGENTS)
         self.assertIn("for a NEW app offer a new workplace named for the app first", content)
-        self.assertIn("EXISTING app offer the workplace that app's sections already live in first", content)
+        self.assertIn("offer that workplace first", content)
         self.assertIn("is not unique", content)
+
+    def test_existing_app_read_back_never_recommends_my_applications(self):
+        # Every app this toolkit built before the placement question existed sits in My applications.
+        # "Offer the workplace the app's sections already live in" would therefore recommend the
+        # admin-only default back to the developer for that whole population — reinstating the defect
+        # the rule exists to prevent, and doing it silently because the read-back looks authoritative.
+        for path in (AGENTS, CHECKLIST):
+            content = read_text(path)
+            self.assertIn("My applications", content)
+            self.assertTrue(
+                "do NOT offer it first" in content or "must not be recommended" in content,
+                f"{path} lets a read-back recommend My applications for an existing app",
+            )
+            self.assertIn("administrators-only", content)
+
+    def test_multi_workplace_read_back_has_a_stated_tie_break(self):
+        # context/essentials.md documents SysModuleInWorkplace as one row per placement, so an app's
+        # sections can legitimately span several workplaces. Without a stated order the agent picks
+        # arbitrarily from a set the developer never saw.
+        for path in (AGENTS, CHECKLIST):
+            content = read_text(path)
+            self.assertIn("most of them", content)
+            self.assertIn("tie", content)
 
     def test_first_turn_reason_names_the_section_path_too(self):
         content = read_text(AGENTS)
