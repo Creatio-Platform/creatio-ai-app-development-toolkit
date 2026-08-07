@@ -68,7 +68,7 @@ Tasks move through New, Active, and Done.
 - dashboard: Task overview
   - access rights: All Employees
   - scope: open tasks by status
-  - widgets: metric — open tasks count; chart — tasks by status (bar)
+  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)
 
 ### 7.2 Workplace analytics
 
@@ -160,7 +160,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
 
     def test_missing_widgets_label_is_rejected(self):
         doc = VALID_DOC.replace(
-            "  - widgets: metric — open tasks count; chart — tasks by status (bar)", ""
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)", ""
         ).replace("  - widgets: metric — total tasks; list — tasks due this week", "")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
@@ -201,7 +201,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         # Symmetric to the above but strips the 7.1 (leading) dashboard's widgets,
         # exercising the non-terminal block boundary (end == next dashboard start).
         doc = VALID_DOC.replace(
-            "  - widgets: metric — open tasks count; chart — tasks by status (bar)", ""
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)", ""
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
@@ -214,7 +214,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             "- dashboard: Task overview\n"
             "  - access rights: All Employees\n"
             "  - scope: open tasks by status\n"
-            "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n",
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n",
             "",
         )
         with self.assertRaises(WorkflowError) as ctx:
@@ -255,12 +255,22 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
     def test_empty_widgets_value_is_rejected(self):
         # Same non-empty-value rule for widgets: a bare `widgets:` must fail.
         doc = VALID_DOC.replace(
-            "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n",
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n",
             "  - widgets:\n",
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("widgets:", str(ctx.exception))
+
+    def test_too_few_widgets_on_71_dashboard_is_rejected(self):
+        # Every §7.1 dashboard must carry at least 5 widgets; a 4-widget board fails.
+        doc = VALID_DOC.replace(
+            "metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)",
+            "metric — open tasks count; metric — tasks due this week; chart — tasks by status (bar); list — recent tasks",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least 5 widgets", str(ctx.exception))
 
     def test_missing_scope_on_71_dashboard_is_rejected(self):
         # `scope:` is a mandatory §7.1 dashboard field (never empty/TBD), enforced
@@ -299,7 +309,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             "- dashboard: Task overview\n"
             "  - access rights: All Employees\n"
             "  - scope: open tasks by status\n"
-            "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n\n"
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n\n"
         )
         sec72 = (
             "### 7.2 Workplace analytics\n\n"
@@ -379,9 +389,9 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             "- dashboard: Contact directory\n"
             "  - access rights: All Employees\n"
             "  - scope: contacts by owner\n"
-            "  - widgets: metric — total contacts; chart — contacts by owner (bar)\n"
+            "  - widgets: metric — total contacts; metric — new contacts this month; metric — active contacts; chart — contacts by owner (bar); chart — contacts by type (donut)\n"
         )
-        anchor = "  - widgets: metric — open tasks count; chart — tasks by status (bar)\n"
+        anchor = "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n"
         assert anchor in VALID_DOC, "fixture 7.1 dashboard drifted"
         doc = VALID_DOC.replace(anchor, anchor + second_group)
         validate_requirements_doc(doc)  # must not raise (two grouping headings in 7.1)

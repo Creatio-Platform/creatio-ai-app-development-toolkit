@@ -295,7 +295,7 @@ Describe each **§7.1 dashboard** with these labels (colon included) — the val
 - `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
 - `access rights:` — **who the dashboard is created visible to**. This is a **static default: always `All Employees`** (every generated dashboard is visible to everyone). It is stated per dashboard purely so the developer sees the grant in the plan; write it verbatim as `access rights: All Employees`. The role a dashboard is for drives its **content** (which metrics/charts/slices — see `scope:`/`widgets:`), **not** its access rights.
 - `scope:` — a short, natural human sentence, **in the plan's language**, saying **what the dashboard shows / describes** (the question it answers for the role that uses it). Lead with a verb like *shows* / *describes* — and when the plan is not in English, use that language's equivalent (e.g. English `scope: shows open orders by stage this quarter`; Ukrainian `scope: показує відкриті замовлення за стадіями цього кварталу`). Do not write a bare noun phrase or a machine-style tag.
-- `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
+- `widgets:` — the widgets in business terms, each as a metric, chart, or list, **`;`-separated**. A §7.1 dashboard must list **at least 5 widgets** — a metric band (a few key metrics) plus charts/lists — not one or two. e.g. `widgets: metric — open orders count; metric — orders won this month; metric — average deal size; chart — orders by stage (bar); chart — orders by owner (bar); list — orders due this week`
 
 **Layout:** render each label on its **own line** as an indented sub-bullet under the `dashboard:` / `home page:` title — do **not** put them inline on one line separated by `·`, `—`, or commas. Each dashboard/home-page block looks like this (the `access rights:` line is mandatory for §7.1 dashboards and sits right under the title):
 
@@ -303,7 +303,7 @@ Describe each **§7.1 dashboard** with these labels (colon included) — the val
 - dashboard: Top clients
   - access rights: All Employees
   - scope: shows which customers visit most often
-  - widgets: chart — top clients by number of work orders (bar); metric — total clients; list — clients ranked by visits
+  - widgets: metric — total clients; metric — new clients this month; metric — average orders per client; chart — top clients by number of work orders (bar); chart — clients by type (donut); list — clients ranked by visits
 ```
 
 The **§7.2 home page** uses a `home page:` block instead — **no** `access rights:` line — like this:
@@ -330,7 +330,7 @@ Before finalizing the BA draft, verify at minimum:
 - sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
 - `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, both non-empty
-- `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list); every §7.1 dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, a non-empty `scope:` line, and a non-empty `widgets:` line — the validator rejects a missing/value-less line (and an `access rights:` value other than `All Employees`)
+- `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list); every §7.1 dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, a non-empty `scope:` line, and a `widgets:` line with **at least 5** `;`-separated widgets — the validator rejects a missing/value-less line, fewer than 5 widgets, and an `access rights:` value other than `All Employees`
 - every §7.1 dashboard states `access rights: All Employees` (the static default — dashboards are created visible to everyone; the validator pins this exact value). The role a dashboard is for shapes its **content** (`scope:`/`widgets:`), not its access
 - `### 7.2` describes exactly one `home page:` block with a non-empty `scope:` line and a non-empty `widgets:` line, and has **no** `dashboard:` blocks and **no** `access rights:` line (a home page is one page whose audience is the workplace, not a per-page grant) — the validator rejects `dashboard:`/`access rights:` under §7.2
 

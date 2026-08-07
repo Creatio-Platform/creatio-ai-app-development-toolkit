@@ -79,6 +79,11 @@ ANALYTICS_WORKPLACE_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.2\s+Workpl
 DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:[ \t]*\S")
 DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:[ \t]*\S")
 DASHBOARD_SCOPE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*scope:[ \t]*\S")
+# Start of a `widgets:` value; widgets on the line are separated by `;`.
+DASHBOARD_WIDGETS_START_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:[ \t]*")
+# Each §7.1 dashboard must carry a real set of widgets — at least this many
+# (a metric band plus charts/lists), not one or two.
+DASHBOARD_MIN_WIDGETS = 5
 # Dashboard access is a STATIC default: every generated dashboard is created
 # visible to `All Employees`. The plan surfaces it per dashboard for transparency,
 # and because the value is a known constant we pin the exact value (not just
@@ -123,6 +128,17 @@ def iter_labeled_blocks(text, start_re):
     for i, start in enumerate(starts):
         end = starts[i + 1] if i + 1 < len(starts) else len(text)
         yield text[start:end]
+
+
+def count_widgets(block):
+    """Count the widgets on a dashboard block's `widgets:` line. Widgets are
+    `;`-separated (commas may appear inside a single widget's field list), and the
+    line may hard-wrap, so read from `widgets:` up to the next blank line."""
+    m = DASHBOARD_WIDGETS_START_RE.search(block)
+    if not m:
+        return 0
+    tail = re.split(r"\n[ \t]*\n", block[m.end():], maxsplit=1)[0]
+    return len([w for w in tail.split(";") if w.strip()])
 
 
 def normalize_title_list(text):
@@ -259,6 +275,8 @@ def validate_requirements_doc(content: str) -> None:
             raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must state a non-empty 'scope:' line (what the dashboard shows / the question it answers)")
         if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
             raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must list a non-empty 'widgets:' line")
+        if count_widgets(block) < DASHBOARD_MIN_WIDGETS:
+            raise WorkflowError(f"Requirements doc failed: every dashboard in section 7.1 Section analytics must list at least {DASHBOARD_MIN_WIDGETS} widgets (a metric band plus charts/lists), separated by ';'")
         if not DASHBOARD_ACCESS_RIGHTS_RE.search(block):
             raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must state 'access rights: All Employees' (dashboard access is a static default — every dashboard is created visible to All Employees; the role a dashboard is for drives its content, not its access)")
 
