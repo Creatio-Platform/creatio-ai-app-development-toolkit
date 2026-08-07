@@ -80,30 +80,40 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         # Broadening the rule to sections without reordering the options produced a real defect: a
         # measured add-section run recommended creating a second workplace named after an app that
         # already had one, which is the SysWorkplace.Name collision the clio guide warns about.
+        # The first batch can only carry the half that needs no read; the runbook owns the other half.
+        agents = read_text(AGENTS)
+        self.assertIn("recommending the new named workplace when the request is to scaffold a NEW app",
+                      agents)
+        runbook = read_text(REQUIREMENTS_RUNBOOK)
+        self.assertIn("recommend the workplace its sections already live in", runbook)
+        self.assertIn("is not unique", runbook)
+
+    def test_first_batch_does_not_require_an_environment_read(self):
+        # The placement question belongs in the first batch, but resolving where an existing app's
+        # sections already live needs a live SysModuleInWorkplace read — and the first-turn latency
+        # rule in this same file forbids blocking that turn on environment inspection. Asking for the
+        # read here would have made AGENTS.md contradict itself.
         content = read_text(AGENTS)
-        self.assertIn("for a NEW app offer a new workplace named for the app first", content)
-        self.assertIn("offer that workplace first", content)
-        self.assertIn("is not unique", content)
+        self.assertIn("Ask it from the PROMPT ALONE", content)
+        self.assertNotIn("READ where that app's sections already live", content)
+        self.assertIn("runbooks/02-requirements-gathering.md", content)
 
     def test_existing_app_read_back_never_recommends_my_applications(self):
         # Every app this toolkit built before the placement question existed sits in My applications.
-        # "Offer the workplace the app's sections already live in" would therefore recommend the
+        # "Recommend the workplace the app's sections already live in" would therefore hand the
         # admin-only default back to the developer for that whole population — reinstating the defect
         # the rule exists to prevent, and doing it silently because the read-back looks authoritative.
-        for path in (AGENTS, CHECKLIST):
+        for path in (CHECKLIST, REQUIREMENTS_RUNBOOK):
             content = read_text(path)
             self.assertIn("My applications", content)
-            self.assertTrue(
-                "do NOT offer it first" in content or "must not be recommended" in content,
-                f"{path} lets a read-back recommend My applications for an existing app",
-            )
+            self.assertIn("must not be recommended", content)
             self.assertIn("administrators-only", content)
 
     def test_multi_workplace_read_back_has_a_stated_tie_break(self):
         # context/essentials.md documents SysModuleInWorkplace as one row per placement, so an app's
         # sections can legitimately span several workplaces. Without a stated order the agent picks
         # arbitrarily from a set the developer never saw.
-        for path in (AGENTS, CHECKLIST):
+        for path in (CHECKLIST, REQUIREMENTS_RUNBOOK):
             content = read_text(path)
             self.assertIn("most of them", content)
             self.assertIn("tie", content)
@@ -150,6 +160,17 @@ class OrchestratorTriggerContractTests(unittest.TestCase):
             self.assertIn("create", desc, str(path))
             self.assertIn("creatio app", desc, str(path))
             self.assertIn("apply proactively", desc, str(path))
+
+    def test_openai_manifest_carries_the_user_intent_trigger(self):
+        # test_release_structure pins this manifest's SHAPE (keys present, not nested under
+        # `interface:`) and never its wording, so the trigger fix reached SKILL.md and the .mdc while
+        # OpenAI-format hosts kept selecting on artifact names alone — the exact non-selection this
+        # whole fix exists to remove.
+        manifest = read_text(ROOT / "skills/creatio-app-orchestrator/agents/openai.yaml").lower()
+        for verb in ("create", "add", "scaffold"):
+            self.assertIn(verb, manifest, f"openai.yaml must match a plain '{verb}' request")
+        self.assertIn("section", manifest,
+                      "openai.yaml must match a new-section request, not only a new-app one")
 
     def test_skill_and_cursor_rule_descriptions_stay_in_sync(self):
         # Both are public trigger surfaces (test_release_structure pins them together); a fix applied
