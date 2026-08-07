@@ -251,6 +251,28 @@ function rowsForImages(images, regionOf) {
   });
 }
 
+// ENG-93928 — an embedded profile card (a compact card of a LINKED record). It is real page CONTENT, so it gets
+// its own Layout row in the region it sat in (the side profile on every real page), with the Freedom component
+// and its `referenceColumn` wiring in Source — the full instructions stay in the ⚠ Confirm item.
+function rowsForProfileCards(profileCards, regionOf) {
+  return (profileCards || []).map((pc) => {
+    // Known limitation, shared with every other row builder that calls regionOf: when the card sat in a tab the
+    // template declares (e.g. `ESNTab`), regionOf has no human label for it and returns the raw schema identifier.
+    // Not specific to profile cards, so it is left consistent rather than special-cased here.
+    const region = pc.region === "SideAreaProfileContainer" ? "Side profile" : regionOf(pc.region);
+    const label = esc(pc.schemaName || pc.classic);
+    const src = pc.freedom
+      ? `${esc(pc.freedom)} · referenceColumn \`$${esc(pc.masterColumn)}\``
+      : `⚠ no native compact profile for ${esc(pc.entity || "the profiled entity")} — read-only fields via \`${esc(pc.masterColumn)}.<column>\``;
+    const parts = [];
+    if (pc.package) parts.push(`needs \`${esc(pc.package)}\``);
+    if (pc.fields?.length) parts.push(`classic showed: ${pc.fields.map(esc).join(" · ")}`);
+    else if (pc.schemaVerifiedNone) parts.push("no separate profile schema (verified) — rebuild the card per the mapping recipe");
+    else if (!pc.schemaSupplied) parts.push("⚠ profile schema not supplied — contents unresolved");
+    return { region, sort: 0, cells: [label, "Profile card", src, "read-only", parts.join(" · ") || DASH] };
+  });
+}
+
 // Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
 function pageRuleRows(cs) {
   const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
@@ -357,7 +379,7 @@ function renderSpecHeader(result, opts, entity, fields, cs) {
   }
   const structure = result.structure || { complete: true, issues: [] };
   if (!opts.embedded && !structure.complete) {
-    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail/child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
+    L.push("> ⛔ **STRUCTURE INCOMPLETE.** Required detail / profile / child-page schemas are not supplied — the plan cannot be complete; fetch them and re-run:");
     for (const it of structure.issues) L.push(`> - ${esc(it)}`);
   }
   L.push("");
@@ -489,6 +511,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForWidgets(cs.widgets),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
+    ...rowsForProfileCards(cs.profileCards, regionOf),
   ];
   // group by region (first-seen order), then reading order: side profile FIRST, tabs, widgets, actions, flagged.
   const { order, byRegion } = orderRegions(rows);
@@ -854,7 +877,7 @@ function renderPlanBanners(result, opts) {
   }
   const structure = result.structure || { complete: true, issues: [] };
   if (!structure.complete) {
-    P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
+    P.push("> ⛔ **STRUCTURE INCOMPLETE — this plan is NOT ready.** The engine detected required inputs you have not supplied (detail schemas / embedded-profile schemas / child-page mappings). Fetch them, add to the manifest, and re-run `migrate.mjs --plan`:");
     for (const it of structure.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
