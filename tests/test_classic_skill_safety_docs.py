@@ -8,10 +8,13 @@ MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
 CARD_CONTRACT = ROOT / "skills/classic-ui-expert/references/08-card-contract.md"
 MEMBER_LEDGER = ROOT / "skills/classic-ui-expert/references/03-member-ledger.md"
 REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-following.md"
+SURFACE_RESOLUTION = ROOT / "skills/classic-ui-expert/references/01-surface-resolution.md"
 
 EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
 GATE_HEAD = "**Gate-toggle safety (shared stand).**"
 PLACEMENT_HEAD = "**Where the evidence goes.**"
+CONDITION_HEAD = "- **Port every condition the card states"
+CHILD_PAGE_HEAD = "**A child or related page in scope gets the SAME ledger discipline as the main page**"
 
 
 def read_text(path):
@@ -48,6 +51,19 @@ def paragraph(text, head):
         if para.lstrip().startswith(head):
             return para
     raise AssertionError(f"no paragraph starting with {head!r}")
+
+
+def bullet(text, head):
+    """The single list item starting with `head`.
+
+    A bullet is one physical line inside a block with no blank lines, so paragraph()
+    cannot scope it — line scoping gives the same guarantee: a marker that drifts into a
+    neighbouring bullet turns the assertion red instead of staying green.
+    """
+    for line in text.splitlines():
+        if line.lstrip().startswith(head):
+            return line
+    raise AssertionError(f"no list item starting with {head!r}")
 
 
 class ClassicSkillSafetyDocTests(unittest.TestCase):
@@ -91,6 +107,39 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"evidence-placement rule incomplete; missing {missing}")
         self.assertNotIn("copy from there", flat(content))
         self.assertNotIn("It goes in the Evidence column", flat(content))
+
+    def test_condition_substitution_is_a_deviation_never_self_approved(self):
+        # The round-4 defect this rule closes: one of three conjunctive gates was swapped
+        # for a guard judged "strictly stronger", inverting the card's negative AC. Every
+        # other rule tied to a measured failure is pinned here; this one was not.
+        item = bullet(read_text(MIGRATION_SKILL), CONDITION_HEAD)
+        missing = missing_markers(
+            item,
+            [
+                "is a DEVIATION you propose, never one you approve for yourself",
+                "conditions are conjunctive",
+                "holds for **every** AC of the card, negative ones included",
+                "never invent a workaround and self-certify it",
+            ],
+        )
+        self.assertFalse(missing, f"condition substitution rule incomplete; missing {missing}")
+
+    # --- surface resolution ---------------------------------------------------------
+
+    def test_child_pages_get_the_same_ledger_discipline(self):
+        # Measured failure: the main record page reached 49/51 methods attributed while one
+        # child edit page left 4/6 in no unit — and those four were a single real behaviour.
+        para = paragraph(read_text(SURFACE_RESOLUTION), CHILD_PAGE_HEAD)
+        missing = missing_markers(
+            para,
+            [
+                "every member attributed or a counted zero",
+                "49 of 51",
+                "4 of 6",
+                "declared out of scope",
+            ],
+        )
+        self.assertFalse(missing, f"child-page ledger discipline incomplete; missing {missing}")
 
     # --- gate-toggle safety, scoped to its own paragraph -------------------------
 
