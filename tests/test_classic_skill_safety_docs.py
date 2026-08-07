@@ -75,6 +75,21 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
     review caught each one late; these locks catch the next one at commit time.
     """
 
+    def test_every_pinned_doc_is_present_and_non_empty(self):
+        # The module's negative pins (assertNotIn / assertNotRegex) pass vacuously on
+        # empty text, so their strength rests on this guard: a renamed or emptied doc
+        # fails here loudly instead of turning the negative half of the suite
+        # green-by-absence. (Path.read_text raises on a missing file; this closes the
+        # emptied-file case too.)
+        for path in (
+            MIGRATION_SKILL,
+            CARD_CONTRACT,
+            MEMBER_LEDGER,
+            REFERENCE_FOLLOWING,
+            SURFACE_RESOLUTION,
+        ):
+            self.assertTrue(read_text(path).strip(), f"{path} is missing or empty")
+
     # --- the rule this branch exists to add -------------------------------------
 
     def test_evidence_paragraph_requires_a_line_per_ac(self):
@@ -105,8 +120,10 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
             ],
         )
         self.assertFalse(missing, f"evidence-placement rule incomplete; missing {missing}")
-        self.assertNotIn("copy from there", flat(content))
-        self.assertNotIn("It goes in the Evidence column", flat(content))
+        # Regex-tolerant: a lightly reworded reintroduction ("copy it from there",
+        # "This goes in the Evidence column") must fail the same as the original.
+        self.assertNotRegex(flat(content), r"copy(\s+\w+)? from there")
+        self.assertNotRegex(flat(content), r"goes in the (\*\*)?Evidence(\*\*)? column")
 
     def test_condition_substitution_is_a_deviation_never_self_approved(self):
         # The round-4 defect this rule closes: one of three conjunctive gates was swapped
@@ -230,6 +247,22 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
             content, ["exactly these fields, in this order", "Do not add fields"]
         )
         self.assertFalse(missing, f"card contract must stay a closed set; missing {missing}")
+
+    def test_card_contract_pins_the_field_content_caps(self):
+        # PR rule 8 (card trimming): cards were 76% of a 244 KB report before these
+        # caps. "Two sentences at most" and "omit when empty" are the two checkable
+        # phrases carrying the rule; unpinned they can drift back to the baseline
+        # wording ("One short paragraph", plain "supporting") without a failure.
+        # bullet() scopes to the single table row, same as for a list item.
+        content = read_text(CARD_CONTRACT)
+        what_row = bullet(content, "| **What it is** |")
+        self.assertIn("Two sentences at most", what_row)
+        notes_row = bullet(content, "| **Mechanism notes** |")
+        missing = missing_markers(
+            notes_row, ["supporting, **omit when empty**", "leave the field out"]
+        )
+        self.assertFalse(missing, f"mechanism-notes cap incomplete; missing {missing}")
+        self.assertNotIn("One short paragraph", flat(content))
 
     # --- member ledger -------------------------------------------------------------
 
