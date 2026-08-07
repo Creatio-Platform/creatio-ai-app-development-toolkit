@@ -84,6 +84,8 @@ DASHBOARD_WIDGETS_START_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:[ \t]*")
 # Each §7.1 dashboard must carry a real set of widgets — at least this many
 # (a metric band plus charts/lists), not one or two.
 DASHBOARD_MIN_WIDGETS = 5
+# The §7.2 home page aggregates the whole app, so it carries more — at least this many.
+HOME_PAGE_MIN_WIDGETS = 10
 # Dashboard access is a STATIC default: every generated dashboard is created
 # visible to `All Employees`. The plan surfaces it per dashboard for transparency,
 # and because the value is a known constant we pin the exact value (not just
@@ -293,4 +295,6 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: the section 7.2 home page must state a non-empty 'scope:' line (what the home page shows / the question it answers)")
     if not DASHBOARD_WIDGETS_LABEL_RE.search(home_page_blocks[0]):
         raise WorkflowError("Requirements doc failed: the section 7.2 home page must list its 'widgets:'")
+    if count_widgets(home_page_blocks[0]) < HOME_PAGE_MIN_WIDGETS:
+        raise WorkflowError(f"Requirements doc failed: the section 7.2 home page must list at least {HOME_PAGE_MIN_WIDGETS} widgets (it aggregates the whole app), separated by ';'")
 

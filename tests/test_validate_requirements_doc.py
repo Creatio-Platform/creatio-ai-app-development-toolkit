@@ -74,7 +74,7 @@ Tasks move through New, Active, and Done.
 
 - home page: Team overview
   - scope: how the whole team is performing right now
-  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week
+  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity
 
 ## 8. Edge Cases and Exceptions
 
@@ -190,12 +190,23 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         # The §7.2 home page must list its own widgets (it is the app's single home
         # page — populated with metrics/charts, not left as a bare title).
         doc = VALID_DOC.replace(
-            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n",
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n",
             "",
         )
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("widgets", str(ctx.exception).lower())
+
+    def test_too_few_widgets_on_72_home_page_is_rejected(self):
+        # The §7.2 home page aggregates the whole app — it needs at least 10 widgets;
+        # a 9-widget home page fails.
+        doc = VALID_DOC.replace(
+            "chart — tasks by priority (bar); list — recent activity",
+            "chart — tasks by priority (bar)",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least 10 widgets", str(ctx.exception))
 
     def test_widgets_missing_on_leading_dashboard_is_rejected(self):
         # Symmetric to the above but strips the 7.1 (leading) dashboard's widgets,
@@ -315,7 +326,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             "### 7.2 Workplace analytics\n\n"
             "- home page: Team overview\n"
             "  - scope: how the whole team is performing right now\n"
-            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n\n"
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n\n"
         )
         assert sec71 in VALID_DOC, "fixture block 7.1 drifted"
         assert sec72 in VALID_DOC, "fixture block 7.2 drifted"
@@ -327,7 +338,7 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         doc = VALID_DOC.replace(
             "- home page: Team overview\n"
             "  - scope: how the whole team is performing right now\n"
-            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n",
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n",
             "",
         )
         with self.assertRaises(WorkflowError) as ctx:
@@ -367,10 +378,10 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
         doc = VALID_DOC.replace(
             "- home page: Team overview\n"
             "  - scope: how the whole team is performing right now\n"
-            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n",
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n",
             "- home page: Team overview\n"
             "  - scope: how the whole team is performing right now\n"
-            "  - widgets: metric — total tasks; metric — open tasks; list — tasks due this week\n\n"
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n\n"
             "- home page: Second page\n"
             "  - scope: extra\n"
             "  - widgets: metric — total tasks\n",

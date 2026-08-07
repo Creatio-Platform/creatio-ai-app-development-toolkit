@@ -288,7 +288,7 @@ If a technical carrier is needed for internal reasoning or pre-analysis, keep it
 Organize `## 7. Analytics` into two required subsections:
 
 - `### 7.1 Section analytics` — **dashboards** surfaced on a section, immediately useful to the role that works with that section. There may be several per section (different data slices or different roles). Default to 2-3 dashboards per section, each sized to fit roughly one screen; if the developer asks for more, that limit does not apply. **Group the dashboards by section**: under `### 7.1` add one `#### <Section> section dashboards` heading per section that gets analytics (e.g. `#### Appointments section dashboards`), and list that section's dashboard blocks beneath it. The grouping makes it explicit which section each dashboard is added to.
-- `### 7.2 Workplace analytics` — the app's **single home page** (a `BaseHomePage` bound to the app's workplace): app-wide indicators describing how the whole app is working. It is **one page, not a set of dashboards**, so describe **exactly one** `home page:` block with its widgets. A home page has **no per-page access rights** — its audience is the workplace it is bound to — so do **not** add an `access rights:` line here.
+- `### 7.2 Workplace analytics` — the app's **single home page** (a `BaseHomePage` bound to the app's workplace): app-wide indicators describing how the whole app is working. It is **one page, not a set of dashboards**, so describe **exactly one** `home page:` block. Because it aggregates the whole app, it is richer than a section dashboard — list **at least 10 widgets** (`;`-separated). A home page has **no per-page access rights** — its audience is the workplace it is bound to — so do **not** add an `access rights:` line here.
 
 Describe each **§7.1 dashboard** with these labels (colon included) — the validator checks `dashboard:`, `access rights:`, and `widgets:` verbatim:
 
@@ -311,7 +311,7 @@ The **§7.2 home page** uses a `home page:` block instead — **no** `access rig
 ```
 - home page: Agency overview
   - scope: shows how the whole agency is performing right now
-  - widgets: metric — open vacancies; metric — active candidates; chart — hiring funnel (submissions by stage); chart — vacancies opened vs closed per month (column)
+  - widgets: metric — open vacancies; metric — active candidates; metric — placements this month; metric — average time to fill; metric — revenue this month; chart — hiring funnel (submissions by stage); chart — vacancies opened vs closed per month (column); chart — placements by recruiter (bar); chart — candidates by source (donut); list — vacancies closing this week
 ```
 
 In `### 7.1`, each dashboard sits under the `#### <Section> section dashboards` heading of the section whose list page hosts it, so the section binding is unambiguous. Do not list section-analytics dashboards as a flat list without their section grouping.
@@ -332,7 +332,7 @@ Before finalizing the BA draft, verify at minimum:
 - `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, both non-empty
 - `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list); every §7.1 dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, a non-empty `scope:` line, and a `widgets:` line with **at least 5** `;`-separated widgets — the validator rejects a missing/value-less line, fewer than 5 widgets, and an `access rights:` value other than `All Employees`
 - every §7.1 dashboard states `access rights: All Employees` (the static default — dashboards are created visible to everyone; the validator pins this exact value). The role a dashboard is for shapes its **content** (`scope:`/`widgets:`), not its access
-- `### 7.2` describes exactly one `home page:` block with a non-empty `scope:` line and a non-empty `widgets:` line, and has **no** `dashboard:` blocks and **no** `access rights:` line (a home page is one page whose audience is the workplace, not a per-page grant) — the validator rejects `dashboard:`/`access rights:` under §7.2
+- `### 7.2` describes exactly one `home page:` block with a non-empty `scope:` line and a `widgets:` line of **at least 10** `;`-separated widgets, and has **no** `dashboard:` blocks and **no** `access rights:` line (a home page is one page whose audience is the workplace, not a per-page grant) — the validator rejects `dashboard:`/`access rights:` under §7.2
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 
