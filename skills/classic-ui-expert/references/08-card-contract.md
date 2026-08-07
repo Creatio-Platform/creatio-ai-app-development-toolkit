@@ -38,7 +38,7 @@ no target-platform recommendations, nothing addressed to a particular consumer
 | **Acceptance criteria** | mandatory | The behaviour restated as numbered, independently checkable requirements, each citing the sourceRef row that proves it. Section below. |
 | **Mechanism notes** | supporting, **omit when empty** | Only a fragile or surprising construct a rebuilder would otherwise trip on (a shared mixin driving two surfaces, a sizing hack, a value written by a path the sourceRef rows do not make obvious). Never the authoritative claim, and never a restatement of the sourceRef "what it contributes" column — if that is all you have, leave the field out. |
 
-The card shape is fixed: these fields, in this order. Do not add fields (counts,
+The card shape is fixed: exactly these fields, in this order. Do not add fields (counts,
 observations, run metadata) — anything beyond the behaviour goes to the run's other
 artifacts. `Assumption?` and `Mechanism notes` are the two that disappear when they have
 nothing to say; the rest are always present.
