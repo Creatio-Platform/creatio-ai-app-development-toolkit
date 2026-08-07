@@ -251,6 +251,11 @@ class NavigationPlacementContractTests(unittest.TestCase):
             content = read_text(path)
             self.assertIn("unknown-topic", content)
             self.assertIn("STOP", content)
+            # Naming the version is what makes the stop actionable: without it the developer learns
+            # an upgrade is needed but not to what, and cannot tell an old library from an inactive
+            # one. 1.13.0 is the first clio-knowledge release whose bundle carries the article;
+            # 1.12.0 does not.
+            self.assertIn("1.13.0", content)
 
     def test_implementation_runbook_requires_telling_the_developer_about_re_login(self):
         content = read_text(IMPLEMENTATION_RUNBOOK)
