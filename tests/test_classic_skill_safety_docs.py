@@ -119,19 +119,28 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"gate-toggle must be Boolean-only; missing {missing}")
 
-    def test_every_untoggleable_gate_has_a_disposition(self):
-        # Three ways a gate goes unexercised — non-Boolean row, no permission to write,
-        # feature flag. A missing branch leaves the agent improvising on a shared stand.
+    def test_feature_flag_gates_get_a_procedure_not_a_refusal(self):
+        # Feature toggles outnumber system-setting gates on a customized stand (156 vs 106
+        # schemas, ENG-94529 census), so refusing to exercise them costs more coverage than
+        # the secret-exposure risk it avoids. Same four steps, different tools.
         para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
         missing = missing_markers(
             para,
             [
-                "cannot toggle the row at all",
                 "getIsFeatureEnabled",
-                "rather than inventing one",
+                "refresh-feature-cache",
+                "restore unconditionally",
+                "never a blanket refusal",
             ],
         )
-        self.assertFalse(missing, f"every untoggleable gate needs a disposition; missing {missing}")
+        self.assertFalse(missing, f"feature gates need a real procedure; missing {missing}")
+
+    def test_an_untoggleable_gate_of_either_kind_has_a_disposition(self):
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para, ["if you cannot toggle it at all", "`⚠ Partial — unexercised`"]
+        )
+        self.assertFalse(missing, f"untoggleable gates need a disposition; missing {missing}")
 
     def test_gate_toggle_restores_unconditionally_against_a_held_value(self):
         # Pin the CAPTURE and the comparison together. Pinning only "the pre-toggle value
@@ -192,21 +201,31 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
     # --- retrieval floor -----------------------------------------------------------
 
-    def test_message_counterpart_search_stays_package_bounded(self):
-        # The census carries names and packages, not bodies: an unbounded stand-wide body
-        # scan is not executable and contradicts this file's own budget discipline.
+    def test_message_counterpart_search_is_run_once_and_widened(self):
+        # Two failures to hold apart. Deferring the search left 18 of 30 threads open
+        # (ENG-94529), so it must actually run; re-running it per scope is unbounded on a
+        # customer stand, so it runs ONCE and the caller owns it when there is one.
         content = read_text(REFERENCE_FOLLOWING)
         missing = missing_markers(
             content,
             [
+                "run the search, do not defer it",
+                "Once per run, never per scope",
+                "the caller owns the register",
+                "state the scope you reached",
                 "declaring layer's package*",
-                "Not a stand-wide body scan",
-                "unrun settling query",
-                "do not rebuild it per scope",
             ],
         )
-        self.assertFalse(missing, f"class 3 must stay package-bounded; missing {missing}")
+        self.assertFalse(missing, f"class 3 must run once and widen; missing {missing}")
         self.assertNotIn("scan the client-schema census for the other side", flat(content))
+
+    def test_message_counterpart_zero_carries_its_scope_of_proof(self):
+        content = read_text(REFERENCE_FOLLOWING)
+        missing = missing_markers(
+            content,
+            ["A counted zero carries the scope that proves it", "`unresolved`, never an omitted member"],
+        )
+        self.assertFalse(missing, f"counted zeros need a scope of proof; missing {missing}")
 
     def test_setting_values_are_reported_as_state_not_literals(self):
         # Cards ship in customizations.md, the one output doc carrying verbatim customer
