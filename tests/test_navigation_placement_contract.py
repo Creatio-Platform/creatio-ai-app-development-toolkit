@@ -116,7 +116,10 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         for path in (CHECKLIST, REQUIREMENTS_RUNBOOK):
             content = read_text(path)
             self.assertIn("most of them", content)
-            self.assertIn("tie", content)
+            # NOT "tie": that substring already occurs inside `responsibilities`, `entities`,
+            # `ambiguities` and `capabilities` in both files, so it passes even when the rule is
+            # deleted. Pin the clause instead.
+            self.assertIn("ask rather than choose when it is a tie", content)
 
     def test_first_turn_reason_names_the_section_path_too(self):
         content = read_text(AGENTS)
