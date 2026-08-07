@@ -1015,11 +1015,37 @@ function normalizeDetails(d) {
   return out;
 }
 
+// `modules` = the sub-modules a classic page composes INSIDE itself (widgets, dashboards, and the embedded
+// profile CARD of a linked record). The identity lives in `config`, not in `moduleName`: real OOTB bodies
+// (ContactPageV2/AccountPageV2, verified on-stand) carry NO `moduleName` at all and name the embedded schema
+// in `config.schemaName`, with the wiring in `config.parameters.viewModelConfig`. Dropping `config` (as this
+// did) is what left an embedded profile card unrecognisable — the mapper saw a nameless module and the page
+// lost the card. Keep the whole wiring so mapProfileCards can recognise the pattern STRUCTURALLY.
 function normalizeModules(m) {
   const out = [];
   if (m && typeof m === "object") for (const k of Object.keys(m)) {
     const e = m[k] || {};
-    out.push({ key: k, moduleName: isStr(e.moduleName) ? e.moduleName : null });
+    const cfg = plainObj(e.config);
+    const vmc = plainObj(plainObj(cfg.parameters).viewModelConfig);
+    out.push({
+      key: k,
+      moduleName: isStr(e.moduleName) ? e.moduleName : null,
+      // the embedded schema this module renders (e.g. AccountProfileSchema, SectionActionsDashboard)
+      schemaName: strOrNull(cfg.schemaName),
+      // profile-card wiring: `masterColumnName` = the lookup ON THE MASTER page whose value IS the profiled
+      // record's Id (BaseProfileSchema loads the profile entity from it); `profileColumnName` = the column on
+      // the PROFILED entity pointing back at the master, used only to pre-fill a newly ADDED linked record
+      // (BaseProfileSchema.getDefaultProfileColumnValues). Verified against the platform schema, not inferred.
+      masterColumnName: strOrNull(vmc.masterColumnName),
+      profileColumnName: strOrNull(vmc.profileColumnName),
+      // the actions/DCM dashboard module carries `masterColumnName` TOO — but nested per entity under
+      // `dashboardConfig`, never on `viewModelConfig` itself. Recording the key lets the mapper exclude that
+      // shape instead of mistaking every dashboard for a profile card.
+      hasDashboardConfig: vmc.dashboardConfig != null && typeof vmc.dashboardConfig === "object",
+      // display flags the classic card toggled (IsPhoneVisible, …) — booleans on viewModelConfig. They say
+      // WHICH extra values the card showed, which the Freedom native card may not cover.
+      displayFlags: Object.fromEntries(Object.entries(vmc).filter(([, v]) => typeof v === "boolean")),
+    });
   }
   return out;
 }
