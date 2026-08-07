@@ -97,14 +97,22 @@ point at them — and every fetch, or its counted zero, is logged:
    constant or a system setting gets its value query actually **run** (a read — one ESQ or
    settings query), not parked as an assumption. An assumption remains only for what a read
    cannot reach. A setting's value is **per-audience**: read `SysSettingsValue` (per-role/user
-   overrides), not only the All-Users default, and report whose value it is ("All Users `false`;
-   Supervisor override `true`"). A `false` default is not "dormant".
-3. **Message counterparts.** For every message the surface declares or a body publishes/subscribes,
-   scan the client-schema census for the other side (`sandbox.publish` / `subscribe` of that name)
-   and record it, or record a counted zero ("no subscriber on this stand"). Do this per run, not per
-   unresolved name: a method whose body only publishes or subscribes has nothing to describe on its own,
-   so without the counterpart it lands in no unit at all — the measured failure. A thread left untraced
-   is a refusal with the scan as its settling action, never an omitted member.
+   overrides), not only the All-Users default, and report the **resolved state per audience** ("off
+   for All Users, on for Supervisor"). A `false` default is not "dormant". Report the state, not the
+   literal value, unless the row is Boolean: a Text/String/Lookup value may be a secret that no
+   metadata flags as encrypted, and these cards ship in `customizations.md` — the one output document
+   that carries verbatim customer code.
+3. **Message counterparts.** Once per surface, for every message the surface declares, find the other
+   side by the search order under **Cross-schema wiring** above: one ESQ for client schemas in the
+   *declaring layer's package*, fetch those
+   candidate chains, text-search the bodies offline for `sandbox.publish` / `subscribe` of that name.
+   Not a stand-wide body scan — the census carries names and packages, not bodies. Record the
+   counterpart, or a counted zero with its scope of proof ("no subscriber in the declaring package"),
+   naming the stand-wide scan as the unrun settling query. A method whose body only publishes or
+   subscribes has nothing to describe on its own, so without the counterpart it lands in no unit at
+   all — the measured failure. An untraced thread is `unresolved` with that settling query, never an
+   omitted member. When a caller supplied a **row digest** (`SKILL.md`), this register is the caller's
+   to build once for the whole surface — do not rebuild it per scope.
 4. **Resource strings** — already mandatory through the ledger and the criteria rules
    (`03-member-ledger.md`, `08-card-contract.md`); listed here so the floor is complete in
    one place.

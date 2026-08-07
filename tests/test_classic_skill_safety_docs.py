@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -6,100 +7,220 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
 CARD_CONTRACT = ROOT / "skills/classic-ui-expert/references/08-card-contract.md"
 MEMBER_LEDGER = ROOT / "skills/classic-ui-expert/references/03-member-ledger.md"
+REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-following.md"
+
+EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
+GATE_HEAD = "**Gate-toggle safety (shared stand).**"
+PLACEMENT_HEAD = "**Where the evidence goes.**"
 
 
 def read_text(path):
-    return path.read_text(encoding="utf-8")
+    # Normalize curly apostrophes so a typographic pass over the Markdown cannot turn a
+    # safety assertion red with a message about the wrong problem.
+    return path.read_text(encoding="utf-8").replace("’", "'")
 
 
-def contains_all(text, markers):
-    return [marker for marker in markers if marker not in text]
+def flat(text):
+    """Collapse whitespace runs so a pin survives a Markdown re-wrap.
+
+    These docs hard-wrap at ~100 chars, so any multi-word phrase can straddle a newline
+    the moment a sentence above it grows. Matching on flattened text pins the wording,
+    not the line breaks.
+    """
+    return re.sub(r"\s+", " ", text)
+
+
+def missing_markers(text, markers):
+    """Return the markers ABSENT from text — empty list means all present."""
+    flattened = flat(text)
+    return [marker for marker in markers if flat(marker) not in flattened]
+
+
+def paragraph(text, head):
+    """The single paragraph starting with `head`.
+
+    Scoping assertions to the paragraph rather than the whole file is what makes a
+    *moved* sentence visible: whole-file assertIn stays green when a rule migrates into
+    a neighbouring paragraph whose surrounding text changes its meaning. Same idiom as
+    tests/test_default_contract_docs.py:574-597.
+    """
+    for para in text.split("\n\n"):
+        if para.lstrip().startswith(head):
+            return para
+    raise AssertionError(f"no paragraph starting with {head!r}")
 
 
 class ClassicSkillSafetyDocTests(unittest.TestCase):
     """Pin the normative phrases of prose-only safety guarantees.
 
-    Each guarantee below regressed once already during ENG-94529 review (the raw-value
-    logging in bf31563, the toggle fail-safe in 7944948, the card contract's closed set
-    in 65266ce), so the wording is locked here rather than left to prose review.
+    Each guarantee below regressed at least once during ENG-94529 review — raw-value
+    logging (bf31563), the toggle fail-safe (7944948), the card contract's closed set
+    (65266ce), and the Evidence rule closing on the instruction it supersedes. Prose
+    review caught each one late; these locks catch the next one at commit time.
     """
 
-    def test_gate_toggle_procedure_names_the_row_it_touches(self):
-        content = read_text(MIGRATION_SKILL)
-        self.assertIn("Gate-toggle safety (shared stand)", content)
-        missing = contains_all(
-            content,
-            ["SysSettingsValue", "culture/user/role", "per-role override"],
-        )
-        self.assertFalse(
-            missing,
-            f"gate-toggle procedure must name the exact row it touches; missing {missing}",
-        )
+    # --- the rule this branch exists to add -------------------------------------
 
-    def test_gate_toggle_procedure_default_denies_raw_value_logging(self):
-        # A Text/String/Lookup gate may hold a secret no metadata flags as encrypted,
-        # so the worklog records the resolved state, not the literal value.
-        content = read_text(MIGRATION_SKILL)
-        missing = contains_all(
-            content,
+    def test_evidence_paragraph_requires_a_line_per_ac(self):
+        para = paragraph(read_text(MIGRATION_SKILL), EVIDENCE_HEAD)
+        missing = missing_markers(
+            para,
             [
-                "resolved effective state",
-                "never the literal value by default",
-                "Boolean feature gate",
-                "Text/String/Lookup",
+                "one line per acceptance criterion",
+                "Test each AC, don't argue it",
+                "must NOT happen",
+                "`⚠ Partial`",
             ],
         )
-        self.assertFalse(
-            missing,
-            f"gate-toggle procedure must default-deny raw value logging; missing {missing}",
-        )
+        self.assertFalse(missing, f"per-AC evidence rule incomplete; missing {missing}")
 
-    def test_gate_toggle_procedure_restores_unconditionally(self):
-        # A failed or interrupted test does not leave the shared stand mutated.
+    def test_evidence_placement_never_accepts_the_card_citation(self):
+        # The regression this replaces: the paragraph used to close on "copy from there"
+        # / "It goes in the Evidence column", whose referent is the card+AC *citation* —
+        # the weaker rule the per-AC rule supersedes.
         content = read_text(MIGRATION_SKILL)
-        missing = contains_all(
-            content,
+        para = paragraph(content, PLACEMENT_HEAD)
+        missing = missing_markers(
+            para,
             [
+                "card + AC list to walk",
+                "per-AC result lines",
+                "never the **Described in** citation copied across",
+            ],
+        )
+        self.assertFalse(missing, f"evidence-placement rule incomplete; missing {missing}")
+        self.assertNotIn("copy from there", flat(content))
+        self.assertNotIn("It goes in the Evidence column", flat(content))
+
+    # --- gate-toggle safety, scoped to its own paragraph -------------------------
+
+    def test_gate_toggle_names_the_row_it_touches(self):
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para, ["SysSettingsValue", "culture/user/role", "per-role override"]
+        )
+        self.assertFalse(missing, f"gate-toggle must name the exact row; missing {missing}")
+
+    def test_gate_toggle_default_denies_raw_value_logging(self):
+        # The invariant is "never echo a non-Boolean value", not any particular noun for
+        # the row type — pin the invariant so a terminology fix does not turn this red.
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para, ["resolved effective state", "never the literal value"]
+        )
+        self.assertFalse(missing, f"gate-toggle must default-deny raw values; missing {missing}")
+
+    def test_gate_toggle_only_ever_toggles_a_boolean_row(self):
+        # A Text/String/Lookup row may hold a secret no metadata flags as encrypted, and
+        # toggling overwrites it — the held copy can be lost to context compaction.
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para, ["Only a Boolean row is toggled", "`⚠ Partial — unexercised`"]
+        )
+        self.assertFalse(missing, f"gate-toggle must be Boolean-only; missing {missing}")
+
+    def test_every_untoggleable_gate_has_a_disposition(self):
+        # Three ways a gate goes unexercised — non-Boolean row, no permission to write,
+        # feature flag. A missing branch leaves the agent improvising on a shared stand.
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para,
+            [
+                "cannot toggle the row at all",
+                "getIsFeatureEnabled",
+                "rather than inventing one",
+            ],
+        )
+        self.assertFalse(missing, f"every untoggleable gate needs a disposition; missing {missing}")
+
+    def test_gate_toggle_restores_unconditionally_against_a_held_value(self):
+        # Pin the CAPTURE and the comparison together. Pinning only "the pre-toggle value
+        # you held" passes on prose that compares against a value it never told you to
+        # keep — a dangling back-reference reads as complete and is not.
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para,
+            [
+                "Hold that row's pre-toggle value in session",
+                "pre-toggle value you held",
+                "toggle → test → restore → re-read",
                 "restore runs unconditionally",
                 "fails, errors or times out",
                 "try/finally",
             ],
         )
-        self.assertFalse(
-            missing,
-            f"gate-toggle procedure must restore on any test outcome; missing {missing}",
-        )
+        self.assertFalse(missing, f"restore must be unconditional; missing {missing}")
 
-    def test_gate_toggle_procedure_escalates_an_unconfirmed_restore(self):
-        content = read_text(MIGRATION_SKILL)
-        missing = contains_all(
-            content,
-            ["Confirm the restore, don't assume it", "blocking risk"],
+    def test_gate_toggle_escalates_an_unconfirmed_restore(self):
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para, ["Confirm the restore, don't assume it", "blocking risk"]
         )
-        self.assertFalse(
-            missing,
-            f"an unconfirmed restore must be surfaced as blocking; missing {missing}",
-        )
+        self.assertFalse(missing, f"unconfirmed restore must be blocking; missing {missing}")
+
+    def test_gate_toggle_groups_acs_behind_one_window(self):
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        self.assertIn("toggle window", flat(para))
+        self.assertIn("toggle once, run them all, restore once", flat(para))
+
+    # --- card contract ------------------------------------------------------------
 
     def test_card_contract_keeps_the_closed_set_guarantee(self):
         # Both halves: the set is exact, and nothing outside the table may be added.
         content = read_text(CARD_CONTRACT)
-        missing = contains_all(
-            content,
-            ["exactly these fields, in this order", "Do not add fields"],
+        missing = missing_markers(
+            content, ["exactly these fields, in this order", "Do not add fields"]
         )
-        self.assertFalse(
-            missing,
-            f"card contract must stay a closed set; missing {missing}",
-        )
+        self.assertFalse(missing, f"card contract must stay a closed set; missing {missing}")
+
+    # --- member ledger -------------------------------------------------------------
 
     def test_member_ledger_tally_uses_three_distinct_counts(self):
         # N members · M attributed · K unattributed — reusing N for the attributed slot
         # reads as attributed == total while admitting K more are unattributed.
         content = read_text(MEMBER_LEDGER)
-        self.assertIn("N members · M attributed · K unattributed", content)
-        self.assertIn("M + K = N", content)
-        self.assertNotIn("N members · N attributed", content)
+        self.assertRegex(content, r"N\s+members\s*·\s*M\s+attributed\s*·\s*K\s+unattributed")
+        self.assertIn("M + K = N", flat(content))
+        self.assertNotRegex(content, r"N\s+members\s*·\s*N\s+attributed")
+
+    def test_member_ledger_worked_example_closes_with_a_conforming_tally(self):
+        # The worked example is what an agent copies, so it regressed first — lock the
+        # concrete footer alongside the abstract rule.
+        content = read_text(MEMBER_LEDGER)
+        self.assertRegex(content, r"6\s+members\s*·\s*6\s+attributed\s*·\s*0\s+unattributed")
+        self.assertNotIn("all members attributed", flat(content))
+
+    # --- retrieval floor -----------------------------------------------------------
+
+    def test_message_counterpart_search_stays_package_bounded(self):
+        # The census carries names and packages, not bodies: an unbounded stand-wide body
+        # scan is not executable and contradicts this file's own budget discipline.
+        content = read_text(REFERENCE_FOLLOWING)
+        missing = missing_markers(
+            content,
+            [
+                "declaring layer's package*",
+                "Not a stand-wide body scan",
+                "unrun settling query",
+                "do not rebuild it per scope",
+            ],
+        )
+        self.assertFalse(missing, f"class 3 must stay package-bounded; missing {missing}")
+        self.assertNotIn("scan the client-schema census for the other side", flat(content))
+
+    def test_setting_values_are_reported_as_state_not_literals(self):
+        # Cards ship in customizations.md, the one output doc carrying verbatim customer
+        # code — so this skill needs its own redaction rule, not a cross-skill pointer.
+        content = read_text(REFERENCE_FOLLOWING)
+        missing = missing_markers(
+            content,
+            [
+                "resolved state per audience",
+                "not the literal value, unless the row is Boolean",
+                "customizations.md",
+            ],
+        )
+        self.assertFalse(missing, f"per-audience read must redact literals; missing {missing}")
 
 
 if __name__ == "__main__":

@@ -25,11 +25,10 @@ the layer is enumerated, walk the list: any member without a unit is a unit you 
 That is the completeness test — nothing else in this skill substitutes for it.
 
 Write it **member → unit**, one line per member, and close each layer with the count
-(`N members · M attributed · K unattributed`, where `M + K = N` — three distinct counts, not the
-member total copied into the attributed slot), and `K` is the count you actually found, not a
-placeholder — a nonzero `K` is a live gap: it means the walk found a member with no unit, exactly
-what the completeness test above exists to catch, and the layer is not closed until every member
-is on a roster. The inverse shape — a unit with a roster of the
+(`N members · M attributed · K unattributed`, where `M + K = N` — three counts you actually
+computed, never the member total copied into the attributed slot). A nonzero `K` is a live gap: the
+walk found a member with no unit, exactly what the completeness test above exists to catch, and the
+layer is not closed until every member has one. The inverse shape — a unit carrying a roster of the
 members it covers — reads as a ledger but cannot be checked: a member absent from every roster
 looks like no gap at all, and no coverage figure can be derived from it. Grouping members by family
 ("the `save*` methods → these cards") fails the same way.
@@ -47,7 +46,7 @@ unit — never past the end of the layer.
 Practical form (keep it in the output):
 
 ```
-Layer: <SchemaName> [<Package>]  — 6 members
+Layer: <SchemaName> [<Package>]  — <N> members
   diff op 1 (remove X) ............... U03
   method getSectionActions ........... U02 (removal part), U03 (insert part)
   method syncWithTS .................. U03
