@@ -294,7 +294,7 @@ Describe each **§7.1 dashboard** with these labels (colon included) — the val
 
 - `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
 - `access rights:` — **who the dashboard is created visible to**. This is a **static default: always `All Employees`** (every generated dashboard is visible to everyone). It is stated per dashboard purely so the developer sees the grant in the plan; write it verbatim as `access rights: All Employees`. The role a dashboard is for drives its **content** (which metrics/charts/slices — see `scope:`/`widgets:`), **not** its access rights.
-- `scope:` — the data slice / question it answers, framed for the role that uses this dashboard, e.g. `scope: open orders by stage this quarter`
+- `scope:` — in plain, human language, **what the dashboard shows / describes** (the question it answers for the role that uses it). Phrase it as a natural sentence starting with `shows` or `describes`, e.g. `scope: shows open orders by stage this quarter` or `scope: describes how quickly the team closes requests`.
 - `widgets:` — the widgets in business terms, each as a metric, chart, or list, e.g. `widgets: metric — open orders count; chart — orders by stage (bar); list — orders due this week`
 
 Render each §7.1 dashboard block like this (the `access rights:` line is mandatory and sits right under the title):
@@ -302,7 +302,7 @@ Render each §7.1 dashboard block like this (the `access rights:` line is mandat
 ```
 - dashboard: Top clients
   - access rights: All Employees
-  - scope: which customers visit most often
+  - scope: shows which customers visit most often
   - widgets: chart — top clients by number of work orders (bar); metric — total clients; list — clients ranked by visits
 ```
 
@@ -310,7 +310,7 @@ The **§7.2 home page** uses a `home page:` block instead — **no** `access rig
 
 ```
 - home page: Agency overview
-  - scope: how the whole agency is performing right now
+  - scope: shows how the whole agency is performing right now
   - widgets: metric — open vacancies; metric — active candidates; chart — hiring funnel (submissions by stage); chart — vacancies opened vs closed per month (column)
 ```
 
@@ -330,9 +330,9 @@ Before finalizing the BA draft, verify at minimum:
 - sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
 - `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, both non-empty
-- `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list); every §7.1 dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, and a non-empty `widgets:` line — the validator rejects a missing/value-less line (and an `access rights:` value other than `All Employees`)
+- `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list); every §7.1 dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, a non-empty `scope:` line, and a non-empty `widgets:` line — the validator rejects a missing/value-less line (and an `access rights:` value other than `All Employees`)
 - every §7.1 dashboard states `access rights: All Employees` (the static default — dashboards are created visible to everyone; the validator pins this exact value). The role a dashboard is for shapes its **content** (`scope:`/`widgets:`), not its access
-- `### 7.2` describes exactly one `home page:` block with a non-empty `widgets:` line, and has **no** `dashboard:` blocks and **no** `access rights:` line (a home page is one page whose audience is the workplace, not a per-page grant) — the validator rejects `dashboard:`/`access rights:` under §7.2
+- `### 7.2` describes exactly one `home page:` block with a non-empty `scope:` line and a non-empty `widgets:` line, and has **no** `dashboard:` blocks and **no** `access rights:` line (a home page is one page whose audience is the workplace, not a per-page grant) — the validator rejects `dashboard:`/`access rights:` under §7.2
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 

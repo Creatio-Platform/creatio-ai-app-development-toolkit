@@ -78,6 +78,7 @@ ANALYTICS_WORKPLACE_SUBHEADING_RE = re.compile(r"(?im)^\s*#{3,6}\s+7\.2\s+Workpl
 # whitespace) after them are rejected instead of passing as "present".
 DASHBOARD_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*dashboard:[ \t]*\S")
 DASHBOARD_WIDGETS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*widgets:[ \t]*\S")
+DASHBOARD_SCOPE_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*scope:[ \t]*\S")
 # Dashboard access is a STATIC default: every generated dashboard is created
 # visible to `All Employees`. The plan surfaces it per dashboard for transparency,
 # and because the value is a known constant we pin the exact value (not just
@@ -254,6 +255,8 @@ def validate_requirements_doc(content: str) -> None:
         if not DASHBOARD_LABEL_RE.search(group_block):
             raise WorkflowError("Requirements doc failed: every '#### <Section> section dashboards' heading in section 7.1 must have at least one 'dashboard:' under it (no empty grouping headings)")
     for block in dashboard_blocks:
+        if not DASHBOARD_SCOPE_LABEL_RE.search(block):
+            raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must state a non-empty 'scope:' line (what the dashboard shows / the question it answers)")
         if not DASHBOARD_WIDGETS_LABEL_RE.search(block):
             raise WorkflowError("Requirements doc failed: every dashboard in section 7.1 Section analytics must list a non-empty 'widgets:' line")
         if not DASHBOARD_ACCESS_RIGHTS_RE.search(block):
@@ -268,6 +271,8 @@ def validate_requirements_doc(content: str) -> None:
     home_page_blocks = list(iter_labeled_blocks(section_72_text, HOME_PAGE_LABEL_RE))
     if len(home_page_blocks) != 1:
         raise WorkflowError("Requirements doc failed: section 7.2 Workplace analytics must describe exactly one 'home page:' (the app's single home page) with its widgets")
+    if not DASHBOARD_SCOPE_LABEL_RE.search(home_page_blocks[0]):
+        raise WorkflowError("Requirements doc failed: the section 7.2 home page must state a non-empty 'scope:' line (what the home page shows / the question it answers)")
     if not DASHBOARD_WIDGETS_LABEL_RE.search(home_page_blocks[0]):
         raise WorkflowError("Requirements doc failed: the section 7.2 home page must list its 'widgets:'")
 

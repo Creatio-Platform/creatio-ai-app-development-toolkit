@@ -262,6 +262,33 @@ class TestValidateRequirementsDocAnalytics(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("widgets:", str(ctx.exception))
 
+    def test_missing_scope_on_71_dashboard_is_rejected(self):
+        # `scope:` is a mandatory §7.1 dashboard field (never empty/TBD), enforced
+        # like `widgets:`. Dropping it must fail.
+        doc = VALID_DOC.replace("  - scope: open tasks by status\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("scope:", str(ctx.exception))
+
+    def test_empty_scope_value_on_71_dashboard_is_rejected(self):
+        # Presence of the label is not enough — the value after `scope:` must be
+        # non-empty.
+        doc = VALID_DOC.replace(
+            "  - scope: open tasks by status\n", "  - scope:\n"
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("scope:", str(ctx.exception))
+
+    def test_missing_scope_on_72_home_page_is_rejected(self):
+        # The §7.2 home page must also state its `scope:`.
+        doc = VALID_DOC.replace(
+            "  - scope: how the whole team is performing right now\n", ""
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("scope:", str(ctx.exception))
+
     def test_order_of_71_and_72_does_not_matter_when_both_populated(self):
         # The requirement is "both subsections present AND both populated" — the
         # order between 7.1 and 7.2 is irrelevant. A doc that lists 7.2 before 7.1,
