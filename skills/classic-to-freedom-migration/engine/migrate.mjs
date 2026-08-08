@@ -1057,6 +1057,17 @@ const SCHEMA_BODY_ARRAYS = new Set(["schemas", "seed"]);
 // same input. Real bundles nest a handful of levels and a few thousand nodes.
 const PLAN_VERSION_MAX_DEPTH = 24;
 const PLAN_VERSION_MAX_NODES = 200000;
+// The `schemas`/`seed` leg, extracted so `feedPlanVersion` carries one branch per shape rather than three
+// (the repo pins Sonar cognitive complexity 15, and this is the hottest walk in the file).
+function feedSchemaArray(h, value, readBody) {
+  h.update("\u0001S");
+  for (const e of value) {
+    h.update(String(e?.pkg ?? ""));
+    h.update("\u0001");
+    h.update(e && (e.body != null || e.file) ? String(readBody(e)) : "");
+    h.update("\u0001");
+  }
+}
 function feedPlanVersion(h, value, key, readBody, state, depth) {
   if (depth > PLAN_VERSION_MAX_DEPTH || ++state.nodes > PLAN_VERSION_MAX_NODES) { h.update("\u0001cap"); return; }
   if (Array.isArray(value)) {
@@ -1065,16 +1076,7 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
     // CONTAINS, and re-planning the same bodies from a fresh temp dir keeps one version. An entry with neither
     // `body` nor `file` would make `readBody` throw, so it contributes nothing rather than aborting the run: an
     // unreadable entry is the gate's problem, not the version's.
-    if (SCHEMA_BODY_ARRAYS.has(key)) {
-      h.update("\u0001S");
-      for (const e of value) {
-        h.update(String(e?.pkg ?? ""));
-        h.update("\u0001");
-        h.update(e && (e.body != null || e.file) ? String(readBody(e)) : "");
-        h.update("\u0001");
-      }
-      return;
-    }
+    if (SCHEMA_BODY_ARRAYS.has(key)) return feedSchemaArray(h, value, readBody);
     // Array order IS a plan input (it is the override chain), so it is never sorted.
     h.update("\u0001A");
     for (const v of value) feedPlanVersion(h, v, null, readBody, state, depth + 1);
@@ -1391,17 +1393,21 @@ function builtPayloadIssue(built) {
 // already told you" to "invent a coherent identity graph", and it makes a careless copy-paste fail outright.
 // It is not a defence against a determined author, and nothing here should be described as one.
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function provenanceIssue(pages) {
-  const entries = Object.entries(pages).filter(([, e]) => e && e !== false && typeof e === "object");
+function missingUidIssue(entries) {
   const noUid = entries.filter(([, e]) => !GUID_RE.test(String(e.schemaUId ?? "")));
-  if (noUid.length)
-    return `has ${noUid.length} page entr${noUid.length === 1 ? "y" : "ies"} with no valid \`schemaUId\`: ${noUid.map(([k]) => k).slice(0, 5).join(", ")}. Copy it VERBATIM from clio \`get-page\` (\`page.schemaUId\`) — \`--units\` publishes no GUIDs, so this is what shows the page was actually read off the stand`;
+  if (!noUid.length) return null;
+  return `has ${noUid.length} page entr${noUid.length === 1 ? "y" : "ies"} with no valid \`schemaUId\`: ${noUid.map(([k]) => k).slice(0, 5).join(", ")}. Copy it VERBATIM from clio \`get-page\` (\`page.schemaUId\`) — \`--units\` publishes no GUIDs, so this is what shows the page was actually read off the stand`;
+}
+function duplicateUidIssue(entries) {
   const byUid = new Map();
   for (const [k, e] of entries) {
     const u = String(e.schemaUId).toLowerCase();
     if (byUid.has(u)) return `claims the SAME \`schemaUId\` ${u} for two different page keys (\`${byUid.get(u)}\` and \`${k}\`) — one schema cannot be two pages; re-read each page with \`get-page\``;
     byUid.set(u, k);
   }
+  return null;
+}
+function packageUidIssue(entries) {
   const byPkg = new Map();
   for (const [k, e] of entries) {
     if (!e.packageName || !e.packageUId) continue;   // packageUId stays optional; when present it must agree
@@ -1411,6 +1417,11 @@ function provenanceIssue(pages) {
     if (!prev) byPkg.set(e.packageName, { uid: String(e.packageUId), key: k });
   }
   return null;
+}
+// Three independent checks, each its own function so this one stays a flat sequence (Sonar CC 15).
+function provenanceIssue(pages) {
+  const entries = Object.entries(pages).filter(([, e]) => e && e !== false && typeof e === "object");
+  return missingUidIssue(entries) || duplicateUidIssue(entries) || packageUidIssue(entries);
 }
 
 // The flags that take a VALUE, in ONE list — because each of them has TWO obligations and forgetting either is a
