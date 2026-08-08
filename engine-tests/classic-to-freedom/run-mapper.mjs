@@ -169,8 +169,8 @@ check("F9: the client field still routes into the layout (Header→profile)",
 // The tab type moved `crt.Tab` → `crt.TabContainer`, so a spelling-specific negative here would pass vacuously
 // (it would no longer see a duplicate the mapper DID synthesize). Assert on the NAME instead: the base tab must
 // carry no synthesized insert of ANY tab spelling.
-const TAB_TYPES = ["crt.TabContainer", "crt.Tab"];
-const synthesizedTab = (diff, name) => diff.some(o => o.name === name && TAB_TYPES.includes(o.values?.type));
+const TAB_TYPES = new Set(["crt.TabContainer", "crt.Tab"]);
+const synthesizedTab = (diff, name) => diff.some(o => o.name === name && TAB_TYPES.has(o.values?.type));
 const btSeed = L("Tpl", { diff: [di({ name: "Tabs", itemType: 15 }),
   di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true })] });
 const btClient = L("Client", { entity: "X",
@@ -4117,7 +4117,7 @@ const pgUnitKeys = pgUnits.pages.map((p) => p.key);
 const setEq = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
 
 check("ENG-94975 fixture preconditions: the tree really is main + folded child + GRANDCHILD + diamond-shared sibling + unresolved child (else the checks below are vacuous)",
-  pgUnitKeys.includes("main") && pgUnitKeys.some((k) => /^child:C1@/.test(k)) && pgUnitKeys.includes("child:G1") && pgUnitKeys.includes("child:U1")
+  pgUnitKeys.includes("main") && pgUnitKeys.some((k) => k.startsWith("child:C1@")) && pgUnitKeys.includes("child:G1") && pgUnitKeys.includes("child:U1")
   && pgRun.childPages.filter((c) => c.entity === "C1").length === 2                            // two sibling details…
   && new Set(pgRun.childPages.filter((c) => c.entity === "C1").map((c) => c.pageDedupeId)).size === 1, // …ONE physical page
   () => ({ pgUnitKeys, c1: pgRun.childPages.filter((c) => c.entity === "C1").map((c) => ({ key: c.pageKey, dedupe: c.pageDedupeId })) }));
@@ -4135,12 +4135,12 @@ check("ENG-94975 --units: the published key set is EXACTLY the LITERAL key set t
   () => ({ pgUnitKeys, rowKeys: [...new Set(pgRowKeys)], expected: PG_EXPECTED_KEYS }));
 check("ENG-94975 --units: `buildOrder` covers the same key set exactly once, LEAF-FIRST with `main` last (a diamond-shared child is built ONCE, before both parents)",
   setEq(new Set(pgUnits.buildOrder), new Set(pgUnitKeys)) && pgUnits.buildOrder.length === pgUnitKeys.length
-  && pgUnits.buildOrder[pgUnits.buildOrder.length - 1] === "main"
-  && pgUnits.buildOrder.indexOf("child:G1") < pgUnits.buildOrder.findIndex((k) => /^child:C1@/.test(k)),
+  && pgUnits.buildOrder.at(-1) === "main"
+  && pgUnits.buildOrder.indexOf("child:G1") < pgUnits.buildOrder.findIndex((k) => k.startsWith("child:C1@")),
   () => ({ buildOrder: pgUnits.buildOrder, pgUnitKeys }));
 
 /* ---- THE CORE DEFECT, both directions: one page's components must never close another page's row ---- */
-const pgChildKey = pgUnitKeys.find((k) => /^child:C1@/.test(k));
+const pgChildKey = pgUnitKeys.find((k) => k.startsWith("child:C1@"));
 const pgFieldsRow = (v, key) => {          // this page's `Fields — N expected` row, read off its own tally + text
   const lines = v.markdown.split("\n").filter((l) => /Fields — \d+ expected/.test(l));
   return { lines, page: v.pages[key] };
@@ -4385,23 +4385,23 @@ const kcRun = runMigration(KC_MANIFEST, { baseDir: FIX });
 const kcOpts = checklistOpts(KC_MANIFEST);
 const kcUnits = pageUnits(kcRun, kcOpts);
 const kcKeys = kcUnits.pages.map((p) => p.key);
-const kcXKeys = kcKeys.filter((k) => /^child:X/.test(k));
+const kcXKeys = kcKeys.filter((k) => k.startsWith("child:X"));
 check("ENG-94975 F1 preconditions: two DIFFERENT physical child pages really do share the entity name `X`, one at depth 1 and one at depth 2 (else the collision checks below are vacuous)",
   kcKeys.includes("main") && kcKeys.includes("child:B") && kcXKeys.length === 2
-  && kcUnits.pages.filter((p) => /^child:X/.test(p.key)).every((p) => p.expect.fieldNames.join() === "XF"),
+  && kcUnits.pages.filter((p) => p.key.startsWith("child:X")).every((p) => p.expect.fieldNames.join() === "XF"),
   () => ({ kcKeys, expects: kcUnits.pages.map((p) => ({ k: p.key, f: p.expect.fieldNames })) }));
 check("ENG-94975 F1: a page key identifies exactly ONE physical page — two same-entity children on DIFFERENT branches get DISTINCT keys (round 1 collapsed both onto `child:X`, so one built page closed both pages' rows)",
   new Set(kcKeys).size === kcKeys.length && kcXKeys[0] !== kcXKeys[1]
   // …and the disambiguator is derived, not invented: it names the resolved Classic schema of the colliding page.
-  && kcXKeys.some((k) => k === "child:X") && kcXKeys.some((k) => k === "child:X@XAltPage"),
+  && kcXKeys.includes("child:X") && kcXKeys.includes("child:X@XAltPage"),
   () => ({ kcKeys }));
 check("ENG-94975 F1b: `buildOrder` dedupes on the FINAL page key — it covers the published key set EXACTLY once (round 1 deduped on `pageDedupeId` and emitted `child:X` twice against ONE `--units` entry)",
   kcUnits.buildOrder.length === new Set(kcUnits.buildOrder).size
   && setEq(new Set(kcUnits.buildOrder), new Set(kcKeys))
-  && kcUnits.buildOrder[kcUnits.buildOrder.length - 1] === "main",
+  && kcUnits.buildOrder.at(-1) === "main",
   () => ({ buildOrder: kcUnits.buildOrder, kcKeys }));
 check("ENG-94975 F1: the DIAMOND still collapses — the same physical page reached along two paths keeps ONE key (the fix must not turn shared pages into duplicates)",
-  new Set(pgUnitKeys).size === pgUnitKeys.length && pgUnitKeys.filter((k) => /^child:C1/.test(k)).length === 1
+  new Set(pgUnitKeys).size === pgUnitKeys.length && pgUnitKeys.filter((k) => k.startsWith("child:C1")).length === 1
   && new Set(pgRun.childPages.filter((c) => c.entity === "C1").map((c) => c.pageKey)).size === 1,
   () => ({ pgUnitKeys, c1: pgRun.childPages.filter((c) => c.entity === "C1").map((c) => c.pageKey) }));
 // IDEMPOTENCE — the keys are claimed by a walk that MUTATES the result tree, and `--units` / `--checklist` /
@@ -4450,7 +4450,7 @@ try {
     return { out: r.stdout, status: r.status, err: r.stderr || "", verdict: r.stdout.split("\n").find((l) => l.startsWith("**Verdict:**")) || "" };
   };
   const kcPagesPart = { ...kcPagesFull };
-  const kcDropped = kcUnitsCli.pages.map((p) => p.key).filter((k) => /^child:X/.test(k)).slice(1);
+  const kcDropped = kcUnitsCli.pages.map((p) => p.key).filter((k) => k.startsWith("child:X")).slice(1);
   for (const k of kcDropped) delete kcPagesPart[k];
   const kcFull = kcVerify(kcBuiltFull, kcPagesFull);
   const kcPart = kcVerify(kcBuiltPart, kcPagesPart);
@@ -4459,7 +4459,7 @@ try {
     && /✅ \*\*All machine-checkable deliverables present/.test(kcFull.verdict)   // control: an honest full build closes
     && !/✅ \*\*All machine-checkable deliverables present/.test(kcPart.verdict)
     // …and the table NAMES the page nobody looked at (D6 tri-state: absent entry ⇒ ⚠ unverified, not ❌ MISSING)
-    && new RegExp(`no .--built\\.pages\\["${kcDropped[0]}"\\]. entry`).test(kcPart.out),
+    && new RegExp(String.raw`no .--built\.pages\["${kcDropped[0]}"\]. entry`).test(kcPart.out),
     () => ({ dropped: kcDropped, full: kcFull.verdict.slice(0, 120), part: kcPart.verdict.slice(0, 120) }));
   // (D12, the OTHER half) The same honest FULL build, on a manifest whose PLAN has a gap (this fixture's synthetic
   // seed trips the correctness gate). Everything the queue asked for is filed, so the build verdict is ✅ — and the
@@ -4500,12 +4500,12 @@ check("ENG-94975 F3: the depth-2 placement row really GATES — a grandchild sav
    only in `resolveChildPageVk`; everywhere else an absent entry fell through `pageOpsOf` → `[]` and reported
    ❌ MISSING — "you built it wrong" for a page the verifier never fetched. ---- */
 const pgOnlyMain = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain }, ...U1_EVIDENCE });
-const pgChildKeyF2 = pgUnitKeys.find((k) => /^child:C1/.test(k));
+const pgChildKeyF2 = pgUnitKeys.find((k) => k.startsWith("child:C1"));
 check("ENG-94975 F2: an OMITTED `--built.pages` entry for a FOLDED sub-page is ⚠ unverified on every row that reads its components (form page + counts) — never ❌ MISSING, which accuses the executor of a build defect it has no evidence of",
   () => pgOnlyMain.pages["child:G1"].missing === 0 && pgOnlyMain.pages["child:G1"].unverified > 0
   && pgOnlyMain.pages[pgChildKeyF2].missing === 0 && pgOnlyMain.pages[pgChildKeyF2].unverified > 0
   && pgOnlyMain.complete === false                                   // still blocks exit 0 — softer diagnosis, same gate
-  && new RegExp(`no .--built\\.pages\\["${pgChildKeyF2}"\\]. entry`).test(pgOnlyMain.markdown),
+  && new RegExp(String.raw`no .--built\.pages\["${pgChildKeyF2}"\]. entry`).test(pgOnlyMain.markdown),
   () => ({ g1: pgOnlyMain.pages["child:G1"], c1: pgOnlyMain.pages[pgChildKeyF2] }));
 const pgG1False = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:G1": false }, ...U1_EVIDENCE });
 const pgG1Empty = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:G1": { viewConfig: { items: [] } } }, ...U1_EVIDENCE });
@@ -4669,7 +4669,7 @@ const p3Units = pageUnits(p3Run, p3Opts);
 const p3Rows = p3Groups.flatMap((g) => g.rows);
 // The FOLDED sub-pages, deduped by final page key (the diamond reaches the same physical child along two paths).
 const p3Folded = new Map();
-const p3Walk = (nd) => { for (const c of nd.childPages || []) { if (c.spec && c.pageKey && !p3Folded.has(c.pageKey)) p3Folded.set(c.pageKey, c); p3Walk(c); } };
+const p3Walk = (nd) => { for (const c of nd.childPages || []) { if (c.spec && c.pageKey && !p3Folded.has(c.pageKey)) { p3Folded.set(c.pageKey, c); } p3Walk(c); } };
 p3Walk(p3Run);
 // What D2's rule says each of them should be built on — computed from the CHILD's own numbers, independently of
 // anything `subPageOpts` did.
@@ -4687,14 +4687,14 @@ check("ENG-94975 P3 (D3, EXPECTED side): each sub-page's `template` row expects 
   () => ({ expected: [...p3Expected], got: p3Rows.filter((r) => r.vk?.type === "template").map((r) => ({ k: r.pageKey, exp: r.vk.exp })),
     units: p3Units.pages.map((p) => ({ k: p.key, t: p.expectedTemplate })) }));
 check("ENG-94975 P3 (D3, EXPECTED side): with a SECTION named in the plan, the section-scoped deliverables stay on `main` — no `<childKey> · List page` group, no `List page →` row and no `Navigable section registered` row under any sub-page (all three ARE emitted for main, so the absence is the override's doing)",
-  !p3Groups.some((g) => g.pageKey !== "main" && / · List page$/.test(g.title))
-  && !p3Rows.some((r) => r.pageKey !== "main" && (SECTION_RE.test(r.label) || /^List page →/.test(r.label) || /^List columns$/.test(r.label)))
+  !p3Groups.some((g) => g.pageKey !== "main" && g.title.endsWith(" · List page"))
+  && !p3Rows.some((r) => r.pageKey !== "main" && (SECTION_RE.test(r.label) || r.label.startsWith("List page →") || r.label === "List columns"))
   // positive controls on the same run — the rows exist, they are just page-scoped
-  && p3Groups.some((g) => g.pageKey === "main" && /List page$/.test(g.title))
+  && p3Groups.some((g) => g.pageKey === "main" && g.title.endsWith("List page"))
   && p3Rows.some((r) => r.pageKey === "main" && SECTION_RE.test(r.label))
-  && p3Rows.some((r) => r.pageKey === "main" && /^List page → ListPageV3/.test(r.label)),
+  && p3Rows.some((r) => r.pageKey === "main" && r.label.startsWith("List page → ListPageV3")),
   () => ({ groups: p3Groups.map((g) => ({ k: g.pageKey, t: g.title })),
-    leaked: p3Rows.filter((r) => r.pageKey !== "main" && (SECTION_RE.test(r.label) || /^List page/.test(r.label))).map((r) => ({ k: r.pageKey, l: r.label.slice(0, 80) })) }));
+    leaked: p3Rows.filter((r) => r.pageKey !== "main" && (SECTION_RE.test(r.label) || r.label.startsWith("List page"))).map((r) => ({ k: r.pageKey, l: r.label.slice(0, 80) })) }));
 
 /* ---- P4 — the `--units` payload CONTENT. The existing `--units` checks assert key sets, build order, evidence
    ids and CLI/library parity, and NOTHING about `expect`: making `pageExpect` return all zeros and an empty
@@ -4735,7 +4735,7 @@ check("ENG-94975 P4 --units content: `expect` agrees with the `vk`s of that page
 // `expectedTemplate` is the SCHEMA NAME (D2), and it must be the one D2's rule derives from THIS child's numbers —
 // not a choice token, not the parent's template, and absent entirely when the rule derives no choice.
 const pgFolded = new Map();
-const pgWalk = (nd) => { for (const c of nd.childPages || []) { if (c.spec && c.pageKey && !pgFolded.has(c.pageKey)) pgFolded.set(c.pageKey, c); pgWalk(c); } };
+const pgWalk = (nd) => { for (const c of nd.childPages || []) { if (c.spec && c.pageKey && !pgFolded.has(c.pageKey)) { pgFolded.set(c.pageKey, c); } pgWalk(c); } };
 pgWalk(pgRun);
 check("ENG-94975 P4 --units content: a folded child's `expectedTemplate` is the SCHEMA NAME the D2 mapping gives for ITS OWN `childTemplateChoice` — and the unfolded child publishes none at all",
   pgFolded.size === 2
@@ -4897,7 +4897,7 @@ const e1Absent = renderVerify(e1Run, e1Opts, e1Payload({ [E1_MINI_KEY]: undefine
 check("ENG-94975 E1: the mini row keeps D6's TRI-STATE, same as every other page — `false` (reported absent) is a HARD ❌ MISSING, a fetched-but-empty entry and an OMITTED key are ⚠ unverified, and all three still block exit 0",
   () => /\| ❌ MISSING \|/.test(e1Row(e1False)) && e1False.pages.main.missing === 1
   && /\| ⚠ verify \|/.test(e1Row(e1Empty)) && /yielded NO components/.test(e1Row(e1Empty))
-  && /\| ⚠ verify \|/.test(e1Row(e1Absent)) && new RegExp(`no .--built\\.pages\\["${E1_MINI_KEY}"\\]. entry`).test(e1Row(e1Absent))
+  && /\| ⚠ verify \|/.test(e1Row(e1Absent)) && new RegExp(String.raw`no .--built\.pages\["${E1_MINI_KEY}"\]. entry`).test(e1Row(e1Absent))
   && [e1False, e1Empty, e1Absent].every((v) => v.complete === false),
   () => ({ false: e1Row(e1False).slice(0, 190), empty: e1Row(e1Empty).slice(0, 190), absent: e1Row(e1Absent).slice(0, 190) }));
 const e1StrayTrue = renderVerify(e1Run, e1Opts, e1Payload({ [E1_MINI_KEY]: undefined }, { miniPageBuilt: true }));
@@ -4953,7 +4953,7 @@ try {
   // as an ENOENT stack that hides which assertion it was that could not be satisfied.
   const e2Report = (() => { try { return JSON.parse(fs.readFileSync(e2Json, "utf8")); } catch (e) { return { readError: e.message, pages: {} }; } })();
   const e2Open = Object.entries(e2Report.pages).filter(([, p]) => !p.complete);
-  const e2StderrPages = (e2Run.stderr.match(/\d+ missing \/ \d+ unconfirmed/g) || []).length;
+  const e2StderrPages = (e2Run.stderr.match(/\b\d+ missing \/ \b\d+ unconfirmed/g) || []).length;
   check("ENG-94975 E2 preconditions: the fixture really has MORE than six open pages (else the cap check below is vacuous), and the run is verify-incomplete",
     () => e2Keys.length === E2_N + 1 && e2Open.length === E2_N + 1 && e2Report.complete === false,
     () => ({ keys: e2Keys, open: e2Open.length, report: { complete: e2Report.complete, missing: e2Report.missing, unverified: e2Report.unverified } }));

@@ -3,7 +3,7 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,7 +11,6 @@ import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-fre
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
-import { readdirSync, statSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 let pass = 0, fail = 0;
@@ -223,7 +222,7 @@ check("parkedKeys: a frozen persisted counter cannot keep a unit alive forever �
 const parents = { "child:Leaf": "child:Mid", "child:Mid": "main", main: null, "child:Other": "main" };
 const exact = wf.blockedByParked(["child:Leaf"], parents, [{ key: "miniPageWired", pages: ["mini:M"] }]);
 check("blockedByParked: with the parent edge, a park blocks its ANCESTORS",
-  exact.independence === "exact" && [...exact.blocked].sort().join(",") === "child:Mid,main");
+  exact.independence === "exact" && [...exact.blocked].sort((a, b) => a.localeCompare(b)).join(",") === "child:Mid,main");
 check("blockedByParked: a sibling branch is NOT blocked — that is the point of tracking the edge",
   !exact.blocked.has("child:Other"));
 check("blockedByParked: a reachability key whose rows read the parked page is blocked with it",
@@ -303,8 +302,8 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
       () => src.slice(0, 200));
 
     check(`workflow sandbox: ${name} imports nothing — the host supplies args/log/phase/agent/parallel and no module loader`,
-      !/^\s*import\s+/m.test(src) && !/\brequire\s*\(/.test(src),
-      () => (src.match(/^\s*(?:import\s+|.*require\s*\().*$/m) || ["?"])[0]);
+      !/^[ \t]*import\s+/m.test(src) && !/\brequire\s*\(/.test(src),
+      () => src.split("\n").find((l) => /^[ \t]*import\s+/.test(l) || /\brequire\s*\(/.test(l)) || "?");
   }
 }
 

@@ -1416,7 +1416,7 @@ export function unresolvedChildGroups(pageKey, c) {
       label: `Child page for \`${esc(c.entity)}\` — opened by detail "${esc(c.via)}". Its Classic source was NOT folded into this plan, so no deliverable of it is machine-derivable: confirm on-stand what was built for it.`,
       vk: { type: "childpage" },
     },
-    evidenceRow(`${pageKey}#childpage`, `Child page \`${esc(c.entity)}\` — evidence of what was actually built. Nothing about this page is derivable from the plan, so the structural row above can only ask whether the key returned ANY component. File the record naming the reference page and the components you built (\`${EVIDENCE_REQUIRES.join("\` + \`")}\`), and have the judge review it — a page nobody described is not a built page.`),
+    evidenceRow(`${pageKey}#childpage`, `Child page \`${esc(c.entity)}\` — evidence of what was actually built. Nothing about this page is derivable from the plan, so the structural row above can only ask whether the key returned ANY component. File the record naming the reference page and the components you built (\`${EVIDENCE_REQUIRES.join("` + `")}\`), and have the judge review it — a page nobody described is not a built page.`),
   ])];
 }
 // Splice in the rows every sub-page attached at fold time. Child pages RECURSIVELY — a grandchild is a
@@ -1923,9 +1923,11 @@ function resolveEvidenceVk(vk, ctx) {
   // Surface both, and say which way to resolve it.
   if (rec === false) {
     const why = ctx.root?.judge?.[vk.id]?.why;
-    const contradiction = judged === true
-      ? ` — NOTE: the judge reviewed it and DISAGREES${why ? ` ("${esc(String(why)).slice(0, 240)}")` : ""}. One of the two is wrong about the built page: re-file the record with what is actually there, or confirm the deliverable really is absent.`
-      : "";
+    let contradiction = "";
+    if (judged === true) {
+      const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
+      contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page: re-file the record with what is actually there, or confirm the deliverable really is absent.`;
+    }
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
@@ -1977,7 +1979,7 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 // `{name, type}` op list every resolver already counts. Nodes carry no `parentName`; that is safe, because no
 // resolver reads one (fields match on `name`, everything else counts `type`).
 function walkViewConfig(node, out = []) {
-  if (Array.isArray(node)) { for (const n of node) walkViewConfig(n, out); return out; }
+  if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
   if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
   return walkViewConfig(node.items, out);
@@ -2057,8 +2059,8 @@ function verifyTally() {
 export function planGaps(result) {
   const g = [];
   if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
-  if (result?.structure && result.structure.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
-  if (result?.coverage && result.coverage.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
+  if (result?.structure?.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
+  if (result?.coverage?.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
   return g;
 }
 function verifyVerdict(missing, unverified) {

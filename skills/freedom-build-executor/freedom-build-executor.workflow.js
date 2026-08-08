@@ -56,7 +56,7 @@ function normalizeArgs(a) {
   if (typeof a === 'string') {
     const s = a.trim()
     if (!s) return {}
-    if (s[0] === '{') {
+    if (s.startsWith('{')) {
       try {
         const parsed = JSON.parse(s)
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
@@ -81,8 +81,13 @@ const input = normalizeArgs(args)
 // `import.meta`, which is a parse-time error in a host that wraps this body in a function.)
 function resolveEngineCli(a) {
   const explicit = typeof a.engine === 'string' ? a.engine.trim() : ''
-  if (explicit) return explicit.endsWith('.mjs') ? explicit : `${explicit.replace(/[/\\]+$/, '')}/migrate.mjs`
-  const self = typeof __filename === 'string' ? __filename.replace(/\\/g, '/') : ''
+  if (explicit) {
+    if (explicit.endsWith('.mjs')) return explicit
+    let base = explicit
+    while (base.endsWith('/') || base.endsWith('\\')) base = base.slice(0, -1)
+    return `${base}/migrate.mjs`
+  }
+  const self = typeof __filename === 'string' ? __filename.replaceAll('\\', '/') : ''
   const at = self.lastIndexOf('/freedom-build-executor/')
   return at > 0 ? `${self.slice(0, at)}/classic-to-freedom-migration/engine/migrate.mjs` : ''
 }
@@ -108,10 +113,10 @@ if (missingArgs.length) {
 // engine path (it ships inside `…/skills/classic-to-freedom-migration/engine/`). Both yield the SKILLS ROOT, and
 // both references hang off it at fixed positions.
 function resolveSkillsRoot(engineCli) {
-  const self = typeof __filename === 'string' ? __filename.replace(/\\/g, '/') : ''
+  const self = typeof __filename === 'string' ? __filename.replaceAll('\\', '/') : ''
   const atSelf = self.lastIndexOf('/freedom-build-executor/')
   if (atSelf > 0) return self.slice(0, atSelf)
-  const eng = (engineCli || '').replace(/\\/g, '/')
+  const eng = (engineCli || '').replaceAll('\\', '/')
   const atEng = eng.lastIndexOf('/classic-to-freedom-migration/')
   return atEng > 0 ? eng.slice(0, atEng) : ''
 }
@@ -563,14 +568,19 @@ const parkedKeys = (roundOf, localRounds, keys) =>
 // and nothing else; without it, the honest fallback is that it blocks `main` only — and the
 // return says `independence: 'approximated'` rather than claiming branches were kept independent.
 // Takes park KEYS, not park records.
+// Walk `start`'s ancestor chain via the parent edge and add each into `blocked` (cycle-guarded). Pulled out of
+// `blockedByParked` so that function stays under the cognitive-complexity limit — behaviour is unchanged.
+function addAncestors(start, parents, blocked) {
+  let cur = parents[start]
+  const guard = new Set([start])
+  while (cur && !guard.has(cur)) { blocked.add(cur); guard.add(cur); cur = parents[cur] }
+}
 function blockedByParked(parkedKeyList, parents, reachability) {
   const exact = !!parents && Object.keys(parents).length > 0
   const blocked = new Set()
   for (const p of parkedKeyList) {
     if (exact) {
-      let cur = parents[p]
-      const guard = new Set([p])
-      while (cur && !guard.has(cur)) { blocked.add(cur); guard.add(cur); cur = parents[cur] }
+      addAncestors(p, parents, blocked)
     } else {
       blocked.add('main')
     }
@@ -592,17 +602,18 @@ function blockedByParked(parkedKeyList, parents, reachability) {
 //
 // `ctx` carries the two run-specific strings the messages name (`planFile`, `unitsCmd`) so this stays pure.
 function approvalStop(app, planVersion, ctx = {}) {
-  const approved = ((app && app.version) || '').trim()
+  const approved = (app?.version || '').trim()
   const planned = (planVersion || '').trim()
   const planFile = ctx.planFile || 'the approved plan file'
-  if (!app || !app.found) {
+  if (!app?.found) {
     return { stopped: 'approval-missing', next: 'present the approved plan to the user, obtain explicit approval, record it in decisions.md naming the plan VERSION the plan file shows under `**Plan version:**` (decisions.md is required at both scopes — a single-section folder gets one holding just that entry), then re-run — nothing has been built' }
   }
   if (!approved) {
     // Includes every approval RECORDED BEFORE the engine published versions at all. It stays a stop — an
     // approval that names no plan authorises no plan — but it is now clearable: re-approve, and record the
     // version the plan file now shows.
-    return { stopped: 'approval-unversioned', next: `the recorded approval names no plan version, so it authorises no particular plan (an approval written before the engine published versions reads this way) — present the current plan, obtain approval for THAT version, and record the \`**Plan version:**\` string from ${planFile}${planned ? ` (this run's is \`${planned}\`)` : ''} in the decisions.md entry, then re-run` }
+    const versionHint = planned ? ` (this run's is \`${planned}\`)` : ''
+    return { stopped: 'approval-unversioned', next: `the recorded approval names no plan version, so it authorises no particular plan (an approval written before the engine published versions reads this way) — present the current plan, obtain approval for THAT version, and record the \`**Plan version:**\` string from ${planFile}${versionHint} in the decisions.md entry, then re-run` }
   }
   if (!planned) {
     return { stopped: 'plan-version-unknown', next: `the recorded approval names plan version ${approved}, but \`--units\` published no \`planVersion\` for this manifest — run \`${ctx.unitsCmd || 'migrate.mjs <manifest> --units'}\` by hand and check that the engine is the one that publishes it; nothing has been built` }
@@ -669,10 +680,12 @@ function carryBlock(carry) {
   const j = (v) => JSON.stringify(v)
   const out = []
   if (carry.parked.length) {
-    out.push(`\nPARKED — persist each under \`units\`/\`nonPageUnits\` as \`parked: true\` with its \`parkedWhy\` VERBATIM, and do NOT increment their counters:\n${carry.parked.map((p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${p.parkedWhy}`).join('\n')}`)
+    const parkedLines = carry.parked.map((p) => `- \`${p.key}\` (${p.rounds} round(s)) — ${p.parkedWhy}`).join('\n')
+    out.push(`\nPARKED — persist each under \`units\`/\`nonPageUnits\` as \`parked: true\` with its \`parkedWhy\` VERBATIM, and do NOT increment their counters:\n${parkedLines}`)
   }
   if (Object.keys(carry.pageSchemas).length) {
-    out.push(`\nFREEDOM SCHEMAS LEARNED SO FAR — persist each as \`units["<key>"].schemaName\` (this is the only record of them; \`--units\` cannot publish it):\n${Object.entries(carry.pageSchemas).map(([k, s]) => `- \`${k}\` → \`${s}\``).join('\n')}`)
+    const schemaLines = Object.entries(carry.pageSchemas).map(([k, s]) => `- \`${k}\` → \`${s}\``).join('\n')
+    out.push(`\nFREEDOM SCHEMAS LEARNED SO FAR — persist each as \`units["<key>"].schemaName\` (this is the only record of them; \`--units\` cannot publish it):\n${schemaLines}`)
   }
   if (carry.proposals.length || carry.blocked.length || carry.discrepancies.length) {
     out.push(`\nALSO PERSIST these lists, verbatim — each already INCLUDES whatever the file held when this run read it, so write them as given:\n- \`proposals\`: ${j(carry.proposals)}\n- \`blocked\`: ${j(carry.blocked)}\n- \`discrepancies\`: ${j(carry.discrepancies)}\nA plan deviation, a blocker or a builder-vs-stand disagreement that lives only in a process is lost to the first usage limit; these are the run's answer to the caller.`)
@@ -774,7 +787,7 @@ if ((state.planGaps || []).length) {
 proposals = (state.proposals || []).map((p) => ({ applied: false, ...p }))
 blockedItems = [...(state.blocked || [])]
 discrepancies = [...(state.discrepancies || [])]
-pageSchemas = { ...(state.pageSchemas || {}) }
+pageSchemas = { ...state.pageSchemas }
 
 let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [])
 // Units a park has taken out of reach — an ancestor of a parked page, or a reachability key whose
@@ -794,7 +807,7 @@ const localRounds = {}
 const unknownSchemaSeen = new Set()
 const unknownSchemaNow = () => [...new Set([...unknownSchemaSeen, ...(state.unitKeys || [])])]
   .filter((k) => !pageSchemas[k])
-  .sort()
+  .sort((a, b) => a.localeCompare(b))
 const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
   (u.kind === 'page' ? isOpenPage(state.verify, u.key) : isOpenReach(u, state.reachabilityState, state.verify)))
 
@@ -836,8 +849,8 @@ function applyParks() {
   }
   if (!fresh.length) return []
   parked = [...parked, ...fresh]
-  for (const p of fresh) parkedSet.add(p.key)
-  ;({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability))
+  for (const p of fresh) { parkedSet.add(p.key) }
+  ({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability))
   return fresh
 }
 
@@ -858,8 +871,9 @@ async function persistPending(why) {
   // Nothing decided since the last write ⇒ no agent call. The guard used to look at PARKS ONLY, which is why
   // a round that produced proposals but no park wrote nothing at all.
   if (!unpersistedParks.length && carryNowFp === carryPersisted) return
+  const whyNote = why ? ` (${why})` : ''
   const persisted = await agent(
-    `You are the persistence step of a Freedom build run${why ? ` (${why})` : ''}. One job: write what this run decided into ${QUEUE_FILE} so nothing is lost.
+    `You are the persistence step of a Freedom build run${whyNote}. One job: write what this run decided into ${QUEUE_FILE} so nothing is lost.
 
 ${RULES}
 ${READ_ONLY_RULE} (the queue file is the one thing you write)
@@ -942,7 +956,7 @@ if (state.verify?.complete === true || !openNow().length) {
 // unjudged id already in the built file: a preflight record that no later phase re-files would
 // otherwise never be judged, and an unjudged record keeps its page open forever.
 const pendingJudgeIds = new Set()
-const preflightItems = (state.preflightItems || []).filter((p) => p && p.id)
+const preflightItems = (state.preflightItems || []).filter((p) => p?.id)
 const unresolvedPreflight = []
 if (preflightItems.length) {
   phase('Preflight')
@@ -1016,9 +1030,14 @@ function buildPrompt(unit, st, roundNo) {
     ? `\nTHIS IS REPAIR ROUND ${roundNo} of ${MAX_ROUNDS} for this unit. The gate already ran and these rows are NOT closed — as the engine published them in the machine verdict:\n${shortRows || '  - (the verdict named no open row for this unit; re-read ' + VERIFY_TABLE + ')'}\nFix exactly those. The status text already says WHICH repair each needs: a field absent BY NAME, a component type absent, a wrong package, or a record filed but not judged. Do not rebuild what is already ✅.\n`
     : ''
   const known = pageSchemas[unit.key]
-  const kindBlock = unit.kind === 'reach'
-    ? `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}. Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
-    : `YOUR UNIT is the page \`${unit.key}\`.${known ? ` The queue records it as the Freedom schema \`${known}\` — work on THAT page.` : ' No Freedom schema is recorded for this key yet, so nothing downstream can fetch it. Resolving it is part of your job, and it has a WRITTEN PROCEDURE — read "Resolving a page key to an already-existing Freedom schema" in the per-page recipe named below and follow it (\`list-pages\` by package or app code, matched on \`schema-name\` / \`packageName\` / \`parentSchemaName\`, with an explicit answer for both no match and several matches). Do not guess a schema name.'} ${REF_BLOCK}
+  let kindBlock
+  if (unit.kind === 'reach') {
+    kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}. Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
+  } else {
+    const schemaNote = known
+      ? ` The queue records it as the Freedom schema \`${known}\` — work on THAT page.`
+      : ' No Freedom schema is recorded for this key yet, so nothing downstream can fetch it. Resolving it is part of your job, and it has a WRITTEN PROCEDURE — read "Resolving a page key to an already-existing Freedom schema" in the per-page recipe named below and follow it (`list-pages` by package or app code, matched on `schema-name` / `packageName` / `parentSchemaName`, with an explicit answer for both no match and several matches). Do not guess a schema name.'
+    kindBlock = `YOUR UNIT is the page \`${unit.key}\`.${schemaNote} ${REF_BLOCK}
 
 Get your inputs from the engine, not from memory:
 - \`${CLI_UNITS}\` → this page's \`expectedTemplate\`, \`targetPackage\` and \`expect\` (\`fields\`, \`fieldNames\`, \`tabs\`, \`details\`, \`images\`). \`expect.fieldNames\` is load-bearing: the gate matches fields BY ELEMENT NAME. Those names are the bound COLUMN names, with the engine's own \`_2\` / \`_3\` suffixes wherever several Classic items bind the SAME column — so name each element exactly as \`fieldNames\` gives it, including the suffixed variants, instead of picking a nicer name.
@@ -1026,6 +1045,7 @@ Get your inputs from the engine, not from memory:
 - the approved plan's block for this page (\`### Child page mappings\` / \`### Typed page mappings\` / \`### Add mini-page mapping\`).
 
 RETURN THE SCHEMA NAME. \`schemaName\` in your return is the FREEDOM schema this page key now resolves to — the page a later \`get-page\` must be handed. Return it whether you created the page or found it already there. \`--units\` cannot publish it (its \`schema\` field is the CLASSIC source, and it is \`null\` for \`main\` and for an unfolded child) and the queue file is its only home. Omit it and nothing can verify this unit, in this session or any later one.`
+  }
 
   return `You are a BUILD agent of a Freedom build run. You own ONE unit and nothing else.
 
@@ -1106,8 +1126,9 @@ function verifierSchemaTable() {
   const known = (state.unitKeys || []).filter((k) => pageSchemas[k])
   const unknown = (state.unitKeys || []).filter((k) => !pageSchemas[k])
   const lines = known.map((k) => `- \`${k}\` → get-page \`${pageSchemas[k]}\``).join('\n') || '- (none recorded yet)'
+  const unknownKeys = unknown.map((k) => `\`${k}\``).join(', ')
   const unknownLine = unknown.length
-    ? `\nNO FREEDOM SCHEMA IS RECORDED FOR: ${unknown.map((k) => `\`${k}\``).join(', ')}. Do NOT guess a schema name and do NOT write \`false\` for these — \`false\` means "checked, genuinely not built", which you have not checked. Write NOTHING for them and return every one in \`unknownSchema\`. That is the explicit "cannot verify, unknown schema" state; the key stays unverified and the unit stays open, which is the truth.`
+    ? `\nNO FREEDOM SCHEMA IS RECORDED FOR: ${unknownKeys}. Do NOT guess a schema name and do NOT write \`false\` for these — \`false\` means "checked, genuinely not built", which you have not checked. Write NOTHING for them and return every one in \`unknownSchema\`. That is the explicit "cannot verify, unknown schema" state; the key stays unverified and the unit stays open, which is the truth.`
     : ''
   return `PAGE KEY → FREEDOM SCHEMA (the queue's record; a key is a ROLE, never a schema name, so this table is the only way to know what to fetch):\n${lines}${unknownLine}`
 }
@@ -1120,15 +1141,17 @@ function claimsBlock(claims) {
   if (!claims.length) return 'NO BUILD AGENT REPORTED THIS ROUND — there is no claim to compare against; file only what the stand shows.'
   const line = (c) => {
     if (c.noAnswer) return `- \`${c.unit}\` — **the build agent returned NOTHING**. This is not "it claimed nothing built": nobody answered for this unit. Fetch it like any other and file what you find; do not treat an absent claim as a claim of absence.`
+    const refPage = c.referencePage ? `\`${c.referencePage}\`` : '**none named**'
     const bits = [
       c.schemaName ? `schema \`${c.schemaName}\`` : 'no schema named',
       c.packageName ? `package \`${c.packageName}\`` : null,
       c.template ? `template \`${c.template}\`` : null,
       c.reboundFrom ? `re-bound from \`${c.reboundFrom}\`` : null,
       `guidelines review ${c.guidelinesRun ? 'RUN' : 'NOT reported as run'}`,
-      `reference page for the style diff: ${c.referencePage ? `\`${c.referencePage}\`` : '**none named**'}`,
+      `reference page for the style diff: ${refPage}`,
     ].filter(Boolean)
-    return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${c.claimedBuilt.length ? c.claimedBuilt.map((x) => `\`${x}\``).join(', ') : '(none listed)'}`
+    const claimed = c.claimedBuilt.length ? c.claimedBuilt.map((x) => `\`${x}\``).join(', ') : '(none listed)'
+    return `- \`${c.unit}\` — ${bits.join(' · ')}\n  claimed components: ${claimed}`
   }
   return `WHAT THE BUILD AGENTS CLAIMED THIS ROUND — a CLAIM, never evidence. Your job includes checking it against what \`get-page\` actually returns:\n${claims.map(line).join('\n')}\n\nA builder that named NO reference page has not evidenced a style diff: a \`#quality-gates\` record cannot invent one, so file what the builder named or leave the record unfiled and say so. A claimed component the page does not carry, and a component on the page nobody claimed, are BOTH \`discrepancies\`.`
 }
@@ -1317,7 +1340,7 @@ while (true) {
   }
   markParksPersisted()
   state = next
-  pageSchemas = { ...(state.pageSchemas || {}), ...pageSchemas }   // this process is authoritative for what it learned
+  pageSchemas = { ...state.pageSchemas, ...pageSchemas }   // this process is authoritative for what it learned
   // Reconcile was handed the same carry block and wrote it, so both fingerprints are current again. Taken AFTER
   // the merge above: the merge can reorder the keys without changing the content, and a fingerprint captured
   // before it would read as "something new to write" and buy an extra agent call every single round.

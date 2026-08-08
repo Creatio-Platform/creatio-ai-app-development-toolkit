@@ -498,7 +498,7 @@ export function checklistOpts(manifest, opts = {}) {
 // grandchild — the gate did not fail, it ceased to exist, and `--units` published `targetPackage: null`.
 function subPageOpts(foldCtx, pageKey, formTemplate, flags = {}) {
   return {
-    ...(foldCtx.checklistOpts || {}),
+    ...foldCtx.checklistOpts,
     targetPackage: foldCtx.targetPackage,
     pageKey,
     template: formTemplate || null,
@@ -517,7 +517,7 @@ function subPageOpts(foldCtx, pageKey, formTemplate, flags = {}) {
 // (`assignPageKeys`, designspec.mjs), where every node in the tree is visible.
 function childPageKeys(childPages) {
   const seen = new Set(), dup = new Set();
-  for (const c of childPages) { if (seen.has(c.entity)) dup.add(c.entity); seen.add(c.entity); }
+  for (const c of childPages) { if (seen.has(c.entity)) { dup.add(c.entity); } seen.add(c.entity); }
   return (c) => `child:${c.entity}` + (dup.has(c.entity) ? `@${c.via}` : "");
 }
 // Publish a page node. `pageKeyBase` is the provisional key, `pageKeyAlt` the disambiguator the root walk appends
@@ -1086,7 +1086,9 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
     // Object key order is NOT a plan input, so keys are sorted — two manifests differing only in key order must
     // not read as two different plans.
     h.update("\u0001O");
-    for (const k of Object.keys(value).sort()) {
+    // Code-unit order (matches the default `.sort()`), NOT `localeCompare` — the key order here canonicalizes a
+    // hash and must be byte-for-byte reproducible across machines/locales, which locale collation is not.
+    for (const k of Object.keys(value).sort((a, b) => { if (a < b) return -1; if (a > b) return 1; return 0; })) {
       h.update(k);
       h.update("\u0001");
       feedPlanVersion(h, value[k], k, readBody, state, depth + 1);
@@ -1376,7 +1378,10 @@ function builtPayloadIssue(built) {
   if (!built || typeof built !== "object" || Array.isArray(built)) return "is not a JSON object";
   if (!built.pages || typeof built.pages !== "object" || Array.isArray(built.pages)) return "has no `pages` object — the flat single-page shape is no longer accepted";
   const bad = Object.keys(built.pages).filter((k) => !validBuiltPageEntry(built.pages[k]));
-  if (bad.length) return `has ${bad.length} page entr${bad.length === 1 ? "y" : "ies"} that ${bad.length === 1 ? "is" : "are"} neither \`false\` nor an object carrying \`viewConfig\`: ${bad.slice(0, 5).join(", ")}${bad.length > 5 ? `, …and ${bad.length - 5} more` : ""}`;
+  if (bad.length) {
+    const more = bad.length > 5 ? `, …and ${bad.length - 5} more` : "";
+    return `has ${bad.length} page entr${bad.length === 1 ? "y" : "ies"} that ${bad.length === 1 ? "is" : "are"} neither \`false\` nor an object carrying \`viewConfig\`: ${bad.slice(0, 5).join(", ")}${more}`;
+  }
   return provenanceIssue(built.pages);
 }
 
@@ -1429,7 +1434,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = ["--out", "--built", "--verify-json"];
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -1437,8 +1442,10 @@ function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
   const next = argv[i + 1];
-  if (next === undefined || next.startsWith("--"))
-    onBad(`\`${flag}\` needs a file path (e.g. \`${example}\`) — got ${next === undefined ? "no argument" : `the flag '${next}'`}; nothing was written`);
+  if (next === undefined || next.startsWith("--")) {
+    const got = next === undefined ? "no argument" : `the flag '${next}'`;
+    onBad(`\`${flag}\` needs a file path (e.g. \`${example}\`) — got ${got}; nothing was written`);
+  }
   return next;
 }
 
@@ -1491,7 +1498,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifyJsonFile = valueFlagArg(argv, "--verify-json", "--verify-json verify.json", fail);
   if (verifyJsonFile && !verifyMode)
     fail("`--verify-json <file>` only applies to `--verify` — it writes THAT run's machine-readable verdict. Add `--verify --built <file>`, or drop `--verify-json`.");
-  const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(argv[i - 1])); // positional manifest arg ('-' = stdin)
+  const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
   // instead (also the `--out manifest.json` typo, where the only path was consumed by --out, lands here).
@@ -1604,7 +1611,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       .map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
     // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
     // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
-    const overflow = pageGaps.length > 6 ? ` | …and ${pageGaps.length - 6} more (${verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict"})` : "";
+    let overflow = "";
+    if (pageGaps.length > 6) {
+      const where = verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict";
+      overflow = ` | …and ${pageGaps.length - 6} more (${where})`;
+    }
     process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s). ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: build the missing pieces / file the on-stand evidence, then re-verify.\n`);
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);

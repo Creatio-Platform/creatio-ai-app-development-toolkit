@@ -498,7 +498,7 @@ export function mapToFreedom(eff, opts = {}) {
 // A tab caption MUST be `#ResourceString(Key)#`; `$Resources.Strings.*` does not render on a tab — the same rule
 // `./references/classic-to-freedom-mapping.md` states for tab / card-toggle-panel captions.
 const TAB_COMPONENT = "crt.TabContainer";
-const tabCaption = (c) => (c && c.key ? `#ResourceString(${c.key})#` : (c && c.binding) || "");
+const tabCaption = (c) => (c?.key ? `#ResourceString(${c.key})#` : c?.binding || "");
 function createContainers(ctx) {
   const { index, caption } = ctx;
   const structural = [];            // tab + tab-grid container inserts (emitted once, only when used)
