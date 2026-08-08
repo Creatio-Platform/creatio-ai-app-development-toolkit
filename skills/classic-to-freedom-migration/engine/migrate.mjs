@@ -23,18 +23,43 @@
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
+// THE PLAN VERSION: `--plan` prints `**Plan version:** \`plan-<hash>\`` in its Overview and `--units` publishes the
+// SAME string as `planVersion` — a deterministic hash over `entity` + the `schemas` bodies + `planMeta` and nothing
+// else (never wall-clock, never random, never a filesystem path; see computePlanVersion for what is NOT covered),
+// so the same manifest always yields the same version. It is what the
+// approval entry in decisions.md names and what the delegated build compares that entry against.
 // `--stubs` = the step-5.1 handoff digest: the ⚠ Imperative logic rows per scope (method, traced trigger, externalRef,
 // line span) plus the standard-method names the worklist excluded — the payload a behaviour-analysis run indexes
 // its cards against. Pair it with `manifest.behaviourIndex` to fold that run's answers back into the plan.
-// `--verify --built <file>` = the VERIFIED done-gate: diff the actually-built page (clio get-page ownBodySummary)
-// against expected deliverables; exit 2 if any deliverable is MISSING or unverified.
+// `--units` = the per-page BUILD QUEUE (JSON, honours `--out`): one entry per page key (`main` · `child:<Entity>`
+// · `typed:<Schema>` · `mini:<Schema>`, plus a `@<Via>`/`@<Schema>`/`#n` disambiguator whenever two DISTINCT
+// physical pages would otherwise share a key — read them, never construct one) with its role, source schema,
+// `expectedTemplate`, target package
+// and `expect` counts (including `expect.fieldNames`, the element names the fields check matches on), plus the five
+// reachability keys with `appliesWhen` already decided, the evidence-record ids, the ⚠ Confirm preflight items and a
+// leaf-first `buildOrder`. Run it BEFORE building: it is the only source of the keys `--built` must use — an
+// invented key is silently "not checked", never an error.
+// `--verify --built <file>` = the VERIFIED done-gate: diff the ACTUALLY BUILT pages against expected deliverables.
+// `--built` is a JSON keyed BY PAGE — `{ pages: { "<key from --units>": { viewConfig, packageName,
+// parentSchemaName } | false }, reachability, evidence, judge }` — where `viewConfig` is clio `get-page`'s
+// `bundle.viewConfig` VERBATIM (the MERGED page; the page's own body/ownBodySummary cannot show a
+// template-provided component such as Feed or the DCM bar, so a check fed that source reads ❌ on a correct page).
+// Exit 2 if any deliverable is MISSING or unverified; a payload that is not keyed by page is exit 1.
+// `--verify-json <file>` (with `--verify`) ALSO writes the MACHINE-READABLE verdict — `{ complete, missing,
+// unverified, planGaps, pages: { "<key>": { missing, unverified, complete, openRows: [ { n, deliverable, status,
+// evidence, outcome, id? } ] } } }`. Additive: stdout/`--out` still carry the Markdown table for the human. Read
+// it instead of parsing the table — the table has no per-page counts, and the stderr line shows at most six pages.
+// `planGaps` is D12's other leg: non-empty ⇒ the PLAN is short (not buildable-out-of), independent of `complete`.
 // Prefer inline "body" (get-classic-page-sources writes bodies inline into the manifest) over "file" to avoid path fragility.
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom, STANDARD_CLASSIC_METHODS } from "./mapper.mjs";
-import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS } from "./designspec.mjs";
+import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
+  checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, reuseChildGroups, unresolvedChildGroups,
+  planGaps, pageUnits, verifyReport } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -98,7 +123,12 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `manifest.behaviourIndex` still wins, and `scopeSchema` is what lets a `"<schema>::<method>"` key address
     // this scope specifically. Neither needs a memo-key entry: `scopeSchema` IS the memo key's `key`, and the
     // inherited map is one per run, so two folds of the same key always see the same answers.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, ...extra });
+    // `runTargetPackage` is the RUN-level target package (D5 `placement`), threaded explicitly and separately from
+    // the fold's `checklistOpts`: a nested run rebuilds `checklistOpts` from the CHILD bundle's manifest, which
+    // carries no `targetPackage`, so at depth >= 2 the placement row silently vanished and `--units` published
+    // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
+    // one run has exactly one target package, so it cannot vary between two folds of the same key).
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -426,39 +456,142 @@ function unmatchedIndexKeys(index, stubIndex) {
   return keys.filter((k) => !seen.has(k));
 }
 
+// planMeta completeness — the `--plan` artifact is INCOMPLETE while any required Overview/Main-scope value is
+// still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
+// its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
+// keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
+const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
+// on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
+// must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
+// check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
+// answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
+// absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
+// resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
+const SIGNAL_KEYS = ["dcm", "processes", "printables"];
+// ONE opts object for every row-rendering entry point (`--checklist`, `--verify`, the plan/spec renderers) and
+// for the sub-page folds. `--checklist` and `--verify` used to build their own, and the verify one was thinner
+// (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agreed only for as long
+// as no row helper read the gap, and the first helper that did would silently render two different row sets.
+// Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
+export function checklistOpts(manifest, opts = {}) {
+  const pm = manifest.planMeta || {};
+  const blank = (v) => v == null || String(v).trim() === "";
+  const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
+  return {
+    template: manifest.template,
+    targetPackage: manifest.targetPackage,
+    planMeta: manifest.planMeta,
+    planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
+    signals,
+    signalsMissing: SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true),
+    isMiniPage: !!opts.isMiniPage,
+    isChildPage: !!opts.isChildPage,
+  };
+}
+// A SUB-page's checklist opts. Deliberately NOT the parent's threaded through: with the parent's planMeta the
+// child's `Form template` row expects the PARENT's template (a mismatch nobody can ever fix), and a truthy
+// `sectionSchema` gives every sub-page its own `Navigable section registered` row and a whole `List page` group.
+// So planMeta is REPLACED, not extended: `formTemplate` is this page's OWN target and a null one emits NO
+// template row at all, `sectionSchema`/`listTemplate` are gone.
+// `targetPackage` comes from the FOLD CONTEXT, not from the spread: at depth >= 2 the spread's copy came from the
+// child bundle's own manifest (which declares none), so the `placement` row simply stopped being emitted for every
+// grandchild — the gate did not fail, it ceased to exist, and `--units` published `targetPackage: null`.
+function subPageOpts(foldCtx, pageKey, formTemplate, flags = {}) {
+  return {
+    ...(foldCtx.checklistOpts || {}),
+    targetPackage: foldCtx.targetPackage,
+    pageKey,
+    template: formTemplate || null,
+    planMeta: formTemplate ? { formTemplate } : {},
+    isChildPage: !!flags.isChildPage,
+    isMiniPage: !!flags.isMiniPage,
+  };
+}
+// `child:<Entity>` — a ROLE key, not a schema name: a root form page has no schema name in the result and a
+// `reuseFreedomPage` child has none at all. Two related lists opening the SAME entity get `@<Via>` so their keys
+// stay distinct in the table; the root splice still collapses them when they resolve to one physical page.
+// This is only the PROVISIONAL (base) key: it can see one sibling list, while the key it produces is a GLOBAL
+// identifier (it keys `--built.pages`, the evidence ids, `--units.pages` and the verify ctx cache). Two DIFFERENT
+// physical child pages under DIFFERENT parents that share an entity name would both land on `child:<Entity>` and
+// one built page would close both pages' rows. The FINAL key is claimed in the root-level walk that also dedupes
+// (`assignPageKeys`, designspec.mjs), where every node in the tree is visible.
+function childPageKeys(childPages) {
+  const seen = new Set(), dup = new Set();
+  for (const c of childPages) { if (seen.has(c.entity)) dup.add(c.entity); seen.add(c.entity); }
+  return (c) => `child:${c.entity}` + (dup.has(c.entity) ? `@${c.via}` : "");
+}
+// Publish a page node. `pageKeyBase` is the provisional key, `pageKeyAlt` the disambiguator the root walk appends
+// when a DIFFERENT physical page already claimed that base, `pageDedupeId` the physical identity (the same page
+// reached twice — a diamond — must collapse to ONE key), and `pageRowsFor` the row factory the root walk re-runs
+// under the final key. Rows are also rendered EAGERLY under the base key, so `!node.pageRows` keeps meaning
+// "this node publishes no page key at all" for the callers that test it.
+function publishPage(node, baseKey, alt, dedupeId, rowsFor) {
+  node.pageKeyBase = baseKey;
+  node.pageKeyAlt = alt || null;
+  node.pageDedupeId = dedupeId;
+  node.pageRowsFor = rowsFor;
+  node.pageKey = baseKey;
+  node.pageRows = rowsFor(baseKey);
+}
 // Fold each child page (recursive sub-migration) via foldSubPage, writing the mapping onto each childPages entry.
 // isChildPage → child-scoped rendering (few-fields modal nudge, no section-level Print/Process). Extracted for CC.
 function foldChildPages(childPages, childSchemas, foldCtx) {
-  for (const c of childPages) {
-    // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
-    // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
-    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) continue;
-    const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
-    if (!key) continue;
-    const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
-    if (f.status === "cycle") { c.cyclic = true; continue; }   // mapped higher on this branch
-    if (f.status === "error") { c.specError = f.error; continue; } // malformed child manifest — keep the listed row
-    const res = f.res;
-    c.spec = res.designSpec;
-    c.mappedEntity = res.entity;
-    c.resolvedFrom = key;
-    // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
-    // agree): < 15 flat inputs → Mini page; otherwise (>= 15, or tabs/related-lists) → the Grid page template.
-    c.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
-    c.hasTabs = (res.changeSet?.viewConfigDiff || []).some((o) => o?.values?.type === "crt.Tab");
-    c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-    c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
-    c.grandChildren = c.childPages.length;
-    c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
-    c.childReasons = res.gate?.reasons || [];
-    c.childStructIncomplete = !!(res.structure && !res.structure.complete);
-    c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
-    c.treeCyclic = !!res.treeCyclic;
-    c.stubScope = stubScope("child page", key, res.changeSet, res.changeSet?.standardMethodsFiltered);
-    // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
-    // above as `c.stubScope` — so carrying the whole array would list every child page twice.
-    c.childStubScopes = (res.stubIndex || []).slice(1);
+  const keyOf = childPageKeys(childPages);
+  for (const c of childPages) foldOneChildPage(c, keyOf(c), childSchemas, foldCtx);
+}
+// A child that is NOT rebuilt here still publishes its page key when it owes a deliverable — with a GATED row.
+// A reuse child owes the RelatedPage binding; a child whose Classic page exists (or was never verified) owes the
+// whole page. A child verified to have NO separate page, one already mapped higher on this branch (cycle) and one
+// whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at all and
+// keep only the parent's identity row — a gated row there would be a permanent false red, and the two latter are
+// PLAN-completeness failures the structure gate already blocks on (a different class from "my build is missing").
+function publishUnfoldedChild(c, pageKey) {
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
+    publishPage(c, pageKey, c.reuseFreedomPage, `reuse::${c.reuseFreedomPage}`, (k) => reuseChildGroups(k, c));
+    return;
   }
+  if (!childPageIssue(c)) return;
+  // Nothing was folded, so the only physical identity available is the base key itself — two unresolved children
+  // that reach the SAME base key stay one entry, exactly as before. The disambiguator is the detail it opens from.
+  publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
+}
+function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
+  // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
+  // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
+  const key = [c.editPage, c.entity, c.entity && c.entity + "Page"].find((k) => k && childSchemas[k]);
+  if (!key) return publishUnfoldedChild(c, pageKey);
+  const f = foldSubPage(key, childSchemas, foldCtx, { isChildPage: true });
+  if (f.status === "cycle") { c.cyclic = true; return; }   // mapped higher on this branch
+  if (f.status === "error") { c.specError = f.error; return; } // malformed child manifest — keep the listed row
+  const res = f.res;
+  c.spec = res.designSpec;
+  c.mappedEntity = res.entity;
+  c.resolvedFrom = key;
+  // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
+  // agree): < 15 flat inputs → Mini page; otherwise (>= 15, or tabs/related-lists) → the Grid page template.
+  c.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
+  c.hasTabs = (res.changeSet?.viewConfigDiff || []).some((o) => o?.values?.type === "crt.Tab");
+  c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+  c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
+  c.grandChildren = c.childPages.length;
+  c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
+  c.childReasons = res.gate?.reasons || [];
+  c.childStructIncomplete = !!(res.structure && !res.structure.complete);
+  c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
+  c.treeCyclic = !!res.treeCyclic;
+  c.stubScope = stubScope("child page", key, res.changeSet, res.changeSet?.standardMethodsFiltered);
+  // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
+  // above as `c.stubScope` — so carrying the whole array would list every child page twice.
+  c.childStubScopes = (res.stubIndex || []).slice(1);
+  // This child's OWN checklist rows, derived from ITS ChangeSet — the whole point of the page-scoped gate: the
+  // parent's row set never sees this page's counts, and this page's counts can never be closed by the parent's
+  // components. Its expected template comes from the SHARED child-template rule, so the row the agent must
+  // satisfy names the very schema the recommendation banner told it to build on. Dedupe on the RESOLVED schema
+  // key: the memo hands the same `res` to every parent referencing this page.
+  const childTpl = CHILD_TEMPLATE_SCHEMA[childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails)] || null;
+  publishPage(c, pageKey, key, `child::${key}`,
+    (k) => checklistGroups(res, subPageOpts(foldCtx, k, childTpl, { isChildPage: true })));
 }
 
 // Fold each typed (per-type) page via foldSubPage. `bindOnly:true` is the only non-fold escape; a cycle is its OWN
@@ -483,6 +616,11 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     // renders its own ⚠ Imperative logic table, so its rows must ride the handoff like a child page's.
     t.stubScope = stubScope("typed page", tkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
     t.childStubScopes = (res.stubIndex || []).slice(1); // drop the nested run's own main-page scope (captured above)
+    // …and its own page-scoped checklist rows. The expected template is whatever the manifest declared for THIS
+    // typed page (there is no per-type template rule to derive one from); with none declared the page emits no
+    // template row rather than one pinned to the parent's template, which a per-type form need not share.
+    publishPage(t, `typed:${t.schema}`, tkey, `typed::${tkey}`,
+      (k) => checklistGroups(res, subPageOpts(foldCtx, k, t.template || null)));
   }
 }
 
@@ -511,6 +649,10 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     miniPage.structIncomplete = !!(res.structure && !res.structure.complete); miniPage.treeCyclic = !!res.treeCyclic;
     miniPage.coverage = res.coverage || null;   // aggregated into the parent's coverage gate
     miniPage.stubScope = stubScope("mini page", mkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
+    // The mini page's own rows. Its template is not a choice — a quick-add shell IS the mini-page template — so it
+    // comes from the same shared mapping the child rule uses, and its layout stops being a single boolean row.
+    publishPage(miniPage, `mini:${miniPage.schema}`, mkey, `mini::${mkey}`,
+      (k) => checklistGroups(res, subPageOpts(foldCtx, k, CHILD_TEMPLATE_SCHEMA.mini, { isMiniPage: true })));
   }
   return miniPage;
 }
@@ -878,6 +1020,91 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
 
 const plainObject = (o) => (o && typeof o === "object" && !Array.isArray(o) ? o : {});
 
+// THE PLAN VERSION — the string an operator records in the decisions.md approval entry, and the string the
+// delegated build compares that entry against. The engine has to publish it, because nothing else can: `plan.md`
+// is ENGINE-WRITTEN (`--plan --out plan.md`, presented verbatim), so a version an agent hand-typed into it would
+// be erased by the next `--plan` run — and an approval gate that demands a version nothing produces stops every
+// run before it builds.
+//
+// It is a short hash over THREE manifest inputs, and only those three: `entity`, `schemas` (each entry's `pkg`
+// plus its body CONTENT, in manifest order) and `planMeta`. Same manifest ⇒ same version, always, so a re-run is
+// not a new version to re-approve; a changed `planMeta` or a changed main-page body ⇒ a different one, so an
+// approval cannot silently carry over to a plan the user never saw.
+//
+// EXCLUDED because including them would make the value non-reproducible: wall-clock time; any random source; and
+// every filesystem PATH — a `{ file: … }` schema entry contributes its CONTENT, never its location, so planning
+// the same manifest from a fresh temporary directory yields the same version instead of inventing one.
+//
+// ALSO NOT COVERED, and this is a real limit rather than a safety measure: `seed`, `detailSchemas`,
+// `childPageSchemas`, `profileSchemas`, `section`, `signals`, `behaviourIndex`, `targetPackage`. Each of those
+// reaches the rendered plan, so a plan CAN change without the version moving — a re-mapped child page is the
+// realistic case. The version is therefore a check that the approved plan and the built plan came from the same
+// MAIN-PAGE inputs, not a checksum of the whole artifact. Widening the hash to those sections is the obvious
+// next step and needs its own decision, because it also makes every child-schema refetch a re-approval.
+// Canonicalizes EVERY manifest key that changes what the plan says — not just the main page's. An earlier
+// version hashed only {entity, schemas, planMeta}, which left the plan's child pages, details, typed forms,
+// mini page, section and signals OUTSIDE the version: the unit set could change materially (a detail marked
+// `editPage:false` drops a whole child page) while the approved version stayed identical, so the approval gate
+// authorised a plan nobody approved. Everything the manifest carries is covered here instead of an allowlist,
+// because the allowlist is exactly what went stale.
+const SCHEMA_BODY_ARRAYS = new Set(["schemas", "seed"]);
+// Two ceilings, both learned from the suite's deep-nest DoS golden. A manifest is stand-sourced data, so it can
+// be adversarially or accidentally deep AND wide. A first attempt built a canonical structure and stringified it:
+// it died with a RangeError. A depth cap alone still exhausted the heap, because 24 levels of an N-element array
+// is N^24 nodes. So the walk STREAMS into the hash — constant memory — and stops at whichever ceiling comes
+// first. Past a ceiling the rest of that subtree collapses to one sentinel: the version stops DISTINGUISHING
+// changes beyond that point, a bounded loss of resolution, never a crash and never a different value for the
+// same input. Real bundles nest a handful of levels and a few thousand nodes.
+const PLAN_VERSION_MAX_DEPTH = 24;
+const PLAN_VERSION_MAX_NODES = 200000;
+function feedPlanVersion(h, value, key, readBody, state, depth) {
+  if (depth > PLAN_VERSION_MAX_DEPTH || ++state.nodes > PLAN_VERSION_MAX_NODES) { h.update("\u0001cap"); return; }
+  if (Array.isArray(value)) {
+    // A `schemas`/`seed` entry reduces to pkg + BODY CONTENT wherever it appears — including inside a nested
+    // bundle (childPageSchemas / typedPageSchemas / miniPageSchemas) — so a `{file:…}` entry contributes what it
+    // CONTAINS, and re-planning the same bodies from a fresh temp dir keeps one version. An entry with neither
+    // `body` nor `file` would make `readBody` throw, so it contributes nothing rather than aborting the run: an
+    // unreadable entry is the gate's problem, not the version's.
+    if (SCHEMA_BODY_ARRAYS.has(key)) {
+      h.update("\u0001S");
+      for (const e of value) {
+        h.update(String(e?.pkg ?? ""));
+        h.update("\u0001");
+        h.update(e && (e.body != null || e.file) ? String(readBody(e)) : "");
+        h.update("\u0001");
+      }
+      return;
+    }
+    // Array order IS a plan input (it is the override chain), so it is never sorted.
+    h.update("\u0001A");
+    for (const v of value) feedPlanVersion(h, v, null, readBody, state, depth + 1);
+    return;
+  }
+  if (value && typeof value === "object") {
+    // Object key order is NOT a plan input, so keys are sorted — two manifests differing only in key order must
+    // not read as two different plans.
+    h.update("\u0001O");
+    for (const k of Object.keys(value).sort()) {
+      h.update(k);
+      h.update("\u0001");
+      feedPlanVersion(h, value[k], k, readBody, state, depth + 1);
+    }
+    return;
+  }
+  h.update("\u0001P");
+  h.update(value === undefined ? "null" : (JSON.stringify(value) ?? "null"));
+}
+// Covers EVERY manifest key that changes what the plan says. An earlier version hashed only
+// {entity, schemas, planMeta}, which left the plan's child pages, details, typed forms, mini page, section and
+// signals OUTSIDE it: the unit set could change materially (a detail marked `editPage:false` drops a whole child
+// page) while the approved version stayed identical, so the approval gate authorised a plan nobody approved.
+// Everything the manifest carries is covered here rather than an allowlist — the allowlist is what went stale.
+function computePlanVersion(manifest, readBody) {
+  const h = createHash("sha256");
+  feedPlanVersion(h, manifest, null, readBody, { nodes: 0 }, 0);
+  return "plan-" + h.digest("hex").slice(0, 12);
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
   const bodyOf = (e) => {
@@ -997,7 +1224,15 @@ export function runMigration(manifest, opts = {}) {
   // matches on. Seeded into the FOLD context only — `visited` itself stays as the caller passed it, because
   // hollowFormIssue uses `visited.size === 0` to mean "this is the top-level page".
   const selfKeys = [manifest.entity, manifest.entity && manifest.entity + "Page"].filter(Boolean);
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput }; // shared fold context for foldSubPage (child/typed/mini)
+  // The ONE row-rendering opts object (see checklistOpts) — built here, BEFORE the fold, because each sub-page
+  // derives its own from it and the renderers below reuse it verbatim. Pure in manifest + the run flags, so
+  // building it early changes nothing about its value.
+  const specOpts = checklistOpts(manifest, opts);
+  // `targetPackage` rides on the fold context SEPARATELY from `checklistOpts` (D5/F3): `checklistOpts` is rebuilt
+  // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
+  // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
+  const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -1110,29 +1345,74 @@ export function runMigration(manifest, opts = {}) {
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
   //   plan       = the WHOLE plan skeleton (Overview/Pages placeholders + the design spec + child pages)
-  // planMeta completeness — the `--plan` artifact is INCOMPLETE while any required Overview/Main-scope value is
-  // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
-  // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
-  // keys so the CLI turns an unfilled `--plan` into a non-zero exit (below), like the other incompleteness gates.
-  const pm = manifest.planMeta || {};
-  const blank = (v) => v == null || String(v).trim() === "";
-  const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
-  out.planMetaMissing = REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k]));
-  // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
-  // must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
-  // check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
-  // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
-  // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
-  // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-  const SIGNAL_KEYS = ["dcm", "processes", "printables"];
-  const signals = manifest.signals && typeof manifest.signals === "object" ? manifest.signals : {};
-  out.signals = signals;
-  out.signalsMissing = SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true);
-  const specOpts = { template: manifest.template, targetPackage: manifest.targetPackage, planMeta: manifest.planMeta, planMetaMissing: out.planMetaMissing, signals: out.signals, signalsMissing: out.signalsMissing, isMiniPage: !!opts.isMiniPage, isChildPage: !!opts.isChildPage };
+  // planMeta / on-stand SIGNALS completeness — both computed by `checklistOpts` (above the fold, since every
+  // sub-page needs the same object) and mirrored onto the result here, where the CLI gates read them.
+  out.planMetaMissing = specOpts.planMetaMissing;
+  out.signals = specOpts.signals;
+  out.signalsMissing = specOpts.signalsMissing;
+  // The PLAN VERSION. Set BEFORE `renderPlan`/`pageUnits` can read it — both take it off the result.
+  out.planVersion = computePlanVersion(manifest, bodyOf);
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
+}
+
+// ⛔ THE `--built` PAYLOAD GUARD (D6) — this is what makes the verify gate real. `--verify` now reads a KEYED MAP
+// over the page tree, each entry carrying clio `get-page`'s `bundle.viewConfig` verbatim; the engine walks that
+// tree itself. Without this guard a hand-authored `{ "ops": [...] }` (or a hand-written count) reached
+// `complete: true` having built nothing — the executor would author the very evidence it is being gated on. The
+// shape is REJECTED at exit 1, not silently degraded, and the message points at `--units` because that is where
+// the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
+// (unverified) — so this only checks the entries that ARE present.
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+function validBuiltPageEntry(e) {
+  if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
+  return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
+}
+function builtPayloadIssue(built) {
+  if (!built || typeof built !== "object" || Array.isArray(built)) return "is not a JSON object";
+  if (!built.pages || typeof built.pages !== "object" || Array.isArray(built.pages)) return "has no `pages` object — the flat single-page shape is no longer accepted";
+  const bad = Object.keys(built.pages).filter((k) => !validBuiltPageEntry(built.pages[k]));
+  if (bad.length) return `has ${bad.length} page entr${bad.length === 1 ? "y" : "ies"} that ${bad.length === 1 ? "is" : "are"} neither \`false\` nor an object carrying \`viewConfig\`: ${bad.slice(0, 5).join(", ")}${bad.length > 5 ? `, …and ${bad.length - 5} more` : ""}`;
+  return null;
+}
+
+// The flags that take a VALUE, in ONE list — because each of them has TWO obligations and forgetting either is a
+// silent misfire: the value must be a real path (a trailing `--out` fell back to stdout on a documented write, and
+// `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
+// (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
+// (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
+const VALUE_FLAGS = ["--out", "--built", "--verify-json"];
+// The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
+// diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
+// value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
+function valueFlagArg(argv, flag, example, onBad) {
+  const i = argv.indexOf(flag);
+  if (i < 0) return null;
+  const next = argv[i + 1];
+  if (next === undefined || next.startsWith("--"))
+    onBad(`\`${flag}\` needs a file path (e.g. \`${example}\`) — got ${next === undefined ? "no argument" : `the flag '${next}'`}; nothing was written`);
+  return next;
+}
+
+// The stdout note that goes with `--out`. MODE-AWARE, because "incomplete" means two opposite things.
+//
+// For `--plan` (and `--spec`/`--checklist`/`--units`) an incomplete run produces an artifact that is NOT
+// approvable — it carries a ⛔ banner and describes a plan that is not ready — so the instruction is: do not
+// present it, fix the ⛔ items, re-run. That was the only wording this note had.
+//
+// For `--verify` it is the opposite. The table IS the report of what is still short: it names every unmet row,
+// it is the only sanctioned close report, and the executor skill tells the agent to present it precisely when
+// the run is incomplete. Telling the agent not to present it left the CLI and the skill contradicting each
+// other on the same file, with the agent free to pick either. Own fn (not another inline branch) for the same
+// reason `valueFlagArg` is one: the CLI block does not grow a branch every time a case is added.
+function outFileNote(label, outFile, notReady, verifyMode) {
+  if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
+  if (verifyMode) {
+    return `migrate.mjs: wrote ${label} to ${outFile} — this run is INCOMPLETE, and that is what the table reports: PRESENT IT VERBATIM (it names every ❌ MISSING and ⚠ unverified row). Do not hand-write a status summary of your own, and do not treat the file as an approvable plan — read the ⛔ stderr line(s) below to tell a repairable build gap from a PLAN-level one.\n`;
+  }
+  return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
 }
 
 // CLI: node migrate.mjs <manifest.json>   (or `-` / no arg to read the manifest from stdin)
@@ -1145,21 +1425,27 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
+  const unitsMode = argv.includes("--units"); // print the per-page BUILD QUEUE + the exact keys `--built` must use
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
-  const builtIdx = argv.indexOf("--built");     // --built <file>: the get-page ownBodySummary of the built page(s)
+  // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
+  // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
+  // on a correctly built page. The fail string three lines below says the same thing; this comment used to say
+  // the opposite, which is exactly the kind of drift that gets a payload hand-built from the wrong source.
+  const builtIdx = argv.indexOf("--built");
   if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
-    fail("`--verify` needs `--built <file>` — a JSON with the built page(s): { \"ops\": [{name,type,parentName}], \"parentSchemaName\", \"miniPageBuilt\": true|false|null } (from clio `get-page` ownBodySummary).");
+    fail("`--verify` needs `--built <file>` — a JSON KEYED BY PAGE: " + BUILT_SHAPE + ". Run `--units` on this manifest for the exact page keys, and give each one clio `get-page`'s `bundle.viewConfig` VERBATIM (the merged page — not the page's own body, which cannot show template-provided components).");
   const builtFile = builtIdx >= 0 ? argv[builtIdx + 1] : null;
-  const outIdx = argv.indexOf("--out");        // --out <file>: WRITE the output to a file so the agent presents the file, not a hand-paste
-  // `--out` must be followed by a real path. Without this guard a trailing `--out` silently fell back to
-  // stdout (documented flag → no write), and `--out --plan` swallowed the next flag — both silent misfires.
-  if (outIdx >= 0) {
-    const next = argv[outIdx + 1];
-    if (next === undefined || next.startsWith("--"))
-      fail("`--out` needs a file path (e.g. `--out plan.md`) — got " + (next === undefined ? "no argument" : `the flag '${next}'`) + "; nothing was written");
-  }
-  const outFile = outIdx >= 0 ? argv[outIdx + 1] : null;
-  const arg = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--out" && argv[i - 1] !== "--built"); // positional manifest arg ('-' = stdin)
+  // `--out <file>`: WRITE the output to a file so the agent presents the file, not a hand-paste.
+  const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail);
+  // `--verify-json <file>` — the MACHINE-READABLE verdict, alongside (never instead of) the Markdown table. The
+  // executor's whole open/closed scheduling used to rest on an agent transcribing that table: it carries no
+  // per-page counts, and the only per-page numbers anywhere were on the stderr line, truncated at six pages.
+  // It REQUIRES `--verify`: in any other mode there is no verdict to write, and silently ignoring the flag would
+  // leave a caller believing it had a verdict file it never got.
+  const verifyJsonFile = valueFlagArg(argv, "--verify-json", "--verify-json verify.json", fail);
+  if (verifyJsonFile && !verifyMode)
+    fail("`--verify-json <file>` only applies to `--verify` — it writes THAT run's machine-readable verdict. Add `--verify --built <file>`, or drop `--verify-json`.");
+  const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.includes(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
   // instead (also the `--out manifest.json` typo, where the only path was consumed by --out, lands here).
@@ -1179,7 +1465,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
-  let output, verifyIncomplete = false;
+  let output, verifyIncomplete = false, verifyRes = null;
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else if (checklistMode) output = result.checklist + "\n";
@@ -1202,13 +1488,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       scopes: result.stubIndex,
     }, null, 2) + "\n";
   }
+  // `--units` ⇒ the BUILD QUEUE (JSON): one entry per page key with what that page expects, the reachability keys
+  // with their applicability already decided, the evidence ids, and a leaf-first build order. It is the executor's
+  // input AND the only place the keys of `--built.pages` / `.evidence` / `.judge` come from — an invented key is
+  // silently "not checked", so nothing here may be guessed. Takes NO value (a MODE flag, like `--plan`), and is
+  // therefore deliberately absent from the positional-argument exclusion above: adding it there would make
+  // `--units <manifest>` lose its manifest and die with a misleading JSON error.
+  else if (unitsMode) output = JSON.stringify(pageUnits(result, checklistOpts(manifest)), null, 2) + "\n";
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
-    const specOpts2 = { template: manifest.template, planMeta: manifest.planMeta, signals: result.signals };
-    const v = renderVerify(result, specOpts2, built);
-    output = v.markdown + "\n";
-    verifyIncomplete = v.missing > 0 || v.unverified > 0; // any MISSING or unverified deliverable ⇒ not done
+    // VALIDATE BEFORE RENDERING: `renderVerify` is called outside the try above, so a throw inside it surfaces as a
+    // raw Node stack instead of a diagnosable message — and a malformed payload must be a loud exit 1, never a
+    // table full of ⚠ rows that reads like a half-built page.
+    const issue = builtPayloadIssue(built);
+    if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Run `--units` on this manifest for the exact page keys.");
+    // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
+    // a thinner verify-only literal made that a coincidence rather than a guarantee.
+    verifyRes = renderVerify(result, checklistOpts(manifest), built);
+    output = verifyRes.markdown + "\n";
+    verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
+    // The machine-readable verdict, written from the SAME object the table was rendered from — so the numbers a
+    // caller schedules on and the numbers a human reads cannot disagree. Uncapped: every open page is in `pages`.
+    if (verifyJsonFile) {
+      try { fs.writeFileSync(verifyJsonFile, JSON.stringify(verifyReport(result, verifyRes), null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
+      // stderr, not stdout: stdout is the artifact itself when there is no `--out`, and a note there would end up
+      // inside the table the agent presents verbatim.
+      process.stderr.write(`migrate.mjs: wrote the machine-readable verdict to ${verifyJsonFile} — schedule from THAT file (complete / missing / unverified / planGaps / pages[key].openRows), not from the table.\n`);
+    }
   }
   else output = JSON.stringify(result, null, 2) + "\n";
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
@@ -1228,21 +1536,33 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
   else if (stubsMode) label = "imperative-row handoff digest";
+  else if (unitsMode) label = "per-page build queue";
   else if (verifyMode) label = "verification";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }
     catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
-    // do NOT say "present verbatim" on a blocked/incomplete run (L3): the file carries a ⛔ banner and is not approvable.
-    process.stdout.write(notReady
-      ? `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`
-      : `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`);
+    process.stdout.write(outFileNote(label, outFile, notReady, verifyMode));
   } else {
     process.stdout.write(output);
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
+  // D12 — the `--verify` leg of exit 2, stated apart from the three above. `gate`/`structure`/`coverage` fire in
+  // EVERY mode and describe the PLAN: an executor cannot build its way out of them, so "loop until --verify is
+  // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS
+  // repairable on-stand. Until now `--verify` exited 2 with no stderr line at all, so the two were indistinguishable.
+  if (verifyIncomplete) {
+    const pageGaps = Object.entries(verifyRes.pages).filter(([, p]) => !p.complete)
+      .map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
+    // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
+    // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
+    const overflow = pageGaps.length > 6 ? ` | …and ${pageGaps.length - 6} more (${verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict"})` : "";
+    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s). ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: build the missing pieces / file the on-stand evidence, then re-verify.\n`);
+    const gaps = planGaps(result);
+    if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
+  }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
   if (result.parseDiagnostics?.length)

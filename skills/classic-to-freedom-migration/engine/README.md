@@ -13,8 +13,61 @@ node migrate.mjs <manifest.json>          # full JSON: effective page + ChangeSe
 node migrate.mjs <manifest.json> --plan   # render the migration plan (Markdown)
 node migrate.mjs <manifest.json> --spec   # render just the per-page design spec (Markdown)
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
+node migrate.mjs <manifest.json> --units  # the per-page BUILD QUEUE + the exact keys --built must use (JSON)
+node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
+node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
+node migrate.mjs <manifest.json> --verify --built b.json --verify-json v.json # …plus the MACHINE-READABLE verdict (JSON)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
+
+Mode flags take no value and only ONE is honoured per run (the CLI picks the first it matches, so a second mode
+flag is silently ignored) — pass exactly one. `--out <file>` works with all of them.
+
+**The plan version.** `--plan` prints `**Plan version:** \`plan-<hash>\`` as the first line of the Overview, and
+`--units` publishes the identical string as `planVersion`. It is a deterministic short hash over three manifest
+inputs and only those three — `entity`, `schemas` (package + body CONTENT, in order) and `planMeta`. No
+wall-clock, no random source, and no filesystem path (a `{ file: … }` schema entry contributes its CONTENT), so
+the same manifest always yields the same version and re-planning is not a new version to approve. It does NOT
+cover `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`, `signals` or `behaviourIndex`:
+those reach the rendered plan too, so the version confirms that the approved and built plans share their
+MAIN-PAGE inputs — it is not a checksum of the whole artifact. It is the
+string the `decisions.md` approval entry names, and the string the delegated build compares that entry against.
+`plan.md` is engine-WRITTEN, so nothing else can put a version in it and survive the next `--plan --out`.
+
+`--verify-json <file>` (only with `--verify`) writes the verdict a CALLER computes on:
+`{ complete, missing, unverified, planGaps, pages: { "<key>": { missing, unverified, complete, openRows: [ { n,
+deliverable, status, evidence, outcome, id? } ] } } }`. It is ADDITIVE — stdout and `--out` still carry the
+Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at all, and
+the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open rows).
+`planGaps` is the other half of exit 2 (D12): non-empty means the PLAN is short — not buildable-out-of — and it
+is independent of `complete`, so a run can have nothing left to build and still exit 2. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
+creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each with its expected template, target
+package and `expect` counts (including
+`expect.fieldNames`, the element names the fields check matches on), plus the five reachability keys with
+`appliesWhen` already decided by the engine, the evidence-record ids, the ⚠ Confirm preflight items and a
+leaf-first `buildOrder`. A key identifies exactly ONE physical page: when two distinct pages would land on the
+same key (two related lists opening the same entity, or two same-entity child pages on different branches) the
+engine appends a disambiguator — `@<Via>`, `@<Schema>`, `#2` — while one page reached along two paths keeps a
+single key. The suffix is derived by the engine, so **read every key from `--units`; never construct one.**
+Those page keys are the ONLY valid keys of the `--built` payload:
+
+```jsonc
+{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…" },
+             "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
+  "reachability": { "sectionRegistered": true, "reuseBindings": false },
+  "evidence": { "<id from --units>": { "referencePage": "…", "components": ["…"] } },
+  "judge":    { "<id from --units>": { "convincing": true, "why": "…" } } }
+```
+
+`viewConfig` is clio `get-page`'s `bundle.viewConfig` **verbatim** — the MERGED page. Not the page's own body: an
+element the template provides is touched with `operation: "merge"` and carries no type, so a check fed that source
+could never confirm Feed, FileList, ApprovalList or the DCM bar. A payload that is not keyed by page is rejected
+with exit 1, and an id or page key the engine did not publish is silently "not checked" — never invent one.
+
+**The mini page is a page, so it is checked like one.** Its `Mini page` row resolves from
+`pages["mini:<Schema>"]` — present with components ⇒ built · `false` ⇒ MISSING · key omitted ⇒ not checked. There
+is no boolean to assert instead: `--built.miniPageBuilt` is read ONLY in the legacy flat payload (a payload with
+no `pages` map at all, which the CLI rejects), never once a `pages` map is supplied.
 
 **The inverse call graph.** `triggers[]` is read off DECLARATIONS (an attribute dependency, a bound control
 property), so a method invoked from another method's BODY had none and its row printed `⚠ unresolved` — which reads

@@ -74,7 +74,18 @@ function regionResolver(viewConfigDiff, resources = {}) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
   // Major 4 — a caption is a `$Resources.Strings.<key>` binding; show its human text from the resource map
   // (the plan stays readable) — fall back to the key when the text is not resolved.
-  const capText = (raw) => { const k = resourceKey(raw); return resources[k] ?? k; }; // same key normalization the mapper used to STORE the string (incl. #anchor strip)
+  // A caption reaches here in ONE of two localizable forms and they normalize differently:
+  //   group / field : `$Resources.Strings.<key>`      -> resourceKey() (which also strips a `#en-US` culture anchor)
+  //   TAB           : `#ResourceString(<key>)#`       -> the key is INSIDE the delimiters
+  // `resourceKey` strips everything from the first `#`, so a tab caption would normalize to "" and every tab
+  // Region would render as a bare `Tab · `. Match the tab form FIRST and leave `resourceKey` alone — its
+  // `#`-strip is the culture-anchor rule a live golden pins (`$Resources.Strings.Foo#en-US` -> `Foo`).
+  const RESOURCE_STRING_CALL = /^#ResourceString\(([^)]+)\)#$/;
+  const captionKeyOf = (raw) => {
+    const m = RESOURCE_STRING_CALL.exec(String(raw ?? "").trim());
+    return m ? m[1].trim() : resourceKey(raw);
+  };
+  const capText = (raw) => { const k = captionKeyOf(raw); return resources[k] ?? k; };
   const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
   // a profile island container often has NO caption (it is a visual grouping, e.g. `ContactContainer`) but is
   // a DISTINCT `crt.GridContainer` — keep the islands apart in the Region by falling back to its own name
@@ -99,13 +110,13 @@ function regionResolver(viewConfigDiff, resources = {}) {
       if (p === "SideAreaProfileContainer") return profileRegionLabel(group, prev);
       if (p === "HeaderContainer") return "Header";
       // (removed a legacy hardcode that mapped `GeneralInfoTabContainer` → "⚠ fallback (unresolved)" — it dates
-      // from when that container was a catch-all with no real tab. The mapper now emits it as a proper `crt.Tab`
-      // (isTab, caption "General information"), so the normal crt.Tab climb below resolves it to "Tab · General
+      // from when that container was a catch-all with no real tab. The mapper now emits it as a proper `crt.TabContainer`
+      // (isTab, caption "General information"), so the normal tab climb below resolves it to "Tab · General
       // information". The hardcode short-circuited BEFORE that check and falsely flagged ~20 real General-info
       // fields as unresolved on every page that has this tab.)
       const o = byName.get(p);
       if (!o) return esc(p);
-      if (o.values?.type === "crt.Tab") return tabRegionLabel(o, group);
+      if (o.values?.type === "crt.TabContainer") return tabRegionLabel(o, group);
       // nearest captioned group wins (a hex-hash noise key is dropped — still surfaced as a [group-caption] ⚠).
       if (group == null) group = captionGroupLabel(o, resources);
       prev = p;
@@ -414,22 +425,27 @@ function orderRegions(rows) {
 // row so they can't drift: a related-list child with FEWER THAN 15 inputs AND flat (no tabs, no related lists) →
 // "mini"; otherwise (>= 15 inputs, OR it has tabs/related lists) → "grid". `n === 0` → null (nothing to recommend).
 // Single cut at 15, no gap.
-function childTemplateChoice(n, hasTabs, nDetails) {
+export function childTemplateChoice(n, hasTabs, nDetails) {
   if (!n) return null;
   return (n < 15 && !hasTabs && !nDetails) ? "mini" : "grid";
 }
+// The template SCHEMA NAME each choice resolves to. Exported (and used by the banner below) so the recommendation
+// prose, the Main-scope row and the sub-page checklist's `template` vk cannot drift: a child page folded as "mini"
+// is verified against the very schema name the plan told the agent to build on. A `null` choice has no entry here
+// — such a page emits NO template row at all rather than one nobody can satisfy.
+export const CHILD_TEMPLATE_SCHEMA = { mini: "BaseMiniPageTemplate", grid: "PageWithAreaFreedomTemplate" };
 // Child-page template recommendation banner. Applies to related-list child pages only.
 function childFormRecommendation(cs, fields, opts) {
   if (!opts.isChildPage) return [];
-  const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.Tab");
+  const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.TabContainer");
   const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   const n = fields.length;
   const choice = childTemplateChoice(n, hasTabs, nDetails);
   if (!choice) return [];
   if (choice === "mini")
-    return [`> **Recommendation — small child form (${n} field${n === 1 ? "" : "s"}, < 15, flat):** open this related-list child as an **edit mini page (\`BaseMiniPageTemplate\` — "Mini page") / modal** — a lightweight quick-add shell — rather than a full record page. Confirm the desired shell before building.`, ""];
+    return [`> **Recommendation — small child form (${n} field${n === 1 ? "" : "s"}, < 15, flat):** open this related-list child as an **edit mini page (\`${CHILD_TEMPLATE_SCHEMA.mini}\` — "Mini page") / modal** — a lightweight quick-add shell — rather than a full record page. Confirm the desired shell before building.`, ""];
   const why = hasTabs || nDetails ? "it has tabs / related lists" : `${n} inputs (>= 15)`;
-  return [`> **Recommendation — child form (${n} field${n === 1 ? "" : "s"}):** build this related-list child on the **Grid page template (\`PageWithAreaFreedomTemplate\`)** — ${why}, so a full-width grid suits it better than the narrow left-profile default or a mini page. Confirm before building.`, ""];
+  return [`> **Recommendation — child form (${n} field${n === 1 ? "" : "s"}):** build this related-list child on the **Grid page template (\`${CHILD_TEMPLATE_SCHEMA.grid}\`)** — ${why}, so a full-width grid suits it better than the narrow left-profile default or a mini page. Confirm before building.`, ""];
 }
 
 // Header-template recommendation: a WIDE/populated Classic Header block (the mapper's `headerLayout === "wide"`
@@ -444,6 +460,10 @@ function headerTemplateRecommendation(cs, opts) {
   return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 
+// Decision kinds ALREADY surfaced in their own Layout / Logic / Child-page section, so re-listing them in the
+// "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist" checklist group (below) would double-report them. ONE
+// const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
+const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds already surfaced in Layout /
 // Logic / Child-pages are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines. Extracted for CC.
 function renderConfirmWorklist(cs) {
@@ -452,7 +472,6 @@ function renderConfirmWorklist(cs) {
   // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
-  const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
   // A `message` / `mixin` / `module-dep` / `attribute-*` row is unanswerable from this page body by definition, so
   // it goes through the same step-5.1 run as an unresolved method — and carries the same card + AC reference once
@@ -1046,8 +1065,8 @@ function buildChildScopeRows(childs) {
       // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
       // recommendation banner. Unknown count (unmapped real page) → generic.
       const choice = c.fieldCount == null ? null : childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails);
-      if (choice === "mini") target = "Mini page (`BaseMiniPageTemplate`)";
-      else if (choice === "grid") target = "Grid page (`PageWithAreaFreedomTemplate`)";
+      if (choice === "mini") target = `Mini page (\`${CHILD_TEMPLATE_SCHEMA.mini}\`)`;
+      else if (choice === "grid") target = `Grid page (\`${CHILD_TEMPLATE_SCHEMA.grid}\`)`;
       else target = "Freedom child page";
       call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
     } else if (c.editPage === false || c.editable === false) {
@@ -1098,8 +1117,15 @@ export function renderPlan(result, opts = {}) {
   // when EVERY type has its OWN fold. `someBindOnly` gates that below.
   const someBindOnly = typed.some((t) => t.bindOnly);
   const sizeLine = buildSizeLine(typed, cs, fields);
+  // THE PLAN VERSION, printed into the artifact the operator approves. `plan.md` is engine-WRITTEN and presented
+  // verbatim, so a version hand-typed into it would be erased by the next `--plan` run — and the delegated build
+  // HARD-STOPS unless the recorded approval names a version that matches what the engine publishes. `--units`
+  // publishes the same string as `planVersion`. Rendered only when the engine actually computed one, so a
+  // hand-built `result` (the golden runners construct several) does not get a `Plan version: undefined` line.
+  const planVersion = typeof result.planVersion === "string" && result.planVersion.trim() ? esc(result.planVersion.trim()) : "";
   P.push(
     "### Overview",
+    ...(planVersion ? [`**Plan version:** \`${planVersion}\` — record THIS string in the \`decisions.md\` approval entry; the build compares it and refuses to run on a mismatch.`, ""] : []),
     `**Scope:** ${fill(pm.scope, "<FILL: single-section | whole-package>")} ·`,
     `**Environment:** ${fill(pm.environment, "<FILL: environment name>")} ·`,
     `**Package:** ${fill(pm.package, "<FILL: owning package(s) + lock state → target package>")}`,
@@ -1209,7 +1235,7 @@ function buildCoverageRows(cs, pm, result) {
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expFields = fieldOps.length;
-  const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.Tab").map((o) => o.name)).size;
+  const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.TabContainer").map((o) => o.name)).size;
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   // carry the expected field NAMES (element names, not the stripped control) so the built count can match by
   // identity — a control-bound field whose built component type is outside FIELD_RE (rich-text / a lookup or
@@ -1245,9 +1271,26 @@ function buildCoverageRows(cs, pm, result) {
 // Pages checklist group — every page this migration creates (mini page is a page, not a footnote) plus the
 // navigable-SECTION registration deliverable (one real run created pages but never registered the section, and a
 // hand-built summary silently dropped it). Returns the rows. Extracted for Sonar CC 15.
-function buildPageRows(result, opts, pm, typed, fill) {
-  const pages = [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }];
-  if (!typed.length) pages.push({ label: `Form page → ${fill(pm.formTemplate || opts.template, "<FILL: form template>")}`, vk: { type: "formpage" } });
+// The `List page →` row, which ONLY the main page owns: a SUB-page (child / typed / mini) has no list page, and
+// this row is unconditional (clearing `planMeta.sectionSchema` gates the `Navigable section registered` row and
+// the whole `List page` group, not this one), so without the split every sub-page inherited a `<FILL: list
+// template>` row it can never satisfy. Its own fn so `buildPageRows` gains no branch (Sonar CC 15).
+function listPageRows(pm, fill, isMain) {
+  return isMain ? [{ label: `List page → ${fill(pm.listTemplate, "<FILL: list template>")}` }] : [];
+}
+// The `Form page` label. A SUB-page whose template is not a plan choice (`childTemplateChoice` returned `null`, so
+// D2 emits no `template` vk and publishes no `expectedTemplate`) used to render `Form page → <FILL: form template>`
+// — a placeholder demanding a decision the engine had already decided there is none of, and one nothing in the run
+// can ever fill. Only the MAIN page keeps the `<FILL: …>` prompt, where an unnamed template IS a real plan gap
+// (and `planMetaMissing` gates it). Own fn so `buildPageRows` gains no branch (Sonar CC 15).
+function formPageLabel(pm, opts, fill, isMain) {
+  const tpl = pm.formTemplate || opts.template;
+  if (isMain || (tpl != null && String(tpl).trim() !== "")) return `Form page → ${fill(tpl, "<FILL: form template>")}`;
+  return "Form page built — no template is pinned for this sub-page (the plan derived no template choice for it, so there is nothing to match against)";
+}
+function buildPageRows(result, opts, pm, typed, fill, isMain) {
+  const pages = [...listPageRows(pm, fill, isMain), ...placementRows(opts)];
+  if (!typed.length) pages.push({ label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
   for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
@@ -1261,8 +1304,13 @@ function buildPageRows(result, opts, pm, typed, fill) {
     // The mini page is a build deliverable (vk mini) AND a WIRING deliverable: a built mini page is an orphan schema
     // until the section's "+ New" is bound to it (an ADD-purpose RelatedPage binding — a config record, NOT part of
     // the page body). GATED via on-stand evidence `built.miniPageWired` so an unwired mini page can't pass --verify.
+    // The BUILD leg carries the mini page's OWN published key (`mini:<Schema>`, whatever `assignPageKeys` finally
+    // claimed): the row resolves from `--built.pages[key]` exactly like every other page. It used to read the
+    // root-level `miniPageBuilt` boolean, which the keyed payload every document prescribes does not carry — so a
+    // correctly built mini page stayed ⚠ forever and the ONLY shape that closed it was the flat legacy field.
+    // `null` when the plan never folded the mini page (no key is published for it, and none is invented here).
     pages.push(
-      { label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini" } },
+      { label: `Mini page \`${esc(result.miniPage.schema)}\``, vk: { type: "mini", key: result.miniPage.pageKey || null } },
       { label: `Mini page wired to "+ New" — create the ADD-purpose RelatedPage binding so the section's "+ New" opens \`${esc(result.miniPage.schema)}\`; until then it is a built schema that nothing opens ("+ New" still shows the full form).`, vk: { type: "onstand", evidence: "miniPageWired", what: "add-purpose RelatedPage binding check", miss: "'+ New' still opens the full form" } },
     );
   }
@@ -1276,24 +1324,199 @@ function buildPageRows(result, opts, pm, typed, fill) {
   return pages;
 }
 // List-page contents checklist rows (columns / quick filters / section actions). Returns the rows. Extracted for CC.
-function buildListItems(pm, section, result) {
-  if (!(pm.sectionSchema || section || result.miniPage)) return [];
+// `result.miniPage` is gated on the SAME `isMain` flag the Form/List split already threads: D3 clears a sub-page's
+// `planMeta.sectionSchema`/`listTemplate`, but that only covers the first disjunct — a sub-page that folds its OWN
+// mini page still satisfied the third one and emitted a whole `List page` group (List columns / quick filters /
+// section actions) for a page that has no list page at all.
+function buildListItems(pm, section, result, isMain) {
+  if (!(pm.sectionSchema || section || (isMain && result.miniPage))) return [];
   const items = [{ label: "List columns" }];
   if ((section?.quickFilters || []).length) items.push({ label: `Quick filters (${section.quickFilters.length})` });
   if ((section?.sectionActions || []).length) items.push({ label: `Section actions (${section.sectionActions.length})` });
   return items;
 }
-function checklistGroups(result, opts = {}) {
+// ONE checklist group, stamped with the page it belongs to. `pageKey` stays RAW on the group and on every row —
+// it is the machine identity (it keys the built-page map and the evidence ids), and an `esc`d id would be
+// unreproducible for the caller that has to supply the evidence under it. Only the RENDERED title is escaped:
+// that is where a stand-derived entity/schema name reaches the Markdown. The main page is NOT prefixed, so the
+// existing single-page tables read exactly as before.
+function pageGroup(pageKey, title, rows) {
+  return {
+    title: pageKey === "main" ? title : `${esc(pageKey)} · ${title}`,
+    pageKey,
+    rows: rows.map((r) => ({ ...r, pageKey })),
+  };
+}
+// EVIDENCE ROWS (D7). A deliverable that no page body can prove — the page-DESIGN pass, an imperative member, a
+// ⚠ Confirm item — is closed by an evidence RECORD plus an independent judge verdict, not by prose in the Evidence
+// cell. The record is looked up by an id the ENGINE derives and publishes; the agent never invents one. THREE shapes
+// (this comment said "two" while listing the third one file below — an undercount an executor reads as "there is no
+// `#childpage` id", which is the one id it must file to close an unfolded child):
+//   `<pageKey>#quality-gates`            — the singleton per-page row (one per published page key)
+//   `<pageKey>#confirm:<kind>:<item>`    — one per ⚠ Confirm worklist item
+//   `<pageKey>#childpage`                — an unfolded child page (see `unresolvedChildGroups` below)
+// Built from the RAW `pageKey` / `d.kind` / `d.item`, never from the rendered label: labels pass through `esc`, so
+// a caption carrying a backtick or a pipe would yield an id the caller could not reproduce to file its evidence
+// under. `requires` is the UI gate for "this record is complete" and rides on the row so `--units` can publish it.
+export const EVIDENCE_REQUIRES = ["referencePage", "components"];
+function evidenceRow(id, label, extra = {}) {
+  return { label, id, ...extra, vk: { type: "evidence", id, requires: EVIDENCE_REQUIRES } };
+}
+// The ⚠ Confirm worklist — the same items as the Confirm section (kinds not shown elsewhere). Removals are not
+// decisions. Own fn so `checklistGroups` gains no branch of its own (Sonar CC 15).
+// The RAW `kind`/`item` ride on the ROW (not on the `vk`, which is the resolvers' input): `--units.preflight`
+// republishes them next to the id so the executor reads the decision it must resolve without re-parsing an id —
+// and without `esc`, which is a rendering transform and would not round-trip.
+function confirmWorklistRows(pageKey, cs) {
+  return (cs.needsDecision || [])
+    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind))
+    .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,
+      { confirm: { kind: d.kind, item: d.item } }));
+}
+// Quality gates — ALWAYS present, one per page. See the label for what it demands. It used to be a vk-less `skip`
+// row: visible, tallied in nothing, closable by asserting it in prose — which is exactly how "native components →
+// style parity is inherent" waved it through. It is now an EVIDENCE row: it closes only on a filed record naming
+// the reference page + the components checked AND a judge that found that record convincing.
+function qualityGateRows(pageKey) {
+  return [evidenceRow(`${pageKey}#quality-gates`, "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above.")];
+}
+// PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
+// to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
+// permanently-unverified run. Own fn so `buildPageRows` gains no branch of its own (Sonar CC 15).
+function placementRows(opts) {
+  const pkg = opts.targetPackage;
+  if (typeof pkg !== "string" || pkg.trim() === "") return [];
+  return [{
+    label: `Package placement → \`${esc(pkg)}\` — the built page must live in the target package (a page saved into the wrong package ships nothing to the customer's app)`,
+    vk: { type: "placement", exp: pkg },
+  }];
+}
+// A child the fold did NOT rebuild because the child entity ALREADY has a shipped Freedom page. There is no page
+// to build, but WHICH page the related list opens is a RelatedPage binding — a config record — so the key is
+// published with that one gated row rather than dropped: a published page key with no gated row is a hole by
+// construction (the whole point of this ticket is that a child page could be absent and `--verify` still exit 0).
+export function reuseChildGroups(pageKey, c) {
+  return [pageGroup(pageKey, "Pages", [{
+    label: `Reused Freedom page \`${esc(c.reuseFreedomPage)}\` for \`${esc(c.entity)}\` — opened by detail "${esc(c.via)}". Nothing is rebuilt here, but the related list does not open it until the RelatedPage binding exists.`,
+    vk: { type: "onstand", evidence: "reuseBindings", what: "RelatedPage binding check for this reused child list", miss: "the related list does not open the existing Freedom form" },
+  }])];
+}
+// A child page that is a REAL deliverable (a Classic edit page exists, or its existence was never verified) but
+// whose Classic source was not folded, so not one of its deliverables can be derived from the plan. It still
+// publishes its key — with TWO gated rows, because one is not enough here.
+// The `childpage` vk is the STRUCTURAL half: it asks only "does this key yield any component at all", and
+// `walkViewConfig` counts a node as a component when it carries a `name` OR a `type` — so a one-key JSON object
+// (`{"viewConfig":{"name":"x"}}`) closes it. Every OTHER published key also carries the `#quality-gates` evidence
+// row, which needs a filed record AND an independent judge verdict; this key had no evidence row at all, so it was
+// the one published key an executor could close by typing a literal. It gets its own evidence id in the same
+// namespace (D3: every published key carries a row that cannot be closed by nothing).
+export function unresolvedChildGroups(pageKey, c) {
+  return [pageGroup(pageKey, "Pages", [
+    {
+      label: `Child page for \`${esc(c.entity)}\` — opened by detail "${esc(c.via)}". Its Classic source was NOT folded into this plan, so no deliverable of it is machine-derivable: confirm on-stand what was built for it.`,
+      vk: { type: "childpage" },
+    },
+    evidenceRow(`${pageKey}#childpage`, `Child page \`${esc(c.entity)}\` — evidence of what was actually built. Nothing about this page is derivable from the plan, so the structural row above can only ask whether the key returned ANY component. File the record naming the reference page and the components you built (\`${EVIDENCE_REQUIRES.join("\` + \`")}\`), and have the judge review it — a page nobody described is not a built page.`),
+  ])];
+}
+// Splice in the rows every sub-page attached at fold time. Child pages RECURSIVELY — a grandchild is a
+// first-class page, and the depth-1 `.map` this replaces gave it no row at all — then typed pages and the mini
+// page. DEDUPE by resolved page identity: the run-global memo hands the SAME `res` to every parent referencing
+// one page (diamond sharing), so a shared child reached along two paths would otherwise be spliced, and tallied,
+// twice. Recursion only descends into a page taken for the FIRST time, so a diamond cannot re-walk its subtree.
+// The WALK is over NODES, and the row splice is a projection of it — one traversal, so the key set `--units`
+// publishes and the keys stamped on the spliced rows cannot drift apart (they are the same nodes, in the same
+// order, deduped by the same `pageDedupeId`).
+function subPageNodes(result, seen = new Set(), out = []) {
+  for (const c of result.childPages || []) if (takeSubPage(c, seen, out)) subPageNodes(c, seen, out);
+  for (const t of result.typedPages || []) takeSubPage(t, seen, out);
+  takeSubPage(result.miniPage, seen, out);
+  return out;
+}
+// Dedupe on the FINAL `pageKey` (D1), not on `pageDedupeId`. The two agree only because `assignPageKeys` has
+// already guaranteed one key per physical page; keying the splice on the KEY is what makes that guarantee load-
+// bearing — two nodes that ever ended up sharing a key would otherwise be spliced twice, inflating the tallies and
+// emitting a duplicate `buildOrder` entry against a truncated `--units` expect.
+function takeSubPage(node, seen, out) {
+  const key = node?.pageKey;
+  if (!key || !node.pageRows || seen.has(key)) return false;
+  seen.add(key);
+  out.push(node);
+  return true;
+}
+// GLOBAL page-key assignment (D1) — run over the WHOLE tree from the root, in the same order and with the same
+// dedupe as the row splice. The fold can only see ONE sibling list, but a page key is a GLOBAL identifier: it keys
+// `--built.pages`, the evidence ids, `--units.pages` and the verify ctx cache. Two DIFFERENT physical child pages
+// under DIFFERENT parents that share an entity name both produced `child:<Entity>`, so ONE supplied viewConfig
+// closed BOTH pages' rows and a page that was never built reached exit 0.
+// So: the first claimant of a base key keeps it; any later node with a DIFFERENT `pageDedupeId` gets its
+// disambiguator appended (the resolved schema / reused page / detail), then a numeric suffix if that still
+// collides. The SAME physical page reached twice (a diamond) is NOT a collision — it is aliased onto the key
+// already assigned and its subtree is not re-walked. Idempotent across repeated calls: every claim is re-derived
+// from the immutable `pageKeyBase`, never from the mutated `pageKey`.
+function claimPageKey(claimed, base, alt) {
+  if (!claimed.has(base)) return base;
+  const withAlt = alt ? `${base}@${alt}` : base;
+  if (withAlt !== base && !claimed.has(withAlt)) return withAlt;
+  let n = 2;
+  while (claimed.has(`${withAlt}#${n}`)) n++;
+  return `${withAlt}#${n}`;
+}
+// Re-render this node's rows under its final key. The factory rebuilds a fresh array of fresh row objects, so the
+// re-render cannot alias anything the previous render handed out.
+function setPageKey(node, key) {
+  if (node.pageKey === key) return;
+  node.pageKey = key;
+  if (typeof node.pageRowsFor === "function") node.pageRows = node.pageRowsFor(key);
+}
+function assignOnePageKey(node, claimed, byDedupe) {
+  const id = node?.pageDedupeId;
+  const base = node?.pageKeyBase || node?.pageKey;
+  if (!id || !base) return false;
+  if (byDedupe.has(id)) { setPageKey(node, byDedupe.get(id)); return false; }
+  const key = claimPageKey(claimed, base, node.pageKeyAlt);
+  claimed.set(key, id);
+  byDedupe.set(id, key);
+  setPageKey(node, key);
+  return true;
+}
+function assignPageKeys(result, claimed = new Map(), byDedupe = new Map()) {
+  for (const c of result.childPages || []) if (assignOnePageKey(c, claimed, byDedupe)) assignPageKeys(c, claimed, byDedupe);
+  for (const t of result.typedPages || []) assignOnePageKey(t, claimed, byDedupe);
+  assignOnePageKey(result.miniPage, claimed, byDedupe);
+  return result;
+}
+function subPageGroups(result) {
+  const out = [];
+  for (const node of subPageNodes(result)) out.push(...(node.pageRows || []));
+  return out;
+}
+// The page these rows belong to, and the ROOT-only tree splice. Both are own fns so `checklistGroups` gains no
+// branch of its own (Sonar CC 15 — this file's rule is that new behaviour arrives as helpers, never as an `if`
+// inside the two row assemblers).
+function pageKeyOf(opts) { return opts.pageKey || "main"; }
+function rootSubPageGroups(result, isMain) { return isMain ? subPageGroups(result) : []; }
+// Page keys are claimed by the ROOT run only — a sub-page render sees one branch and would claim keys against a
+// half-empty map. Its own fn so `checklistGroups` gains no branch of its own (Sonar CC 15).
+function rootAssignPageKeys(result, isMain) { if (isMain) assignPageKeys(result); }
+// `opts.pageKey` (default `"main"`) is the page these rows belong to — every group and every row carries it, so a
+// count derived from THIS page's ChangeSet can never be closed by another page's components. Each per-page helper
+// is handed this page's own `cs`; in particular `regionResolver` is rebuilt per call (it closes over the diff it
+// was built from, so the main page's instance would return garbage region labels for a child's fields).
+export function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
   const typed = result.typedPages || [];
   const childs = result.childPages || [];
+  const pageKey = pageKeyOf(opts);
+  const isMain = pageKey === "main";
+  rootAssignPageKeys(result, isMain);
   const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
   const groups = [];
-  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push({ title, rows: r }); };
-  G("Pages", buildPageRows(result, opts, pm, typed, fill));
+  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push(pageGroup(pageKey, title, r)); };
+  G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
   const section = result.section || null;
-  G("List page", buildListItems(pm, section, result));
+  G("List page", buildListItems(pm, section, result, isMain));
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
@@ -1319,18 +1542,147 @@ function checklistGroups(result, opts = {}) {
   if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
   G("Card actions", actItems);
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
-  const SHOWN_ELSEWHERE_CK = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage"]);
-  G("⚠ Confirm worklist", (cs.needsDecision || []).filter((nn) => !SHOWN_ELSEWHERE_CK.has(nn.kind)).map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
-  // Child pages
-  G("Child pages", childs.map((c) => ({ label: `${esc(c.entity)} — separate page?` })));
+  // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
+  G("⚠ Confirm worklist", confirmWorklistRows(pageKey, cs));
+  // Child pages that publish NO page key of their own — a cycle (mapped higher on this branch, and gated there),
+  // a child verified to have no separate page / to be view-only (no deliverable to gate), or a malformed child
+  // bundle (a PLAN-completeness failure the structure gate already blocks on). They keep an identity row so
+  // nothing is silently dropped, but they must NOT carry a machine row: it could never be closed. Every OTHER
+  // child publishes a key and its rows are spliced in below.
+  G("Child pages", childs.filter((c) => !c.pageRows).map((c) => ({ label: `${esc(c.entity)} — separate page?` })));
   // Quality gates — ALWAYS present. Named after the skill and worded so it CANNOT be waved through: the row is
   // DONE only if the `creatio-ui-guidelines` skill was actually invoked on EVERY built page. Sessions gamed the
   // old wording by asserting "native components used → style parity is inherent" (a false equivalence — native
   // components are necessary, not sufficient; a 950-field wall is still native) and demoting real layout problems
   // to "refine if desired". So acceptance is now a single, checkable fact — did you run the skill on all pages —
-  // and the escape phrases are explicitly rejected.
-  G("Quality gates", [{ label: "`creatio-ui-guidelines` skill invoked on EVERY built page — the mandatory UI page-DESIGN pass. **DONE only if you actually invoked the `creatio-ui-guidelines` skill on EACH page this migration creates** (list page · form page · mini page · every typed page · every child page) AND fixed its findings. Evidence MUST name the skill and list the exact pages it ran on. **NOT acceptance — do NOT mark this done with any of:** \"native components / native containers used\", \"style parity is inherent\", \"looks fine\", \"template handles it\", or running it on only some pages; a dense/overloaded layout is a REQUIRED fix (or a decision to raise), never \"refine if desired\". NB: this is the UI **page-creation** guideline specifically — not the clio build `get-guidance` contracts you read to write the schema. Leave it `☐` until the skill has run on ALL of the pages above." }]);
+  // and the escape phrases are explicitly rejected. See `qualityGateRows`: it is now an EVIDENCE-gated row.
+  G("Quality gates", qualityGateRows(pageKey));
+  // ROOT SPLICE — only the page that owns the key `main` folds the tree, so a sub-page's own groups stay its own
+  // (its grandchildren are reached by the recursive walk, not by nesting rows inside rows).
+  groups.push(...rootSubPageGroups(result, isMain));
   return groups;
+}
+
+// ===== `--units` — the build QUEUE, and every key the executor must use ======================================
+// D2. `--units` publishes what an executor may not invent: the page keys of `--built.pages`, each page's expected
+// deliverables, the reachability keys with their applicability already DECIDED here, the evidence ids, and a
+// leaf-first build order. Everything a page "expects" is read off THAT PAGE'S OWN checklist rows — the very `vk`
+// literals `--verify` resolves — never off the fold entry's `fieldCount`/`ruleCount`, which are computed with a
+// deliberately different predicate (`countFormFields` also counts `crt.ImageInput`, `isField` does not) and would
+// hand the executor a number the gate does not check. Units and gate therefore agree by construction, not by
+// coincidence. `list` (D1) is NOT published: the list page's deliverables are rows of the `main` page and
+// `--built.pages` has no entry for it, so a key with no gated row of its own would be a hole by construction.
+const PAGE_ROLE_PREFIX = [["child:", "child"], ["typed:", "typed"], ["mini:", "mini"]];
+function pageRole(key) {
+  const hit = PAGE_ROLE_PREFIX.find(([p]) => key.startsWith(p));
+  return hit ? hit[1] : "main";
+}
+// The CLASSIC schema this page's expectations were derived from — `resolvedFrom` for a folded child, the declared
+// schema for a typed/mini page. `null` for the main record page (a root form page has no schema name in `result`)
+// and for a child that was never folded (reuse / unresolved): there is nothing to derive from, and inventing a
+// name here would read as "build this schema".
+function pageSourceSchema(node) {
+  if (!node) return null;
+  return node.resolvedFrom || node.schema || null;
+}
+const vkOfType = (rows, t) => rows.map((r) => r.vk).find((v) => v?.type === t);
+// Every EXPECTED count, verbatim off this page's own count `vk`s. `fieldNames` is the `fields` vk's `names` array:
+// without it the fields check is UNREACHABLE for the executor — it matches by element NAME and the name is not
+// derivable from the bound column (several classic items bind the same column as `col`, `col_2`, `col_3`).
+// A count of 0 means the page emits no row of that kind, i.e. nothing is expected and nothing is gated.
+function pageExpect(rows) {
+  const n = (t) => vkOfType(rows, t)?.n || 0;
+  const f = vkOfType(rows, "fields");
+  return { fields: n("fields"), fieldNames: [...(f?.names || [])], tabs: n("tabs"), details: n("details"), images: n("image") };
+}
+// ONE page entry. `expectedTemplate` is the SCHEMA NAME (via CHILD_TEMPLATE_SCHEMA at fold time), taken from the
+// `template` vk's `exp` — so it is the exact string the gate compares `parentSchemaName` against. The field is
+// OMITTED when the page emits no template row (D2: a null choice ⇒ no row ⇒ nothing to satisfy), rather than
+// published as null, which would read as "build it on nothing". `targetPackage` likewise comes from the
+// `placement` vk and is null when this page has no package gate — it is NOT back-filled from the run-level
+// manifest, because a package `--verify` does not check on this page must not appear in the executor's queue.
+function pageUnit(key, node, rows) {
+  const tpl = vkOfType(rows, "template")?.exp;
+  const pkg = vkOfType(rows, "placement")?.exp;
+  return {
+    key, role: pageRole(key), schema: pageSourceSchema(node),
+    ...(tpl == null ? {} : { expectedTemplate: tpl }),
+    targetPackage: pkg == null ? null : pkg,
+    expect: pageExpect(rows),
+  };
+}
+// The five REACHABILITY keys, each with its applicability decided HERE: `appliesWhen: true` iff this run actually
+// emits a gated row for it, so the executor can neither invent an obligation nor miss one. `reuseBindings` is
+// published like the rest — it is gated by the engine and was documented nowhere, so a migration with a reused
+// Freedom child page could not exit 0 by following the docs. `pages` lists the page keys whose rows read the key.
+export const REACHABILITY_KEYS = ["typedFormsBuilt", "typedRouting", "miniPageWired", "reuseBindings", "sectionRegistered"];
+function reachabilityUnits(rows) {
+  const found = new Map();
+  for (const r of rows) {
+    if (r.vk?.type !== "onstand") continue;
+    const e = found.get(r.vk.evidence) || { what: r.vk.what || null, miss: r.vk.miss || null, pages: [] };
+    if (!e.pages.includes(r.pageKey)) e.pages.push(r.pageKey);
+    found.set(r.vk.evidence, e);
+  }
+  return REACHABILITY_KEYS.map((key) => {
+    const e = found.get(key);
+    return { key, appliesWhen: !!e, what: e?.what || null, miss: e?.miss || null, pages: e?.pages || [] };
+  });
+}
+// LEAF-FIRST build order, computed in the engine so the executor does not derive it from the tree by eye: a page's
+// own sub-pages are emitted before it, `main` last. Deduped by the same `pageDedupeId` as the row splice, so a
+// diamond-shared child is built ONCE (and before both of its parents).
+function buildOrderNodes(result, seen, out) {
+  for (const c of result.childPages || []) takeInBuildOrder(c, seen, out);
+  for (const t of result.typedPages || []) takeInBuildOrder(t, seen, out);
+  takeInBuildOrder(result.miniPage, seen, out);
+  return out;
+}
+// Deduped on the FINAL `pageKey`, the same identity the row splice uses (D1) — the build queue and the row set are
+// then the same set of keys by construction, so a duplicate entry cannot appear here against a single `--units`
+// page entry.
+function takeInBuildOrder(node, seen, out) {
+  const key = node?.pageKey;
+  if (!key || !node.pageRows || seen.has(key)) return;
+  seen.add(key);
+  buildOrderNodes(node, seen, out);
+  out.push(key);
+}
+// Rows keyed by the page that owns them, in walk order (main first, then the deduped sub-page walk).
+function rowsByPageKey(groups) {
+  const byKey = new Map();
+  for (const g of groups) {
+    for (const r of g.rows) {
+      const k = r.pageKey || g.pageKey || "main";
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(r);
+    }
+  }
+  return byKey;
+}
+export function pageUnits(result, opts = {}) {
+  assignPageKeys(result);   // claim the global keys BEFORE anything reads one — `--units` is a root-level artifact
+  const byKey = rowsByPageKey(checklistGroups(result, opts));
+  const nodes = new Map(subPageNodes(result).map((nd) => [nd.pageKey, nd]));
+  const rows = [...byKey.values()].flat();
+  const evidence = rows.filter((r) => r.vk?.type === "evidence");
+  return {
+    entity: result.entity || null,
+    // The version the `--plan` artifact printed, republished here so the executor never has to parse it back out
+    // of `plan.md`. This is the ONLY machine-readable source of it: the approval gate compares the version the
+    // operator recorded in decisions.md against THIS field. `null` when the caller built the result by hand.
+    planVersion: typeof result.planVersion === "string" && result.planVersion.trim() ? result.planVersion.trim() : null,
+    sectionSchema: opts.planMeta?.sectionSchema || null,
+    pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || null, r)),
+    reachability: reachabilityUnits(rows),
+    // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so
+    // it is closed through `--built.evidence`/`.judge` exactly like any other evidence row — republished here with
+    // its raw kind/item so the queue names the decision, not just an id.
+    preflight: evidence.filter((r) => r.confirm)
+      .map((r) => ({ id: r.vk.id, pageKey: r.pageKey, kind: r.confirm.kind, item: r.confirm.item, requires: [...r.vk.requires] })),
+    evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
+    buildOrder: [...buildOrderNodes(result, new Set(), []), "main"],
+  };
 }
 
 // `--checklist` — the grouped Plan-vs-Done skeleton (all rows `☐ pending`), presented AFTER implementing. Not part
@@ -1349,63 +1701,156 @@ export function renderChecklist(result, opts = {}) {
 }
 
 // VERIFIED done-gate — the SAME grouped structure as `--checklist`, but Status AUTO-FILLED from the ACTUALLY BUILT
-// Freedom page (clio `get-page`: { ops:[{name,type,parentName}], parentSchemaName, miniPageBuilt }), so "done" is
-// checked against reality, not the agent's prose. STRUCTURAL rows (a `vk`) are machine-checked ✅/❌/⚠ and drive the
+// Freedom pages, so "done" is checked against reality, not the agent's prose. `--built` is a KEYED MAP over the
+// page tree — `{ pages: { "<pageKey>": { viewConfig, packageName, parentSchemaName } | false }, reachability,
+// evidence, judge }` — where `viewConfig` is clio `get-page`'s `bundle.viewConfig` verbatim (the MERGED page, so
+// template-provided components are visible). `--units` publishes the exact keys. A payload with no `pages` is the
+// legacy single-page shape and is read as the `main` page alone; the CLI rejects it, direct callers may use it.
+// STRUCTURAL rows (a `vk`) are machine-checked ✅/❌/⚠ and drive the
 // HARD verdict (any ❌ ⇒ INCOMPLETE, non-zero exit). Rows with no `vk` (placement / logic / confirm / child /
 // quality) are surfaced as `☐ confirm on-stand` (agent evidence) — visible so nothing drops, but not machine-gated
 // (get-page shows structure, not business-rule logic or which Freedom tab a field landed in). Driven by get-page,
 // so a broken browser/SSO on the stand is NOT an excuse to skip this gate.
 // The verify-kind resolvers, split by category so each (and the dispatcher) stays under Sonar CC 15. Each returns
 // [mark, evidence, outcome] where outcome ∈ "ok" | "missing" | "unverified" | "skip" — the caller tallies counts.
-function resolveStructuralVk(vk, ctx) {
-  const { ops, built } = ctx;
-  if (vk.type === "formpage") return ops.length ? ["✅ Done", "form page built (get-page returned its components)", "ok"] : ["❌ MISSING", "get-page returned no components for the form page", "missing"];
-  if (vk.type === "template") {
-    if (!built.parentSchemaName) return ["⚠ verify", "get-page `parentSchemaName` not provided — confirm the built page's template", "unverified"];
-    if (built.parentSchemaName === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
-    return ["⚠ verify", `built on \`${esc(built.parentSchemaName)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
-  }
-  if (built.miniPageBuilt === true) return ["✅ Done", "created on-stand", "ok"]; // vk.type === "mini"
-  if (built.miniPageBuilt === false) return ["❌ MISSING", "NOT created — '+ New' still opens the full form", "missing"];
-  return ["⚠ verify", "get-page the mini schema / pass built.miniPageBuilt", "unverified"];
+// D6's tri-state, for the rows that read this page's COMPONENTS: `false` = checked and genuinely absent (❌
+// MISSING) · a present-but-empty entry = checked and empty (❌ MISSING) · NO entry at all = nobody looked
+// (⚠ unverified). Only `resolveChildPageVk` implemented it; for a FOLDED sub-page an absent entry fell through
+// `pageOpsOf` → `[]` and was indistinguishable from an empty one, so every one of its rows read ❌ MISSING —
+// "you built it wrong" for a page the verifier simply never fetched. Both outcomes still block exit 0; what
+// changes is which of the two repairs the executor is sent to do. Own fn so no resolver gains a nested branch.
+function absentEntry(ctx, what) {
+  return ["⚠ verify", `no \`--built.pages["${esc(ctx.pageKey)}"]\` entry — ${what} not checked; get-page this page (or record \`false\` if it was deliberately not built)`, "unverified"];
 }
-// Verify the FIELDS count by IDENTITY when the built ops carry names: count how many EXPECTED field names are present.
-// Type-AGNOSTIC (a rich-text / lookup / color / future field still counts, matched by name) AND does not over-count
-// (an unrelated input of the right TYPE but a different NAME no longer compensates for a dropped business field — the
-// earlier `names.has || FIELD_RE` OR did exactly that). Type-based counting is the fallback ONLY when no built op has
-// a name. Missing expected names are reported. Extracted from resolveCountVk for Sonar CC 15.
-function resolveFieldsVk(vk, ctx) {
-  const names = new Set(vk.names || []);
-  const named = ctx.ops.filter((o) => o.name);
-  let b, missing = [];
-  if (named.length) {
-    const builtNames = new Set(named.map((o) => o.name));
-    b = [...names].filter((n) => builtNames.has(n)).length;
-    missing = [...names].filter((n) => !builtNames.has(n));
-  } else {
-    b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
-  }
-  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present on the built page`, "ok"];
+function resolveFormPageVk(ctx) {
+  if (ctx.ops.length) return ["✅ Done", "form page built (get-page returned its components)", "ok"];
+  if (ctx.entryAbsent) return absentEntry(ctx, "the form page");
+  return ["❌ MISSING", "get-page returned no components for the form page", "missing"];
+}
+function resolveTemplateVk(vk, ctx) {
+  const tpl = entryObject(ctx.page)?.parentSchemaName;
+  if (!tpl) return ["⚠ verify", "get-page `parentSchemaName` not provided for this page — confirm the built page's template", "unverified"];
+  if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
+  return ["⚠ verify", `built on \`${esc(tpl)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
+}
+// THE MINI PAGE, resolved like every other page: from `--built.pages["mini:<Schema>"]`, the key the engine itself
+// published. It is a page, so the SAME D6 tri-state applies — entry with components = built · `false` = reported
+// absent (hard MISSING) · no entry = nobody looked (unverified). Emphatically NOT `miniPageBuilt`: that legacy
+// boolean is a hand-authored assertion, it is the one field the keyed payload every document prescribes does not
+// carry, and while it was the only path, a correctly built mini page could never close its row.
+function resolveMiniFromPages(vk, ctx) {
+  if (!vk.key) return ["⚠ verify",
+    "no page key is published for this mini page — the plan did not FOLD it (assemble its bundle into `manifest.miniPageSchemas`, which the structure gate already demands, and re-plan); until then there is no `--built.pages` key to check it against, and none is invented here", "unverified"];
+  return resolveBuiltPageEntry(ctx.root?.pages?.[vk.key], vk.key, "the mini page");
+}
+// The LEGACY flat payload only (`--built` with no `pages` map — the shape the CLI hard-rejects, kept for the
+// direct `renderVerify(result, opts, built)` callers). Once a `pages` map exists, `miniPageBuilt` is NEVER read:
+// a keyed payload that also carried the stale boolean would otherwise close the row by assertion, which is the
+// defect this split closes. It is an alias for the legacy shape, never a second path out of the keyed one.
+function resolveMiniLegacy(ctx) {
+  const miniBuilt = entryObject(ctx.page)?.miniPageBuilt ?? ctx.root?.miniPageBuilt;
+  if (miniBuilt === true) return ["✅ Done", "created on-stand (legacy flat `--built.miniPageBuilt`)", "ok"];
+  if (miniBuilt === false) return ["❌ MISSING", "NOT created — '+ New' still opens the full form", "missing"];
+  return ["⚠ verify", "supply `--built.pages` keyed by page (the mini page has its own `mini:<Schema>` key) — this payload carries no page map at all", "unverified"];
+}
+function resolveMiniVk(vk, ctx) {
+  return entryObject(ctx.root?.pages) ? resolveMiniFromPages(vk, ctx) : resolveMiniLegacy(ctx);
+}
+function resolveStructuralVk(vk, ctx) {
+  if (vk.type === "formpage") return resolveFormPageVk(ctx);
+  if (vk.type === "template") return resolveTemplateVk(vk, ctx);
+  if (vk.type === "mini") return resolveMiniVk(vk, ctx);
+  return unknownVk(); // every branch is type-tested: no resolver in this file is reached by fallthrough
+}
+// IDENTITY leg of the fields row: the plan published the expected element NAMES, so the ONLY acceptable evidence is
+// that those names are on the built page. Type-AGNOSTIC (a rich-text / lookup / color / future field still counts,
+// matched by name) AND it does not over-count (an unrelated input of the right TYPE but a different NAME cannot
+// compensate for a dropped business field). Own fn so `resolveFieldsVk` keeps one level of nesting (Sonar CC 15).
+//
+// The no-names case is the defect this split closes. A built page whose components carry no `name` at all used to
+// FALL BACK to counting components whose `type` matches FIELD_RE — so the right NUMBER of the right TYPE printed
+// "N of N expected fields present on the built page" and exited 0, while not one expected field name had been
+// shown to exist. Identity was never checked, yet the status text read as though it had been. When names are
+// expected, a nameless built set is NOT weaker evidence, it is NO evidence: return `unverified` and say so.
+//
+// NB the guard is `ops.length && !builtNames.size`, not `!builtNames.size`. A page whose entry IS present and
+// yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
+// missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
+// `name` is the uncheckable case.
+function resolveFieldsByIdentity(vk, names, ops) {
+  const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
+  if (ops.length && !builtNames.size) return ["⚠ verify",
+    `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
+  const missing = names.filter((n) => !builtNames.has(n));
+  const b = names.length - missing.length;
+  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
-  const miss = missing.length ? ` — missing: ${missing.slice(0, 8).join(", ")}${overflow}` : "";
+  const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
 }
+// The FIELDS row. Three inputs, three different answers, and the status text must name which one was used:
+//   · no `--built.pages[<key>]` entry  ⇒ D6 tri-state — nobody fetched this page, so ⚠ unverified (not ❌, and not
+//     the "carried no element names" wording either, which would be a false statement about a page never read);
+//   · the vk publishes expected NAMES  ⇒ identity is the only acceptable evidence (`resolveFieldsByIdentity`);
+//   · the vk publishes NO names        ⇒ and only then, count components of a field TYPE, saying so in the text.
+// Extracted from resolveCountVk for Sonar CC 15.
+function resolveFieldsVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.n} expected field(s)`);
+  const names = [...new Set(vk.names || [])];
+  if (names.length) return resolveFieldsByIdentity(vk, names, ctx.ops);
+  const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
+  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present by TYPE — this deliverable published no expected field names, so identity was not checkable`, "ok"];
+  return ["⚠ verify", `${b}/${vk.n} components of a field type present — this deliverable published no expected field names, so identity was not checkable`, "unverified"];
+}
+// Own fn so `resolveCountVk` gains no nested branch when the D6 tri-state arrives (Sonar CC 15).
+function resolveImageVk(vk, ctx) {
+  const b = ctx.typeCount("crt.ImageInput");
+  if (b >= vk.n) return ["✅ Done", `${b} crt.ImageInput built`, "ok"];
+  if (b > 0) return ["⚠ verify", `${b}/${vk.n} crt.ImageInput built`, "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, "the crt.ImageInput count");
+  return ["❌ MISSING", "no crt.ImageInput on the built page — the image field was not added", "missing"];
+}
+// The component types a built page may legitimately use for a checked deliverable, in ONE place so a platform
+// rename is a one-line change here rather than a hunt through the resolvers.
+//
+// TABS: measured on a live stand (2026-08-08) — `crt.Tab` does NOT exist. `get-component-info` for the target
+// environment lists `crt.TabContainer` ("Single tab within a TabPanel") and `crt.TabPanel`, and NO `crt.Tab`;
+// eight real Freedom pages across two stands carry 0 `crt.Tab` nodes and 2-7 `crt.TabContainer` each. The gate
+// counted `crt.Tab`, so the "Tabs — N expected" row could never read ✅ on a correctly built page. Both spellings
+// are accepted rather than swapped: if any older platform version does emit `crt.Tab`, accepting it costs
+// nothing, while rejecting `crt.TabContainer` mis-reports every current page.
+// NOTE: the mapper now emits `crt.TabContainer` (the type the platform actually builds); `crt.Tab` stays
+// accepted here only as a legacy spelling, for a page built before that fix.
+const BUILT_TYPES = {
+  tabs: ["crt.TabContainer", "crt.Tab"],
+  details: ["crt.DataGrid"],
+};
 function resolveCountVk(vk, ctx) {
   if (vk.type === "fields") return resolveFieldsVk(vk, ctx);
-  if (vk.type === "image") {
-    const b = ctx.typeCount("crt.ImageInput");
-    if (b >= vk.n) return ["✅ Done", `${b} crt.ImageInput built`, "ok"];
-    if (b > 0) return ["⚠ verify", `${b}/${vk.n} crt.ImageInput built`, "unverified"];
-    return ["❌ MISSING", "no crt.ImageInput on the built page — the image field was not added", "missing"];
-  }
-  const noun = vk.type === "tabs" ? "crt.Tab" : "crt.DataGrid"; // tabs | details
-  const b = ctx.typeCount(noun);
+  if (vk.type === "image") return resolveImageVk(vk, ctx);
+  const accepted = BUILT_TYPES[vk.type === "tabs" ? "tabs" : "details"];
+  const noun = accepted[0]; // what the message names: the spelling a current platform actually builds
+  const b = accepted.reduce((n, t) => n + ctx.typeCount(t), 0);
   if (b >= vk.n) return ["✅ Done", `${b} ${noun} built`, "ok"];
   if (b > 0) return ["⚠ verify", `${b}/${vk.n} ${noun} built`, "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${noun} count`);
   return ["❌ MISSING", `no ${noun} built`, "missing"];
+}
+// The noun the absent-entry message names, per component kind. Own fn so `resolveComponentVk` gains exactly one
+// branch for the D6 tri-state and stays under Sonar CC 15.
+const COMPONENT_NOUN = { "dcm-bar": "the DCM case progress bar", "dcm-next": "the crt.NextSteps tab", card: "the card-action button" };
+function componentNoun(vk) {
+  if (vk.type === "feature") return esc(String(vk.ftype || "the standard feature"));
+  return COMPONENT_NOUN[vk.type] || "this page's components";
 }
 function resolveComponentVk(vk, ctx) {
   const { hasType, parentTpl } = ctx;
+  // D6 tri-state, the same one `resolveFormPageVk` / `resolveImageVk` / `resolveCountVk` apply: NO
+  // `--built.pages[<key>]` entry means nobody fetched this page, which is NOT the same as fetching it and finding
+  // the component absent. Without this branch every COMPONENT row read ❌ MISSING — "you built it wrong" — for a
+  // page the verifier simply never looked at, and the executor was sent to rebuild instead of to re-read.
+  // `false` (reported absent) and a present-but-empty entry still fall through to the hard ❌ below.
+  if (ctx.entryAbsent) return absentEntry(ctx, componentNoun(vk));
   if (vk.type === "feature") return hasType(vk.ftype) ? ["✅ Done", `found ${vk.ftype}`, "ok"] : ["❌ MISSING", `NO ${vk.ftype} on the built page`, "missing"];
   if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`, "ok"] : ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``, "missing"]; }
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
@@ -1420,50 +1865,241 @@ const VK_COMPONENT = new Set(["feature", "dcm-bar", "dcm-next", "card"]);
 // supplies in `--built` (e.g. `built.typedRouting`): true → Done; false → MISSING (exit 2); ABSENT → unverified
 // (exit 2, NOT "skip") — so `--verify` cannot exit 0 until the wiring is confirmed. (deep-review #1.)
 function resolveOnstandVk(vk, ctx) {
-  const v = ctx.built?.[vk.evidence];
+  const v = reachabilityValue(ctx.root, vk.evidence);
   const what = vk.what ? ` — run the on-stand ${vk.what}` : "";
   if (v === true) return ["✅ Done", `${vk.evidence} confirmed on-stand`, "ok"];
   if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified"];
 }
 const VK_ONSTAND = new Set(["onstand"]);
+// PACKAGE PLACEMENT — the built page's own package, read off THIS page's entry. A page saved into the wrong
+// package is built and invisible to the customer's app; nothing in its body shows that, so `get-page`'s page
+// metadata (`packageName`) is the source. The row only exists when the plan named a target package.
+function resolvePlacementVk(vk, ctx) {
+  if (vk.type !== "placement") return unknownVk();
+  const pkg = entryObject(ctx.page)?.packageName;
+  if (pkg == null || pkg === "") return ["⚠ verify", `built-page package not reported — confirm the page lives in \`${esc(vk.exp)}\``, "unverified"];
+  if (pkg === vk.exp) return ["✅ Done", `built in \`${esc(vk.exp)}\``, "ok"];
+  return ["❌ MISSING", `built in \`${esc(String(pkg))}\` but the plan targets \`${esc(vk.exp)}\``, "missing"];
+}
+// A CHILD PAGE whose Classic source was never folded: nothing about it is derivable from the plan, so the only
+// machine question left is "does a page exist for this key, and does it have any content". Resolved from the
+// EXTRACTED CONTENT, never from key presence — `"child:X": {}` (or `{ viewConfig: {} }`) is an empty page, and
+// treating the key's existence as proof let an unbuilt child close the gate at exit 0.
+// It has its OWN set and an explicit type test. `VK_STRUCTURAL` used to end in a FALLTHROUGH branch with no type
+// test — adding `childpage` to that set would have made a stray `miniPageBuilt: true` mark every child page Done.
+// That branch is gone (`resolveStructuralVk` now type-tests all three and falls back to `unknownVk`), but the
+// rule stands: never add a type to a set whose last branch is reached without testing the type.
+// "Does a page exist under this key, and does it have any content" — D6's tri-state over ONE `--built.pages`
+// entry, shared by the two rows that ask exactly that question about a whole page: an unfolded CHILD page (below)
+// and the MINI page (`resolveMiniFromPages`). One implementation so the two can never drift into answering the
+// same question differently — and so the mini row cannot quietly keep a second, assertion-shaped path.
+function resolveBuiltPageEntry(entry, key, noun) {
+  if (entry === false) return ["❌ MISSING", `no page built for \`${esc(key)}\` (--built reported it absent)`, "missing"];
+  if (entry == null) return ["⚠ verify", `no \`--built.pages["${esc(key)}"]\` entry — get-page ${noun} (or record \`false\` if it was deliberately not built)`, "unverified"];
+  const ops = pageOpsOf(entry);
+  if (ops.length) return ["✅ Done", `page built — ${ops.length} component(s) returned by get-page`, "ok"];
+  return ["⚠ verify", `the \`${esc(key)}\` entry yielded NO components — confirm the page was really built (an empty viewConfig proves nothing)`, "unverified"];
+}
+function resolveChildPageVk(vk, ctx) {
+  if (vk.type !== "childpage") return unknownVk();
+  return resolveBuiltPageEntry(ctx.page, ctx.pageKey, "this child page");
+}
+// EVIDENCE — a deliverable no page body can prove (the page-DESIGN pass, a ⚠ Confirm item). Two independent
+// writers must agree before it closes: the read-only verifier files the record under the engine-derived id, and a
+// SEPARATE judge marks it convincing. Silence is NOT consent — an absent judge leaves the row unverified, so a
+// self-asserted "done" can no longer close it; `convincing: false` (or a `false` record) is a hard MISSING.
+function resolveEvidenceVk(vk, ctx) {
+  if (vk.type !== "evidence") return unknownVk();
+  const rec = ctx.root?.evidence?.[vk.id];
+  const judged = ctx.root?.judge?.[vk.id]?.convincing;
+  const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}) + an independent judge verdict`;
+  if (rec === false) return ["❌ MISSING", `evidence record ${need} filed as \`false\` — the deliverable was NOT done`, "missing"];
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
+  if (evidenceComplete(rec, vk.requires) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
+  if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];
+  return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified"];
+}
+// Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
+// The earlier predicate ended in `v != null`, so `components: false`, `components: {}` and `referencePage: 0` all
+// counted as a complete record and closed the row — a record that names no page and lists no component proves
+// nothing, and the judge is handed junk to bless. Each required field is typed; anything else is incomplete
+// (⇒ ⚠ unverified, never a silent pass). Extracted so `resolveEvidenceVk` stays under Sonar CC 15.
+const nonBlankString = (v) => typeof v === "string" && v.trim() !== "";
+const nonEmptyStringList = (v) => Array.isArray(v) && v.length > 0 && v.every(nonBlankString);
+// Per-field shape for the fields the engine itself requires. A `requires` entry with no entry here falls back to
+// the STRICT generic shape (a non-blank string, or a non-empty list of non-blank strings) — deliberately not an
+// "unknown field ⇒ accept" escape, which would reintroduce the same hole under another name.
+const EVIDENCE_FIELD_SHAPE = { referencePage: nonBlankString, components: nonEmptyStringList };
+const evidenceFieldOk = (k, v) => (EVIDENCE_FIELD_SHAPE[k] || ((x) => nonBlankString(x) || nonEmptyStringList(x)))(v);
+function evidenceComplete(rec, requires) {
+  if (!rec || typeof rec !== "object" || Array.isArray(rec)) return false;
+  return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k]));
+}
+const VK_PLACEMENT = new Set(["placement"]);
+const VK_CHILDPAGE = new Set(["childpage"]);
+const VK_EVIDENCE = new Set(["evidence"]);
+const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
 function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
   if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
   if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
   if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
-  return ["⚠ verify", "confirm on-stand", "unverified"];
+  if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
+  if (VK_CHILDPAGE.has(vk.type)) return resolveChildPageVk(vk, ctx);
+  if (VK_EVIDENCE.has(vk.type)) return resolveEvidenceVk(vk, ctx);
+  return unknownVk();
+}
+
+// --- the `--built` payload, read per page ------------------------------------------------------------------
+// `--built.pages[<key>]` is what clio `get-page` returned for ONE page: `{ viewConfig, packageName,
+// parentSchemaName }`, or `false` when the page is genuinely absent. `viewConfig` comes VERBATIM from the
+// response `bundle` — the MERGED page, template included. Deliberately not the page's own body: an element the
+// TEMPLATE provides is touched with `operation: "merge"` and carries NO type (see
+// `tests/fixtures/test1_form_page_live.js`), so a check fed the own body could never confirm Feed, FileList,
+// ApprovalList, ContactCommunication or the DCM bar — they would read ❌ MISSING on a correctly built page.
+const entryObject = (e) => (e && typeof e === "object" ? e : null);
+// `bundle.viewConfig` is a JSON TREE (`items` nesting) — plain JSON, no parser involved. Walk it into the flat
+// `{name, type}` op list every resolver already counts. Nodes carry no `parentName`; that is safe, because no
+// resolver reads one (fields match on `name`, everything else counts `type`).
+function walkViewConfig(node, out = []) {
+  if (Array.isArray(node)) { for (const n of node) walkViewConfig(n, out); return out; }
+  if (!node || typeof node !== "object") return out;
+  if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
+  return walkViewConfig(node.items, out);
+}
+// This page's record. `pages` ABSENT ⇒ the single-page payload shape: the whole object IS the main page (what the
+// direct `renderVerify(result, opts, built)` callers supply). The fallback is keyed on `pages` being absent and
+// NEVER on the ENTRY being absent: once a map is supplied, an omitted key stays "not checked" (unverified) —
+// falling back to the root there would resolve a CHILD's counts against the MAIN page's components, which is the
+// exact false green this gate exists to close.
+function pageEntryOf(root, pageKey) {
+  if (!entryObject(root.pages)) return pageKey === "main" ? root : undefined;
+  return root.pages[pageKey];
+}
+function pageOpsOf(entry) {
+  const e = entryObject(entry);
+  if (!e) return [];
+  if (e.viewConfig != null) return walkViewConfig(e.viewConfig);
+  return Array.isArray(e.ops) ? e.ops : [];
+}
+// REACHABILITY is ROOT-level data (a RelatedPage binding / the app menu — a config record, not a page body), so
+// it is read off the payload itself, never off a page entry. Canonical home is `reachability`; a payload that
+// carries the boolean at the top level still resolves, but ONLY where `reachability` says nothing about that key
+// — `reachability.<k> === false` is a hard MISSING and must never be overturned by a stale root-level `true`.
+function reachabilityValue(root, key) {
+  const v = root?.reachability?.[key];
+  return v === undefined ? root?.[key] : v;
+}
+const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
+// ONE ctx per page (D8). It carries BOTH this page's record and the payload ROOT: `placement` and every
+// count/structural check read the PAGE (so a child's field count can never be closed by the parent's
+// components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
+// records are run-level, not page-level). `parentTpl` has NO plan fallback — reading the PLANNED template here
+// let `dcm-bar` show ✅ Done off a template nobody built while the `template` row went ⚠ on the same input.
+function verifyCtx(root, pageKey) {
+  const page = pageEntryOf(root, pageKey);
+  const ops = pageOpsOf(page);
+  const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
+  return {
+    pageKey, page, root, ops, typeCount,
+    // D6 tri-state, decided ONCE here where `pageEntryOf`'s three outcomes are still distinguishable: `undefined`
+    // = no entry (nobody looked) · `false` = reported absent · an object = looked at, whatever it contained. Past
+    // `pageOpsOf` the first two are both `[]` and no resolver can tell them apart any more.
+    entryAbsent: page === undefined,
+    hasType: (t) => typeCount(t) > 0,
+    FIELD_RE: VERIFY_FIELD_RE,
+    parentTpl: entryObject(page)?.parentSchemaName || "",
+  };
+}
+function verifyCtxFactory(root) {
+  const cache = new Map();
+  return (pageKey) => {
+    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey));
+    return cache.get(pageKey);
+  };
+}
+// Per-page AND total tallies. Per-page matters because the table now spans a whole page TREE: "3 missing" with no
+// page attribution tells an executor to re-check everything, when only one child page is short.
+// Each page also keeps its OPEN ROWS — the rows that are not ✅, with the very Deliverable / Status / Evidence
+// text the table shows. That text is the repair instruction ("missing: Amount", "built in `X` but the plan targets
+// `Y`", "filed but NOT judged"), and until now the only way to get it was to read the Markdown: the machine return
+// carried three integers per page and the stderr line carried at most six pages. A caller scheduling repair rounds
+// had to transcribe a table — the "verdict asserted, not computed" failure this gate exists to remove.
+function verifyTally() {
+  const t = { missing: 0, unverified: 0, pages: {} };
+  t.add = (pageKey, outcome, row) => {
+    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, complete: true, openRows: [] });
+    if (outcome !== "missing" && outcome !== "unverified") return;
+    t[outcome]++; p[outcome]++; p.complete = false;
+    p.openRows.push(row);
+  };
+  return t;
+}
+// D12 — exit 2 is NOT one condition, and the two it conflates need opposite responses. `verifyIncomplete` says MY
+// BUILD is short: build the missing pieces, file the evidence, re-verify. `gate` / `structure` / `coverage` say
+// the PLAN is incomplete — they fire in every mode, describe the MANIFEST, and no amount of building clears them;
+// re-running `--verify` in a loop against them costs time and never converges. Name which one this run hit.
+export function planGaps(result) {
+  const g = [];
+  if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
+  if (result?.structure && result.structure.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
+  if (result?.coverage && result.coverage.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
+  return g;
+}
+function verifyVerdict(missing, unverified) {
+  if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
+  if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
+  return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
+}
+// The PLAN-gap banner (D12), stated separately from the build verdict so the two are never read as one condition.
+function planGapBanner(result) {
+  const gaps = planGaps(result);
+  if (!gaps.length) return [];
+  return ["", `> ⛔ **PLAN-level gap — NOT buildable-out-of:** ${gaps.join(" · ")}. This describes the plan/manifest, not your build: the CLI exits 2 for it in EVERY mode, and re-running \`--verify\` can never clear it. Return it to the caller; fix the manifest and re-plan.`];
 }
 
 export function renderVerify(result, opts = {}, built = {}) {
-  const ops = Array.isArray(built.ops) ? built.ops : [];
-  const parentTpl = built.parentSchemaName || opts.planMeta?.formTemplate || "";
-  const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
-  const hasType = (t) => typeCount(t) > 0;
-  const FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
-  let missing = 0, unverified = 0;
-  const ctx = { ops, built, typeCount, hasType, FIELD_RE, parentTpl };
-  // Resolve a row's machine Status from the built page (via the split resolvers above); tally the counts here.
-  // vk-less rows → agent-confirmed (outcome "skip", not part of the gate).
-  const resolve = (vk) => {
-    const [mark, ev, outcome] = resolveVk(vk, ctx);
-    if (outcome === "missing") missing++;
-    else if (outcome === "unverified") unverified++;
-    return [mark, ev];
-  };
+  const root = entryObject(built) || {};
+  const ctxFor = verifyCtxFactory(root);
+  const tally = verifyTally();
   const groups = checklistGroups(result, opts);
   const L = []; let n = 0;
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
-    for (const r of g.rows) { const [mark, ev] = resolve(r.vk); L.push(`| ${++n} | ${r.label} | ${mark} | ${esc(ev)} |`); }
+    for (const r of g.rows) {
+      const key = r.pageKey || g.pageKey || "main";
+      const [mark, ev, outcome] = resolveVk(r.vk, ctxFor(key));
+      // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
+      // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
+      // one text, not a paraphrase of it.
+      const rowNo = ++n;
+      tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, ...(r.id ? { id: r.id } : {}) });
+      L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
+    }
   }
-  let verdict;
-  if (missing > 0) verdict = `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING** (fix and re-verify)`;
-  else if (unverified > 0) verdict = `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
-  else verdict = `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
+  const { missing, unverified, pages } = tally;
+  const verdict = verifyVerdict(missing, unverified);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
-    `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page (\`get-page\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows (logic / confirm / child / quality / placement) are surfaced for the agent — not machine-gated. ${verdict}`,
-    ...L, "", `**Verdict:** ${verdict}`].join("\n");
-  return { markdown: md, missing, unverified, complete: missing === 0 && unverified === 0 };
+    `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
+    ...planGapBanner(result),
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
+  return { markdown: md, missing, unverified, complete: missing === 0 && unverified === 0, pages };
+}
+
+// The MACHINE-READABLE verdict (`--verify --verify-json <file>`). Everything `renderVerify` already computed —
+// the totals, the per-page tallies and each page's open rows — plus D12's plan-gap classification, in ONE object.
+// Without it a caller's scheduling arithmetic ran over an agent's transcription of the Markdown table: the table
+// carries no per-page counts at all, and the only per-page numbers anywhere were on the stderr line, capped at six
+// pages. `planGaps` is what tells a BUILD gap (repairable on-stand — build, file evidence, re-verify) from a PLAN
+// gap (not buildable-out-of — return it to the caller), so both legs of exit 2 are readable without prose.
+// `complete` here is the BUILD verdict only, exactly as in `renderVerify`; a run can be `complete: true` with a
+// non-empty `planGaps` (and still exit 2). The Markdown table stays the human report — this is additive.
+export function verifyReport(result, v) {
+  return {
+    complete: v.complete, missing: v.missing, unverified: v.unverified,
+    planGaps: planGaps(result),
+    pages: v.pages,
+  };
 }
