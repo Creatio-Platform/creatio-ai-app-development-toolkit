@@ -1914,7 +1914,20 @@ function resolveEvidenceVk(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const judged = ctx.root?.judge?.[vk.id]?.convincing;
   const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}) + an independent judge verdict`;
-  if (rec === false) return ["❌ MISSING", `evidence record ${need} filed as \`false\` — the deliverable was NOT done`, "missing"];
+  // A record filed as `false` is the VERIFIER stating the deliverable is genuinely absent, so it is a hard
+  // MISSING — the judge never overrides it, because a judge rules on records and does not create them.
+  // But it must not be reported as the JUDGE's doing. A live run filed `false` here while the judge, having
+  // read the built page, wrote `convincing: true` and named the replacement elements it found by name; the
+  // row said "judge verdict filed as `false`" — blaming the judge for a verdict it did not write, and hiding
+  // the one signal that actually mattered: the two roles DISAGREE, so one of them is wrong about the page.
+  // Surface both, and say which way to resolve it.
+  if (rec === false) {
+    const why = ctx.root?.judge?.[vk.id]?.why;
+    const contradiction = judged === true
+      ? ` — NOTE: the judge reviewed it and DISAGREES${why ? ` ("${esc(String(why)).slice(0, 240)}")` : ""}. One of the two is wrong about the built page: re-file the record with what is actually there, or confirm the deliverable really is absent.`
+      : "";
+    return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
+  }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
   if (evidenceComplete(rec, vk.requires) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified"];

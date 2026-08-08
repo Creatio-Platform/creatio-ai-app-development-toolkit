@@ -5065,5 +5065,44 @@ try {
   }
 }
 
+/* ================================================================================================
+   ENG-94975 — a record FILED AS `false` is the VERIFIER's statement, and the row must say so.
+   Found on a live build run: the verifier filed `false` for ContractPageVisaBlock while the judge, having
+   read the built page, wrote `convincing: true` and named the replacement elements it found (ApprovalsTab,
+   ApprovalList, ContractApprovalWidget, …). The row reported "an independent judge verdict filed as `false`"
+   — blaming the judge for a verdict it never wrote, and hiding the only signal that mattered: the two roles
+   DISAGREE about the page, so one of them is wrong. The outcome stays ❌ MISSING (a judge rules on records,
+   it does not create them), but the message has to name who filed what.
+   ================================================================================================== */
+{
+  const evRes = { changeSet: { viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+      needsDecision: [{ kind: "unmapped-component", item: "VisaBlock" }] }, signals: {} };
+  const evId = "main#confirm:unmapped-component:VisaBlock";
+  const evPage = { viewConfig: { items: [] }, parentSchemaName: "T", schemaUId: "11111111-1111-4111-8111-111111111111" };
+  const run = (evidence, judge) => renderVerify(evRes, {}, { pages: { main: evPage }, evidence, judge });
+  const rowOf = (r) => (r.markdown.split("\n").find((l) => /unmapped-component/.test(l)) || "");
+
+  const disagree = run({ [evId]: false }, { [evId]: { convincing: true, why: "the replacements are all present under those names" } });
+  check("ENG-94975: a record filed `false` is attributed to the VERIFIER, not reported as a judge verdict",
+    () => /FILED AS .false. by the verifier/.test(rowOf(disagree)) && !/judge verdict filed as/.test(rowOf(disagree)),
+    () => rowOf(disagree));
+  check("ENG-94975: when the judge DISAGREES with a `false` record the row surfaces the contradiction (one of the two is wrong about the page)",
+    () => /judge reviewed it and DISAGREES/.test(rowOf(disagree)) && /replacements are all present/.test(rowOf(disagree)),
+    () => rowOf(disagree));
+  check("ENG-94975: a `false` record is still a hard MISSING — the judge rules on records, it does not create them",
+    () => disagree.missing >= 1 && /❌ MISSING/.test(rowOf(disagree)),
+    () => ({ missing: disagree.missing, row: rowOf(disagree) }));
+
+  const plain = run({ [evId]: false }, {});
+  check("ENG-94975: a `false` record with NO judge verdict reports only what the verifier filed — no contradiction claimed that nobody made",
+    () => /FILED AS .false. by the verifier/.test(rowOf(plain)) && !/DISAGREES/.test(rowOf(plain)),
+    () => rowOf(plain));
+
+  const agree = run({ [evId]: false }, { [evId]: { convincing: false, why: "genuinely absent" } });
+  check("ENG-94975: when the judge AGREES it is absent, no contradiction is reported either",
+    () => !/DISAGREES/.test(rowOf(agree)) && agree.missing >= 1,
+    () => rowOf(agree));
+}
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
