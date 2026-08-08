@@ -137,3 +137,21 @@ agent that never saw this run.
 The `--verify` table is the report. A hand-authored "here is where things stand" summary in its
 place is the failure mode this whole skill replaces — blocked and done both come from the same
 machine-verified artifact.
+
+## Environment faults are NOT build failures — never let one spend a repair round
+
+Measured on a live stand while exercising this loop. A clio call can fail for reasons that have
+nothing to do with what was built, and each looks like a data problem until you recognise it:
+
+| Symptom | What it really is | What to do |
+| --- | --- | --- |
+| `'<' is an invalid start of a value` / `Unexpected character encountered while parsing value: <` | The cached session expired and Creatio answered the LOGIN PAGE (HTML) instead of JSON. clio does **not** re-login by itself, and re-running `reg-web-app` on the same environment name does **not** clear it. | Register the SAME uri under a NEW environment name and use that, or pass `uri` + `login` + `password` directly for the call. Then continue — nothing about the build is wrong. |
+| First call takes 10-15 s, later calls are fast | The app pool was asleep; the first request woke it. | Retry once. Do not treat the slow call as a timeout failure. |
+| `nodename nor servname provided, or not known` | DNS/VPN dropped, not a Creatio fault. | Re-check the tunnel, then retry. |
+| One tool returns HTML while `get-page` / `list-pages` still work | That specific command needs `cliogate` installed on the stand (e.g. `list-packages`, `get-target-package`). | Get the same fact another way (`list-apps` → `get-app-info` for a package name) rather than declaring the environment broken. |
+
+**Rule: an environment fault must not count toward a unit's round budget.** A round is spent only
+when the stand answered and the deliverable is still short. Classify the failure first — if it is any
+row above, fix the connection and re-run the same round. Otherwise a stand that merely fell asleep
+can park a perfectly buildable unit after three "failed" rounds and hand the caller a question that
+has nothing to answer.
