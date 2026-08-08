@@ -468,6 +468,16 @@ class TestValidateRequirementsDocTables(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("field table", str(ctx.exception).lower())
 
+    def test_table_header_below_first_line_of_block_is_accepted(self):
+        # Guards TABLE_HEADER_RE's re.MULTILINE: the field table sits several lines
+        # below the object heading (never the block's first line). Push it even
+        # further down with extra prose; it must still be found and accepted.
+        doc = VALID_DOC.replace(
+            "**Description:** Central work item.\n",
+            "**Description:** Central work item.\nExtra context line one.\nExtra context line two.\n",
+        )
+        validate_requirements_doc(doc)  # must not raise (header found on a non-first line)
+
 
 class TestValidateRequirementsDocMarkers(unittest.TestCase):
     def test_missing_minimum_to_create_marker(self):
@@ -513,6 +523,19 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
 
 
 class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
+    def test_object_block_starting_with_blank_line_names_heading_in_error(self):
+        # OBJECT_HEADING_RE's leading `^\s*` can begin a block on the blank line
+        # before the heading, so a block's first line may be blank. The error must
+        # name the first NON-BLANK line (the heading), not ''. Force extra blank
+        # lines before §3.1 and drop a required marker.
+        doc = VALID_DOC.replace("## 3. Object Model\n", "## 3. Object Model\n\n\n")
+        doc = doc.replace("**Primary display field:** `Name`\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        msg = str(ctx.exception)
+        self.assertIn("Primary display field:", msg)
+        self.assertIn("Section object: Task", msg)  # heading named, not ''
+
     def test_missing_title_line_in_entity(self):
         doc = VALID_DOC.replace("**Title:** Task\n", "").replace("- Title: Status;", "- Status;")
         with self.assertRaises(WorkflowError) as ctx:
