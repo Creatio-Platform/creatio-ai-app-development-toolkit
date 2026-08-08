@@ -11,6 +11,8 @@ import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-fre
 import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
 import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
+import { readdirSync, statSync, unlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {
@@ -156,35 +158,35 @@ check("workflow: every helper this suite covers is inside the markers (a move-ou
 
 // --- isOpenPage: the tri-state. Only an explicit `complete: true` closes a unit. ---
 check("isOpenPage: `complete: true` is the ONLY thing that closes a unit",
-  wf.isOpenPage({ pages: { main: { complete: true } } }, "main") === false);
-check("isOpenPage: `complete: false` is open", wf.isOpenPage({ pages: { main: { complete: false } } }, "main") === true);
+  () => (wf.isOpenPage({ pages: { main: { complete: true } } }, "main") === false));
+check("isOpenPage: `complete: false` is open", () => (wf.isOpenPage({ pages: { main: { complete: false } } }, "main") === true));
 check("isOpenPage: a key ABSENT from the verdict is OPEN, not closed (the baseline hole: no verdict yet ⇒ everything is left to build)",
-  wf.isOpenPage({ pages: {} }, "main") === true);
+  () => (wf.isOpenPage({ pages: {} }, "main") === true));
 check("isOpenPage: an EMPTY verdict object (the `--verify` that could not run) leaves every unit open",
-  wf.isOpenPage({ complete: false, missing: 0, unverified: 0, pages: {} }, "child:X") === true);
+  () => (wf.isOpenPage({ complete: false, missing: 0, unverified: 0, pages: {} }, "child:X") === true));
 check("isOpenPage: no verdict at all (undefined) is open, never silently done",
-  wf.isOpenPage(undefined, "main") === true && wf.isOpenPage(null, "main") === true);
+  () => (wf.isOpenPage(undefined, "main") === true && wf.isOpenPage(null, "main") === true));
 check("isOpenPage: an entry WITHOUT a `complete` field is open (absent ≠ true)",
-  wf.isOpenPage({ pages: { main: { missing: 0 } } }, "main") === true);
+  () => (wf.isOpenPage({ pages: { main: { missing: 0 } } }, "main") === true));
 
 // --- isOpenReach: the string tri-state, and the page coupling. ---
 const reachUnit = { key: "miniPageWired", kind: "reach", pages: ["main"] };
 check("isOpenReach: the literal string 'true' closes it regardless of the pages",
-  wf.isOpenReach(reachUnit, { miniPageWired: "true" }, { pages: { main: { complete: false } } }) === false);
+  () => (wf.isOpenReach(reachUnit, { miniPageWired: "true" }, { pages: { main: { complete: false } } }) === false));
 // Same verdict as the row above (main still short) — only the state VALUE differs. The string closes the
 // unit, the boolean does not: the tri-state is carried as literal strings on purpose, and a boolean here
 // would send a build agent to redo wiring that is already done (or, worse, read as done when it is not).
 check("isOpenReach: a real BOOLEAN true does NOT close it (the state is carried as strings on purpose)",
-  wf.isOpenReach(reachUnit, { miniPageWired: true }, { pages: { main: { complete: false } } }) === true);
+  () => (wf.isOpenReach(reachUnit, { miniPageWired: true }, { pages: { main: { complete: false } } }) === true));
 check("isOpenReach: 'false' (confirmed absent) is open work, like 'unset'",
-  wf.isOpenReach(reachUnit, { miniPageWired: "false" }, { pages: { main: { complete: false } } }) === true &&
-  wf.isOpenReach(reachUnit, {}, { pages: { main: { complete: false } } }) === true);
+  () => (wf.isOpenReach(reachUnit, { miniPageWired: "false" }, { pages: { main: { complete: false } } }) === true &&
+  wf.isOpenReach(reachUnit, {}, { pages: { main: { complete: false } } }) === true));
 check("isOpenReach: unconfirmed, but every page it reads on is green ⇒ closed (a green page cannot hide an unconfirmed row)",
-  wf.isOpenReach(reachUnit, {}, { pages: { main: { complete: true } } }) === false);
+  () => (wf.isOpenReach(reachUnit, {}, { pages: { main: { complete: true } } }) === false));
 check("isOpenReach: unconfirmed and listing NO page ⇒ open (nothing else can vouch for it)",
-  wf.isOpenReach({ key: "sectionRegistered", pages: [] }, {}, { pages: { main: { complete: true } } }) === true);
+  () => (wf.isOpenReach({ key: "sectionRegistered", pages: [] }, {}, { pages: { main: { complete: true } } }) === true));
 check("isOpenReach: an absent page entry keeps it open (inherits isOpenPage's tri-state)",
-  wf.isOpenReach(reachUnit, {}, { pages: {} }) === true);
+  () => (wf.isOpenReach(reachUnit, {}, { pages: {} }) === true));
 
 // --- scheduleUnits: leaf-first, with each reachability key after the last page that reads it. ---
 const order = ["child:A", "mini:M", "main"];
@@ -200,22 +202,22 @@ check("scheduleUnits: a reachability key lands AFTER the last page whose rows re
 check("scheduleUnits: `appliesWhen: false` is not an obligation of this run and is not scheduled",
   !sched.some((u) => u.key === "typedRouting"));
 check("scheduleUnits: a reachability key whose pages are unknown sorts to the head (index -1 + 0.5), never dropped",
-  wf.scheduleUnits(order, [{ key: "reuseBindings", appliesWhen: true, pages: ["child:GONE"] }])[0].key === "reuseBindings");
+  () => (wf.scheduleUnits(order, [{ key: "reuseBindings", appliesWhen: true, pages: ["child:GONE"] }])[0].key === "reuseBindings"));
 check("scheduleUnits: no reachability input at all is a page-only schedule, not a throw",
-  wf.scheduleUnits(order, undefined).length === 3);
+  () => (wf.scheduleUnits(order, undefined).length === 3));
 
 // --- parkedKeys / roundsRun: the two counters, higher wins, persisted one is off by one. ---
 check("roundsRun: the PERSISTED counter is 'the round about to run', so N means N-1 have run",
-  wf.roundsRun({ "child:A": 3 }, {}, "child:A") === 2);
+  () => (wf.roundsRun({ "child:A": 3 }, {}, "child:A") === 2));
 check("roundsRun: the LOCAL counter is rounds actually dispatched, and the HIGHER of the two wins",
-  wf.roundsRun({ "child:A": 1 }, { "child:A": 3 }, "child:A") === 3);
-check("roundsRun: an unknown key is 0, never negative", wf.roundsRun({}, {}, "nope") === 0 && wf.roundsRun({ x: 0 }, {}, "x") === 0);
+  () => (wf.roundsRun({ "child:A": 1 }, { "child:A": 3 }, "child:A") === 3));
+check("roundsRun: an unknown key is 0, never negative", () => (wf.roundsRun({}, {}, "nope") === 0 && wf.roundsRun({ x: 0 }, {}, "x") === 0));
 check("parkedKeys: a unit parks only once the budget is SPENT (3 local rounds at MAX_ROUNDS 3)",
-  wf.parkedKeys({}, { "child:A": 3, "child:B": 2 }, ["child:A", "child:B"]).join(",") === "child:A");
+  () => (wf.parkedKeys({}, { "child:A": 3, "child:B": 2 }, ["child:A", "child:B"]).join(",") === "child:A"));
 check("parkedKeys: a persisted counter alone parks the unit — that is what survives a killed process",
-  wf.parkedKeys({ "child:B": 4 }, {}, ["child:B"]).join(",") === "child:B");
+  () => (wf.parkedKeys({ "child:B": 4 }, {}, ["child:B"]).join(",") === "child:B"));
 check("parkedKeys: a frozen persisted counter cannot keep a unit alive forever — the local one still parks it",
-  wf.parkedKeys({ "child:C": 1 }, { "child:C": 3 }, ["child:C"]).join(",") === "child:C");
+  () => (wf.parkedKeys({ "child:C": 1 }, { "child:C": 3 }, ["child:C"]).join(",") === "child:C"));
 
 // --- blockedByParked: exact with the parent edge, honestly approximated without it. ---
 const parents = { "child:Leaf": "child:Mid", "child:Mid": "main", main: null, "child:Other": "main" };
@@ -225,17 +227,17 @@ check("blockedByParked: with the parent edge, a park blocks its ANCESTORS",
 check("blockedByParked: a sibling branch is NOT blocked — that is the point of tracking the edge",
   !exact.blocked.has("child:Other"));
 check("blockedByParked: a reachability key whose rows read the parked page is blocked with it",
-  [...wf.blockedByParked(["mini:M"], parents, [{ key: "miniPageWired", pages: ["mini:M"] }]).blocked].includes("miniPageWired"));
+  () => ([...wf.blockedByParked(["mini:M"], parents, [{ key: "miniPageWired", pages: ["mini:M"] }]).blocked].includes("miniPageWired")));
 const approx = wf.blockedByParked(["child:Leaf"], null, []);
 check("blockedByParked: with NO parent edge the run blocks `main` only and SAYS the independence is approximated",
   approx.independence === "approximated" && [...approx.blocked].join(",") === "main");
 check("blockedByParked: an empty parents object is not a usable edge — it degrades to approximated, it does not claim exact",
-  wf.blockedByParked(["child:Leaf"], {}, []).independence === "approximated");
+  () => (wf.blockedByParked(["child:Leaf"], {}, []).independence === "approximated"));
 check("blockedByParked: a parked unit never blocks ITSELF (it is already out of the schedule)",
-  !wf.blockedByParked(["main"], parents, []).blocked.has("main"));
+  () => (!wf.blockedByParked(["main"], parents, []).blocked.has("main")));
 check("blockedByParked: a parent CYCLE terminates instead of looping forever",
-  [...wf.blockedByParked(["a"], { a: "b", b: "a" }, []).blocked].join(",") === "b");
-check("blockedByParked: nothing parked ⇒ nothing blocked", wf.blockedByParked([], parents, []).blocked.size === 0);
+  () => ([...wf.blockedByParked(["a"], { a: "b", b: "a" }, []).blocked].join(",") === "b"));
+check("blockedByParked: nothing parked ⇒ nothing blocked", () => (wf.blockedByParked([], parents, []).blocked.size === 0));
 
 // --- approvalStop: the gate that decides whether the run may touch the stand at all. ---
 // The blocker this pins: the gate compared the approval against a version read from `plan.md`, and `plan.md`
@@ -250,16 +252,61 @@ check("approvalStop: no approval entry at all ⇒ `approval-missing`", stopOf({ 
 check("approvalStop: an approval recorded BEFORE the engine published versions (no version named) ⇒ `approval-unversioned` — still a stop, but one an operator clears by re-approving",
   stopOf({ found: true }, "plan-abc123") === "approval-unversioned" && stopOf({ found: true, version: "   " }, "plan-abc123") === "approval-unversioned");
 check("approvalStop: the `approval-unversioned` guidance NAMES the version this run would need, so re-approving is actionable",
-  (wf.approvalStop({ found: true }, "plan-abc123", APPROVAL_CTX).next || "").includes("plan-abc123"));
+  () => ((wf.approvalStop({ found: true }, "plan-abc123", APPROVAL_CTX).next || "").includes("plan-abc123")));
 check("approvalStop: a version the engine did NOT publish ⇒ `plan-version-unknown`, and it points at `--units` (not at editing the engine-written plan file)",
-  stopOf({ found: true, version: "plan-abc123" }, "") === "plan-version-unknown"
-  && (wf.approvalStop({ found: true, version: "plan-abc123" }, undefined, APPROVAL_CTX).next || "").includes("--units"));
+  () => (stopOf({ found: true, version: "plan-abc123" }, "") === "plan-version-unknown"
+  && (wf.approvalStop({ found: true, version: "plan-abc123" }, undefined, APPROVAL_CTX).next || "").includes("--units")));
 check("approvalStop: approving one version does not authorise building another ⇒ `approval-version-mismatch`",
   stopOf({ found: true, version: "plan-111111111111" }, "plan-222222222222") === "approval-version-mismatch");
 check("approvalStop: surrounding whitespace is not a mismatch — the recorded entry is hand-typed",
   stopOf({ found: true, version: "  plan-abc123  " }, "plan-abc123") === null);
 check("approvalStop: a missing `ctx` does not throw — the messages degrade, the decision does not",
-  wf.approvalStop({ found: true, version: "v" }, "v") === null && wf.approvalStop({ found: false }, "v")?.stopped === "approval-missing");
+  () => (wf.approvalStop({ found: true, version: "v" }, "v") === null && wf.approvalStop({ found: false }, "v")?.stopped === "approval-missing"));
+
+/* ================================================================================================
+   Workflow scripts must PARSE. The host evaluates a `*.workflow.js` as an ASYNC FUNCTION BODY — top-level
+   `await` and top-level `return` are legal there, so `node --check` on the file itself rejects a valid script
+   and `import()` would EXECUTE it. Wrapping it the way the host does is the only honest syntax check.
+   Why this exists: these scripts are edited as text and their prompts are template literals full of backticks,
+   so a stray backtick terminates the literal and breaks the file. That happened TWICE while writing ENG-94975,
+   and both times a human caught it — nothing in the suite would have failed. A broken workflow is not a subtle
+   defect: the skill cannot run at all.
+   ================================================================================================== */
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const skillsDir = path.join(repoRoot, "skills");
+  const wfFiles = [];
+  for (const d of readdirSync(skillsDir)) {
+    const dir = path.join(skillsDir, d);
+    if (!statSync(dir).isDirectory()) continue;
+    for (const f of readdirSync(dir)) if (f.endsWith(".workflow.js")) wfFiles.push(path.join(dir, f));
+  }
+  check("workflow scripts: at least one `*.workflow.js` ships under skills/ (else the checks below are vacuous)",
+    wfFiles.length >= 1, () => ({ found: wfFiles.map((f) => path.basename(f)) }));
+
+  for (const file of wfFiles) {
+    const name = path.basename(file);
+    const src = readFileSync(file, "utf8");
+    const wrapped = `async function __hostBody(args, log, phase, agent, parallel) {\n${src.replace("export const meta =", "const meta =")}\n}\n`;
+    const tmp = path.join(os.tmpdir(), `c2f_wf_syntax_${process.pid}_${name}.mjs`);
+    let status = 1, stderr = "";
+    try {
+      writeFileSync(tmp, wrapped);
+      const r = spawnSync(process.execPath, ["--check", tmp], { encoding: "utf8" });
+      status = r.status; stderr = r.stderr || "";
+    } finally { try { unlinkSync(tmp); } catch { /* best effort */ } }
+    check(`workflow syntax: ${name} parses as an async function body (a stray backtick in a prompt breaks the whole skill)`,
+      status === 0, () => stderr.split("\n").slice(0, 6).join("\n"));
+
+    check(`workflow shape: ${name} declares \`export const meta\` with a name and phases`,
+      /export const meta\s*=\s*\{/.test(src) && /name:\s*['"]/.test(src) && /phases:\s*\[/.test(src),
+      () => src.slice(0, 200));
+
+    check(`workflow sandbox: ${name} imports nothing — the host supplies args/log/phase/agent/parallel and no module loader`,
+      !/^\s*import\s+/m.test(src) && !/\brequire\s*\(/.test(src),
+      () => (src.match(/^\s*(?:import\s+|.*require\s*\().*$/m) || ["?"])[0]);
+  }
+}
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -103,7 +103,7 @@ without redoing settled work.
 {
   "pages": {
     "main": { "viewConfig": { "...": "clio get-page bundle.viewConfig, VERBATIM" },
-              "packageName": "CustomHrApp", "parentSchemaName": "PageWithTabsFreedomTemplate" },
+              "packageName": "CustomHrApp", "viewModelConfig", "parentSchemaName": "PageWithTabsFreedomTemplate" },
     "child:Education": false
   },
   "reachability": { "sectionRegistered": true, "miniPageWired": false },
@@ -225,3 +225,15 @@ Be honest about the guarantee: this proves the payload is INTERNALLY CONSISTENT,
 the stand. The engine runs offline and cannot ask Creatio whether a GUID exists. It stops a payload
 assembled from `--units` output alone, and it makes a careless copy-paste fail outright — it is not a
 defence against a determined author.
+
+## `viewModelConfig` — store it, because bindings are not visible in `viewConfig`
+
+`viewConfig` shows WHICH components a page carries; it does not show what each field is BOUND to. The
+binding lives in `bundle.viewModelConfig` (the attribute → data-source path map), so store that verbatim
+alongside `viewConfig`.
+
+This is not theoretical. On the first full build run the judge rejected a `#quality-gates` record whose
+evidence claimed "every built field binds `$PDS_<Column>`" — only 2 of 16 actually did; the rest carried
+generated `$LookupAttribute_*` / `$NumberAttribute_*` controls. The judge could see the discrepancy in
+`viewConfig`, but could NOT check the data-source paths behind them, because the built file stored no
+`viewModelConfig`. Storing it is what makes a binding claim checkable instead of a matter of trust.
