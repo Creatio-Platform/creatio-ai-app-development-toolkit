@@ -155,3 +155,23 @@ when the stand answered and the deliverable is still short. Classify the failure
 row above, fix the connection and re-run the same round. Otherwise a stand that merely fell asleep
 can park a perfectly buildable unit after three "failed" rounds and hand the caller a question that
 has nothing to answer.
+
+## A dead AGENT is not a finished round — never report the previous verdict as current
+
+The verifier is the only step that refreshes the verdict. If it does not answer — an expired host token, a
+killed agent, an API error — then the numbers on file are the PREVIOUS round's, while this round has already
+written to the stand. Reporting them as the outcome is not a small inaccuracy: it is a status report that does
+not match reality, which is the failure this whole gate exists to prevent.
+
+Observed for real on this ticket: a run whose `verify`, `judge` and `reconcile` agents all died on
+`401 OAuth access token has expired` completed "successfully" and returned the verdict from the run BEFORE it,
+with one build round silently unaccounted for.
+
+So the run STOPS with `stopped: "verifier-failed"` and `verdictStale: true` rather than continuing, and says
+plainly that the verdict shown predates the round. Nothing needs undoing — the queue file and the built file
+are intact, and a re-run re-reads the stand. The same rule applies to a reconcile that does not answer
+(`stopped: "reconcile-failed"`), where the verdict is current but the queue state is not.
+
+**Distinguish this from the environment faults above.** Those are Creatio failing to answer a read, and they
+must not spend a repair round. This one is the RUN's own machinery failing, and it must not produce a number
+at all.

@@ -1251,6 +1251,30 @@ while (true) {
 
   const { built: builtThisRound, claims } = await buildRound(open)
   lastVerifier = await verifyRound(builtThisRound, claims)
+
+  // THE VERIFIER IS THE ONLY THING THAT REFRESHES THE VERDICT. If it did not answer — a host/API failure, a
+  // dead agent, an expired token — then `state.verify` still holds the PREVIOUS round's numbers, and this
+  // round WROTE TO THE STAND. Continuing would report those stale numbers as the current state: the exact
+  // "the report does not match reality" failure this whole gate exists to prevent. Observed for real: a run
+  // whose verify/judge/reconcile agents all died on `401 OAuth access token has expired` returned the prior
+  // verdict as its final answer, with a build round silently unaccounted for. Stop, say the verdict is stale,
+  // and name what to do — a re-run re-reads the stand and costs nothing but time.
+  if (!lastVerifier) {
+    log(`round ${round}: the VERIFIER did not answer — the stand was written but not read back, so the verdict on file is STALE. Stopping rather than reporting it as current.`)
+    await persistPending('stopping on a failed verifier')
+    return runReturn({
+      stopped: 'verifier-failed',
+      verdictStale: true,
+      rounds: round,
+      verdict: verdictOf(state.verify),
+      builtThisRound,
+      parked, blockedByParked: [...blockedSet], independence,
+      planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
+      discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
+      staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
+      next: 'the verdict shown is from BEFORE this round — re-run to re-read the stand and get a current one; nothing needs undoing, the queue and built file are intact',
+    })
+  }
   discrepancies = [...discrepancies, ...((lastVerifier?.discrepancies || []).map((d) => ({ round, ...d })))]
   for (const [k, s] of Object.entries(lastVerifier?.schemasConfirmed || {})) if (s) pageSchemas[k] = s
   for (const k of lastVerifier?.unknownSchema || []) unknownSchemaSeen.add(k)
@@ -1275,7 +1299,22 @@ while (true) {
   const next = await agent(reconcilePrompt(round, carryNow()), {
     agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: `reconcile:round-${round + 1}`,
   })
-  if (!next) { log(`reconcile after round ${round} returned nothing — stopping with the last known numbers`); break }
+  if (!next) {
+    // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
+    // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.
+    log(`reconcile after round ${round} did not answer — stopping; the verdict is this round's, the queue state is not refreshed`)
+    await persistPending('stopping on a failed reconcile')
+    return runReturn({
+      stopped: 'reconcile-failed',
+      rounds: round,
+      verdict: verdictOf(state.verify),
+      parked, blockedByParked: [...blockedSet], independence,
+      planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
+      discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
+      staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
+      next: 're-run to refresh the queue state; the built file and the verdict from this round are on disk',
+    })
+  }
   markParksPersisted()
   state = next
   pageSchemas = { ...(state.pageSchemas || {}), ...pageSchemas }   // this process is authoritative for what it learned
