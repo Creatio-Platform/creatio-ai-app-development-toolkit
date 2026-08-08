@@ -52,7 +52,7 @@ single key. The suffix is derived by the engine, so **read every key from `--uni
 Those page keys are the ONLY valid keys of the `--built` payload:
 
 ```jsonc
-{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…" },
+{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": true, "reuseBindings": false },
   "evidence": { "<id from --units>": { "referencePage": "…", "components": ["…"] } },
@@ -63,6 +63,8 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 element the template provides is touched with `operation: "merge"` and carries no type, so a check fed that source
 could never confirm Feed, FileList, ApprovalList or the DCM bar. A payload that is not keyed by page is rejected
 with exit 1, and an id or page key the engine did not publish is silently "not checked" — never invent one.
+
+**`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). `--units` publishes no GUID of any kind, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists) — it stops a payload assembled from `--units` output alone, not a determined author.
 
 **The mini page is a page, so it is checked like one.** Its `Mini page` row resolves from
 `pages["mini:<Schema>"]` — present with components ⇒ built · `false` ⇒ MISSING · key omitted ⇒ not checked. There

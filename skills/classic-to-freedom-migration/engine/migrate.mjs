@@ -1375,6 +1375,41 @@ function builtPayloadIssue(built) {
   if (!built.pages || typeof built.pages !== "object" || Array.isArray(built.pages)) return "has no `pages` object — the flat single-page shape is no longer accepted";
   const bad = Object.keys(built.pages).filter((k) => !validBuiltPageEntry(built.pages[k]));
   if (bad.length) return `has ${bad.length} page entr${bad.length === 1 ? "y" : "ies"} that ${bad.length === 1 ? "is" : "are"} neither \`false\` nor an object carrying \`viewConfig\`: ${bad.slice(0, 5).join(", ")}${bad.length > 5 ? `, …and ${bad.length - 5} more` : ""}`;
+  return provenanceIssue(built.pages);
+}
+
+// PROVENANCE. The shape check above proves the payload is well-formed; it does not prove it came from the stand.
+// A payload synthesised from `--units` output alone used to reach exit 0 with no Creatio contact at all, because
+// everything it needed was published in the plan. These identifiers are NOT: `--units` publishes no GUID of any
+// kind, so `schemaUId` / `packageUId` can only come from a real `get-page` — and they have to agree with each
+// other across the whole payload, which a fabricated set will not do by accident:
+//   - one page is one schema  -> `schemaUId` is UNIQUE across keys (the same page pasted under two keys is the
+//     cheapest way to fake a second built page, and this is what catches it);
+//   - one package is one UId  -> every entry claiming the same `packageName` must carry the same `packageUId`.
+// BE HONEST ABOUT WHAT THIS IS: it proves INTERNAL CONSISTENCY, not origin. The engine runs offline and cannot
+// ask Creatio whether a GUID exists. It raises the cost of a fabricated report from "copy the numbers the plan
+// already told you" to "invent a coherent identity graph", and it makes a careless copy-paste fail outright.
+// It is not a defence against a determined author, and nothing here should be described as one.
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function provenanceIssue(pages) {
+  const entries = Object.entries(pages).filter(([, e]) => e && e !== false && typeof e === "object");
+  const noUid = entries.filter(([, e]) => !GUID_RE.test(String(e.schemaUId ?? "")));
+  if (noUid.length)
+    return `has ${noUid.length} page entr${noUid.length === 1 ? "y" : "ies"} with no valid \`schemaUId\`: ${noUid.map(([k]) => k).slice(0, 5).join(", ")}. Copy it VERBATIM from clio \`get-page\` (\`page.schemaUId\`) — \`--units\` publishes no GUIDs, so this is what shows the page was actually read off the stand`;
+  const byUid = new Map();
+  for (const [k, e] of entries) {
+    const u = String(e.schemaUId).toLowerCase();
+    if (byUid.has(u)) return `claims the SAME \`schemaUId\` ${u} for two different page keys (\`${byUid.get(u)}\` and \`${k}\`) — one schema cannot be two pages; re-read each page with \`get-page\``;
+    byUid.set(u, k);
+  }
+  const byPkg = new Map();
+  for (const [k, e] of entries) {
+    if (!e.packageName || !e.packageUId) continue;   // packageUId stays optional; when present it must agree
+    const prev = byPkg.get(e.packageName);
+    if (prev && prev.uid.toLowerCase() !== String(e.packageUId).toLowerCase())
+      return `gives package \`${e.packageName}\` two different \`packageUId\` values (\`${k}\` vs \`${prev.key}\`) — one package has one UId; re-read both pages with \`get-page\``;
+    if (!prev) byPkg.set(e.packageName, { uid: String(e.packageUId), key: k });
+  }
   return null;
 }
 

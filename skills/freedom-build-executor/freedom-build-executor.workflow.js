@@ -22,6 +22,7 @@ export const meta = {
 //     customizations?: string,  // step 5.1's customizations.md — the behaviour cards an imperative row is ported from
 //     behaviourIndex?: string,  // step 5.1's behaviour-index.json, as merged into the manifest
 //     sectionSchema?: string,   // surface label for the prompts
+//     dryRun?:     boolean,  // PREVIEW: stop before the first stand WRITE and report what would be built
 //     maxRounds?:  number,   // repair rounds per unit before it is PARKED (default 3)
 //     maxPreflightAgents?: number } // cap on the read-only preflight fan-out (default 6)
 //
@@ -43,7 +44,13 @@ export const meta = {
 //
 // The engine CLI cannot be talked out of its answer either: `--built` is rejected
 // at exit 1 unless every page entry carries a real `viewConfig` from get-page, so
-// an agent cannot hand-author the payload it is being gated on.
+// an agent cannot hand-author the payload it is being gated on. It also demands
+// `schemaUId` VERBATIM from `get-page` (`page.schemaUId`), unique per key, with one
+// `packageUId` per `packageName`: `--units` publishes no GUID of any kind, so those
+// identities cannot be derived from the plan — only copied out of a real read. That
+// proves internal consistency, not origin (the engine is offline and cannot ask
+// Creatio whether a GUID exists), but a payload assembled from the plan alone no
+// longer passes.
 // ---------------------------------------------------------------------------
 function normalizeArgs(a) {
   if (typeof a === 'string') {
@@ -696,7 +703,7 @@ DO SIX THINGS, in order:
 
 4. REFRESH THE BUILT FILE AND RUN THE GATE.
    - If \`${BUILT_FILE}\` does not exist, CREATE it as \`{ "pages": {}, "reachability": {}, "evidence": {}, "judge": {} }\` before anything else. That empty skeleton is a VALID payload and makes the gate report every deliverable unverified — which is the truth on a first run. Without the file \`--verify\` dies at exit 1 and this run gets no verdict at all.
-   - For every key in \`unitKeys\` THAT HAS A RECORDED FREEDOM SCHEMA (step 3's \`pageSchemas\`), clio \`get-page\` that schema and write \`pages["<key>"] = { viewConfig: <bundle.viewConfig VERBATIM>, packageName, parentSchemaName }\`. \`bundle.viewConfig\` is the MERGED page — NOT \`ownBodySummary\` and NOT the page's own body: a template-provided element carries no \`type\`, so the own body reads ❌ MISSING on a correctly built page. A page whose schema exists but which the stand does not have is \`false\`; a page you could not fetch is OMITTED (absent = nobody looked, and the engine distinguishes the two).
+   - For every key in \`unitKeys\` THAT HAS A RECORDED FREEDOM SCHEMA (step 3's \`pageSchemas\`), clio \`get-page\` that schema and write \`pages["<key>"] = { viewConfig: <bundle.viewConfig VERBATIM>, packageName, parentSchemaName, schemaUId }\`. \`bundle.viewConfig\` is the MERGED page — NOT \`ownBodySummary\` and NOT the page's own body: a template-provided element carries no \`type\`, so the own body reads ❌ MISSING on a correctly built page. A page whose schema exists but which the stand does not have is \`false\`; a page you could not fetch is OMITTED (absent = nobody looked, and the engine distinguishes the two).
    - For a key with NO recorded schema: write NOTHING for it and say so in \`notes\` as "cannot verify, unknown schema". That is an explicit state, not a skip — the key stays unverified, the unit stays open, and the build agent that takes it will report the schema it resolves to.
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
@@ -1146,7 +1153,7 @@ ${verifierSchemaTable()}
 
 WRITE THREE THINGS into ${BUILT_FILE}, and nothing else — the \`judge\` object belongs to another agent, so do not create or edit it:
 
-1. \`pages\` — for every published key WITH a schema in the table above, clio \`get-page\` that schema and store \`{ viewConfig: <bundle.viewConfig VERBATIM>, packageName, parentSchemaName }\`. \`bundle.viewConfig\` is the MERGED page: NOT \`ownBodySummary\`, NOT the page's own body — a template-provided element (Feed, FileList, ApprovalList, ContactCommunication, the DCM bar) is touched with \`operation: "merge"\` and carries no \`type\`, so the own body makes a CORRECT page read ❌ MISSING. A page whose schema exists but which the stand does not have is \`false\`. A page you could not fetch is OMITTED — absent means nobody looked, and the engine reports the two differently. If you confirm a schema for a key the table did not have (the builder named it in this round's report and the stand agrees), return it in \`schemasConfirmed\` so the queue keeps it.
+1. \`pages\` — for every published key WITH a schema in the table above, clio \`get-page\` that schema and store \`{ viewConfig: <bundle.viewConfig VERBATIM>, packageName, parentSchemaName, schemaUId }\`. \`bundle.viewConfig\` is the MERGED page: NOT \`ownBodySummary\`, NOT the page's own body — a template-provided element (Feed, FileList, ApprovalList, ContactCommunication, the DCM bar) is touched with \`operation: "merge"\` and carries no \`type\`, so the own body makes a CORRECT page read ❌ MISSING. A page whose schema exists but which the stand does not have is \`false\`. A page you could not fetch is OMITTED — absent means nobody looked, and the engine reports the two differently. If you confirm a schema for a key the table did not have (the builder named it in this round's report and the stand agrees), return it in \`schemasConfirmed\` so the queue keeps it.
 2. \`reachability\` — for each applicable key, \`true\` ONLY after you confirmed the wiring on-stand, \`false\` when you confirmed it is absent, and OMIT the key when you did not check. Return what you wrote in \`reachabilityWritten\` as the strings 'true' / 'false' / 'unset'.
 3. \`evidence\` — a record under each published id with its required fields: \`referencePage\` a non-blank string, \`components\` a NON-EMPTY array of non-blank strings. For \`#quality-gates\`, \`referencePage\` is the shipped page THAT UNIT'S BUILDER diffed against — it is named per unit in the claims block above, and if the builder named none you cannot invent one — and \`components\` are the ones checked with \`get-component-info\`. Keep every record already in the file. File \`false\` for a deliverable you confirmed was not done; write NOTHING for one you could not check. Return EVERY id you filed in \`evidenceWritten\` — that list is what the judge is handed, and an id you file but do not report goes unjudged, which keeps its page open.
 
@@ -1187,6 +1194,50 @@ WHAT "CONVINCING" MEANS — a real bar, not a formality:
 Return every verdict you wrote.`,
     { agentType: 'general-purpose', schema: JUDGE_SCHEMA, phase: 'Judge', label: `judge:round-${round}` },
   )
+}
+
+// PREVIEW MODE. This workflow writes to a live stand, and until now there was no way to see what it would do
+// before it did it — neither for an operator approving the work nor for anyone testing the script itself.
+// `dryRun` stops the run at the LAST read-only point: Reconcile has established the baseline from `--units` +
+// `--verify --verify-json`, Preflight has resolved the ⚠ worklist, and NOTHING has been written to the stand.
+// The boundary is deliberately "before the first stand write" rather than "before any side effect at all":
+// Preflight is read-only against Creatio and its evidence records land in the migration folder, which is the
+// preview's whole value. What a dry run never does is create, edit, re-bind or wire anything on the stand.
+const DRY_RUN = input.dryRun === true
+if (DRY_RUN) {
+  const openNowUnits = openNow()
+  const wouldBuild = openNowUnits.map((u) => ({
+    key: u.key,
+    kind: u.kind,
+    schema: pageSchemas[u.key] || null,
+    openRows: (state.verify?.pages?.[u.key]?.openRows || []).map((r) => r.deliverable).slice(0, 8),
+  }))
+  log(`DRY RUN — nothing was written to the stand. ${wouldBuild.length} unit(s) would build now: ${wouldBuild.map((u) => u.key).join(', ') || '(none — the gate is already green)'}`)
+  return runReturn({
+    dryRun: true,
+    complete: state.verify?.complete === true,
+    rounds: 0,
+    verdict: verdictOf(state.verify),
+    wouldBuild,
+    buildOrder: state.buildOrder || [],
+    planGaps: state.planGaps || [],
+    unresolvedPreflight,
+    unknownSchema: unknownSchemaNow(),
+    pageSchemas,
+    approval,
+    planVersion: state.planVersion || null,
+    parked: [],
+    blockedByParked: [],
+    independence,
+    proposals,
+    blocked: blockedItems,
+    discrepancies: [],
+    staleQueueKeys: state.staleQueueKeys || [],
+    newKeys: state.newKeys || [],
+    next: (state.planGaps || []).length
+      ? 'the PLAN is short — fix what planGaps names in the manifest, re-plan and re-approve; a build cannot close these'
+      : `re-run WITHOUT dryRun to build the ${wouldBuild.length} unit(s) above`,
+  })
 }
 
 let lastVerifier = null

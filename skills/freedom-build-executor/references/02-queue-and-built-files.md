@@ -210,3 +210,18 @@ required at both scopes by
 `../../classic-to-freedom-migration/references/migration-documentation.md`, so a single-section
 folder has one too (often holding nothing but that entry). A `worklog.md` entry is accepted only
 as a fallback for a folder written before that rule.
+
+## `schemaUId` is mandatory, and it is the provenance field
+
+Every `pages["<key>"]` entry that is not `false` must carry `schemaUId`, copied VERBATIM from clio
+`get-page` (`page.schemaUId`). The CLI rejects the payload at **exit 1** without it.
+
+Why this field and not another: `--units` publishes **no GUID of any kind**, so a `schemaUId` cannot be
+derived from the plan — it can only be copied out of a real read. The engine additionally requires the
+identities to agree with each other: the same `schemaUId` may not appear under two keys (one schema is
+not two pages), and one `packageName` may not carry two `packageUId` values.
+
+Be honest about the guarantee: this proves the payload is INTERNALLY CONSISTENT, not that it came from
+the stand. The engine runs offline and cannot ask Creatio whether a GUID exists. It stops a payload
+assembled from `--units` output alone, and it makes a careless copy-paste fail outright — it is not a
+defence against a determined author.

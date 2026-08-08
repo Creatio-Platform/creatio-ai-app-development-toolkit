@@ -1271,7 +1271,7 @@ try {
   // `get-page`'s `bundle.viewConfig` verbatim. Keep this payload SHAPE-VALID on purpose — it is the suite's only
   // end-to-end proof that a MISSING deliverable drives exit 2, so it must never collapse into the exit-1 shape
   // guard asserted by (c2) below (that would leave the exit-2 done-gate with NO end-to-end coverage at all).
-  fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage" } } }));
+  fs.writeFileSync(builtPath, JSON.stringify({ pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111" } } }));
   const vIncomplete = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
@@ -4433,7 +4433,13 @@ try {
   }
   const kcReach = {};
   for (const r of kcUnitsCli.reachability) if (r.appliesWhen) kcReach[r.key] = true;
+  // `schemaUId` is the PROVENANCE field: `--units` publishes no GUID, so it can only come from a real get-page.
+  // One distinct, well-formed GUID per key here — a payload reusing one across keys is rejected by the CLI (a
+  // dedicated check below proves that), and this fixture is the honest case.
+  let kcUidN = 0;
+  const kcUid = () => `${String(++kcUidN).padStart(8, "0")}-0000-4000-8000-000000000000`;
   const kcEntry = (p) => ({ parentSchemaName: p.expectedTemplate || "FormPageTemplate", packageName: p.targetPackage || undefined,
+    schemaUId: kcUid(),
     viewConfig: { items: [...p.expect.fieldNames.map((n) => ({ name: n, type: "crt.Input" })),
       ...Array.from({ length: p.expect.details }, (_, i) => ({ name: `DG${i}`, type: "crt.DataGrid" }))] } });
   const kcPagesFull = {};
@@ -4994,6 +5000,69 @@ try {
     () => ({ status: e2PlanOut.status, note: (e2PlanOut.stdout.match(/^migrate\.mjs: wrote.*$/m) || [""])[0] }));
 } finally {
   fs.rmSync(e2Dir, { recursive: true, force: true });
+}
+
+/* ================================================================================================
+   ENG-94975 — PROVENANCE of the `--built` payload.
+   The shape guard proves the payload is well-formed; it does not prove it came from the stand. A payload
+   synthesised from `--units` output alone used to reach exit 0 with zero Creatio contact, because everything
+   it needed was published in the plan. `schemaUId` is not: `--units` publishes no GUID at all, so it can only
+   be copied out of a real `get-page`, and the identities have to agree with each other across the payload.
+   These checks pin what the guard rejects — and, just as importantly, that an honest payload still passes.
+   NB this proves INTERNAL CONSISTENCY, not origin: the engine is offline and cannot ask Creatio whether a GUID
+   exists. It makes a careless fabrication fail outright; it is not a defence against a determined author.
+   ================================================================================================== */
+{
+  const pvManifest = path.join(os.tmpdir(), `c2f_pv_manifest_${process.pid}.json`);
+  const pvBuilt = path.join(os.tmpdir(), `c2f_pv_built_${process.pid}.json`);
+  try {
+    fs.writeFileSync(pvManifest, JSON.stringify(KC_MANIFEST));
+    const pvCli = (args) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { encoding: "utf8" });
+    const pvUnits = JSON.parse(pvCli(["--units", pvManifest]).stdout);
+    const pvRun = (pages) => {
+      fs.writeFileSync(pvBuilt, JSON.stringify({ pages }));
+      const r = pvCli(["--verify", "--built", pvBuilt, pvManifest]);
+      return { status: r.status, err: r.stderr || "" };
+    };
+    const pvPage = (uid) => ({ viewConfig: { items: [{ name: "XF", type: "crt.Input" }] }, parentSchemaName: "FormPageTemplate", schemaUId: uid });
+    const k1 = pvUnits.pages[0].key, k2 = pvUnits.pages[1].key;
+
+    check("ENG-94975 provenance: a page entry with NO `schemaUId` is REJECTED at exit 1 — `--units` publishes no GUID, so its absence means the page was never read off the stand",
+      () => { const r = pvRun({ [k1]: { viewConfig: { items: [] }, parentSchemaName: "FormPageTemplate" } });
+        return r.status === 1 && /schemaUId/.test(r.err) && /get-page/.test(r.err); },
+      () => pvRun({ [k1]: { viewConfig: { items: [] }, parentSchemaName: "FormPageTemplate" } }));
+
+    check("ENG-94975 provenance: a MALFORMED `schemaUId` (not a GUID) is rejected — the field has to be copied, not invented",
+      () => { const r = pvRun({ [k1]: pvPage("not-a-guid") }); return r.status === 1 && /schemaUId/.test(r.err); },
+      () => pvRun({ [k1]: pvPage("not-a-guid") }));
+
+    check("ENG-94975 provenance: the SAME `schemaUId` under two page keys is rejected — one schema cannot be two pages, and pasting one read page under a second key is the cheapest fake",
+      () => { const dup = "11111111-1111-4111-8111-111111111111";
+        const r = pvRun({ [k1]: pvPage(dup), [k2]: pvPage(dup) });
+        return r.status === 1 && /same .?schemaUId/i.test(r.err) && r.err.includes(k1) && r.err.includes(k2); },
+      () => pvRun({ [k1]: pvPage("11111111-1111-4111-8111-111111111111"), [k2]: pvPage("11111111-1111-4111-8111-111111111111") }));
+
+    check("ENG-94975 provenance: one `packageName` carrying two different `packageUId` values is rejected — a package has exactly one UId",
+      () => { const a = { ...pvPage("22222222-2222-4222-8222-222222222222"), packageName: "P", packageUId: "aaaaaaaa-0000-4000-8000-000000000000" };
+        const b = { ...pvPage("33333333-3333-4333-8333-333333333333"), packageName: "P", packageUId: "bbbbbbbb-0000-4000-8000-000000000000" };
+        const r = pvRun({ [k1]: a, [k2]: b });
+        return r.status === 1 && /packageUId/.test(r.err); },
+      () => "see the guard message");
+
+    check("ENG-94975 provenance CONTROL: an honest payload — distinct GUIDs per page, one UId per package — is NOT rejected by the guard (it fails on deliverables, exit 2, never on shape)",
+      () => { const a = { ...pvPage("44444444-4444-4444-8444-444444444444"), packageName: "P", packageUId: "cccccccc-0000-4000-8000-000000000000" };
+        const b = { ...pvPage("55555555-5555-4555-8555-555555555555"), packageName: "P", packageUId: "cccccccc-0000-4000-8000-000000000000" };
+        const r = pvRun({ [k1]: a, [k2]: b });
+        return r.status === 2 && !/schemaUId|packageUId/.test(r.err); },
+      () => "the control must reach the deliverable gate, not the shape guard");
+
+    check("ENG-94975 provenance: `false` (a genuinely absent page) still needs no GUID — it is a hard MISSING, not a malformed entry",
+      () => { const r = pvRun({ [k1]: pvPage("66666666-6666-4666-8666-666666666666"), [k2]: false });
+        return r.status === 2 && !/schemaUId/.test(r.err); },
+      () => "an explicit `false` must survive the provenance guard");
+  } finally {
+    for (const f of [pvManifest, pvBuilt]) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+  }
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
