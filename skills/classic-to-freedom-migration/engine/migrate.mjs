@@ -1088,7 +1088,11 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
     h.update("\u0001O");
     // Code-unit order (matches the default `.sort()`), NOT `localeCompare` — the key order here canonicalizes a
     // hash and must be byte-for-byte reproducible across machines/locales, which locale collation is not.
-    for (const k of Object.keys(value).sort((a, b) => { if (a < b) return -1; if (a > b) return 1; return 0; })) {
+    for (const k of Object.keys(value).sort((a, b) => {
+      if (a < b) { return -1; }
+      if (a > b) { return 1; }
+      return 0;
+    })) {
       h.update(k);
       h.update("\u0001");
       feedPlanVersion(h, value[k], k, readBody, state, depth + 1);
