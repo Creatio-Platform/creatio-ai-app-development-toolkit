@@ -214,6 +214,24 @@ Use this exact visible skeleton for the Business Plan:
 - actors and responsibilities
 - access posture or ownership limits
 - persona notes when they materially affect behavior
+- navigation placement and its audience: which workplace the app's section (and its home page, if the
+  plan has one) belongs to, and which roles can see that workplace. State it in business terms — a new
+  workplace named for the app, `My applications`, or a named existing one. This is a plan-level
+  decision, not a build detail: left unstated, the app ships where only administrators can reach it.
+  The first batch asks this from the prompt alone, so when the section is being added to an app that
+  ALREADY exists, refine the answer HERE, where environment reads are allowed — the first-turn latency
+  rule keeps them out of that batch. Read `SysModuleInWorkplace` for the app's current placement rather
+  than guessing, because `SysWorkplace.Name` is not unique and a second workplace named after the app
+  silently collides with the first. Then:
+  - recommend the workplace its sections already live in — EXCEPT when that is `My applications`, which
+    must not be recommended: an app sitting there is the very defect this question exists to catch, so
+    recommend a new workplace named for the app and tell the developer the current placement is
+    administrators-only
+  - a section can legitimately sit in more than one workplace (`SysModuleInWorkplace` is one row per
+    placement); when the app's sections span several, recommend the one holding most of them and list
+    the others, and ask rather than choose when it is a tie
+  Confirm the refined answer with the developer before applying it — the first batch promised exactly
+  that.
 
 `## 3. Object Model` must define the core business objects.
 For each object block, include:

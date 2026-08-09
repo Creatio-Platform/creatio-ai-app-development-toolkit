@@ -54,7 +54,36 @@ Apply the remaining plan (entities, lookups, pages, bindings) through the tools 
 DB-first and immediately runtime-accessible — they do **not** require a separate compile or deploy
 step.
 
-### 4. Build analytics dashboards
+### 4. Place the app in the navigation
+
+`create-app` leaves the section in the `My applications` workplace, which is granted to
+`System administrators` only — so until this step runs, the app is invisible to ordinary users no
+matter how complete the schema and pages are. Apply the placement the approved plan states in
+`## 2. Roles and Permissions`.
+
+Call `get-guidance name=workplaces` FIRST and follow it — it owns the three-table model, the move
+recipe, the data-binding column sets that make the placement transfer to the next environment, and the
+destructive-path rules. For a home page, `get-guidance name=home-page` owns `HomePageUId`. Do not
+improvise these writes from the tool contracts alone: a workplace bound with the wrong column set
+installs on the next environment as an empty, unreachable entry, and one of the binding tools deletes
+live records.
+
+If `get-guidance name=workplaces` returns an unknown-topic error, STOP — do not fall back to
+improvising the writes, because that is the exact failure the guidance exists to prevent. The topic is
+delivered by clio's knowledge library and ships from its `1.13.0` release onward, so an unknown topic
+means the installed clio carries an older library, or the library is not active. Read the
+`availableGuides` list the error returns to confirm, tell the developer the placement cannot be
+applied safely until the knowledge library is at `1.13.0` or newer, and leave the section where it is
+rather than half-applying a navigation change. The same holds for `name=home-page`: without it, report
+the home page as created but not reachable.
+
+If the plan does not state a placement, that is a Gate R defect, not something to decide here: stop and
+ask the developer (see `../context/business-checklist.md`, "Users, access and ownership").
+
+Tell the developer that navigation is cached, so they must log out and back in to see the app — a
+browser refresh is not enough.
+
+### 5. Build analytics dashboards
 
 Build the analytics from the plan's `## 7. Analytics` section. **Run this only after step 3 has
 produced the section list pages** — a section dashboard is hosted on its section's list page, so
@@ -125,11 +154,12 @@ For each dashboard in the plan:
 Widgets may draw on any site object named in the plan — the app's own entities and standard platform
 entities alike.
 
-### 5. Verify and report
+### 6. Verify and report
 
-Verify each created section against `list-app-sections`, confirm the planned dashboards exist on
-their host pages, and report operation, page, dashboard, and acceptance evidence inline in the
-conversation.
+Verify each created section against `list-app-sections`, confirm the app's navigation placement (and
+home-page binding) took effect by reading the workplace rows back, confirm the planned dashboards
+exist on their host pages, and report operation, page, dashboard, navigation, and acceptance evidence
+inline in the conversation.
 
 ## Error Handling
 
@@ -193,6 +223,13 @@ diagnostic — no change is required here when the clio-side wording lands.
 ## Completion Criteria
 
 ✅ The application and all planned sections exist and are verified against `list-app-sections`
+✅ The section sits in the workplace the plan states, and that workplace grants the planned roles —
+   verified by reading the rows back, not from an install log. `list-app-sections` proves a section
+   exists; it says nothing about which workplace it is in
+✅ When the plan has a home page, the target workplace's `HomePageUId` points at it (read back)
+✅ Every navigation change was mirrored into a package data binding, so the placement survives a
+   transfer to another environment
+✅ The developer was told a re-login is required for navigation changes to appear
 ✅ Every section dashboard (`### 7.1`) exists on its section list page's `crt.Dashboards` element with
    its widgets laid out and bound to `DashboardDS`; every workplace chart/metric (`### 7.2`) lives on
    the app's `BaseHomePage`, which is bound to the app's workplace (normally "My applications") via
