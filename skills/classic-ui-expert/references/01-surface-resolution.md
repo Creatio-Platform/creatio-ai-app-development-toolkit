@@ -94,3 +94,9 @@ they were classified as global rather than enumerated per section.
   These are discovered while reading (see `05-reference-following.md`), not up front;
 - schemas reached through registry and convention edges (above) — checked against the
   census before the scope is declared complete.
+
+**A child or related page in scope gets the SAME ledger discipline as the main page** — every member
+attributed or a counted zero, per `03-member-ledger.md`. Measured failure: on a run where the main record
+page reached 49 of 51 methods attributed, one child edit page left 4 of 6 in no unit — and those four were
+one real behaviour (a portal-only quick-add pre-fill through a mixin). A child page is either analysed to the
+same standard or declared out of scope (rule 5 above); "covered more thinly because it is a child" is neither.

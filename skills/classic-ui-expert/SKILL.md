@@ -75,8 +75,8 @@ Six phases, in order. Each phase's detail lives in the reference file above.
    lower layers of the same chain → parent-template chain → platform base schemas. Fetch
    mixins and module dependencies. Unresolvable → mark unresolved; never invent. Complete
    the **retrieval floor** — the entity's C# and event process, lookup/setting values,
-   resource strings, detail wiring — fetched and logged on every run, zeros counted
-   (`./references/05-reference-following.md`).
+   message counterparts, resource strings, detail wiring — fetched and logged on every
+   run, zeros counted (`./references/05-reference-following.md`).
 6. **Write the output.** Cards + ledger + counted zeros + refusals, in the contract format.
    Close each card by cutting its sourceRef evidence into acceptance criteria — one checkable
    item per assertion, nothing that rests on an open assumption.

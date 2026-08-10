@@ -84,7 +84,7 @@ query, run it now instead of writing the assumption.** Two mandatory cases:
 ## The retrieval floor (mandatory per surface)
 
 Name-driven fetching alone repeats a measured failure: with the source fully reachable,
-agents still leave reachable artifacts unfetched, and purpose accuracy drops. Four artifact
+agents still leave reachable artifacts unfetched, and purpose accuracy drops. Five artifact
 classes are therefore fetched on **every run** — not only when an unresolved name happens to
 point at them — and every fetch, or its counted zero, is logged:
 
@@ -96,11 +96,41 @@ point at them — and every fetch, or its counted zero, is logged:
 2. **Lookup and setting values.** Every condition a unit compares against a lookup row, a
    constant or a system setting gets its value query actually **run** (a read — one ESQ or
    settings query), not parked as an assumption. An assumption remains only for what a read
-   cannot reach.
-3. **Resource strings** — already mandatory through the ledger and the criteria rules
+   cannot reach. A setting's value is **per-audience**: read `SysSettingsValue` (per-role/user
+   overrides), not only the All-Users default, and report the **resolved state per audience** ("off
+   for All Users, on for Supervisor"). A `false` default is not "dormant". Report the state, not the
+   literal value, unless the row is Boolean: a Text/String/Lookup value may be a secret that no
+   metadata flags as encrypted, and these cards ship in `customizations.md` — the one output document
+   that carries verbatim customer code.
+3. **Message counterparts.** Build the publish/subscribe register — for every message the surface
+   declares, which schema publishes it and which subscribes — and **run the search, do not defer it**:
+   the measured failure is 18 of 30 threads left open because the counterpart search was recorded as a
+   settling query instead of performed. A method whose body only publishes or subscribes has nothing to
+   describe on its own, so without the counterpart it lands in no unit at all.
+   - **Once per run, never per scope and never per unresolved name.** The register is keyed by the
+     messages the surface declares — a bounded set — not by the census, which carries names and
+     packages, no bodies. When a caller supplied a **shared-core package** that carries the
+     register (the phased orchestration in `SKILL.md`), the caller owns it: consume it, never
+     rebuild it. A plain **row digest** carries rows, not a register — build the register
+     yourself before closing class 3.
+   - **Scope growth extends the register, never rebuilds it.** A page entering scope after the
+     register was built (a child edit page, a discovered detail — `01-surface-resolution.md`) adds
+     its declared messages as new entries, and their counterpart search runs then. The same holds
+     for a caller-supplied register: append the new page's threads and say so. A message a
+     late-scoped page declares is in the register or it is an untraced thread — never silently
+     absent.
+   - **Widen until you find the counterpart, and state the scope you reached.** Start at the *declaring
+     layer's package* (the search order under **Cross-schema wiring** above) and widen from there;
+     fetch candidate chains and text-search the bodies offline. A counterpart found in a package the
+     surface never names is the normal case, not the exception — `ReloadGridAfterAdd` is published by a
+     typed form and consumed by a grid elsewhere.
+   - **A counted zero carries the scope that proves it** ("no subscriber found stand-wide" is a
+     different fact from "none in the declaring package"), and names any wider scan left unrun. An
+     untraced thread is `unresolved`, never an omitted member.
+4. **Resource strings** — already mandatory through the ledger and the criteria rules
    (`03-member-ledger.md`, `08-card-contract.md`); listed here so the floor is complete in
    one place.
-4. **Detail wiring** — already mandatory through the ledger and the detail-wiring pattern
+5. **Detail wiring** — already mandatory through the ledger and the detail-wiring pattern
    (`03-member-ledger.md`, `06-platform-patterns.md`).
 
 "Nothing there" is a counted zero, recorded per class ("entity has no event process", "no
