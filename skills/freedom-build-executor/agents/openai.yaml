@@ -1,0 +1,5 @@
+---
+display_name: "Freedom Build Executor"
+short_description: "Execute an approved Classic→Freedom migration plan page by page until --verify is green"
+default_prompt: "Use $freedom-build-executor to build the approved Classic→Freedom migration plan on the stand — one page per unit, leaf-first, each verified by a separate read-only agent and closed only by the engine's --verify gate."
+---

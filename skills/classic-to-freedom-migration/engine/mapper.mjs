@@ -494,6 +494,11 @@ export function mapToFreedom(eff, opts = {}) {
 // what's emitted) and accumulates them in `structural`. ensure* route their decisions/accountedFor into the
 // CALLING phase's sinks (nd array, accounted Set) so needsDecision order matches the original single pass —
 // fields and details share ONE builder (a detail-only tab must still be emitted).
+// The tab component and its caption form, in ONE place (both were wrong together, so they stay together).
+// A tab caption MUST be `#ResourceString(Key)#`; `$Resources.Strings.*` does not render on a tab — the same rule
+// `./references/classic-to-freedom-mapping.md` states for tab / card-toggle-panel captions.
+const TAB_COMPONENT = "crt.TabContainer";
+const tabCaption = (c) => (c?.key ? `#ResourceString(${c.key})#` : c?.binding || "");
 function createContainers(ctx) {
   const { index, caption } = ctx;
   const structural = [];            // tab + tab-grid container inserts (emitted once, only when used)
@@ -517,8 +522,15 @@ function createContainers(ctx) {
       const tItem = index.get(tab);
       const c = caption(tItem?.caption, tab);
       structural.push(
-        { operation: "insert", name: tab, parentName: "Tabs", propertyName: "tabs",
-          values: { type: "crt.Tab", caption: c.binding } },
+        // A tab is a `crt.TabContainer` under `Tabs.items` — verified on a live stand (2026-08-08): the component
+        // catalog lists crt.TabContainer ("Single tab within a TabPanel") and crt.TabPanel but NO `crt.Tab`, nine
+        // real Freedom pages across two stands carry 0 crt.Tab nodes, and a real tab insert reads
+        // `{parentName:"Tabs", propertyName:"items", values:{type:"crt.TabContainer", items:[], caption:"#ResourceString(K)#"}}`.
+        // This previously emitted `crt.Tab` into `propertyName:"tabs"` with a `$Resources.Strings.*` caption — a
+        // component that does not exist, in a slot that is not the one the platform fills, with the one caption
+        // form the skill's own mapping reference says will NOT render on a tab.
+        { operation: "insert", name: tab, parentName: "Tabs", propertyName: "items",
+          values: { type: TAB_COMPONENT, items: [], caption: tabCaption(c), iconPosition: "only-text", visible: true } },
         { operation: "insert", name: parentName, parentName: tab, propertyName: "items",
           values: { type: "crt.GridContainer", columns: GRID_2 } },
       );
