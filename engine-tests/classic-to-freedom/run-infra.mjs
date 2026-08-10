@@ -356,7 +356,10 @@ check("workflow: `buildMode` owns its mode list rather than closing over a modul
 // is the point: it runs the file's real prologue. Every agent is stubbed to return nothing, so the run reaches
 // its first Reconcile, gets nothing, and returns `reconcile-failed`. Nothing is read, written or called out to.
 const runPrologue = async (mode) => {
-  const body = `return (async()=>{${wfSrc.replace(/^export const meta[\s\S]*?\n\}\n/m, "")}})()`;
+  // `\r?` on both terminators deliberately: on a checkout that converted the file this strip would otherwise
+  // MISS, leaving `export const meta` inside a function body, and five prologue cases would fail with a syntax
+  // error instead of the one CR check that actually explains the problem. A misleading red is worse than a slow one.
+  const body = `return (async()=>{${wfSrc.replace(/^export const meta[\s\S]*?\r?\n\}\r?\n/m, "")}})()`;
   // eslint-disable-next-line no-new-func -- see the comment above: executing the prologue IS the assertion
   const fn = new Function("args", "log", "phase", "agent", "parallel", "__filename", body);
   return fn({ manifest: "m.json", environment: "env", outDir: "out", planFile: "plan.md", engine: "/e/migrate.mjs", mode, checkpointAfter: ["main"] },
@@ -470,6 +473,34 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
   }
   check("workflow scripts: at least one `*.workflow.js` ships under skills/ (else the checks below are vacuous)",
     wfFiles.length >= 1, () => ({ found: wfFiles.map((f) => path.basename(f)) }));
+
+  /* LINE ENDINGS. A CR in one of these files does not break the script — it stops the host from ever running it.
+     The `Workflow` permission handler inlines a `scriptPath` file into the `script` field so the approval dialog
+     can show it, and that field rejects control characters: `\n` and `\t` pass, `\r` does not. So a Windows
+     checkout with `core.autocrlf=true` (the Git for Windows default) turned the shipped LF blob into CRLF and the
+     workflow failed schema validation before a single agent ran — reported from a real run, and mystifying at the
+     point of failure because nothing in the script is wrong. ENG-94529 pinned `*.workflow.js text eol=lf`.
+     The ON-DISK check is the one that matters and it needs no git: run this suite on a checkout that converted
+     the file and it goes red here, naming the file, instead of failing later inside the host. */
+  for (const file of wfFiles) {
+    const raw = readFileSync(file, "utf8");
+    const crs = (raw.match(/\r/g) || []).length;
+    check(`workflow script ${path.basename(file)} is LF on disk — a CR makes the host reject it at the approval dialog, before the script runs`,
+      crs === 0, () => `${crs} CR byte(s) present; expected 0 (is \`core.autocrlf\` rewriting it? \`.gitattributes\` pins \`*.workflow.js text eol=lf\`)`);
+  }
+  // …and the pin that keeps it that way on a fresh clone. Asserted through git's OWN resolution, not by reading
+  // the file, so a later `*.js` entry that overrode it would be caught too. When git cannot be consulted (this
+  // suite also runs from a plugin install that may not be a checkout) the detail says so rather than the check
+  // quietly passing on nothing.
+  {
+    const rels = wfFiles.map((f) => path.relative(repoRoot, f));
+    const r = spawnSync("git", ["check-attr", "eol", "--", ...rels], { cwd: repoRoot, encoding: "utf8" });
+    const usable = !r.error && r.status === 0 && typeof r.stdout === "string" && r.stdout.trim();
+    const resolved = usable ? r.stdout.trim().split("\n").map((l) => l.split(": ").pop()) : [];
+    check("workflow scripts: `.gitattributes` pins EVERY shipped `*.workflow.js` to `eol=lf` — the fix for the Windows CRLF failure, and it must keep covering scripts added later",
+      usable ? resolved.length === rels.length && resolved.every((v) => v === "lf") : false,
+      () => (usable ? `git resolved: ${rels.map((p, i) => `${path.basename(p)}=${resolved[i]}`).join(", ")}` : `git check-attr could not be consulted here (${r.error?.message || `status ${r.status}`}) — the on-disk CR checks above still gate the property`));
+  }
 
   for (const file of wfFiles) {
     const name = path.basename(file);
