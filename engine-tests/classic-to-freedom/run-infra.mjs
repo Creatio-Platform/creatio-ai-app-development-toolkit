@@ -602,5 +602,70 @@ check("approvalStop: a missing `ctx` does not throw — the messages degrade, th
   }
 }
 
+// ---------------------------------------------------------------------------
+// classic-behaviour-analysis.workflow.js — the step-5.1 run's own pure block. Same slice-and-import harness as the
+// executor above, for the same reason: this script decides COVERAGE, and coverage that an agent asserts instead of
+// the script computing it is the failure the whole workflow exists to prevent.
+// ---------------------------------------------------------------------------
+const CBA = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js", import.meta.url));
+const cbaSrc = readFileSync(CBA, "utf8");
+const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
+check("cba workflow: the pure-helper block is present and delimited in the shipped file",
+  cbaFrom >= 0 && cbaTo > cbaFrom, () => `BEGIN at ${cbaFrom}, END at ${cbaTo}`);
+const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys"];
+let cba = {};
+let tmpCba;
+try {
+  tmpCba = mkdtempSync(path.join(os.tmpdir(), "cba-helpers-"));
+  const modPath = path.join(tmpCba, "helpers.mjs");
+  writeFileSync(modPath, `${cbaSrc.slice(cbaFrom + BEGIN.length, cbaTo)}\nexport { ${CBA_HELPERS.join(", ")} };\n`);
+  cba = await import(pathToFileURL(modPath).href);
+} catch (e) {
+  check("cba workflow: the pure-helper block loads as a standalone module (it closes over nothing)", false, e.message);
+} finally {
+  if (tmpCba) rmSync(tmpCba, { recursive: true, force: true });
+}
+check("cba workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
+  CBA_HELPERS.every((h) => typeof cba[h] === "function"),
+  () => CBA_HELPERS.filter((h) => typeof cba[h] !== "function").join(", "));
+
+// --- wiringOnlyMixinKeys: the two-card rule's computed floor (ENG-95010). A `mixin:` row described by a wiring
+// card alone is measurably incomplete — its body is another schema and the Context phase cards every mixin body.
+// The defect this floors: the plan cited a card saying a lead "may" be created while the criteria that gate it
+// (first save and only then · never when one already exists) sat in a body card the plan never named.
+const allMixinKeys = new Set(["mixin:LeadMixin", "mixin:Other", "message:Refresh", "someMethod"]);
+check("wiringOnlyMixinKeys: a mixin row with a wiring card and NO bodyCard is flagged",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:LeadMixin", card: "main/C28", ac: ["AC-200"] }], allMixinKeys)
+    .join(",") === "mixin:LeadMixin"));
+check("wiringOnlyMixinKeys: a bodyCard clears it — that IS the two-card shape the rule asks for",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:LeadMixin", card: "main/C28", bodyCard: "shared/C09" }], allMixinKeys).length === 0));
+check("wiringOnlyMixinKeys: a bodyCard on ANY entry for the key clears it, so two describe agents splitting one row do not flag each other",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:LeadMixin", card: "main/C28" }, { key: "mixin:LeadMixin", bodyCard: "shared/C09" }], allMixinKeys).length === 0));
+check("wiringOnlyMixinKeys: non-mixin kinds are NOT flagged — a message counterpart may be in-surface, one module-dep key hides many bodies, externalRef is the engine's leg",
+  () => (cba.wiringOnlyMixinKeys([{ key: "message:Refresh", card: "c" }, { key: "someMethod", card: "c" }], allMixinKeys).length === 0));
+check("wiringOnlyMixinKeys: a key this run does not own is ignored (that is the unmatched-key report, not a missing body card)",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:NotOurs", card: "c" }], allMixinKeys).length === 0));
+check("wiringOnlyMixinKeys: an entry with NEITHER card is not flagged — it is an UNCOVERED row, counted by the coverage arithmetic instead",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:Other" }], allMixinKeys).length === 0));
+check("wiringOnlyMixinKeys: the same key flagged twice collapses to one, and malformed/empty input is an empty result rather than a throw",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:Other", card: "a" }, { key: "mixin:Other", card: "b" }], allMixinKeys).length === 1
+    && cba.wiringOnlyMixinKeys([], allMixinKeys).length === 0
+    && cba.wiringOnlyMixinKeys(undefined, allMixinKeys).length === 0
+    && cba.wiringOnlyMixinKeys([{}, null], allMixinKeys).length === 0));
+
+// The helper being right is not the run USING it (the lesson pinned for `preflightToRun` above). These two are
+// source-level on purpose: the call sites close over run state, so deleting the filter — or dropping it out of the
+// completeness verdict — leaves every unit test above passing while the run goes back to asserted coverage.
+check("cba workflow: the run FEEDS the filter and RE-COMPUTES it after the repair round",
+  (cbaSrc.match(/wiringOnly\s*=\s*wiringOnlyMixinKeys\(entriesOf\(described\), allKeys\)/g) || []).length === 2,
+  () => cbaSrc.split("\n").filter((l) => /wiringOnlyMixinKeys/.test(l)).join("\n"));
+check("cba workflow: a still-wiring-only row makes the run INCOMPLETE — the verdict is arithmetic, not the merge agent's word",
+  /const complete = allKeys\.size > 0 && uncoveredKeys\.length === 0 && wiringOnly\.length === 0/.test(cbaSrc));
+check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
+  /MIXIN ROWS NAMING ONLY A WIRING CARD/.test(cbaSrc) && /MIXIN ROWS STILL NAMING ONLY A WIRING CARD/.test(cbaSrc)
+    && /uncovered: uncoveredKeys, wiringOnly/.test(cbaSrc));
+check("cba workflow: the repair round is fed the flagged rows, so they are actually re-described rather than only reported",
+  /\.\.\.uncoveredKeys, \.\.\.critiqueUncovered, \.\.\.wiringOnly/.test(cbaSrc));
+
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

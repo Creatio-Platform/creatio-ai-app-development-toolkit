@@ -100,10 +100,20 @@ worklist excluded (so "63 stubs vs 70 members" is a set difference, not a contra
 result JSON — `evidence` is dropped, because the analysis run reads bodies from the stand itself.
 
 The answers come back as `manifest.behaviourIndex`: `{ "<method>" | "<schema>::<method>" | "<kind>:<name>":
-{ trigger?, from?, card?, ac?: […], note? } }`. On the next run the engine folds each entry into the GENERATED
-tables — a **Described in** cell naming the card + AC on the `⚠ Imperative logic` row, the same reference on a
-described `⚠ Confirm` member row, and a reported trigger where the engine traced none (marked `reported`; an
-engine-traced trigger is never overwritten). A key that matches no row anywhere becomes a plan banner rather than a
+{ trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? } }`. On the next run the engine folds each entry
+into the GENERATED tables — a **Described in** cell naming the card + AC on the `⚠ Imperative logic` row, the same
+reference on a described `⚠ Confirm` member row, and a reported trigger where the engine traced none (marked
+`reported`; an engine-traced trigger is never overwritten).
+
+**Two cards, when the body lives elsewhere.** Any row whose behaviour is defined outside the scope that owns it is
+described twice — a `mixin:` member or the method wiring one in, a method assigned from another module
+(`externalRef`), a `message:` whose counterpart is in another schema, an aggregated `module-dep`, an override
+implemented in the base chain. The owning scope's card says how this surface uses it (`card`/`ac`); the body's own
+card, typically in the shared core, says what it does (`bodyCard`/`bodyAc`). Both render, as
+`<card> <ACs> · body <card> <ACs>` — the criteria that gate a behaviour usually live in the body card, so a plan
+that names only the wiring card reads as described while the guards are missing. Where that omission is
+mechanically provable — a `mixin:` row or an `externalRef` method carrying a wiring card alone — the plan gets a
+⚠ banner (`behaviourIndex.wiringOnly`). A key that matches no row anywhere becomes a plan banner rather than a
 silent drop. This is why the reference belongs in the manifest and not in the plan's hand-written `Adjustments`
 section: `--plan --out` rewrites the file, so an appended index is lost on every regenerate.
 
