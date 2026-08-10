@@ -24,6 +24,15 @@ Per **extension** layer, enumerate:
 the layer is enumerated, walk the list: any member without a unit is a unit you have not found.
 That is the completeness test — nothing else in this skill substitutes for it.
 
+Write it **member → unit**, one line per member, and close each layer with the count
+(`N members · M attributed · K unattributed`, where `M + K = N` — three counts you actually
+computed, never the member total copied into the attributed slot). A nonzero `K` is a live gap: the
+walk found a member with no unit, exactly what the completeness test above exists to catch, and the
+layer is not closed until every member has one. The inverse shape — a unit carrying a roster of the
+members it covers — reads as a ledger but cannot be checked: a member absent from every roster
+looks like no gap at all, and no coverage figure can be derived from it. Grouping members by family
+("the `save*` methods → these cards") fails the same way.
+
 ## Process members in source order
 
 Walk the layer **top to bottom, in file order** — deps, mixins, attributes, details, methods
@@ -44,7 +53,7 @@ Layer: <SchemaName> [<Package>]  — <N> members
   attribute IsFlagEnabled ............ U05
   message SetIsFlagEnabled ........... U05
   mixin PrintUtilities ............... U04
-  → all members attributed
+  → 6 members · 6 attributed · 0 unattributed
 ```
 
 ## Two shapes that break naive counting

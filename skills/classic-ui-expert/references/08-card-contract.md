@@ -12,6 +12,11 @@ member ledger, counted zeros, refusals. One file is one handoff: a consumer rece
 full run, its evidence, and its coverage boundary together, and cannot mistake an
 unanalyzed behaviour for an absent one.
 
+**What makes coverage checkable is the member ledger** (`03-member-ledger.md`) — member → unit, one
+line each, closing with the attributed/unattributed count. Do not add a second index section that
+restates it. When a caller supplied a row digest, `behaviour-index.json` (`SKILL.md`) is the keyed,
+machine-readable form of the same mapping; the ledger stays the human-readable proof.
+
 Write the report to `migrations/<section-slug>/customizations.md` in the current
 workspace — the same per-project folder convention the toolkit's migration
 documentation uses, so a later migration run on the same section finds the report
@@ -25,17 +30,18 @@ no target-platform recommendations, nothing addressed to a particular consumer
 
 | Field | Status | Content |
 |---|---|---|
-| **What it is** | authoritative | The behaviour, named as a person would name it. One short paragraph: trigger → effect, in the user's terms. No method names. |
+| **What it is** | authoritative | The behaviour, named as a person would name it. **Two sentences at most**: trigger → effect, in the user's terms. No method names. The detail belongs in Acceptance criteria, which restate the same behaviour checkably — do not write it twice. |
 | **Business logic** | authoritative, may be marked as a reading | What it accomplishes and why it exists, in business terms. If the intent is inferred rather than stated in source, say so here and carry the uncertainty into Assumptions. |
 | **sourceRef** | mandatory | Every code location that implements it. Table form (below). Source wins on conflict with your reading. |
 | **Code** | mandatory | The unit's own members, **verbatim from the fetched bodies**. Section below. |
 | **Assumption?** | mandatory when non-empty | Each unproven reading, each unresolved name, each runtime-only question — every entry with **the query that would settle it**. A bare "unknown" with no closing query is a defect. |
 | **Acceptance criteria** | mandatory | The behaviour restated as numbered, independently checkable requirements, each citing the sourceRef row that proves it. Section below. |
-| **Mechanism notes** | supporting | How the code achieves it — including fragile or surprising constructs. Never the authoritative claim. |
+| **Mechanism notes** | supporting, **omit when empty** | Only a fragile or surprising construct a rebuilder would otherwise trip on (a shared mixin driving two surfaces, a sizing hack, a value written by a path the sourceRef rows do not make obvious). Never the authoritative claim, and never a restatement of the sourceRef "what it contributes" column — if that is all you have, leave the field out. |
 
 The card shape is fixed: exactly these fields, in this order. Do not add fields (counts,
 observations, run metadata) — anything beyond the behaviour goes to the run's other
-artifacts.
+artifacts. `Assumption?` and `Mechanism notes` are the two that disappear when they have
+nothing to say; the rest are always present.
 
 **Cards are source-only.** No runtime observations, no "verified live" notes, no debugging
 narration. A fact learned any other way is either restated from the source location that
@@ -99,6 +105,12 @@ Rules:
 
 - **Verbatim from the fetched body, never retyped.** Copy the members exactly as retrieved; a
   snippet "cleaned up" from memory is an invention wearing evidence's clothes.
+- **A secret literal is redacted, never copied.** A credential inside a member — connection
+  string, API key/token, password — is replaced with a comment naming what was removed
+  (`/* redacted: connection string */`), the same shape as an elided member. This is the one
+  edit allowed inside a member: the snippet ships in `customizations.md`, and the same
+  default-deny that keeps non-Boolean setting values out of the report (retrieval-floor
+  class 2, `05-reference-following.md`) applies to code.
 - **The unit's own members only** — the customization's diff operations and methods. Platform/context
   bodies are cited in sourceRef, not reproduced (they are the same on every stand; the customization
   is not).
