@@ -4456,8 +4456,10 @@ try {
   // dedicated check below proves that), and this fixture is the honest case.
   let kcUidN = 0;
   const kcUid = () => `${String(++kcUidN).padStart(8, "0")}-0000-4000-8000-000000000000`;
+  // `entitySchemaName` is the object the page's data source is bound to — the migration invariant. Taken from
+  // `--units.pages[].entity`, i.e. the same string the gate compares against, so a correct build is expressible.
   const kcEntry = (p) => ({ parentSchemaName: p.expectedTemplate || "FormPageTemplate", packageName: p.targetPackage || undefined,
-    schemaUId: kcUid(),
+    schemaUId: kcUid(), entitySchemaName: p.entity,
     viewConfig: { items: [...p.expect.fieldNames.map((n) => ({ name: n, type: "crt.Input" })),
       ...Array.from({ length: p.expect.details }, (_, i) => ({ name: `DG${i}`, type: "crt.DataGrid" }))] } });
   const kcPagesFull = {};
@@ -4837,7 +4839,9 @@ for (const e of pageUnits(m12Run, m12Opts).evidenceRows) {
   m12Judge[e.id] = { convincing: true, why: "the record names the page and the components built on it" };
 }
 const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: true }, evidence: m12Evidence, judge: m12Judge });
-const m12Page = (items) => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items } });
+// `entitySchemaName` matches this fixture's own entity (`X`): the migration invariant is that the Freedom page
+// sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
+const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
 const m12Row = (v, label) => v.markdown.split("\n").find((l) => /^\| \d/.test(l) && l.includes(label)) || "";
 // The five component TYPES this page's rows look for, all present in the right NUMBER — but not one of them
 // carrying a `name`. This is the checker's payload: right count, right types, zero identity.
@@ -4872,6 +4876,33 @@ check("ENG-94975 M1: a built page carrying the right COUNT of the right TYPE but
 // expected name present, close the row. (`n` and `names` come from the same `fieldOps` array at the emission site,
 // so `n === names.length` and a fully built page always can reach ✅.)
 const m1Named = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED)));
+/* ---- ENG-94975 ENTITY BINDING — the migration invariant, and the one that had NO machine check at all. A
+   Classic→Freedom migration is a new PRESENTATION of data that already exists: the page must be bound to the SAME
+   object, or the customer's records stay behind and nothing was migrated. Measured failure this closes: `create-app`
+   mints its own stub entity for a new application and binds its starter pages to THAT; a real run reached 13 of 20
+   units with `main` sitting on a one-column stub, and every other gate was satisfied because `--built` did not even
+   record which object a page was on. Caught only because a build agent volunteered a proposal — the kind of luck a
+   machine gate exists to replace. Tri-state, like every other row here: never `!value`. ---- */
+const m1Ent = (entity) => renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED, entity)));
+check("ENG-94975 entity: a page bound to the SAME object as the Classic page is ✅ Done (the correct case must stay reachable)",
+  () => { const v = m1Ent("X"); const row = m12Row(v, "Bound to the EXISTING object"); return /\| ✅ Done \|/.test(row) && /bound to .X./.test(row); },
+  () => m12Row(m1Ent("X"), "Bound to the EXISTING object"));
+check("ENG-94975 entity: a page bound to a DIFFERENT object is a HARD ❌ MISSING — this is the `create-app` stub-entity failure, and the text names BOTH objects so the repair is unambiguous",
+  () => { const v = m1Ent("UsrXMig"); const row = m12Row(v, "Bound to the EXISTING object");
+    return /\| ❌ MISSING \|/.test(row) && /bound to .UsrXMig./.test(row) && /object is .X./.test(row)
+      && v.pages.main.missing >= 1 && v.pages.main.complete === false && v.complete === false; },
+  () => ({ row: m12Row(m1Ent("UsrXMig"), "Bound to the EXISTING object"), pages: m1Ent("UsrXMig").pages }));
+check("ENG-94975 entity: an entry that reports NO entity is ⚠ unverified, never ❌ MISSING — nobody-looked is not a wrong binding, and it still blocks exit 0",
+  () => { const v = renderVerify(m12Run, m12Opts, m12Built({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items: M12_NAMED } }));
+    const row = m12Row(v, "Bound to the EXISTING object");
+    return /\| ⚠ verify \|/.test(row) && /not reported/.test(row) && v.pages.main.missing === 0
+      && v.pages.main.unverified >= 1 && v.complete === false; },
+  () => m12Row(renderVerify(m12Run, m12Opts, m12Built({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items: M12_NAMED } })), "Bound to the EXISTING object"));
+check("ENG-94975 entity: `--units` PUBLISHES the expected object per page, byte-identical to what the gate compares against — a builder must not have to read it out of the plan's prose",
+  () => { const u = pageUnits(m12Run, m12Opts); const main = u.pages.find((x) => x.key === "main");
+    return main.entity === "X" && main.entity === (checklistGroups(m12Run, m12Opts).flatMap((g) => g.rows).find((r) => r.vk?.type === "entity")?.vk.exp); },
+  () => pageUnits(m12Run, m12Opts).pages.map((x) => ({ key: x.key, entity: x.entity })));
+
 check("ENG-94975 M1 (complement): the identity path still CLOSES — the same build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
   () => /Fields — 1 expected \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Fields — 1 expected"))
   && m1Named.pages.main.missing === 0 && m1Named.pages.main.unverified === 0 && m1Named.complete === true,
@@ -4935,6 +4966,7 @@ const E1_MINI_KEY = "mini:MMini";
 const e1Payload = (over = {}, extra = {}) => {
   const pages = {};
   for (const p of e1Units.pages) pages[p.key] = { parentSchemaName: p.expectedTemplate || "FormPageTemplate", packageName: p.targetPackage || undefined,
+    entitySchemaName: p.entity,
     viewConfig: { items: p.expect.fieldNames.map((n) => ({ name: n, type: "crt.Input" })) } };
   const evidence = {}, judge = {};
   for (const e of e1Units.evidenceRows) { evidence[e.id] = { referencePage: "an existing Freedom page", components: ["crt.Input"] }; judge[e.id] = { convincing: true, why: "checked" }; }

@@ -1295,7 +1295,7 @@ function formPageLabel(pm, opts, fill, isMain) {
   return "Form page built — no template is pinned for this sub-page (the plan derived no template choice for it, so there is nothing to match against)";
 }
 function buildPageRows(result, opts, pm, typed, fill, isMain) {
-  const pages = [...listPageRows(pm, fill, isMain), ...placementRows(opts)];
+  const pages = [...listPageRows(pm, fill, isMain), ...entityRows(result), ...placementRows(opts)];
   if (!typed.length) pages.push({ label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
@@ -1389,6 +1389,29 @@ function qualityGateRows(pageKey) {
 // PACKAGE PLACEMENT (D5). Emitted ONLY when the expected package is known: with no `targetPackage` there is nothing
 // to compare against, and a row that can never resolve would turn every `renderVerify(res, {}, …)` call into a
 // permanently-unverified run. Own fn so `buildPageRows` gains no branch of its own (Sonar CC 15).
+// THE OBJECT THE PAGE SITS ON (the migration's whole point). A Classic→Freedom migration is a new PRESENTATION of
+// data that already exists: the Freedom page must be bound to the SAME entity the Classic page was, so the
+// customer's records stay where they are. A page built on a fresh object is not a migration — it is an empty new
+// section that happens to look right.
+//
+// This row exists because that invariant had NO machine check at all, and the omission was measured: `create-app`
+// mints its own stub entity for a new application and binds its starter pages to THAT, and a real run got 13 units
+// deep with `main`'s pages sitting on a one-column stub. Every other gate was satisfied, because nothing anywhere
+// compared the built page's entity against the Classic one — `--built` did not even record it. The failure was
+// caught only because a build agent volunteered a proposal about it, which is exactly the kind of luck a machine
+// gate exists to replace.
+//
+// `result.entity` is THIS page's own Classic entity: each sub-page is its own `runMigration` result, so a child's
+// row gets the child's entity rather than the parent's. `"?"` means the merged chain never named one — nothing to
+// compare against, so no row (the same rule `placementRows` follows for a missing target package).
+function entityRows(result) {
+  const ent = typeof result?.entity === "string" ? result.entity.trim() : "";
+  if (!ent || ent === "?") return [];
+  return [{
+    label: `Bound to the EXISTING object \`${esc(ent)}\` — a migration re-presents data that already exists; a page on a new object migrates nothing and the customer's records stay behind`,
+    vk: { type: "entity", exp: ent },
+  }];
+}
 function placementRows(opts) {
   const pkg = opts.targetPackage;
   if (typeof pkg !== "string" || pkg.trim() === "") return [];
@@ -1607,12 +1630,19 @@ function pageExpect(rows) {
 // published as null, which would read as "build it on nothing". `targetPackage` likewise comes from the
 // `placement` vk and is null when this page has no package gate — it is NOT back-filled from the run-level
 // manifest, because a package `--verify` does not check on this page must not appear in the executor's queue.
+// `entity` is published the same way and for the same reason: it is the `entity` vk's `exp`, so the object a
+// builder is told to bind to is BYTE-IDENTICAL to the one the gate compares against. It could not be read off the
+// plan instead — that is prose, and the one thing a migration must never get wrong is which object the page sits
+// on. Omitted (not null) when the merged chain named no entity, matching `expectedTemplate`'s rule: no row to
+// satisfy, so no obligation to publish.
 function pageUnit(key, node, rows) {
   const tpl = vkOfType(rows, "template")?.exp;
   const pkg = vkOfType(rows, "placement")?.exp;
+  const ent = vkOfType(rows, "entity")?.exp;
   return {
     key, role: pageRole(key), schema: pageSourceSchema(node),
     ...(tpl == null ? {} : { expectedTemplate: tpl }),
+    ...(ent == null ? {} : { entity: ent }),
     targetPackage: pkg == null ? null : pkg,
     expect: pageExpect(rows),
   };
@@ -1888,6 +1918,17 @@ function resolvePlacementVk(vk, ctx) {
   if (pkg === vk.exp) return ["✅ Done", `built in \`${esc(vk.exp)}\``, "ok"];
   return ["❌ MISSING", `built in \`${esc(String(pkg))}\` but the plan targets \`${esc(vk.exp)}\``, "missing"];
 }
+// THE ENTITY BINDING — read off THIS page's entry, exactly like the package. The two failures it separates are
+// different facts and must read differently: a page bound to the WRONG object is a built page that migrates
+// nothing (❌ MISSING, and the message names both objects so the repair is obvious), while an entry that does not
+// report an entity at all is nobody-looked (⚠ unverified). Never `!value`: an absent field is not a wrong binding.
+function resolveEntityVk(vk, ctx) {
+  if (vk.type !== "entity") return unknownVk();
+  const ent = entryObject(ctx.page)?.entitySchemaName;
+  if (ent == null || ent === "") return ["⚠ verify", `built-page entity not reported — record \`entitySchemaName\` (the entity the page's PRIMARY data source is bound to) and confirm it is \`${esc(vk.exp)}\``, "unverified"];
+  if (ent === vk.exp) return ["✅ Done", `bound to \`${esc(vk.exp)}\``, "ok"];
+  return ["❌ MISSING", `bound to \`${esc(String(ent))}\` but the Classic page's object is \`${esc(vk.exp)}\` — the customer's records live on \`${esc(vk.exp)}\`, so this page migrates nothing`, "missing"];
+}
 // A CHILD PAGE whose Classic source was never folded: nothing about it is derivable from the plan, so the only
 // machine question left is "does a page exist for this key, and does it have any content". Resolved from the
 // EXTRACTED CONTENT, never from key presence — `"child:X": {}` (or `{ viewConfig: {} }`) is an empty page, and
@@ -1958,6 +1999,7 @@ function evidenceComplete(rec, requires) {
   return (requires || EVIDENCE_REQUIRES).every((k) => evidenceFieldOk(k, rec[k]));
 }
 const VK_PLACEMENT = new Set(["placement"]);
+const VK_ENTITY = new Set(["entity"]);
 const VK_CHILDPAGE = new Set(["childpage"]);
 const VK_EVIDENCE = new Set(["evidence"]);
 const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
@@ -1968,6 +2010,7 @@ function resolveVk(vk, ctx) {
   if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
   if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
   if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
+  if (VK_ENTITY.has(vk.type)) return resolveEntityVk(vk, ctx);
   if (VK_CHILDPAGE.has(vk.type)) return resolveChildPageVk(vk, ctx);
   if (VK_EVIDENCE.has(vk.type)) return resolveEvidenceVk(vk, ctx);
   return unknownVk();

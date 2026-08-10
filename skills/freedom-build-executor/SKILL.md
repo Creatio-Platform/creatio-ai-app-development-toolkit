@@ -126,6 +126,17 @@ criteria, both `creatio-ui-guidelines` invocations and the re-bind happen inside
 worklog/roadmap entry is part of closing it — not a step at the end, so an interrupted run never
 loses the history.
 
+**The page sits on the EXISTING object. Always.** A Classic→Freedom migration is a new PRESENTATION of data that
+already exists: bind the Freedom page to the SAME entity the Classic page used, so the customer's records show up
+in it. A page on a fresh object migrates nothing. `--units` publishes the expected object per page as
+`pages[].entity`, and `--verify` gates it: the built payload records `entitySchemaName` (the object the page's
+PRIMARY data source is bound to, off `modelConfig`), a mismatch is a hard ❌ MISSING naming both objects, and an
+entry that reports no entity is ⚠ unverified. Never read the object out of the plan's prose — it is published data.
+
+This gate exists because the invariant had no machine check and the omission cost a run: `create-app` mints its own
+stub entity for a new application and binds its starter pages to that one, and a build reached 13 of 20 units with
+`main` on a one-column stub while every other gate stayed satisfied.
+
 **The `app` unit comes first, and only when it is needed.** A migration into a NEW application has a
 prerequisite no page unit may satisfy: `create-app` is the only way to obtain the target package, and
 it also mints `<Code>_FormPage` / `_ListPage`, which are **`main`'s** deliverable — so a child-page

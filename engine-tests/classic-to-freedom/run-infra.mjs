@@ -327,6 +327,11 @@ check("workflow: `checkFirst` is asked for ONLY at a checkpoint, and is sourced 
 // tokens, 53 minutes, `built.json.pages` empty and not one schemaName recorded.
 check("appUnitFor: an absent target package schedules an `app` unit that sorts BEFORE every page (`at: -1`)",
   () => { const u = wf.appUnitFor("UsrOpportunityMig", "absent"); return u && u.kind === "app" && u.key === "app" && u.at === -1 && u.package === "UsrOpportunityMig"; });
+check("appUnitFor: the unit carries the OBJECT its section must be bound to — a migration re-presents existing data, so the section goes on the Classic page's own entity, never on one create-app invents",
+  () => (wf.appUnitFor("Pkg", "absent", "Opportunity").entity === "Opportunity"
+    && wf.appUnitFor("Pkg", "absent", "  Opportunity  ").entity === "Opportunity"));
+check("appUnitFor: no entity published ⇒ `entity: null`, not a guess — the build prompt then tells the agent to STOP rather than pick an object",
+  () => (wf.appUnitFor("Pkg", "absent").entity === null && wf.appUnitFor("Pkg", "absent", "   ").entity === null));
 check("appUnitFor: an EXISTING package schedules nothing — the unit is a prerequisite, not a step of every run",
   () => (wf.appUnitFor("UsrOpportunityMig", "exists") === null));
 check("appUnitFor: no package NAME ⇒ no unit (there is nothing to pass to `create-app`); the hard stop covers that case instead",
@@ -357,6 +362,12 @@ check("packagePreconditionStop: absent with NO name STOPS and points at `manifes
   () => { const r = wf.packagePreconditionStop(null, "absent"); return r && r.stopped === "target-package-unnamed" && /manifest\.targetPackage/.test(r.next); });
 
 // Source-level pins for the parts that close over run state.
+check("workflow: the app unit creates the section on the EXISTING object via `create-app-section --entity-schema-name`, and REMOVES the stub section create-app always mints — this is the created-a-new-object failure",
+  /create-app-section\b/.test(wfSrc) && /--entity-schema-name \$\{unit\.entity/.test(wfSrc)
+    && /delete-app-section/.test(wfSrc) && /ALWAYS mints its own stub entity/.test(wfSrc));
+check("workflow: the built payload records the page OBJECT — without it the gate cannot tell the real entity from a stub, which is how a whole run stayed green on the wrong one",
+  /entitySchemaName/.test(wfSrc) && /modelConfig: <bundle\.modelConfig VERBATIM>/.test(wfSrc)
+    && /primaryDataSourceName/.test(wfSrc));
 check("workflow: the app unit's package answer is checked as an EQUALITY against the plan's target — a near-match is a blocker, not an acceptance, because every placement row gates on the plan's package",
   /got === unit\.package/.test(wfSrc) && /package MISMATCH/.test(wfSrc) && /packageState = 'exists'/.test(wfSrc));
 check("workflow: the starter page `create-app` minted is recorded as `main`'s schema, so `main` EDITS it instead of trying to create the page again",
