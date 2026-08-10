@@ -136,7 +136,8 @@ const from = wfSrc.indexOf(BEGIN), to = wfSrc.indexOf(END);
 check("workflow: the pure-helper block is present and delimited in the shipped file", from >= 0 && to > from,
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
-  "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings"];
+  "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
+  "appUnitFor", "isOpenApp", "packagePreconditionStop"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -318,6 +319,52 @@ check("workflow: operator findings reach the BUILD prompt, and are marked as the
 check("workflow: `checkFirst` is asked for ONLY at a checkpoint, and is sourced from the card's acceptance criteria including the negative ones",
   /function checkFirstPromptBlock\(/.test(wfSrc) && /shouldPauseAfter\(MODE, CHECKPOINT_SET, unitKey\)/.test(wfSrc)
     && /NEGATIVE ones/.test(wfSrc));
+
+// --- THE APPLICATION UNIT. Measured failure it exists for: a migration into a NEW application where the target
+// package does not exist yet. `create-app` is the only way to obtain it and it ALSO mints the starter pages that
+// are `main`'s deliverable, so a child-page builder must not call it; leaf-first runs every child BEFORE `main`;
+// so every unit reported blocked on a precondition no unit was allowed to satisfy. Real run: 12 agents, 1.9M
+// tokens, 53 minutes, `built.json.pages` empty and not one schemaName recorded.
+check("appUnitFor: an absent target package schedules an `app` unit that sorts BEFORE every page (`at: -1`)",
+  () => { const u = wf.appUnitFor("UsrOpportunityMig", "absent"); return u && u.kind === "app" && u.key === "app" && u.at === -1 && u.package === "UsrOpportunityMig"; });
+check("appUnitFor: an EXISTING package schedules nothing — the unit is a prerequisite, not a step of every run",
+  () => (wf.appUnitFor("UsrOpportunityMig", "exists") === null));
+check("appUnitFor: no package NAME ⇒ no unit (there is nothing to pass to `create-app`); the hard stop covers that case instead",
+  () => (wf.appUnitFor(null, "absent") === null && wf.appUnitFor("", "absent") === null));
+check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
+  () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
+check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
+  () => (wf.scheduleUnits(["child:A", "main"], [], null).map((u) => u.key).join(",") === "child:A,main"
+    && wf.scheduleUnits(["child:A", "main"], []).map((u) => u.key).join(",") === "child:A,main"));
+check("isUnitOpen: the app unit is judged by the PACKAGE state, never by the gate's page map (the gate has no row for a package, so `verify.pages` would keep it open forever)",
+  () => (wf.isUnitOpen({ key: "app", kind: "app" }, { pages: { app: { complete: true } } }, {}, "absent") === true
+    && wf.isUnitOpen({ key: "app", kind: "app" }, { pages: {} }, {}, "exists") === false
+    && wf.isOpenApp("unknown") === true));
+check("blockedByParked: a parked APP unit blocks EVERY other unit — with no package there is nowhere to create a page, so any round after it is spent on work that cannot close",
+  () => { const r = wf.blockedByParked(["app"], null, [{ key: "sectionRegistered", pages: ["main"] }], ["app", "child:A", "main"]);
+    return r.blocked.has("child:A") && r.blocked.has("main") && r.blocked.has("sectionRegistered") && !r.blocked.has("app"); });
+check("blockedByParked: a parked PAGE still blocks only its ancestors — the app case did not widen the ordinary one",
+  () => { const r = wf.blockedByParked(["child:A"], { "child:A": "main", main: null }, [], ["app", "child:A", "main"]);
+    return r.blocked.has("main") && !r.blocked.has("app") && r.independence === "exact"; });
+
+check("packagePreconditionStop: an ABSENT package WITH a name is NOT a stop — that is exactly what the app unit builds",
+  () => (wf.packagePreconditionStop("UsrOpportunityMig", "absent") === null));
+check("packagePreconditionStop: an EXISTING package is not a stop either",
+  () => (wf.packagePreconditionStop("UsrOpportunityMig", "exists") === null));
+check("packagePreconditionStop: `unknown` STOPS — neither reading is safe, and the message says to check by hand rather than guessing",
+  () => { const r = wf.packagePreconditionStop("Pkg", "unknown"); return r && r.stopped === "target-package-unknown" && /list-packages/.test(r.next); });
+check("packagePreconditionStop: absent with NO name STOPS and points at `manifest.targetPackage` — there is nothing to create",
+  () => { const r = wf.packagePreconditionStop(null, "absent"); return r && r.stopped === "target-package-unnamed" && /manifest\.targetPackage/.test(r.next); });
+
+// Source-level pins for the parts that close over run state.
+check("workflow: the app unit's package answer is checked as an EQUALITY against the plan's target — a near-match is a blocker, not an acceptance, because every placement row gates on the plan's package",
+  /got === unit\.package/.test(wfSrc) && /package MISMATCH/.test(wfSrc) && /packageState = 'exists'/.test(wfSrc));
+check("workflow: the starter page `create-app` minted is recorded as `main`'s schema, so `main` EDITS it instead of trying to create the page again",
+  /pageSchemas\.main = res\.starterFormPage/.test(wfSrc));
+check("workflow: Reconcile is asked for the package state as THREE values and told not to resolve doubt into either answer",
+  /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
+check("workflow: the builders' answer is persisted BEFORE Verify runs — a stop in that window used to drop every blocker the round produced",
+  /await persistPending\(`recording what round \$\{round\}'s builders reported`\)[\s\S]{0,400}lastVerifier = await verifyRound/.test(wfSrc));
 
 // --- TEMPORAL DEAD ZONE. The bug this exists for SHIPPED: `buildMode` is a hoisted function called among the
 // constants at the head of the file, but its body read a module-level `const BUILD_MODES` declared ~550 lines

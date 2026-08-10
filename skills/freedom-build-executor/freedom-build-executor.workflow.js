@@ -277,6 +277,18 @@ const RECONCILE_SCHEMA = {
     planVersion: { type: 'string' },
     unitKeys: { type: 'array', items: { type: 'string' } },        // `--units.pages[].key`, verbatim
     buildOrder: { type: 'array', items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
+    // THE TARGET PACKAGE, and whether it EXISTS. Nothing in the run used to ask, and the omission cost a whole
+    // run: on a migration into a NEW application every page unit is unbuildable until the package exists, and
+    // `create-app` — the only way to obtain it — also mints the starter pages that are `main`'s deliverable, which
+    // a child-page builder must not create. Leaf-first puts every child BEFORE `main`, so each one correctly
+    // refused and reported blocked, three rounds each, and the run wrote nothing at all. Measured: 12 agents,
+    // 1.9M tokens, `built.json.pages` empty. So the state is now DATA the script schedules on.
+    targetPackage: { type: ['string', 'null'] },   // `--units.pages[].targetPackage` for `main`, VERBATIM
+    // 'exists' — confirmed present on the stand · 'absent' — confirmed not there · 'unknown' — could not tell.
+    // Three states, not a boolean: 'unknown' must not read as "go ahead and create it" (a second `create-app`
+    // over an existing app is not a no-op) nor as "it is there" (which puts every unit back in the loop that
+    // wasted the run). It stops the run and says which check was inconclusive.
+    packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -461,6 +473,21 @@ const BUILD_PROPERTIES = {
 // record with no page body, so demanding a schema name there would reject a correct answer.
 const BUILD_SCHEMA_PAGE = { type: 'object', required: ['unit', 'claimedBuilt', 'schemaName'], properties: BUILD_PROPERTIES }
 const BUILD_SCHEMA_REACH = { type: 'object', required: ['unit', 'claimedBuilt'], properties: BUILD_PROPERTIES }
+// The APP unit must come back with the package it actually produced — the one fact the rest of the run schedules
+// on. `packageName` is REQUIRED and is compared against the plan's target by the script, not by the agent: clio
+// derives the package from `code` via the environment's `SchemaNamePrefix`, so "I created the app" is not the same
+// claim as "the package the plan targets now exists".
+const BUILD_SCHEMA_APP = {
+  type: 'object',
+  required: ['unit', 'packageName'],
+  properties: {
+    ...BUILD_PROPERTIES,
+    packageName: { type: 'string' },       // what the stand actually has now, read back — never the code that was passed
+    appName: { type: 'string' },
+    starterFormPage: { type: 'string' },   // `main`'s deliverable, created as a side effect of `create-app`
+    starterListPage: { type: 'string' },
+  },
+}
 
 const VERIFIER_SCHEMA = {
   type: 'object',
@@ -604,11 +631,25 @@ function isOpenReach(unit, reachState, verify) {
   return pages.some((p) => isOpenPage(verify, p))
 }
 
-// The schedule: every gated page in the engine's own leaf-first order, then each applicable
-// reachability key positioned AFTER the last page whose rows read it. Arithmetic from published
-// data — the ordering is never handed to a prompt.
-function scheduleUnits(buildOrder, reachability) {
+// THE APPLICATION UNIT — the prerequisite nothing owned. When the plan targets a package that is not on the
+// stand, SOMETHING has to run `create-app`, and it cannot be a page builder: `create-app` also mints
+// `<Code>_FormPage` / `_ListPage`, which are `main`'s deliverable, and "touch no other unit's page" correctly
+// stops a child from creating them. Leaf-first puts every child before `main`, so on a new-application migration
+// every single unit was blocked on a precondition no unit was allowed to satisfy. This unit is that owner, and it
+// sorts at `-1` so it runs before any page. Modelled on the reachability units rather than the page ones: there is
+// no page body, so its openness comes from a recorded STATE, never from the gate's page map.
+function appUnitFor(targetPackage, packageState) {
+  if (!targetPackage || packageState === 'exists') return null
+  return { key: 'app', kind: 'app', at: -1, package: targetPackage }
+}
+const isOpenApp = (packageState) => packageState !== 'exists'
+
+// The schedule: the application unit first when one is needed, then every gated page in the engine's own
+// leaf-first order, then each applicable reachability key positioned AFTER the last page whose rows read it.
+// Arithmetic from published data — the ordering is never handed to a prompt.
+function scheduleUnits(buildOrder, reachability, appUnit) {
   const units = buildOrder.map((key, i) => ({ key, kind: 'page', at: i }))
+  if (appUnit) units.push(appUnit)
   const lastIndexOf = (pages) => (pages || []).reduce((m, p) => Math.max(m, buildOrder.indexOf(p)), -1)
   for (const r of reachability || []) {
     if (!r.appliesWhen) continue
@@ -631,10 +672,13 @@ const roundsRun = (roundOf, localRounds, k) =>
 const parkedKeys = (roundOf, localRounds, keys) =>
   keys.filter((k) => roundsRun(roundOf, localRounds, k) >= MAX_ROUNDS)
 
-// Still OPEN per the machine verdict, for a unit of either kind. One predicate so the schedule and the park
-// arithmetic cannot disagree about what "open" means.
-const isUnitOpen = (unit, verify, reachState) =>
-  (unit.kind === 'reach' ? isOpenReach(unit, reachState, verify) : isOpenPage(verify, unit.key))
+// Still OPEN per the machine verdict, for a unit of any kind. One predicate so the schedule and the park
+// arithmetic cannot disagree about what "open" means. The app unit is judged by the recorded package state: the
+// gate has no row for a package, so asking `verify.pages` about it would report it open forever.
+const isUnitOpen = (unit, verify, reachState, packageState) => {
+  if (unit.kind === 'app') return isOpenApp(packageState)
+  return unit.kind === 'reach' ? isOpenReach(unit, reachState, verify) : isOpenPage(verify, unit.key)
+}
 
 // WHICH units this round actually parks: budget spent AND still open. Both halves are load-bearing, and the
 // second one was missing. `applyParks` runs at the BOTTOM of the round, after Reconcile has refreshed the
@@ -643,8 +687,8 @@ const isUnitOpen = (unit, verify, reachState) =>
 // blocked set, so `main` stops being schedulable and the loop can break with `main` never built; `complete`
 // becomes false on a green gate; and `parkWhy` composes a question with no answerable content ("0 MISSING + 0
 // unconfirmed row(s)"). A closed unit is not a stuck unit.
-const parkableKeys = (roundOf, localRounds, units, verify, reachState) =>
-  parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState)).map((u) => u.key))
+const parkableKeys = (roundOf, localRounds, units, verify, reachState, packageState) =>
+  parkedKeys(roundOf, localRounds, (units || []).filter((u) => isUnitOpen(u, verify, reachState, packageState)).map((u) => u.key))
 
 // Which units a park BLOCKS. With the parent edge published, a parked page blocks its ancestors
 // and nothing else; without it, the honest fallback is that it blocks `main` only — and the
@@ -657,10 +701,19 @@ function addAncestors(start, parents, blocked) {
   const guard = new Set([start])
   while (cur && !guard.has(cur)) { blocked.add(cur); guard.add(cur); cur = parents[cur] }
 }
-function blockedByParked(parkedKeyList, parents, reachability) {
+function blockedByParked(parkedKeyList, parents, reachability, allKeys) {
   const exact = !!parents && Object.keys(parents).length > 0
   const blocked = new Set()
+  // A PARKED APPLICATION UNIT BLOCKS EVERYTHING. It is not an ancestor in the page tree — it is the ground the
+  // whole tree stands on: with no package there is nowhere to create a single page, so scheduling anything after
+  // it parks spends a stand-writing round on work that cannot close. This is the case the parent-edge walk cannot
+  // express, because the app unit has no children in `parents`.
+  if (parkedKeyList.includes('app')) {
+    for (const k of allKeys || []) if (k !== 'app') blocked.add(k)
+    for (const r of reachability || []) blocked.add(r.key)
+  }
   for (const p of parkedKeyList) {
+    if (p === 'app') continue
     if (exact) {
       addAncestors(p, parents, blocked)
     } else {
@@ -743,6 +796,22 @@ function shouldPauseAfter(mode, checkpointSet, unitKey) {
   return false
 }
 
+// THE PACKAGE PRECONDITION. Only the cases the run cannot act on are stops — an ABSENT package with a name is not
+// one of them, because the app unit now creates it. What cannot be recovered from is not knowing: an 'unknown'
+// state means the stand checks were inconclusive, and both readings of it are expensive. Guessing "absent" runs
+// `create-app` over what may be an existing application; guessing "exists" puts every page unit back into the loop
+// that spent 12 agents and 1.9M tokens discovering the same blocker four times. And a package that is absent with
+// no NAME published cannot be created at all — there is nothing to pass to `create-app`.
+function packagePreconditionStop(targetPackage, packageState) {
+  if (packageState === 'unknown') {
+    return { stopped: 'target-package-unknown', next: 'the stand checks for the target package were inconclusive, so this run will neither create it (a second `create-app` over an existing application is not a no-op) nor assume it is there (which is what wasted the previous run) — check by hand with `list-packages` / `find-app`, then re-run; nothing has been built' }
+  }
+  if (packageState === 'absent' && !targetPackage) {
+    return { stopped: 'target-package-unnamed', next: '`--units` published no `targetPackage`, so there is no package name to create or build into — set `manifest.targetPackage`, re-run `--plan --out`, re-approve if the plan changed, then re-run this build; nothing has been built' }
+  }
+  return null
+}
+
 // Operator findings, indexed by unit.
 function findingKeySet(findings) {
   return new Set((findings || []).map((f) => f && f.unit).filter(Boolean))
@@ -757,9 +826,9 @@ function findingsFor(findings, unitKey) {
 // reason out of the engine's open rows, and there are none: the machine thinks the page is finished, which is the
 // whole reason the finding exists. A park whose stated reason is "0 MISSING + 0 unconfirmed" is a question nobody
 // can answer.
-function isUnitOpenWithFindings(unit, verify, reachState, findingKeys) {
+function isUnitOpenWithFindings(unit, verify, reachState, findingKeys, packageState) {
   if (findingKeys && findingKeys.has(unit.key)) return true
-  return isUnitOpen(unit, verify, reachState)
+  return isUnitOpen(unit, verify, reachState, packageState)
 }
 // ---8<--- END PURE DECISION HELPERS ---8<---
 // ---------------------------------------------------------------------------
@@ -788,6 +857,10 @@ function runReturn(extra) {
     deferred: [],
     remainingOpen: [],
     findings: FINDINGS,
+    // The prerequisite the run used to be silent about. On every return, so a caller never has to guess whether
+    // the package question was even asked.
+    targetPackage: null,
+    packageState: null,
     approval: null,
     planVersion: null,
     verdict: { missing: 0, unverified: 0, pages: {} },
@@ -863,6 +936,8 @@ DO SIX THINGS, in order:
 
 2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
 
+2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that.
+
 3. READ THE QUEUE FILE. From \`${QUEUE_FILE}\` (absent ⇒ every list below is empty and the run is starting fresh) return:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
@@ -897,6 +972,11 @@ let discrepancies = []
 let pageSchemas = {}
 let parked = []                    // park RECORDS: { key, kind, rounds, parkedWhy, shortRows }
 let parkedSet = new Set()
+// The target-package state, seeded from Reconcile and updated by the app unit the moment the package really
+// exists. Held in this process as well as in the queue file because the app unit closes MID-round: the units
+// scheduled after it must see the new state without waiting for the next Reconcile, which is the whole reason
+// they were unbuildable before.
+let packageState = null
 const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas })
 
 let state = await agent(reconcilePrompt(round, carryNow()), {
@@ -937,7 +1017,25 @@ if ((state.planGaps || []).length) {
   })
 }
 
-// --- HARD STOP 3: a checkpoint key that names no unit ----------------------
+// --- HARD STOP 3: the target package cannot be established or created -------
+// Deliberately NOT a stop for the common case: an absent package WITH a name is what the `app` unit exists to
+// build. What stops the run is a state it cannot act on — see `packagePreconditionStop`.
+const stopOnPackage = packagePreconditionStop(state.targetPackage, state.packageState)
+if (stopOnPackage) {
+  log(`STOP — the target package cannot be established (${stopOnPackage.stopped}): package=${state.targetPackage || '(unnamed)'} state=${state.packageState || '(not reported)'}`)
+  return runReturn({
+    ...stopOnPackage,
+    targetPackage: state.targetPackage || null,
+    packageState: state.packageState || null,
+    approval,
+    planVersion: state.planVersion || null,
+    verdict: verdictOf(state.verify),
+    staleQueueKeys: state.staleQueueKeys || [],
+    newKeys: state.newKeys || [],
+  })
+}
+
+// --- HARD STOP 4: a checkpoint key that names no unit ----------------------
 // Checked HERE because this is the first point where the published keys are known, and checked at ALL because a
 // checkpoint that matches nothing fails SILENTLY in the worst possible direction: the operator asked to be
 // stopped for a look, the run would never stop, and the whole section would be written before they found out.
@@ -974,7 +1072,8 @@ blockedItems = [...(state.blocked || [])]
 discrepancies = [...(state.discrepancies || [])]
 pageSchemas = { ...state.pageSchemas }
 
-let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [])
+packageState = state.packageState || null
+let schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState))
 // Units a park has taken out of reach — an ancestor of a parked page, or a reachability key whose
 // rows read one. They are NOT built: spending a round on work that cannot close is how a run burns
 // its budget and still reports the same shortfall. They are reported instead, in `blockedByParked`.
@@ -996,7 +1095,7 @@ const unknownSchemaNow = () => [...new Set([...unknownSchemaSeen, ...(state.unit
 // `isUnitOpen` is the SHARED openness predicate (pure block) — the same one the park arithmetic uses, so the
 // schedule and `parkableKeys` cannot disagree about what "open" means.
 const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
-  isUnitOpenWithFindings(u, state.verify, state.reachabilityState, FINDING_KEYS))
+  isUnitOpenWithFindings(u, state.verify, state.reachabilityState, FINDING_KEYS, packageState))
 
 // One open row, rendered as the engine wrote it — Deliverable, Status, Evidence. The evidence cell IS the repair
 // instruction ("missing: Amount", "built in `X` but the plan targets `Y`", "filed but NOT judged"), so it travels
@@ -1033,13 +1132,13 @@ function applyParks() {
   }
   // Budget-spent AND STILL OPEN — see `parkableKeys`. Never `schedule` wholesale: that parks a unit whose last
   // budgeted round actually closed it, and a park blocks its ancestors.
-  for (const k of parkableKeys(state.roundOf, localRounds, schedule, state.verify, state.reachabilityState)) {
+  for (const k of parkableKeys(state.roundOf, localRounds, schedule, state.verify, state.reachabilityState, packageState)) {
     if (!parkedSet.has(k) && !fresh.some((f) => f.key === k)) fresh.push(parkRecord(k))
   }
   if (!fresh.length) return []
   parked = [...parked, ...fresh]
   for (const p of fresh) { parkedSet.add(p.key) }
-  ({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability))
+  ({ blocked: blockedSet, independence } = blockedByParked([...parkedSet], state.parents, state.reachability, schedule.map((u) => u.key)))
   return fresh
 }
 
@@ -1220,7 +1319,24 @@ function buildPrompt(unit, st, roundNo) {
     : ''
   const known = pageSchemas[unit.key]
   let kindBlock
-  if (unit.kind === 'reach') {
+  if (unit.kind === 'app') {
+    // THE PREREQUISITE UNIT. It owns `create-app` precisely because that call also mints the starter pages that
+    // are `main`'s deliverable — so the ownership is explicit here instead of being a thing no unit may do.
+    // The acceptance criterion is an EQUALITY the builder cannot talk its way around: clio applies the
+    // environment's `SchemaNamePrefix` to the `code` it is given, so the package that comes out is not
+    // necessarily the one the plan targets, and a near-match is a blocker rather than a judgement call. Every
+    // page unit's `placement` row gates on the plan's package, so building into a substitute fails the gate later
+    // and wastes the whole tree.
+    kindBlock = `YOUR UNIT is \`app\` — the APPLICATION AND PACKAGE every page unit is waiting for. It is NOT a page.
+
+The plan targets the package \`${unit.package}\`, and the stand does not have it. Create it, and create NOTHING else.
+
+1. Read the tool contract before you call anything: \`get-tool-contract\` for \`create-app\`. Do not guess its argument shape.
+2. Create the application with template \`AppFreedomUI\`. Choose the \`code\` so that the package clio produces is EXACTLY \`${unit.package}\` — clio applies the environment's \`SchemaNamePrefix\` to \`code\`, so the code you pass and the package you get are usually NOT the same string. Read the prefix off the stand rather than assuming it.
+3. CONFIRM what you actually got: \`list-packages\` / \`find-app\`, and report the real \`packageName\`. **If it is not exactly \`${unit.package}\`, that is a \`blocked\`, not a near-enough.** Every page unit's placement row gates on the plan's package name: building into a substitute passes here and fails the whole tree later.
+4. \`create-app\` also mints the starter pages — typically \`<Code>_FormPage\` and \`<Code>_ListPage\`. Those are the \`main\` unit's deliverable and you do NOT edit them. Report their schema names in \`starterFormPage\` / \`starterListPage\` so the \`main\` builder EDITS what you created instead of trying to create it again.
+5. Touch no other page. Do not build, bind or wire anything else — the units that own that work run after you.`
+  } else if (unit.kind === 'reach') {
     kindBlock = `YOUR UNIT is the REACHABILITY deliverable \`${unit.key}\` — NOT a page body. It is a configuration record: ${unit.what || 'the on-stand wiring this key names'}. Left undone: ${unit.miss || 'built pages stay unreachable'}. It reads on page(s): ${(unit.pages || []).join(', ') || '(none listed)'}. Do the wiring on the stand (the RelatedPage binding / the app-menu registration), then CONFIRM it by opening the surface it governs — a saved record is not a working binding.`
   } else {
     const schemaNote = known
@@ -1308,8 +1424,9 @@ async function buildRound(open) {
     const nth = Math.max(state.roundOf?.[unit.key] ?? 0, localRounds[unit.key])
     const res = await agent(buildPrompt(unit, st, nth), {
       agentType: 'general-purpose', phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
-      // A PAGE unit must return `schemaName`; a reachability unit has no page and must not be asked for one.
-      schema: unit.kind === 'page' ? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_REACH,
+      // Three obligations, three schemas. A PAGE unit must return `schemaName`; a reachability unit has no page and
+      // must not be asked for one; the APP unit must return the package it actually produced.
+      schema: unit.kind === 'app' ? BUILD_SCHEMA_APP : (unit.kind === 'page' ? BUILD_SCHEMA_PAGE : BUILD_SCHEMA_REACH),
     })
     if (!res) {
       log(`build agent returned nothing for ${unit.key} — it stays open`)
@@ -1329,6 +1446,27 @@ async function buildRound(open) {
       guidelinesRun: res.guidelinesRun === true,
       reboundFrom: res.reboundFrom || null,
     })
+    // THE APP UNIT'S ANSWER, checked as arithmetic rather than accepted as a report. The equality is the whole
+    // point: an app created under a different package name unblocks nothing, because every page unit's placement
+    // row gates on the plan's package. A mismatch leaves `packageState` untouched — so the unit stays open, the
+    // round budget keeps counting, and the run parks it and stops instead of building a tree into the wrong place.
+    if (unit.kind === 'app') {
+      const got = (res.packageName || '').trim()
+      if (got && got === unit.package) {
+        packageState = 'exists'
+        log(`app unit: package \`${got}\` now exists on the stand`)
+        // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
+        // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
+        // per-page recipe documents — instead of a second creation attempt that would collide.
+        if (res.starterFormPage && !pageSchemas.main) {
+          pageSchemas.main = res.starterFormPage
+          log(`main resolves to the starter page \`${res.starterFormPage}\` created with the app`)
+        }
+      } else {
+        blockedItems = [...blockedItems, { unit: unit.key, what: `the application was created but its package is \`${got || '(none reported)'}\`, not the \`${unit.package}\` the plan targets`, why: 'clio applies the environment SchemaNamePrefix to the code, so the package that comes out need not be the one the plan names; every page unit\'s placement row gates on the plan\'s package, so building into this one would fail the whole tree later' }]
+        log(`app unit: package MISMATCH — got \`${got || '(none)'}\`, plan targets \`${unit.package}\`; the unit stays open`)
+      }
+    }
     // The Freedom schema is the one fact only the builder holds. Recorded here, persisted by the next
     // Reconcile; a page unit that comes back without one is named, not silently left unverifiable.
     if (unit.kind === 'page') {
@@ -1504,6 +1642,14 @@ while (true) {
   round += 1
 
   const { built: builtThisRound, claims, pausedAfter, deferred, checkFirst } = await buildRound(open)
+
+  // PERSIST THE BUILDERS' ANSWER IMMEDIATELY, before the verifier runs. It used to wait until after Verify, and a
+  // stop in that window took the whole round's blockers, proposals and discrepancies with it — measured on a real
+  // run: three units each returned a structured blocker naming the missing package, and the queue file came back
+  // with `blocked: []`. Only the prose in worklog.md survived, because the build agents write that file themselves.
+  // Nothing here needs the verifier: a blocker, a proposal and a Freedom schema name are all builder output.
+  await persistPending(`recording what round ${round}'s builders reported`)
+
   lastVerifier = await verifyRound(builtThisRound, claims)
 
   // THE VERIFIER IS THE ONLY THING THAT REFRESHES THE VERDICT. If it did not answer — a host/API failure, a
@@ -1576,7 +1722,8 @@ while (true) {
   // the merge above: the merge can reorder the keys without changing the content, and a fingerprint captured
   // before it would read as "something new to write" and buy an extra agent call every single round.
   carryPersisted = carryFingerprint()
-  schedule = scheduleUnits(state.buildOrder || [], state.reachability || [])
+  packageState = state.packageState || packageState
+  schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState))
 
   // A plan gap can APPEAR mid-run (a repair that touched the manifest, a re-plan in another
   // session). It stops the run for the same reason it stops it at the head: nothing built closes it.
@@ -1613,6 +1760,8 @@ while (true) {
       return runReturn({
         stopped: 'paused-at-checkpoint',
         mode: MODE,
+        targetPackage: state.targetPackage || null,
+        packageState,
         pausedAfter,
         pausedUnitSchema: schema,
         checkFirst,
@@ -1650,6 +1799,8 @@ log(complete
 return runReturn({
   complete,
   rounds: round,
+  targetPackage: state.targetPackage || null,
+  packageState,
   verdict: verdictOf(state.verify),
   parked,
   blockedByParked: [...blockedSet],

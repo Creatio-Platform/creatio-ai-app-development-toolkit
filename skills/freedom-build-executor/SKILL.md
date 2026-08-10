@@ -126,6 +126,31 @@ criteria, both `creatio-ui-guidelines` invocations and the re-bind happen inside
 worklog/roadmap entry is part of closing it — not a step at the end, so an interrupted run never
 loses the history.
 
+**The `app` unit comes first, and only when it is needed.** A migration into a NEW application has a
+prerequisite no page unit may satisfy: `create-app` is the only way to obtain the target package, and
+it also mints `<Code>_FormPage` / `_ListPage`, which are **`main`'s** deliverable — so a child-page
+builder calling it would violate "touch no other unit's page". Since the order is leaf-first, every
+child runs before `main`, and without this unit every single one is blocked on something none of them
+is allowed to do. Measured on a real run before it existed: 12 agents, 1.9M tokens, 53 minutes, not
+one page written and not one Freedom schema recorded.
+
+So Reconcile reports `targetPackage` and a three-valued `packageState` (`exists` / `absent` /
+`unknown`), and an `absent` package with a name schedules an `app` unit ahead of every page. Three
+properties make it honest:
+
+- **Its acceptance is an equality, checked in the script.** clio applies the environment's
+  `SchemaNamePrefix` to the `code` it is given, so the package that comes out need not be the one the
+  plan targets. The builder reports the package it actually produced; if it is not the planned one the
+  unit stays **open** and the mismatch is a blocker. Every page unit's `placement` row gates on the
+  plan's package, so building into a substitute passes nothing and wastes the whole tree.
+- **The starter form page becomes `main`'s recorded schema.** `main` then EDITS the page the app
+  created — the resolve path the per-page recipe documents — instead of attempting a second creation.
+- **A parked `app` unit blocks everything.** It is not an ancestor in the page tree; it is the ground
+  the tree stands on.
+
+`packageState: 'unknown'` is a **stop**, not a default. Guessing `absent` runs `create-app` over what
+may be a live application; guessing `exists` restores exactly the loop that wasted the run.
+
 The page keys are published by the engine and are the only keys anything may use:
 
 ```
