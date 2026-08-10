@@ -42,10 +42,10 @@ Start with the page template, then map child controls. Do not choose a Freedom f
 | `BaseSectionV2` section grid | `ListPageV3Template` or an existing Freedom list page for the same entity. | Preserve folders, import/export, tags, summaries, actions, and grid columns where applicable. |
 | `BaseModulePageV2` edit page with tabs/details/files/notes | `PageWithTabsFreedomTemplate` or an existing form page. | Default choice for Classic cards with tabbed detail areas. |
 | Classic card with important side/profile area and right panel behavior | `PageWithRightAreaAndTabsFreedomTemplate` or existing right-area form page. | Use when the side/right area is functional, not merely decorative. |
-| Classic card organized around top header/status/stage region | `PageWithTopAreaAndTabsFreedomTemplate` or template with top area. | Use when top-area fields or process/status controls are central to the workflow. |
+| Classic card organized around top header/status/stage region — **elements in the Header container** (not just the title) | `PageWithTopAreaAndTabsFreedomTemplate` (Tabbed page with area on top). | Use when the Classic `Header` container holds fields/controls. Place those header elements in **`TopAreaProfileContainer`** (the template's top `crt.GridContainer` under `MainContainer`), not the narrow left profile. |
 | Card whose object HAS a DCM case (needs a case-stage progress bar) | **`PageWithTabsAndProgressBarTemplate`** — it SHIPS the progress bar in the right place. | **Prefer this over hand-adding `crt.EntityStageProgressBar`.** Pick it at plan time when the DCM check finds a case; after `create-page` the new page is bound to the template's demo object, so **re-bind it to your entity** (set the page's entity/data source to the target object). Hand-adding the bar into `MainContainer` is the FALLBACK for when you are already on a no-bar template or the page already exists. |
-| Simple edit page without tabs or details | `PageWithAreaFreedomTemplate` or `BlankPageTemplate` if no standard form region is needed. | Prefer a standard form template unless the Classic page is truly custom. |
-| Mini page | `BaseMiniPageTemplate`, modal, side panel, or a manual UX decision. | Record whether mini-page behavior is create/edit/preview/quick action. |
+| Detail / child edit page with **MANY columns — `>= 15` inputs, OR it has tabs / related lists** (a wide record), or a simple edit page without tabs/details | `PageWithAreaFreedomTemplate` (Grid page), or `BlankPageTemplate` if no standard form region is needed. | A wide detail/child form → the full-width Grid page. Prefer a standard form template unless the Classic page is truly custom. |
+| Mini page, **or a detail / child edit page with FEW inputs — `< 15` inputs AND flat** (no tabs / related lists) | `BaseMiniPageTemplate` (Mini page), modal, side panel, or a manual UX decision. | Few-input child forms are better opened as a quick-add / mini card than a full record page. Record whether mini-page behavior is create/edit/preview/quick action. |
 | Classic detail based on `BaseGridDetailV2` or configuration grid | Freedom related list/detail data source with `crt.DataGrid`, existing detail component, or custom handler-backed list. | Preserve add/edit/delete restrictions, inline edit behavior, filters, and parent-column binding. |
 | Custom Classic module or heavily customized parent schema | Existing Freedom page pattern, `BlankPageTemplate`, or manual decision. | Do not force-fit if the parent template provides behavior that has no Freedom equivalent. |
 
@@ -77,7 +77,7 @@ The single source of truth for the components agents most often mis-map. When yo
 right shape. Honor that shape; do not invent a generic Expanded-list.
 
 > **Keep this in sync with the engine.** These rows encode the same standard-feature / widget knowledge as
-> `../engine/mapper.mjs` (`FEATURE_CATALOG`, `WIDGET_BY_MODULE`, `WIDGET_BY_CONTAINER`) — the engine is what
+> `../engine/mapper.mjs` (`FEATURE_CATALOG`, `WIDGET_BY_MODULE`, `WIDGET_BY_CONTAINER`, `PROFILE_CARD_BY_ENTITY`) — the engine is what
 > actually emits `standardFeatures` / `widgets` / `cardActions` at runtime; this table is the human-readable
 > guidance and the hand-mapping fallback when Node is unavailable. When you add, rename, or reclassify a
 > feature/widget, change **both in the same commit** — they must not drift.
@@ -91,6 +91,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 | Timeline | `widgets` (only when the classic page has an actual Timeline) | `crt.Timeline` | invent a Timeline for Activities/Emails — those are lists (row above). |
 | Action Dashboard = **Case progress bar** + **Next steps** (two components) | `widgets` (`Case progress bar` / `Next steps`) | **The default Freedom form template ships NEITHER — you must ADD them** when the object has a configured DCM case: the **progress bar** on the page top, and **Next steps** as a **NEW tab in the tab container, next to the Feed tab**. Both **auto-populate from the object's case** — do not hand-author stages/steps. **Check on-stand whether the object has a DCM case:** DCM cases are `SysSchema` records with **`ManagerName = 'DcmSchemaManager'`** (the case-schema manager) — query `SysSchema` filtered by `ManagerName eq 'DcmSchemaManager'` and find the case for your entity (match via the case caption/metadata and the object's own `Stage`/case-stage column; a DCM-driven object carries one). Some cases have an active + previous version sharing one caption (e.g. `Recruiting_v11` active, `Recruiting_v1` previous) — take the active one. **A hit ⇒ add both components; no hit ⇒ nothing to add.** ⚠ Do NOT filter by `ManagerName = 'CaseSchemaManager'` — that name is wrong, returns 0 rows, and reads as a false "no case". | treat them as template-provided / "nothing to migrate", or hand-author stage/step lists per page. Conclude "no case" from a query that returned 0 without confirming the filter used `DcmSchemaManager` (not `CaseSchemaManager`). |
 | Recommendations (side widget) | `chromeWidgets` (hidden by default) | inherited base-template container (`BasePageV2`), **empty by default**, filled at runtime by `RecommendationModuleUtilities` (the **Next-Best-Offer / product recommendations**, `RecommendedProduct`). The engine classifies it as base **chrome and HIDES it from the plan** (kept in `chromeWidgets`). Surface it manually ONLY if the live page actually renders recommendations (NBO rules configured for the entity) → then wire the Freedom product-selection / recommendations component. | treat it as page content just because it is in the schema — it's always present but usually empty. |
+| **Embedded profile card** — a compact card of a LINKED record dropped into the page by `modules` config (a "requester" block on a request page; `AccountProfile` on `ContactPageV2`) | `profileCards[]` + a `profile-card` ⚠ item | the native Freedom **compact profile** in the **side profile**, keyed by the PROFILED entity: Contact → `crt.ContactCompactProfile`, Account → `crt.AccountCompactProfile`, user → `crt.UserCompactProfile` (the first two need the `CrtCustomer360App` package). Wire it with `referenceColumn: "$<masterColumnName>"` + `readonly: true`. No native component for that entity ⇒ rebuild the card as its own read-only-fields island. Full recipe below. | treat it as an "unknown embedded module" and drop the card (that is exactly the gap this rule closes); mistake the **actions/DCM dashboard** module for a profile card (it carries `masterColumnName` too, but nested under `dashboardConfig`); assume the native card shows everything the classic one did — it does **not** render Phone/Email/JobTitle-style columns, which must be added beside it. |
 | Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
 | Run process (record page) | `needsDecision` `process-launch` / `cardActions` | a Freedom "Run process" card action — **only if a process is connected to the section**. Check `ProcessInModules` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) — that is what fills the menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the name. None connected ⇒ **drop the button**; if some are, name each in the plan. | fabricate a process name, or migrate the button when nothing is connected. The base `ProcessButton` names none; only a literal `executeProcess`/`RunProcessRequest` name in a method is captured directly. `SysProcessEntity`/`VwSysProcessEntity` ("Object in process") are runtime process↔record instances — NOT the section config. |
 | Print (record page) | `cardActions` (Print) | a Freedom print action — **only if printables/reports exist** for the section. Check `SysModuleReport` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) / `ShowInCard eq true` (record card); read each `Caption`/`Type`/`SysReportSchemaUId`\|`FileName`. None ⇒ **drop the button**. | migrate the Print button when the section has no printables (it would be a dead button). |
@@ -155,6 +156,141 @@ button; always a **menu item in the template's existing `Actions` button**, one 
 - **Form / record page** → the form page's OWN `Actions` button in the header action area (the header action-buttons container the template provides, e.g. `ActionButtonsContainer` in `PageWithTabsFreedomTemplate` — mirror the list-page Actions pattern, do NOT invent a new button and do NOT drop a bare button in the content). **Place it at the END of that container, next to the `CloseButton`** (last position — the standard spot for record actions), not first/mid-container. Run for the CURRENT record: pass `$Id` (`processRunType` = the current record, not `ForTheSelectedRecords`). If the template exposes no Actions menu on the form, that gap is a manual decision to raise, not a reason to place a loose button.
 
 None connected on a surface ⇒ nothing on that surface. None connected anywhere ⇒ drop the button entirely.
+
+### Embedded profile cards (linked-record blocks) → the Freedom side profile
+
+A Classic page can embed a **compact card of a linked record**: a request page shows a "requester" block with
+the person's name and contacts, `ContactPageV2` shows the contact's account, `AccountPageV2` shows its primary
+contact. It is a page-within-a-page — and it is **not custom code**: a small declarative profile schema plus
+three config properties. The engine recognises it and emits `changeSet.profileCards`; this section is the
+manual recipe (and the fallback for the cases the rule does not cover).
+
+**Recognise it — the Classic side.** In the page's `modules` block, a module whose `config` carries
+`parameters.viewModelConfig.masterColumnName`:
+
+```js
+modules: /**SCHEMA_MODULES*/{
+    "RequesterProfile": {
+        "config": {
+            "schemaName": "RequesterProfilePage",       // the embedded profile schema
+            "parameters": { "viewModelConfig": {
+                "masterColumnName": "Requester",        // lookup ON THIS page whose value IS the profiled record
+                "profileColumnName": "Contact"          // column on the PROFILED entity pointing back at the master
+                // … display flags (IsPhoneVisible, …)
+            } }
+        }
+    }
+}
+```
+
+plus its host item in the `diff` — `{ name: "RequesterProfile", parentName: "LeftModulesContainer", values: { itemType: Terrasoft.ViewItemType.MODULE } }`.
+That host item is what an un-taught converter reports as an unknown embedded module.
+
+Read the two wiring properties correctly (verified against `BaseProfileSchema`, not inferred):
+
+- `masterColumnName` — the lookup **on the master page**; its value **is the profiled record's Id**
+  (`BaseProfileSchema.loadEntity` loads the profile entity from it). This is the one binding the card needs.
+- `profileColumnName` — a column on the **profiled** entity pointing back at the master. It is used **only**
+  when the classic blank slate CREATED a new linked record (to pre-fill the back-reference), never for display.
+- The **profiled entity** is the profile schema's own `entitySchemaName` (`RequesterProfilePage` → `Contact`) —
+  read it from the schema body, or from the master lookup's referenced schema. Do not guess it from the name.
+
+**The Freedom side.** Native compact-profile components live in the side profile and take the master lookup as
+`referenceColumn` (a GUID attribute, not a display value):
+
+| Profiled entity | Freedom component | Package |
+| --- | --- | --- |
+| `Contact` | `crt.ContactCompactProfile` | `CrtCustomer360App` |
+| `Account` | `crt.AccountCompactProfile` | `CrtCustomer360App` |
+| `SysAdminUnit` / user | `crt.UserCompactProfile` | — |
+| anything else | *no native card* → read-only-fields island (steps below) | — |
+
+**Ordered manual steps.**
+
+1. **Read the classic card.** From the `modules` config take `schemaName`, `masterColumnName`,
+   `profileColumnName` and the display flags; fetch the profile schema
+   (`get-client-unit-schema --schema-name <ProfileSchema>`) and list its `bindTo` columns — those are the values
+   the card actually displayed. Do this first: everything below depends on it (and the engine's structure gate
+   blocks the plan until that body is in `manifest.profileSchemas`, or the entry is recorded as `false` once you
+   have verified there is no separate profile schema to read — the same verified-none vs never-checked
+   distinction as `editPage: false` / `addRecordMiniPage: false`).
+2. **Pick the target** from the table above, using the profile schema's `entitySchemaName`.
+3. **Confirm the package** on the target environment (`list-packages`) and add it as a dependency of the page's
+   package. Without `CrtCustomer360App` the Contact/Account cards do not render at all.
+4. **Insert the component into the side profile** (`SideAreaProfileFieldFlexContainer` / the template's
+   side-profile container), read-only, with `referenceColumn` pointing at a view-model attribute over the master
+   lookup. This is the shape the OOTB `Opportunities_FormPage` uses for its account/contact cards — copied from
+   it, not invented:
+
+   ```jsonc
+   // viewModelConfigDiff — the attribute that carries the profiled record's Id
+   { "operation": "merge", "path": ["attributes"], "values": {
+       "RequesterRef": { "modelConfig": { "path": "PDS.Requester" } }
+   } }
+
+   // viewConfigDiff
+   {
+     "operation": "insert",
+     "name": "RequesterCompactProfile",
+     "parentName": "SideAreaProfileFieldFlexContainer",
+     "propertyName": "items",
+     "index": 0,
+     "values": {
+       "type": "crt.ContactCompactProfile",
+       "referenceColumn": "$RequesterRef",  // attribute over the MASTER lookup — the profiled record's Id
+       "readonly": true,                    // embedded on a related-entity page: a view of another record
+       "layoutConfig": {}
+     }
+   }
+   ```
+
+   `referenceColumn` must resolve to a **GUID**, never a `{ value, displayValue }` lookup object or a display
+   value — a card wired to a display value renders empty.
+
+5. **Add back the values the native card does not render.** It covers photo + name (+ country/city/time zone,
+   birth date). Classic cards routinely also showed Phone, Email, JobTitle, Web, Industry — for each such
+   column add a **read-only field over a lookup-path data-source attribute** beside the card. The shape
+   (verified on-stand — this is exactly how the OOTB `Chats_FormPage` reads `Channel.Provider`):
+
+   ```jsonc
+   // modelConfigDiff
+   { "operation": "merge", "path": ["dataSources", "PDS", "config", "attributes"], "values": {
+       "RequesterMobilePhone": { "path": "Requester.MobilePhone", "type": "ForwardReference" }
+   } }
+   ```
+
+   `type: "ForwardReference"` is required for a path that traverses a lookup — without it the attribute does
+   not resolve. Dropping these values is the usual fidelity loss. (For a value that is NOT a column of the
+   profiled entity at all, use the companion-field pattern below — a view-model attribute filled by the
+   lookup's on-change handler.)
+6. **Reproduce the create-from-blank-slate flow only if needed.** The classic card offered Add/Find when the
+   lookup was empty; Find is the lookup's own select. Only if the page must also CREATE the linked record, wire
+   that and pre-fill `profileColumnName` with the master record.
+7. **Keep the record link.** The classic header was a hyperlink opening the profiled record — confirm the
+   Freedom card (or an adjacent field) still gets the user there.
+
+**No native component for the profiled entity** (a custom entity): rebuild the card as its **own
+`crt.GridContainer` island** in `SideAreaProfileContainer` (single-column, styled like the island the template
+already provides — see *Profile islands* below) holding one **read-only** field per displayed column, each over
+a `{ path: "<masterColumn>.<column>", type: "ForwardReference" }` PDS attribute as in step 5, plus the record
+link. Never drop the card, and never flatten its fields into the master record's own group.
+
+**A POLYMORPHIC client profile maps to TWO cards.** When the profile schema declares **no**
+`entitySchemaName` (it profiles an Account *or* a Contact depending on the record — `ClientProfileSchema`,
+`BaseMultipleProfileSchema`, as `OpportunityPageV2` · `"ClientProfile"` · `masterColumnName: "Client"` does),
+there is no single Freedom counterpart: build **both** native cards, each over its own lookup and shown
+conditionally. The OOTB `Opportunities_FormPage` does exactly that — `crt.AccountCompactProfile` over
+`PDS.Account` plus `crt.ContactCompactProfile` over `PDS.Contact`, both `readonly: true`. The engine reports
+this card with an unresolved profiled entity, which is the signal to check for this case before falling back to
+hand-built fields.
+
+**Example pairs (OOTB, all three verified on-stand).**
+
+| Classic | Freedom |
+| --- | --- |
+| `ContactPageV2` · `"AccountProfile"` → `AccountProfileSchema`, `masterColumnName: "Account"` (no `profileColumnName`); card showed Type, Owner, Web, Phone, AccountCategory, Industry | `crt.AccountCompactProfile` in the side profile, `readonly: true`, `referenceColumn` over `PDS.Account` + read-only `Account.Web` / `Account.Phone` / `Account.Industry` … fields beside it |
+| `AccountPageV2` · `"ContactProfile"` → `ContactProfileSchema`, `masterColumnName: "PrimaryContact"`, `profileColumnName: "Account"`; card showed JobTitle, MobilePhone, Phone, Email | `crt.ContactCompactProfile`, `readonly: true`, `referenceColumn` over `PDS.PrimaryContact` + read-only `PrimaryContact.JobTitle` / `.MobilePhone` / `.Phone` / `.Email` fields beside it |
+| `OpportunityPageV2` · `"ClientProfile"` → `ClientProfileSchema` (no `entitySchemaName` — polymorphic), `masterColumnName: "Client"` | **both** cards on `Opportunities_FormPage`: `crt.AccountCompactProfile` over `PDS.Account` and `crt.ContactCompactProfile` over `PDS.Contact`, each `readonly: true` — plus the denormalized companion fields (`AccountWeb`, `AccountIndustry`, `ContactJobTitle`, …) |
 
 **Profile islands — build EVERY one the plan shows; do not collapse "for simplicity".** When the classic
 left area groups fields into more than one island, the plan lists them — each as a `Side profile › <island>`

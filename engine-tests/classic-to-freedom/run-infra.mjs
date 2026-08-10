@@ -3,7 +3,13 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
+import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 
 let pass = 0, fail = 0;
@@ -40,9 +46,9 @@ console.log("\n===== ustar reader (offline) =====");
 const body = "export const x = 1;\nconst y = 2;\n"; // CRLF-free content
 const tar = makeTar([
   { name: "package/README.md", content: "readme" },              // a preceding entry the reader must skip past
-  { name: "package/dist/acorn.mjs", content: body },
+  { name: "package/dist/acorn.cjs", content: body },
 ]);
-const entry = readTarEntry(tar, "package/dist/acorn.mjs");
+const entry = readTarEntry(tar, "package/dist/acorn.cjs");
 check("ustar: extracts the requested entry's exact bytes (skips preceding entries by size)",
   !!entry && entry.toString("utf8") === body, () => (entry ? JSON.stringify(entry.toString("utf8")) : "null"));
 check("ustar: sha256Lf of the extracted bytes matches an independent hash of the content",
@@ -50,9 +56,9 @@ check("ustar: sha256Lf of the extracted bytes matches an independent hash of the
 check("ustar: a non-existent entry name returns null (not a wrong/partial slice)",
   readTarEntry(tar, "package/dist/missing.mjs") === null);
 // the ustar `prefix` field (long paths): full path = prefix + "/" + name
-const tarPfx = makeTar([{ name: "acorn.mjs", prefix: "package/dist", content: body }]);
+const tarPfx = makeTar([{ name: "acorn.cjs", prefix: "package/dist", content: body }]);
 check("ustar: honours the `prefix` field when reconstructing the full path",
-  readTarEntry(tarPfx, "package/dist/acorn.mjs")?.toString("utf8") === body);
+  readTarEntry(tarPfx, "package/dist/acorn.cjs")?.toString("utf8") === body);
 
 console.log("\n===== integrity (offline) =====");
 const blob = Buffer.from("some tarball bytes");
@@ -73,6 +79,40 @@ check("glob: bracket/paren metacharacters in a segment are escaped (matched lite
 check("glob: anchored — a prefix match alone does not pass", toRegex("engine/**").test("otherengine/x") === false);
 check("baseDir: literal prefix before the first wildcard", baseDir("skills/x/engine/vendor/**") === "skills/x/engine/vendor");
 check("baseDir: a leading-wildcard glob has an empty base (always active)", baseDir("*.js") === "");
+
+console.log("\n===== vendor runtime integrity gate (offline) =====");
+// Fix A: parseSchema feeds UNTRUSTED bodies to the vendored acorn parser; it now verifies vendor/ integrity at
+// RUNTIME (not only in CI) via the PURE checkVendorIntegrity export. These goldens exercise that pure check
+// offline against copied/tampered fixtures under the OS temp dir — never touching the real vendor files.
+const VENDOR = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/vendor/", import.meta.url));
+check("vendor-gate: importing verify-vendor.mjs did NOT exit the process (CLI run is guarded by import.meta.url) — the pure export is a function",
+  typeof checkVendorIntegrity === "function");
+check("vendor-gate: the REAL vendor dir passes (positive control — the check is not vacuously failing)",
+  checkVendorIntegrity(VENDOR).ok === true);
+// OS-temp fixtures cleaned in a finally so a throwing check never strands them (matches run-mapper.mjs's vv-dir pattern).
+let tmpBad, tmpMissing;
+try {
+  // negative 1 — a byte-mutated acorn.cjs beside the genuine provenance pin
+  tmpBad = mkdtempSync(path.join(os.tmpdir(), "vendorgate-bad-"));
+  copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpBad, "provenance.json"));
+  writeFileSync(path.join(tmpBad, "acorn.cjs"), Buffer.concat([readFileSync(path.join(VENDOR, "acorn.cjs")), Buffer.from("\n// tampered\n")]));
+  const badRes = checkVendorIntegrity(tmpBad);
+  check("vendor-gate: a byte-mutated acorn.cjs FAILS integrity (ok:false + SHA-256 MISMATCH)",
+    badRes.ok === false && badRes.failures.some((f) => /SHA-256 MISMATCH/.test(f)), () => JSON.stringify(badRes.failures));
+  // negative 2 — provenance pins a file that is absent
+  tmpMissing = mkdtempSync(path.join(os.tmpdir(), "vendorgate-missing-"));
+  copyFileSync(path.join(VENDOR, "provenance.json"), path.join(tmpMissing, "provenance.json"));
+  const missRes = checkVendorIntegrity(tmpMissing);
+  check("vendor-gate: a MISSING pinned file FAILS (ok:false + 'cannot read')",
+    missRes.ok === false && missRes.failures.some((f) => /cannot read/.test(f)));
+  // the gate does NOT block normal use on the untampered vendor — parseSchema (which calls ensureVendorIntegrity
+  // on the co-located real vendor) parses a benign body cleanly.
+  check("vendor-gate: parseSchema still parses normally on the untampered vendor (gate passes, real use not blocked)",
+    parseSchema('define("P",[],function(){return{entitySchemaName:"X",diff:[]};});', "P").entitySchemaName === "X");
+} finally {
+  if (tmpBad) rmSync(tmpBad, { recursive: true, force: true });
+  if (tmpMissing) rmSync(tmpMissing, { recursive: true, force: true });
+}
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

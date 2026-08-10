@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Supply-chain integrity gate for the engine's vendored third-party code.
 //
-// `parseSchema` runs UNTRUSTED classic schema-body through the bundled acorn parser (vendor/acorn.mjs) —
+// `parseSchema` runs UNTRUSTED classic schema-body through the bundled acorn parser (vendor/acorn.cjs) —
 // the one executable component standing between a hostile stand input and the engine. A vendored bundle
 // gets no automatic security patching AND no automatic tamper detection: a swapped or silently-drifted
 // parser would execute unnoticed. This script pins each vendored file to a known-good SHA-256 recorded
@@ -18,11 +18,11 @@
 //
 // The pin is over LF-NORMALIZED bytes so it equals the upstream npm artifact's hash and is immune to
 // line-ending churn between platforms/checkouts — a CRLF checkout verifies identically to an LF one.
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Vendor dir defaults to the one co-located with this script. The optional argv[2] override is a TEST-ONLY hook
 // (the negative goldens point the SAME integrity check at a tampered fixture). The CLI-controlled path is
@@ -44,48 +44,92 @@ const MANIFEST = path.join(VENDOR_DIR, "provenance.json");
 const sha256Lf = (buf) =>
   createHash("sha256").update(Buffer.from(buf.toString("utf8").replaceAll("\r\n", "\n"), "utf8")).digest("hex");
 
-function main() {
+// PURE integrity check over a given vendor dir — no console, no process.exit — so it can gate at RUNTIME
+// (engine.mjs calls it before parsing untrusted input) AND back the CLI + goldens. Returns:
+//   { ok: bool, failures: string[], results: [{ name, ok, package?, version?, sha256?/expected?/actual?, error? }] }
+export function checkVendorIntegrity(vendorDir) {
+  const manifestPath = path.join(vendorDir, "provenance.json");
+  const results = [], failures = [];
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch (e) {
-    console.error(`verify-vendor: cannot read ${MANIFEST}: ${e.message}`);
-    return 1;
+    return { ok: false, failures: [`cannot read ${manifestPath}: ${e.message}`], results };
   }
   const files = manifest.files || {};
   const names = Object.keys(files);
-  if (names.length === 0) {
-    console.error("verify-vendor: provenance.json lists no files — nothing pinned");
-    return 1;
-  }
-  let failed = 0;
+  if (names.length === 0) return { ok: false, failures: ["provenance.json lists no files — nothing pinned"], results };
   for (const name of names) {
     const pin = files[name];
-    const file = path.join(VENDOR_DIR, name);
+    const file = path.join(vendorDir, name);
     let actual;
     try {
       actual = sha256Lf(readFileSync(file));
     } catch (e) {
-      console.error(`  ✗ ${name}: cannot read (${e.message})`);
-      failed++;
+      const msg = `${name}: cannot read (${e.message})`;
+      failures.push(msg); results.push({ name, ok: false, error: msg });
       continue;
     }
     if (actual === pin.sha256) {
-      console.log(`  ✓ ${name}  ${pin.package}@${pin.version}  sha256 ${actual.slice(0, 16)}…`);
+      results.push({ name, ok: true, package: pin.package, version: pin.version, sha256: actual });
     } else {
-      console.error(`  ✗ ${name}: SHA-256 MISMATCH — vendored file does not match its pinned ${pin.package}@${pin.version} provenance`);
-      console.error(`      expected ${pin.sha256}`);
-      console.error(`      actual   ${actual}`);
-      console.error(`      If this change is intentional, re-vendor from the pinned upstream artifact and update vendor/provenance.json.`);
-      failed++;
+      const msg = `${name}: SHA-256 MISMATCH — vendored file does not match its pinned ${pin.package}@${pin.version} provenance (expected ${pin.sha256}, actual ${actual})`;
+      failures.push(msg); results.push({ name, ok: false, package: pin.package, version: pin.version, expected: pin.sha256, actual });
     }
   }
-  if (failed) {
-    console.error(`\nverify-vendor: ${failed} of ${names.length} vendored file(s) FAILED integrity check`);
+  // DENY-UNKNOWN for executable modules: any `.cjs`/`.mjs`/`.js`/`.node` present in vendor/ that is NOT pinned could be
+  // loaded transitively (e.g. by acorn.cjs) and would bypass the hash gate entirely. Fail closed on it. Today
+  // acorn.cjs is a self-contained bundle and the only pinned module, so this is future-proofing — a new unpinned
+  // executable sibling is a hard failure, not a silent bypass. (Inert assets like the LICENSE are not enumerated.)
+  // Match is CASE-INSENSITIVE (extension lower-cased) and includes native addons (`.node`): on a case-insensitive FS
+  // (Windows / default macOS) a planted `evil.JS` / `evil.CJS` is still require()-able, and a `.node` addon is
+  // dlopen-able — both must be caught. Walked RECURSIVELY: a nested `vendor/sub/evil.js` is equally loadable, so it
+  // must fail closed too, not only the flat top level. Pins are flat basenames, so any executable at depth > 0
+  // (relPath !== basename) can never match a pin and is denied by construction.
+  try {
+    const pinned = new Set(names);
+    const walk = (dir, rel) => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const relPath = rel ? `${rel}/${ent.name}` : ent.name;
+        // A SYMLINK is fail-closed FIRST: readdirSync uses lstat, so a symlink-to-directory reports isDirectory()===false
+        // (never walked) and typically carries no matching extension (never flagged) — it would silently escape the scan
+        // while still being loadable / pointing outside the pinned set. A symlink has no place in vendor/; reject it.
+        if (ent.isSymbolicLink()) {
+          const msg = `${relPath}: symlink present in vendor/ — not allowed (it can point outside the pinned set or to a directory the deny-unknown scan never walks); remove it`;
+          failures.push(msg); results.push({ name: relPath, ok: false, error: msg });
+          continue;
+        }
+        if (ent.isDirectory()) { walk(path.join(dir, ent.name), relPath); continue; }
+        if (/\.(cjs|mjs|js|node)$/.test(ent.name.toLowerCase()) && !pinned.has(relPath)) {
+          const msg = `${relPath}: unpinned executable module present in vendor/ (at any depth) — every .cjs/.mjs/.js/.node must be pinned in provenance.json (deny-unknown); pin it or remove it`;
+          failures.push(msg); results.push({ name: relPath, ok: false, error: msg });
+        }
+      }
+    };
+    walk(vendorDir, "");
+  } catch (e) {
+    // A mid-walk readdir failure (e.g. an unreadable SUBdir) must NOT silently pass the deny-unknown gate: the flat
+    // pinned-file loop above only covers the TOP dir, so a swallowed subtree error could leave ok:true with an
+    // un-scanned subtree. Fail closed with an explicit failure entry.
+    const msg = `vendor/ deny-unknown scan could not fully enumerate the tree (${e.message}) — cannot prove no unpinned executable is present; failing closed`;
+    failures.push(msg); results.push({ name: "(vendor deny-unknown scan)", ok: false, error: msg });
+  }
+  return { ok: failures.length === 0, failures, results };
+}
+
+// CLI wrapper — prints the human report and returns an exit code. Runs ONLY when this file is invoked directly
+// (see the import.meta.url guard below); importing the module for `checkVendorIntegrity` must NOT run it.
+function main() {
+  const r = checkVendorIntegrity(VENDOR_DIR);
+  for (const res of r.results) if (res.ok) console.log(`  ✓ ${res.name}  ${res.package}@${res.version}  sha256 ${res.sha256.slice(0, 16)}…`);
+  if (!r.ok) {
+    for (const f of r.failures) console.error(`  ✗ ${f}`); // failure strings carry the diagnostic ('cannot read' / 'nothing pinned' / 'SHA-256 MISMATCH')
+    console.error(`\nverify-vendor: integrity check FAILED — ${r.failures.length} problem(s). If a change is intentional, re-vendor from the pinned upstream artifact and update vendor/provenance.json.`);
     return 1;
   }
-  console.log(`verify-vendor: ${names.length} vendored file(s) verified`);
+  console.log(`verify-vendor: ${r.results.length} vendored file(s) verified`);
   return 0;
 }
 
-process.exit(main());
+// Guarded so importing this module (engine.mjs) does NOT execute the CLI / exit the process.
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) process.exit(main());
