@@ -8,6 +8,30 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.7.0 (2026-08-07)
+
+**Your new app now lands where users can actually find it.** Until this release the toolkit could build a complete Creatio app that nobody but an administrator could open — `create-app` drops every new section into the `My applications` workplace, which is granted to `System administrators` only, and nothing ever asked where the app really belonged. Navigation placement is now a required discovery question, asked in the first batch alongside the business questions and carried through the plan, the runbooks and the completion criteria. The same release fixes the reason the orchestrator was often skipped entirely, and sharpens what the Classic and mobile migration skills tell you they could not convert.
+
+### ✨ What's new
+
+- **Navigation placement and audience are settled before anything is built.** The first discovery batch now asks which workplace your section — and its home page — belongs to, and which roles should see it, offering a new workplace named for the app, `My applications`, or one you name. Asking later was never a smaller version of the same thing: it made you re-decide work that was already finished. When a section is added to an app that already exists, the recommendation is refined during requirements gathering by reading where that app's sections actually live — and deliberately never recommends `My applications` back to you, because an app sitting there is the very problem this question exists to catch. ([#77](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/77))
+- **The orchestrator is selectable from a plain request.** Its description named only the toolkit's own artifacts — "Business Plans", "implementation handoffs" — so "create a Todo app" or "add an Orders section" could miss it entirely and fall through to raw clio MCP with none of the toolkit's gates applied. All three trigger surfaces — the Claude skill, the Cursor rule and the OpenAI manifest — now carry the same user-intent wording, and a test keeps them from drifting apart again. ([#77](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/77))
+- **Embedded profile cards migrate to the Freedom side profile.** A Classic page that carried an embedded profile card now maps onto the Freedom side profile instead of being flattened into the main layout. ([#71](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/71))
+
+### 🛠️ Straighter answers about what did not convert
+
+- **Mobile conversion names the whole containers it dropped.** It reported only per-element drops, so a web container removed up front never appeared in "what was dropped" — you found out by noticing something missing. ([#78](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/78))
+- **Mobile page conversion emits targeted diff operations** instead of one root merge, so a converted page changes what it needs to and leaves the rest of the mobile template alone. ([#73](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/73))
+- **Classic → Freedom migration reads sources from the runtime only.** The hybrid runtime-plus-repository model is gone, so a migration can no longer be planned from a local checkout that disagrees with the environment it will be applied to. ([#66](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/66))
+- **A Flow & Engine explainer for the migration skill now lives in the repository**, so the documentation can be read and edited alongside the code it describes. ([#67](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/67))
+
+### 🔒 Fewer surprises in what gets applied
+
+- **Custom CSS is a last resort, and you are asked first.** Freedom UI guidance now tries native component properties before reaching for CSS, and warns and confirms before applying any. ([#57](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/57))
+- **A missing guidance topic stops the run instead of improvising.** Navigation writes depend on clio's `workplaces` guidance, which ships with the clio knowledge library from `1.13.0` onward. If it is unavailable the run stops and tells you, rather than guessing the write — a workplace bound with the wrong columns installs on the next environment as an unreachable entry and cannot be repaired by re-installing. ([#77](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/77))
+
+---
+
 ## 1.6.0 (2026-07-29)
 
 **Beta — your Classic pages finally have a map to Freedom.** Migrating a Creatio Classic UI page to Freedom UI has always been archaeology — hunt down the client schema, work out which base template it inherits from, rebuild the merged tree by hand, then guess the Freedom equivalent and hope nothing got dropped. This first release hands that job to an agent skill backed by a deterministic engine: the mechanical work is reconstructed for you and only the real judgment calls come back for review. It ships as an early **Beta** with deliberately limited migration coverage — **layout, components, and business rules** — so treat its output as a reviewed draft to build from, not a finished migration (see *Beta scope* below).
