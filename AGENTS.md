@@ -10,7 +10,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
 - **The plan output MUST be a BA-style Business Plan.** The BA-style Business Plan (Agent 2 output) must be shown inline in the visible conversation body. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
-- **Exception — Classic→Freedom UI migration.** Everything above governs **business-requirements planning** — app creation and any other business task that needs requirements working-through. A Classic→Freedom UI migration is **not** such a task: it is a deterministic technical UI-transformation. The `classic-to-freedom-migration` skill therefore does **not** use the BA-style Business Plan or Gate P/R — it presents its OWN engine-written migration plan (`node engine/migrate.mjs <manifest> --plan`: Overview / Main scope / Layout / Logic / ⚠ Confirm), and for it the written `plan.md` **is** the deliverable, presented verbatim. That skill's Contract governs its plan format and approval; do not force it into the 7-section structure.
+- **Exception — Classic→Freedom UI migration.** Everything above governs **business-requirements planning** — app creation and any other business task that needs requirements working-through. A Classic→Freedom UI migration is **not** such a task: it is a deterministic technical UI-transformation. The `classic-to-freedom-migration` skill therefore does **not** use the BA-style Business Plan or Gate P/R — it presents its OWN engine-written migration plan (`node engine/migrate.mjs <manifest> --plan`: Overview / Main scope / Layout / Logic / ⚠ Confirm), and for it the written `plan.md` **is** the deliverable, presented verbatim. That skill's Contract governs its plan format and approval; do not force it into the BA-style Business Plan structure.
 
 
 The required top-level sections of every BA-style Business Plan are, in order:
@@ -21,12 +21,14 @@ The required top-level sections of every BA-style Business Plan are, in order:
 4. Lifecycle and Statuses
 5. Business Logic
 6. UX Expectations
-7. Edge Cases and Exceptions
+7. Analytics
+8. Edge Cases and Exceptions
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
+`Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
 
 Required BA-style Business Plan template:
 
@@ -37,7 +39,8 @@ Required BA-style Business Plan template:
 ## 4. Lifecycle and Statuses
 ## 5. Business Logic
 ## 6. UX Expectations
-## 7. Edge Cases and Exceptions
+## 7. Analytics
+## 8. Edge Cases and Exceptions
 ```
 
 ## Format Compliance Rule
@@ -252,12 +255,12 @@ Gate R:
 - **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
 - Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
+- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`).
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
-- The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
+- The visible draft must use the 8-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
-- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 7-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
+- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 8-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
 - A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
 Gate bypass rule:
