@@ -111,6 +111,12 @@ point at them — and every fetch, or its counted zero, is logged:
      messages the surface declares — a bounded set — not by the census, which carries names and
      packages, no bodies. When a caller supplied a **row digest** (`SKILL.md`), the caller owns the
      register: consume it, never rebuild it.
+   - **Scope growth extends the register, never rebuilds it.** A page entering scope after the
+     register was built (a child edit page, a discovered detail — `01-surface-resolution.md`) adds
+     its declared messages as new entries, and their counterpart search runs then. The same holds
+     for a caller-supplied register: append the new page's threads and say so. A message a
+     late-scoped page declares is in the register or it is an untraced thread — never silently
+     absent.
    - **Widen until you find the counterpart, and state the scope you reached.** Start at the *declaring
      layer's package* (the search order under **Cross-schema wiring** above) and widen from there;
      fetch candidate chains and text-search the bodies offline. A counterpart found in a package the

@@ -9,6 +9,8 @@ CARD_CONTRACT = ROOT / "skills/classic-ui-expert/references/08-card-contract.md"
 MEMBER_LEDGER = ROOT / "skills/classic-ui-expert/references/03-member-ledger.md"
 REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-following.md"
 SURFACE_RESOLUTION = ROOT / "skills/classic-ui-expert/references/01-surface-resolution.md"
+CLASSIC_SKILL = ROOT / "skills/classic-ui-expert/SKILL.md"
+PLATFORM_PATTERNS = ROOT / "skills/classic-ui-expert/references/06-platform-patterns.md"
 
 EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
 GATE_HEAD = "**Gate-toggle safety (shared stand).**"
@@ -44,13 +46,16 @@ def paragraph(text, head):
 
     Scoping assertions to the paragraph rather than the whole file is what makes a
     *moved* sentence visible: whole-file assertIn stays green when a rule migrates into
-    a neighbouring paragraph whose surrounding text changes its meaning. Same idiom as
-    tests/test_default_contract_docs.py:574-597.
+    a neighbouring paragraph whose surrounding text changes its meaning. (The section
+    slicing in tests/test_default_contract_docs.py:574-597 gives the same guarantee
+    ad hoc, by index arithmetic; these helpers are new, not ported from there.)
+    Requires the head to be unique — a duplicated head would silently pin whichever
+    copy comes first, so it fails instead.
     """
-    for para in text.split("\n\n"):
-        if para.lstrip().startswith(head):
-            return para
-    raise AssertionError(f"no paragraph starting with {head!r}")
+    matches = [p for p in text.split("\n\n") if p.lstrip().startswith(head)]
+    if len(matches) != 1:
+        raise AssertionError(f"{len(matches)} paragraphs start with {head!r}; need exactly one")
+    return matches[0]
 
 
 def bullet(text, head):
@@ -58,12 +63,13 @@ def bullet(text, head):
 
     A bullet is one physical line inside a block with no blank lines, so paragraph()
     cannot scope it — line scoping gives the same guarantee: a marker that drifts into a
-    neighbouring bullet turns the assertion red instead of staying green.
+    neighbouring bullet turns the assertion red instead of staying green. Same uniqueness
+    requirement as paragraph().
     """
-    for line in text.splitlines():
-        if line.lstrip().startswith(head):
-            return line
-    raise AssertionError(f"no list item starting with {head!r}")
+    matches = [ln for ln in text.splitlines() if ln.lstrip().startswith(head)]
+    if len(matches) != 1:
+        raise AssertionError(f"{len(matches)} list items start with {head!r}; need exactly one")
+    return matches[0]
 
 
 class ClassicSkillSafetyDocTests(unittest.TestCase):
@@ -80,13 +86,17 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # empty text, so their strength rests on this guard: a renamed or emptied doc
         # fails here loudly instead of turning the negative half of the suite
         # green-by-absence. (Path.read_text raises on a missing file; this closes the
-        # emptied-file case too.)
+        # emptied-file case too.) CLASSIC_SKILL and PLATFORM_PATTERNS carry edits from
+        # the same branch without phrase pins of their own — the guard is all the
+        # backstop they have, so they are listed too.
         for path in (
             MIGRATION_SKILL,
             CARD_CONTRACT,
             MEMBER_LEDGER,
             REFERENCE_FOLLOWING,
             SURFACE_RESOLUTION,
+            CLASSIC_SKILL,
+            PLATFORM_PATTERNS,
         ):
             self.assertTrue(read_text(path).strip(), f"{path} is missing or empty")
 
@@ -238,6 +248,16 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertIn("toggle window", flat(para))
         self.assertIn("toggle once, run them all, restore once", flat(para))
 
+    def test_gate_toggle_announces_the_window_before_opening_it(self):
+        # A flipped gate changes behaviour for every concurrent user of a shared stand
+        # while the window is open — restore-on-exit does not cover the window itself,
+        # so the toggle is announced, never silent.
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para, ["Announce the window before opening it", "every concurrent user"]
+        )
+        self.assertFalse(missing, f"toggle window must be announced; missing {missing}")
+
     # --- card contract ------------------------------------------------------------
 
     def test_card_contract_keeps_the_closed_set_guarantee(self):
@@ -263,6 +283,21 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"mechanism-notes cap incomplete; missing {missing}")
         self.assertNotIn("One short paragraph", flat(content))
+
+    def test_code_snippets_redact_secret_literals(self):
+        # The Code field requires verbatim customer code, and verbatim code can embed
+        # credentials — the same exposure the setting-value redaction (retrieval-floor
+        # class 2) closes, on the other path into customizations.md.
+        content = read_text(CARD_CONTRACT)
+        missing = missing_markers(
+            content,
+            [
+                "A secret literal is redacted, never copied",
+                "redacted: connection string",
+                "the one edit allowed inside a member",
+            ],
+        )
+        self.assertFalse(missing, f"code snippets must redact secrets; missing {missing}")
 
     # --- member ledger -------------------------------------------------------------
 
@@ -300,6 +335,22 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"class 3 must run once and widen; missing {missing}")
         self.assertNotIn("scan the client-schema census for the other side", flat(content))
+
+    def test_message_register_extends_when_scope_grows(self):
+        # "Once per run" without a scope-growth clause reads as "closed once built" — a
+        # child page entering scope mid-run would then declare messages the register
+        # never carries, reproducing the 18-of-30 open-thread failure through the side
+        # door the child-page ledger rule opens.
+        content = read_text(REFERENCE_FOLLOWING)
+        missing = missing_markers(
+            content,
+            [
+                "Scope growth extends the register, never rebuilds it",
+                "append the new page's threads",
+                "never silently absent",
+            ],
+        )
+        self.assertFalse(missing, f"register must extend on scope growth; missing {missing}")
 
     def test_message_counterpart_zero_carries_its_scope_of_proof(self):
         content = read_text(REFERENCE_FOLLOWING)

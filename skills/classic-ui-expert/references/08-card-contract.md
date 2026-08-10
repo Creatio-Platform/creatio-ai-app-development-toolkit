@@ -105,6 +105,12 @@ Rules:
 
 - **Verbatim from the fetched body, never retyped.** Copy the members exactly as retrieved; a
   snippet "cleaned up" from memory is an invention wearing evidence's clothes.
+- **A secret literal is redacted, never copied.** A credential inside a member — connection
+  string, API key/token, password — is replaced with a comment naming what was removed
+  (`/* redacted: connection string */`), the same shape as an elided member. This is the one
+  edit allowed inside a member: the snippet ships in `customizations.md`, and the same
+  default-deny that keeps non-Boolean setting values out of the report (retrieval-floor
+  class 2, `05-reference-following.md`) applies to code.
 - **The unit's own members only** — the customization's diff operations and methods. Platform/context
   bodies are cited in sourceRef, not reproduced (they are the same on every stand; the customization
   is not).
