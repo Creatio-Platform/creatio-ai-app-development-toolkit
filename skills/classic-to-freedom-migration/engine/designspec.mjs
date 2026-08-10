@@ -434,10 +434,16 @@ export function childTemplateChoice(n, hasTabs, nDetails) {
 // is verified against the very schema name the plan told the agent to build on. A `null` choice has no entry here
 // — such a page emits NO template row at all rather than one nobody can satisfy.
 export const CHILD_TEMPLATE_SCHEMA = { mini: "BaseMiniPageTemplate", grid: "PageWithAreaFreedomTemplate" };
+// The `values.type` spellings that denote ONE TAB. Exported so every tab predicate reads the SAME list — the
+// child-template banner here, `expTabs`, the BUILT_TYPES gate below, and migrate.mjs's fold-time `hasTabs` — and a
+// platform rename stays a one-line change. `crt.TabContainer` is what the mapper emits and what a real stand
+// builds; `crt.Tab` is kept only as a legacy spelling (see the BUILT_TYPES note).
+export const TAB_TYPES = ["crt.TabContainer", "crt.Tab"];
+export const isTabOp = (o) => TAB_TYPES.includes(o?.values?.type);
 // Child-page template recommendation banner. Applies to related-list child pages only.
 function childFormRecommendation(cs, fields, opts) {
   if (!opts.isChildPage) return [];
-  const hasTabs = (cs.viewConfigDiff || []).some((o) => o.values?.type === "crt.TabContainer");
+  const hasTabs = (cs.viewConfigDiff || []).some(isTabOp);
   const nDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   const n = fields.length;
   const choice = childTemplateChoice(n, hasTabs, nDetails);
@@ -1235,7 +1241,7 @@ function buildCoverageRows(cs, pm, result) {
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expFields = fieldOps.length;
-  const expTabs = new Set((cs.viewConfigDiff || []).filter((o) => o.values?.type === "crt.TabContainer").map((o) => o.name)).size;
+  const expTabs = new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name)).size;
   const expDetails = (cs.details || []).length + (cs.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   // carry the expected field NAMES (element names, not the stripped control) so the built count can match by
   // identity — a control-bound field whose built component type is outside FIELD_RE (rich-text / a lookup or
@@ -1822,7 +1828,7 @@ function resolveImageVk(vk, ctx) {
 // NOTE: the mapper now emits `crt.TabContainer` (the type the platform actually builds); `crt.Tab` stays
 // accepted here only as a legacy spelling, for a page built before that fix.
 const BUILT_TYPES = {
-  tabs: ["crt.TabContainer", "crt.Tab"],
+  tabs: TAB_TYPES,
   details: ["crt.DataGrid"],
 };
 function resolveCountVk(vk, ctx) {

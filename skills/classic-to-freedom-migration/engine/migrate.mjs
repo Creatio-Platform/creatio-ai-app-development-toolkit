@@ -59,7 +59,7 @@ import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom, STANDARD_CLASSIC_METHODS } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport } from "./designspec.mjs";
+  planGaps, pageUnits, verifyReport, isTabOp } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -571,7 +571,10 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // field count / tabs / details drive the child's template choice (Main scope + the child recommendation must
   // agree): < 15 flat inputs → Mini page; otherwise (>= 15, or tabs/related-lists) → the Grid page template.
   c.fieldCount = countFormFields(res.changeSet?.viewConfigDiff);
-  c.hasTabs = (res.changeSet?.viewConfigDiff || []).some((o) => o?.values?.type === "crt.Tab");
+  // `isTabOp` (the SHARED tab-type list), not a local `crt.Tab` literal: the mapper emits `crt.TabContainer`, so a
+  // `crt.Tab` test here was dead — every tabbed child folded as tab-less and `childTemplateChoice` gated it as the
+  // mini template while its OWN design spec recommended the grid one.
+  c.hasTabs = (res.changeSet?.viewConfigDiff || []).some(isTabOp);
   c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
   c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
   c.grandChildren = c.childPages.length;
@@ -1057,6 +1060,23 @@ const SCHEMA_BODY_ARRAYS = new Set(["schemas", "seed"]);
 // same input. Real bundles nest a handful of levels and a few thousand nodes.
 const PLAN_VERSION_MAX_DEPTH = 24;
 const PLAN_VERSION_MAX_NODES = 200000;
+// An entry whose `file` cannot be read contributes this FIXED sentinel — never the path, never the error text, both
+// of which are machine-specific and would break reproducibility. Two distinct unreadable entries therefore hash
+// alike; that is the same bounded loss of resolution the depth/node ceilings already accept.
+const PLAN_VERSION_UNREADABLE = "unreadable";
+// The body CONTENT one `schemas`/`seed` entry contributes. The walk reaches entries the RUN never needed — a
+// `reuseFreedomPage` child that `foldOneChildPage` returns early on, an unreferenced `childPageSchemas` bundle — so
+// an entry with neither `body` nor `file`, AND one whose `file` does not resolve, both contribute a sentinel rather
+// than throwing ENOENT out of `runMigration` and failing (exit 1) a manifest that planned fine. Same reasoning as
+// the missing-both case: an unreadable entry is the gate's problem, not the version's.
+function schemaBodyFor(e, readBody) {
+  if (!e || (e.body == null && !e.file)) return "";
+  try {
+    return String(readBody(e));
+  } catch {
+    return PLAN_VERSION_UNREADABLE;
+  }
+}
 // The `schemas`/`seed` leg, extracted so `feedPlanVersion` carries one branch per shape rather than three
 // (the repo pins Sonar cognitive complexity 15, and this is the hottest walk in the file).
 function feedSchemaArray(h, value, readBody) {
@@ -1064,7 +1084,7 @@ function feedSchemaArray(h, value, readBody) {
   for (const e of value) {
     h.update(String(e?.pkg ?? ""));
     h.update("\u0001");
-    h.update(e && (e.body != null || e.file) ? String(readBody(e)) : "");
+    h.update(schemaBodyFor(e, readBody));
     h.update("\u0001");
   }
 }
@@ -1074,8 +1094,8 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
     // A `schemas`/`seed` entry reduces to pkg + BODY CONTENT wherever it appears — including inside a nested
     // bundle (childPageSchemas / typedPageSchemas / miniPageSchemas) — so a `{file:…}` entry contributes what it
     // CONTAINS, and re-planning the same bodies from a fresh temp dir keeps one version. An entry with neither
-    // `body` nor `file` would make `readBody` throw, so it contributes nothing rather than aborting the run: an
-    // unreadable entry is the gate's problem, not the version's.
+    // `body` nor `file`, or a `file` that does not resolve, contributes a sentinel instead of aborting the run —
+    // see `schemaBodyFor`.
     if (SCHEMA_BODY_ARRAYS.has(key)) return feedSchemaArray(h, value, readBody);
     // Array order IS a plan input (it is the override chain), so it is never sorted.
     h.update("\u0001A");

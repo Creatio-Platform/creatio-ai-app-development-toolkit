@@ -4340,6 +4340,24 @@ try {
 } finally {
   for (const d of pvDirs) fs.rmSync(d, { recursive: true, force: true });
 }
+// …and an entry the RUN NEVER NEEDED must not be able to fail the run. The version walk visits every `schemas`/
+// `seed` array at any depth, including nested bundles the fold deliberately skips (a `reuseFreedomPage` child, an
+// unreferenced `childPageSchemas` entry). An unreadable `{ file: … }` there threw ENOENT out of `runMigration` and
+// exited 1, naming a file whose relevance the operator cannot see. It contributes a FIXED sentinel instead —
+// deterministic (never the path, never the error text), so the version stays reproducible.
+const pvGhost = { ...PG_MANIFEST, childPageSchemas: { ...PG_MANIFEST.childPageSchemas,
+  GhostPage: { entity: "Ghost", schemas: [{ pkg: "P", file: "does-not-exist.js" }] } } };
+let pvGhostVersion = null;
+let pvGhostThrew = null;
+try { pvGhostVersion = runMigration(pvGhost, { baseDir: FIX }).planVersion; } catch (e) { pvGhostThrew = e.message; }
+check("ENG-94975 Y1: an unreferenced schema entry whose `file` does not resolve does NOT abort the run — the version takes a fixed sentinel for it instead of throwing ENOENT out of `runMigration` (exit 1) on a manifest that planned fine",
+  pvGhostThrew === null && typeof pvGhostVersion === "string" && pvGhostVersion.trim() !== "",
+  () => ({ threw: pvGhostThrew, version: pvGhostVersion }));
+// The sentinel is a VALUE, not a silent skip: the entry is still part of the hash, so it stays reproducible across
+// runs and still differs from the manifest that never carried the entry at all.
+check("ENG-94975 Y1: the unreadable entry's sentinel is DETERMINISTIC (same manifest ⇒ same version) and still DISTINGUISHES the manifest from one without the entry — a machine-specific path or error string would break the first, dropping the entry the second",
+  pvGhostVersion === runMigration(pvGhost, { baseDir: FIX }).planVersion && pvGhostVersion !== pvA,
+  () => ({ first: pvGhostVersion, second: runMigration(pvGhost, { baseDir: FIX }).planVersion, base: pvA }));
 // The two artifacts must agree — the operator records what `--plan` printed, the gate reads what `--units` published.
 check("ENG-94975 Y1: `--units` publishes the version as `planVersion`, and it is the engine's",
   pgUnits.planVersion === pvA, () => ({ units: pgUnits.planVersion, engine: pvA }));
@@ -4745,6 +4763,53 @@ check("ENG-94975 P4 --units content: a folded child's `expectedTemplate` is the 
   && !("expectedTemplate" in pgUnits.pages.find((p) => p.key === "child:U1")),
   () => ({ folded: [...pgFolded].map(([k, c]) => ({ k, fc: c.fieldCount, ht: c.hasTabs, nd: c.nDetails,
     choice: childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails), published: pgUnits.pages.find((p) => p.key === k)?.expectedTemplate })) }));
+
+/* ---- P4b — the FOLD path's own `hasTabs`, which no assertion reached. Every tab check above either calls
+   `renderDesignSpec` directly (#7c) or compares the published `expectedTemplate` against
+   `childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails)` — i.e. against `c.hasTabs` itself, so it holds
+   whatever that flag says. `foldOneChildPage` tested `values.type === "crt.Tab"` while the mapper emits
+   `crt.TabContainer`, so the predicate was DEAD: a tabbed child with < 15 fields and no related lists folded as
+   tab-less and was planned AND GATED as `BaseMiniPageTemplate`, while its own design spec recommended
+   `PageWithAreaFreedomTemplate`. `nDetails > 0` masks it in the common case, which is why the fixture above
+   (whose children all carry details) never caught it. Asserted through `runMigration` → `foldOneChildPage`, and
+   pinned against the LITERAL schema name so a mutation of `childTemplateChoice` cannot satisfy both sides. ---- */
+const TAB_CHILD_MANIFEST = {
+  entity: "TM", seed: PG_SEED,
+  schemas: [{ pkg: "P", body: `define("TMPage",[],function(){return{entitySchemaName:"TM",details:{R:{schemaName:"TCD",entitySchemaName:"TC",filter:{detailColumn:"m",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}]};});` }],
+  detailSchemas: { TCD: { entity: "TC", columns: ["Number"], editPage: "TCPage" } },
+  childPageSchemas: {
+    // The child: ONE tab holding ONE field, and NO details of its own — so `fieldCount < 15` and `nDetails === 0`,
+    // and the tab is the ONLY thing that can push the choice to "grid".
+    TCPage: { entity: "TC", seed: PG_SEED, schemas: [{ pkg: "P", body: `define("TCPage",[],function(){return{entitySchemaName:"TC",diff:[{operation:"insert",name:"CT",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:{bindTo:"Resources.Strings.CTCaption"}}},{operation:"insert",name:"CF1",parentName:"CT",propertyName:"items",values:{bindTo:"CF1"}},{operation:"insert",name:"CF2",parentName:"CT",propertyName:"items",values:{bindTo:"CF2"}}]};});` }] },
+  },
+  planMeta: { formTemplate: "FormPageTemplate" },
+  signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } },
+};
+const tabChildRun = runMigration(TAB_CHILD_MANIFEST, { baseDir: FIX });
+const tabChildOpts = checklistOpts(TAB_CHILD_MANIFEST);
+const tabChildUnits = pageUnits(tabChildRun, tabChildOpts);
+const tabChild = (tabChildRun.childPages || []).find((c) => c.spec);
+check("ENG-94975 P4b preconditions: the folded child really is the masked case — a TAB on the page, FEWER than 15 fields and NO related lists of its own (else the template check below passes for the wrong reason)",
+  !!tabChild && tabChild.fieldCount > 0 && tabChild.fieldCount < 15 && tabChild.nDetails === 0
+  && (tabChild.spec?.changeSet?.viewConfigDiff || tabChild.spec ? true : false),
+  () => ({ found: !!tabChild, fc: tabChild?.fieldCount, nd: tabChild?.nDetails, ht: tabChild?.hasTabs }));
+check("ENG-94975 P4b (fold path): `foldOneChildPage` sees the tab the MAPPER emits (`crt.TabContainer`, not the removed `crt.Tab`) — so a tabbed child with < 15 fields and no related lists is planned and gated as `PageWithAreaFreedomTemplate`, never as the mini page its own design spec rejects",
+  tabChild?.hasTabs === true
+  && tabChildUnits.pages.find((p) => p.key === tabChild.pageKey)?.expectedTemplate === "PageWithAreaFreedomTemplate"
+  && childTemplateChoice(tabChild.fieldCount, tabChild.hasTabs, tabChild.nDetails) === "grid",
+  () => ({ ht: tabChild?.hasTabs, key: tabChild?.pageKey,
+    published: tabChildUnits.pages.map((p) => ({ k: p.key, t: p.expectedTemplate })) }));
+// …and the same page's OWN design spec agrees — the contradiction the dead predicate produced was between these
+// two, so both sides are pinned rather than just the published one.
+// …and the two recommendations for this ONE page agree. This is the contradiction the dead predicate produced —
+// the spec (which computes `hasTabs` correctly) said grid while the queue gated the mini template — so it is
+// asserted as an EQUALITY between the two sides, not as a property of either one alone.
+const tabChildSpecTpl = ["PageWithAreaFreedomTemplate", "BaseMiniPageTemplate"].filter((t) => String(tabChild?.spec || "").includes(t));
+check("ENG-94975 P4b (no contradiction): the tabbed child's own design-spec recommendation and its published `expectedTemplate` name the SAME template — one page, one answer",
+  tabChildSpecTpl.length === 1
+  && tabChildSpecTpl[0] === tabChildUnits.pages.find((p) => p.key === tabChild.pageKey)?.expectedTemplate,
+  () => ({ specNames: tabChildSpecTpl, published: tabChildUnits.pages.find((p) => p.key === tabChild?.pageKey)?.expectedTemplate,
+    spec: String(tabChild?.spec || "").split("\n").filter((l) => /Template/.test(l)).slice(0, 4) }));
 
 /* ================================================================================================================
    ENG-94975 M1 + M2 — the two MAJOR defects a checker drove through the real CLI to exit 0 / to a false ❌.
