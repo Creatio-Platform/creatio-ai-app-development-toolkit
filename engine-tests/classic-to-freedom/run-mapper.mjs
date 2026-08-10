@@ -4026,6 +4026,78 @@ check("handoff BACK: an undescribed row reads ⚠, not a blank",
 check("handoff BACK: unmatched keys surface as a plan banner",
   /matched no imperative row/.test(hoPlan));
 
+// TWO cards per row. A member whose behaviour lives in another scope — a `mixin:`, or a method that only wires one
+// in — is described by the owning scope's card (the wiring) AND the body's own card (shared core). Carrying only
+// the first leaves the row citing criteria that say the behaviour MAY happen, while the conditions that gate it
+// sit in a card nothing points at — so a port walking the named criteria never sees them.
+const hoBody = runMigration({ ...handoffManifest, behaviourIndex: {
+  privateHelper: { card: "C01", ac: ["AC-1"], bodyCard: "shared/C09", bodyAc: ["AC-51", "AC-53"] },
+  "message:RefreshThing": { bodyCard: "shared/C09", bodyAc: ["AC-56"] },
+} });
+const bodyStub = hoBody.changeSet.handlerStubs.find(h => h.sourceMethod === "privateHelper");
+check("handoff BACK: a body card in ANOTHER scope survives the fold alongside the owning scope's card",
+  bodyStub.describedIn.card === "C01" && bodyStub.describedIn.bodyCard === "shared/C09" &&
+  bodyStub.describedIn.bodyAc.length === 2);
+check("handoff BACK: a member described ONLY by a body card still counts as described",
+  hoBody.changeSet.needsDecision.find(n => n.kind === "message" && n.item === "RefreshThing")?.describedIn.bodyCard === "shared/C09");
+const hoBodyPlan = renderPlan(hoBody, {});
+check("handoff BACK: the plan prints BOTH cards, so the guards in the body card are named",
+  /C01 AC-1 · body shared\/C09 AC-51, AC-53/.test(hoBodyPlan));
+check("handoff BACK: a ⚠ Confirm member described ONLY by a body card cites it instead of reading ⚠ not described",
+  /message.*RefreshThing[\s\S]*?described in\*\* body shared\/C09 AC-56/.test(hoBodyPlan));
+
+// The COMPUTED floor under the two-card rule: a row whose body is PROVABLY in another schema — a `mixin:` member,
+// an `externalRef` method — described by a wiring card alone is flagged (`behaviourIndex.wiringOnly` + ⚠ plan
+// banner). `message:`/`module-dep` stay prompt-level: a counterpart may sit on this same surface, and one
+// aggregated key hides many bodies. This is the computed floor under the rule pinned in the TWO-cards block above.
+const WIRE_BODY = `define("WirePage", ["LeadHelper"], function() { return {
+  entitySchemaName: "Deal",
+  messages: { "RefreshThing": { mode: 0, direction: 1 } },
+  mixins: { LeadMixin: "Terrasoft.LeadMixin" },
+  methods: {
+    localHelper: function() { return this.get("Amount"); },
+    wired: LeadHelper.CreateLead
+  },
+  diff: []
+}; });`;
+const wireManifest = { entity: "Deal", schemas: [{ pkg: "P", body: WIRE_BODY }] };
+const hoWire = runMigration({ ...wireManifest, behaviourIndex: {
+  "mixin:LeadMixin": { card: "main/C28", ac: ["AC-200"] },     // body in another schema, wiring card alone → flagged
+  wired: { card: "main/C28", ac: ["AC-201"] },                 // externalRef method, wiring card alone → flagged
+  localHelper: { card: "main/C01", ac: ["AC-1"] },             // body IS here — one card is the correct shape
+  "message:RefreshThing": { card: "main/C02", ac: ["AC-2"] },  // excluded by design (counterpart may be in-surface)
+} });
+check("wiringOnly: a `mixin:` row and an `externalRef` method carrying a wiring card alone are flagged — and ONLY they",
+  hoWire.behaviourIndex.wiringOnly.includes("mixin:LeadMixin") &&
+  hoWire.behaviourIndex.wiringOnly.includes("wired") &&
+  hoWire.behaviourIndex.wiringOnly.length === 2,
+  () => hoWire.behaviourIndex.wiringOnly);
+check("wiringOnly: the plan carries the ⚠ banner naming the keys and the fix",
+  /only a wiring card/.test(renderPlan(hoWire, {})) && /`mixin:LeadMixin`/.test(renderPlan(hoWire, {})));
+const hoWireOk = runMigration({ ...wireManifest, behaviourIndex: {
+  "mixin:LeadMixin": { card: "main/C28", ac: ["AC-200"], bodyCard: "shared/C09", bodyAc: ["AC-51", "AC-53"] },
+  wired: { bodyCard: "shared/C09", bodyAc: ["AC-51"] },
+} });
+check("wiringOnly: carrying the body card clears the flag — with or without a wiring card",
+  hoWireOk.behaviourIndex.wiringOnly.length === 0 && !/only a wiring card/.test(renderPlan(hoWireOk, {})));
+// FOLDED scopes are walked too. The check runs on the ROOT run only (a folded sub-run sees one page's rows, so
+// every sibling's answer would look wiring-only there) — which is exactly why the root has to reach INTO the folds:
+// a mixin declared on the mini page is the same silent hole as one on the record page. The mini's mixin is given a
+// DISTINCT name on purpose: sharing the main page's name would let a main-page-only walk pass this test.
+const hoWireMini = runMigration({ ...wireManifest,
+  addRecordMiniPage: { schema: "DealMini" },
+  miniPageSchemas: { DealMini: { entity: "Deal", schemas: [{ pkg: "P",
+    body: WIRE_BODY.replace(/WirePage/g, "DealMini").replace(/LeadMixin/g, "MiniMixin") }] } },
+  behaviourIndex: { "mixin:MiniMixin": { card: "mini/C1", ac: ["AC-9"] } } });
+check("wiringOnly: a wiring-only mixin on a FOLDED scope (mini page) is flagged from the root run",
+  hoWireMini.behaviourIndex.wiringOnly.includes("mixin:MiniMixin") &&
+  /`mixin:MiniMixin`/.test(renderPlan(hoWireMini, {})),
+  () => ({ wiringOnly: hoWireMini.behaviourIndex.wiringOnly,
+           scopes: hoWireMini.stubIndex.map(s => s.schema || s.role) }));
+check("wiringOnly: a FOLDED sub-run reports nothing itself — the root owns the verdict, so no wall of per-scope noise",
+  runMigration({ ...wireManifest, behaviourIndex: { "mixin:LeadMixin": { card: "main/C28" } } },
+    { scopeSchema: "WirePage" }).behaviourIndex.wiringOnly.length === 0);
+
 // A folded scope (mini page / child page) sees the SAME index: one report covers the whole surface.
 const hoMini = runMigration({ ...handoffManifest, addRecordMiniPage: { schema: "DealMiniPage" },
   miniPageSchemas: { DealMiniPage: { entity: "Deal", schemas: [{ pkg: "DealPkg", body: HANDOFF_BODY.replace(/HandoffPage/g, "DealMiniPage") }] } },

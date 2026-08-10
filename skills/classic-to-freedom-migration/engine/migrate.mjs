@@ -19,7 +19,7 @@
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
-//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Confirm rows (see applyBehaviourIndex)
+//     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Confirm rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
 // file, not stdout). `--checklist` = the Plan-vs-Done control table, produced AFTER implementation (not in `--plan`).
@@ -398,11 +398,15 @@ function stubScope(role, schema, changeSet, standardMethodsFiltered) {
 //     whose trigger the engine already resolved.
 //
 // The card + acceptance criteria a behaviour-analysis run attached to one row, sanitized. Anything else in the
-// entry (a note, a trigger) is read at its own call site.
+// entry (a note, a trigger) is read at its own call site. `bodyCard`/`bodyAc` name the body's OWN card when the
+// behaviour is defined outside the owning scope — the criteria that gate a behaviour usually live there, not in
+// the wiring card (see wiringOnlyKeys below for the computed check).
 function describedInOf(entry) {
   const card = typeof entry.card === "string" ? entry.card : null;
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
-  return card || ac.length ? { card, ac } : null;
+  const bodyCard = typeof entry.bodyCard === "string" ? entry.bodyCard : null;
+  const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
+  return card || ac.length || bodyCard ? { card, ac, bodyCard, bodyAc } : null;
 }
 
 // A behaviour report covers a whole SURFACE, so its answers span several scopes (the record page, the mini page,
@@ -454,6 +458,29 @@ function unmatchedIndexKeys(index, stubIndex) {
     for (const m of s.members) seen.add(m.key);
   }
   return keys.filter((k) => !seen.has(k));
+}
+
+// Rows whose body PROVABLY lives in another schema, described by a wiring card alone (`card`, no `bodyCard`).
+// Only the mechanically provable kinds are flagged: a `mixin:` member (one row, one external body, and the
+// analysis contract cards every mixin body) and an `externalRef` method (assigned from exactly one other module).
+// `message:` is left out — the counterpart may sit on this same surface, covered by the same card — and so are the
+// aggregated `module-dep`/`referenced-module` rows, where many bodies hide behind one key so a single missing
+// `bodyCard` proves nothing. For those kinds the two-card rule stays in the analysis prompts; this list is the
+// computed floor under it, surfaced as a ⚠ plan banner (renderPlanBanners).
+function wiringOnlyKeys(index, stubIndex) {
+  const map = plainObject(index);
+  if (!Object.keys(map).length) return [];
+  const isWiringOnly = (key) => {
+    const e = map[key];
+    return !!e && typeof e === "object" && typeof e.card === "string" && typeof e.bodyCard !== "string";
+  };
+  // Same scoped-key-first lookup applyBehaviourIndex uses, so both read the same entry for one row.
+  const stubKey = (s, st) => (s.schema && map[`${s.schema}::${st.method}`] ? `${s.schema}::${st.method}` : st.method);
+  const candidates = stubIndex.flatMap((s) => [
+    ...s.stubs.filter((st) => st.externalRef).map((st) => stubKey(s, st)),
+    ...s.members.filter((m) => m.kind === "mixin").map((m) => m.key),
+  ]);
+  return [...new Set(candidates.filter(isWiringOnly))];
 }
 
 // planMeta completeness — the `--plan` artifact is INCOMPLETE while any required Overview/Main-scope value is
@@ -1291,6 +1318,7 @@ export function runMigration(manifest, opts = {}) {
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
   behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
+  behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any

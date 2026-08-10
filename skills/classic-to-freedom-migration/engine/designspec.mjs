@@ -673,11 +673,19 @@ export const HANDOFF_MEMBER_KINDS = new Set(["message", "mixin", "module-dep", "
 // The behaviour card + acceptance criteria that DESCRIBE this row, once a step-5.1 run has indexed it. This is what
 // makes *ported* checkable against a described behaviour instead of against the method's name (Contract rule 7);
 // with no card it stays a ⚠ so the blank cannot read as "nothing to describe".
+// When the analysis recorded two cards both print — the owning scope's (how this surface uses it) and the body's
+// own (what it does): the criteria that gate a behaviour usually live in the body card.
 function describedInText(h) {
   const d = h.describedIn;
-  if (!d || (!d.card && !(d.ac || []).length)) return "⚠ not described";
-  const ac = (d.ac || []).length ? ` ${d.ac.map(esc).join(", ")}` : "";
-  return `${esc(d.card || "?")}${ac}`;
+  if (!d || (!d.card && !d.bodyCard && !(d.ac || []).length)) return "⚠ not described";
+  const cite = (card, ac) => {
+    const acText = (ac || []).length ? ` ${ac.map(esc).join(", ")}` : "";
+    return esc(card || "?") + acText;
+  };
+  const parts = [];
+  if (d.card || (d.ac || []).length) parts.push(cite(d.card, d.ac));
+  if (d.bodyCard) parts.push(`body ${cite(d.bodyCard, d.bodyAc)}`);
+  return parts.join(" · ");
 }
 
 // Where the method's body lives. An externally-assigned method has none HERE — naming the module beats leaving a
@@ -785,7 +793,7 @@ function renderImperativeLogic(cs) {
   // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
   // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
   const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
-  const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || (h.describedIn.ac || []).length)).length;
+  const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || h.describedIn.bodyCard || (h.describedIn.ac || []).length)).length;
   const { ordered, folded } = foldByCaller(stubs);
   // Rows and PORT UNITS are different numbers once helpers are folded, and the difference is the useful one: 63 rows
   // that are really 39 things to build reads very differently from 63 independent handlers.
@@ -922,6 +930,13 @@ function renderPlanBanners(result, opts) {
     `> ⚠ **${rt.unmatched.length} \`manifest.behaviourIndex\` key(s) matched no imperative row:** ` +
     rt.unmatched.map((k) => "`" + esc(k) + "`").join(", ") +
     ". The behaviour report and this manifest disagree about the surface — check for a renamed method, a stale report, or a report run against a different scope.", "");
+  // A row whose body PROVABLY lives in another schema (a `mixin:` member, an `externalRef` method) described by a
+  // wiring card alone. Advisory like `unmatched`, never silent: the criteria that gate the behaviour live in the
+  // body's own card, and a plan that never names that card reads as fully described while the guards are missing.
+  if ((rt.wiringOnly || []).length) P.push(
+    `> ⚠ **${rt.wiringOnly.length} \`manifest.behaviourIndex\` key(s) name only a wiring card for a row whose body lives in another schema:** ` +
+    rt.wiringOnly.map((k) => "`" + esc(k) + "`").join(", ") +
+    ". Add the body's own card as `bodyCard`/`bodyAc` — the behaviour report's attribution table names it (`body <scope>/Cnn`, usually a shared-core card).", "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const signalsMissing = opts.signalsMissing || [];
