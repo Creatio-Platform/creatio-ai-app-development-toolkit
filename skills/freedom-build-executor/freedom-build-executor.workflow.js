@@ -708,9 +708,15 @@ function approvalStop(app, planVersion, ctx = {}) {
 // THE THREE OPERATING MODES, validated as a decision rather than read as a free string. An unrecognised mode
 // THROWS instead of falling back to `auto`: a typo that silently produced a fully automatic run is precisely the
 // failure the mode exists to prevent — the operator asked to be stopped and would not have been.
-// Declared as a hoisted `function` (not an arrow const) because the constants near the head of the file call it.
-const BUILD_MODES = ['auto', 'checkpoints', 'guided']
+// Declared as a hoisted `function` (not an arrow const) because the constants near the head of the file call it —
+// and for the same reason it must reference NOTHING declared outside itself. The mode list lived here as a
+// module-level `const` and shipped broken: the function hoists, the const does not, so `buildMode('checkpoints')`
+// at the head of the file threw `Cannot access 'BUILD_MODES' before initialization` and EVERY explicitly named
+// mode failed before a single agent ran. Only the default path survived, because it returns before the reference.
+// The unit tests could not see it — the suite slices this block into its own module, where the const is
+// initialised first — so the list lives INSIDE the function now and `run-infra` pins the ordering rule directly.
 function buildMode(raw) {
+  const BUILD_MODES = ['auto', 'checkpoints', 'guided']
   if (raw === undefined || raw === null || raw === '') return 'auto'
   const m = String(raw).trim().toLowerCase()
   if (!BUILD_MODES.includes(m)) {
