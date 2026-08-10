@@ -50,9 +50,11 @@ def paragraph(text, head):
     slicing in tests/test_default_contract_docs.py:574-597 gives the same guarantee
     ad hoc, by index arithmetic; these helpers are new, not ported from there.)
     Requires the head to be unique — a duplicated head would silently pin whichever
-    copy comes first, so it fails instead.
+    copy comes first, so it fails instead. Both sides are flattened, same as
+    missing_markers(), so a head that outgrows the docs' hard-wrap width cannot turn
+    into a misleading zero-match failure.
     """
-    matches = [p for p in text.split("\n\n") if p.lstrip().startswith(head)]
+    matches = [p for p in text.split("\n\n") if flat(p).lstrip().startswith(flat(head))]
     if len(matches) != 1:
         raise AssertionError(f"{len(matches)} paragraphs start with {head!r}; need exactly one")
     return matches[0]
@@ -64,9 +66,9 @@ def bullet(text, head):
     A bullet is one physical line inside a block with no blank lines, so paragraph()
     cannot scope it — line scoping gives the same guarantee: a marker that drifts into a
     neighbouring bullet turns the assertion red instead of staying green. Same uniqueness
-    requirement as paragraph().
+    and flattening rules as paragraph().
     """
-    matches = [ln for ln in text.splitlines() if ln.lstrip().startswith(head)]
+    matches = [ln for ln in text.splitlines() if flat(ln).lstrip().startswith(flat(head))]
     if len(matches) != 1:
         raise AssertionError(f"{len(matches)} list items start with {head!r}; need exactly one")
     return matches[0]
@@ -211,6 +213,22 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"feature gates need a real procedure; missing {missing}")
 
+    def test_gate_toggle_restores_a_created_row_by_deletion(self):
+        # The flip-and-restore cycle assumes the row existed; a per-audience AC can
+        # require CREATING an override row, where "restore" is deletion and there is no
+        # held value for the confirm check to compare — without this branch, a stray
+        # override outlives the run and the restore check cannot even see it.
+        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        missing = missing_markers(
+            para,
+            [
+                "A row you CREATE restores by deletion",
+                "no held value to write back",
+                "the row is gone, not that a value matches",
+            ],
+        )
+        self.assertFalse(missing, f"created rows must restore by deletion; missing {missing}")
+
     def test_an_untoggleable_gate_of_either_kind_has_a_disposition(self):
         para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
         missing = missing_markers(
@@ -318,6 +336,25 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
     # --- retrieval floor -----------------------------------------------------------
 
+    def test_retrieval_floor_summaries_enumerate_all_five_classes(self):
+        # The summary lines are where this rule already regressed once: the SKILL.md
+        # phase-5 recap stayed at the old four-class list after class 3 was inserted.
+        # Pin the enumeration and the count so a renumbering or a dropped class fails
+        # even when the class-3 body itself is untouched.
+        skill = read_text(CLASSIC_SKILL)
+        self.assertIn(
+            "the entity's C# and event process, lookup/setting values, message counterparts, "
+            "resource strings, detail wiring",
+            flat(skill),
+        )
+        floor = read_text(REFERENCE_FOLLOWING)
+        self.assertIn("Five artifact classes", flat(floor))
+        self.assertNotRegex(flat(floor), r"[Ff]our artifact classes")
+        patterns = read_text(PLATFORM_PATTERNS)
+        self.assertIn(
+            "read `SysSettingsValue` (overrides), not only the All-Users default", flat(patterns)
+        )
+
     def test_message_counterpart_search_is_run_once_and_widened(self):
         # Two failures to hold apart. Deferring the search left 18 of 30 threads open
         # (ENG-94529), so it must actually run; re-running it per scope is unbounded on a
@@ -328,13 +365,30 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
             [
                 "run the search, do not defer it",
                 "Once per run, never per scope",
-                "the caller owns the register",
                 "state the scope you reached",
                 "declaring layer's package*",
             ],
         )
         self.assertFalse(missing, f"class 3 must run once and widen; missing {missing}")
         self.assertNotIn("scan the client-schema census for the other side", flat(content))
+
+    def test_register_ownership_is_scoped_to_the_handoff_that_carries_one(self):
+        # "Caller owns the register when a row digest was supplied" was ambiguous in a
+        # dangerous direction: only the shared-core package (phased orchestration)
+        # carries a register — a plain row digest carries rows. Read generically, the
+        # escape clause let a digest-fed analyst skip building the register entirely,
+        # reopening the 18-of-30 failure for the most common invocation routes.
+        content = read_text(REFERENCE_FOLLOWING)
+        missing = missing_markers(
+            content,
+            [
+                "shared-core package** that carries the register",
+                "the caller owns it: consume it, never rebuild it",
+                "A plain **row digest** carries rows, not a register",
+                "build the register yourself",
+            ],
+        )
+        self.assertFalse(missing, f"register ownership must be scoped; missing {missing}")
 
     def test_message_register_extends_when_scope_grows(self):
         # "Once per run" without a scope-growth clause reads as "closed once built" — a

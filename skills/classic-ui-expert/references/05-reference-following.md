@@ -109,8 +109,10 @@ point at them — and every fetch, or its counted zero, is logged:
    describe on its own, so without the counterpart it lands in no unit at all.
    - **Once per run, never per scope and never per unresolved name.** The register is keyed by the
      messages the surface declares — a bounded set — not by the census, which carries names and
-     packages, no bodies. When a caller supplied a **row digest** (`SKILL.md`), the caller owns the
-     register: consume it, never rebuild it.
+     packages, no bodies. When a caller supplied a **shared-core package** that carries the
+     register (the phased orchestration in `SKILL.md`), the caller owns it: consume it, never
+     rebuild it. A plain **row digest** carries rows, not a register — build the register
+     yourself before closing class 3.
    - **Scope growth extends the register, never rebuilds it.** A page entering scope after the
      register was built (a child edit page, a discovered detail — `01-surface-resolution.md`) adds
      its declared messages as new entries, and their counterpart search runs then. The same holds
