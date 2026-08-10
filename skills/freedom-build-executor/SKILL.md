@@ -151,6 +151,17 @@ properties make it honest:
 `packageState: 'unknown'` is a **stop**, not a default. Guessing `absent` runs `create-app` over what
 may be a live application; guessing `exists` restores exactly the loop that wasted the run.
 
+**Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
+list of open questions and says nothing about which have been answered, so a resumed run used to hand
+all of it back to the fan-out — measured on a real folder, 107 evidence records were on file and every
+one was about to be re-derived. That is read-only, so the stand is never at risk; the cost is agents,
+and the risk is the merge overwriting a good record with a thinner second answer under the same id.
+An id is re-resolved when there is **no record**, or when the **judge rejected** the one on file
+(`convincing: false`) — a rejection is where re-reading the stand beats waiting for a build round to
+repair it. Everything else is left alone. The filter never judges quality itself; that is the judge's
+job. Whatever is skipped is **logged with its count**, because a run that resolved 6 of 113 items
+otherwise reads exactly like a run that found only 6.
+
 The page keys are published by the engine and are the only keys anything may use:
 
 ```

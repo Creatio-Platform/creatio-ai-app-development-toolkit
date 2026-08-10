@@ -322,6 +322,12 @@ const RECONCILE_SCHEMA = {
     // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
     // judge is only ever handed ids, so a record nobody names is a page that can never close.
     unjudgedEvidenceIds: { type: 'array', items: { type: 'string' } },
+    // WHAT IS ALREADY ANSWERED, so Preflight does not re-derive it. `--units.preflight` is the plan's list of open
+    // questions and says nothing about which have been resolved; without these two a resumed run re-ran the whole
+    // fan-out over records that were already on file, and the merge would overwrite each one with the second
+    // answer. Both are read off the built file, and both may be empty on a first run.
+    evidenceFiled: { type: 'array', items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
+    evidenceRejected: { type: 'array', items: { type: 'string' } },  // ids the judge ruled `convincing: false`
     // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
     // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
     // round for a unit its predecessor already gave up on and asked the user about.
@@ -812,6 +818,24 @@ function packagePreconditionStop(targetPackage, packageState) {
   return null
 }
 
+// WHICH ⚠ CONFIRM ITEMS PREFLIGHT ACTUALLY HAS TO RESOLVE. `--units.preflight` is the PLAN's list of open
+// questions, not a list of unanswered ones, and the run used to hand all of it to the fan-out on every start. So a
+// resumed session re-resolved every item its predecessor had already answered: measured on a real folder, 107
+// evidence records were on file and all of them were about to be re-derived. Read-only, so nothing on the stand
+// was at risk — but a second pass OVERWRITES the record under the same id (the merge copies values in), which
+// means a thinner second answer can silently replace a good first one.
+//
+// The division of labour is deliberate: this filter does NOT decide whether a record is good enough. The JUDGE
+// does that. An id is re-run when there is no record at all, or when the judge REJECTED the one on file
+// (`convincing: false`) — a rejection is exactly the case where re-reading the stand is cheaper than waiting for a
+// build round to repair it. Everything else is left alone, because re-deriving an answer nobody faulted spends
+// agents to risk a worse one.
+function preflightToRun(items, filedIds, rejectedIds) {
+  const filed = new Set(filedIds || [])
+  const rejected = new Set(rejectedIds || [])
+  return (items || []).filter((p) => p?.id && (!filed.has(p.id) || rejected.has(p.id)))
+}
+
 // Operator findings, indexed by unit.
 function findingKeySet(findings) {
   return new Set((findings || []).map((f) => f && f.unit).filter(Boolean))
@@ -948,7 +972,7 @@ DO SIX THINGS, in order:
    - If \`${BUILT_FILE}\` does not exist, CREATE it as \`{ "pages": {}, "reachability": {}, "evidence": {}, "judge": {} }\` before anything else. That empty skeleton is a VALID payload and makes the gate report every deliverable unverified — which is the truth on a first run. Without the file \`--verify\` dies at exit 1 and this run gets no verdict at all.
    - For every key in \`unitKeys\` THAT HAS A RECORDED FREEDOM SCHEMA (step 3's \`pageSchemas\`), clio \`get-page\` that schema and write \`pages["<key>"] = { viewConfig: <bundle.viewConfig VERBATIM>, viewModelConfig: <bundle.viewModelConfig VERBATIM>, packageName, parentSchemaName, schemaUId }\`. \`bundle.viewConfig\` is the MERGED page — NOT \`ownBodySummary\` and NOT the page's own body: a template-provided element carries no \`type\`, so the own body reads ❌ MISSING on a correctly built page. A page whose schema exists but which the stand does not have is \`false\`; a page you could not fetch is OMITTED (absent = nobody looked, and the engine distinguishes the two).
    - For a key with NO recorded schema: write NOTHING for it and say so in \`notes\` as "cannot verify, unknown schema". That is an explicit state, not a skip — the key stays unverified, the unit stays open, and the build agent that takes it will report the schema it resolves to.
-   - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it.
+   - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
    - Run the gate: \`${CLI_VERIFY}\`. \`--out\` writes the human table; \`--verify-json\` writes the machine verdict.
    - Return \`verify\` = the CONTENTS of ${VERIFY_JSON}, copied verbatim: \`complete\`/\`missing\`/\`unverified\`/\`planGaps\` and \`pages["<key>"] = { complete, missing, unverified, openRows }\`. Do NOT read the numbers off the table, do not re-add them, do not summarise \`openRows\` — its \`deliverable\`/\`status\`/\`evidence\` strings are handed to the next build round verbatim, and a paraphrase there sends an agent to repair something the gate did not say. Also return \`exitCode\` and \`verifyTablePath\`.
@@ -1244,7 +1268,14 @@ if (state.verify?.complete === true || !openNow().length) {
 // unjudged id already in the built file: a preflight record that no later phase re-files would
 // otherwise never be judged, and an unjudged record keeps its page open forever.
 const pendingJudgeIds = new Set()
-const preflightItems = (state.preflightItems || []).filter((p) => p?.id)
+const preflightAll = (state.preflightItems || []).filter((p) => p?.id)
+const preflightItems = preflightToRun(preflightAll, state.evidenceFiled, state.evidenceRejected)
+// Say what was SKIPPED and why. A run that quietly resolved 6 of 113 items reads exactly like a run that found
+// only 6 — and the difference is whether 107 answers are trusted or missing.
+if (preflightAll.length !== preflightItems.length) {
+  const skipped = preflightAll.length - preflightItems.length
+  log(`preflight: ${skipped} of ${preflightAll.length} ⚠ Confirm item(s) already have a record the judge has not rejected — left as they are, not re-derived (a second pass would overwrite them). ${preflightItems.length} to resolve.`)
+}
 const unresolvedPreflight = []
 if (preflightItems.length) {
   phase('Preflight')

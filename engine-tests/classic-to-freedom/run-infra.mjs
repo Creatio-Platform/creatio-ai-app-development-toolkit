@@ -137,7 +137,7 @@ check("workflow: the pure-helper block is present and delimited in the shipped f
   () => `BEGIN at ${from}, END at ${to}`);
 const HELPERS = ["isOpenPage", "isOpenReach", "scheduleUnits", "blockedByParked", "parkedKeys", "parkableKeys", "isUnitOpen", "roundsRun", "pageStateOf", "approvalStop",
   "buildMode", "unknownCheckpointKeys", "shouldPauseAfter", "findingKeySet", "findingsFor", "isUnitOpenWithFindings",
-  "appUnitFor", "isOpenApp", "packagePreconditionStop"];
+  "appUnitFor", "isOpenApp", "packagePreconditionStop", "preflightToRun"];
 // The slice becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval:
 // the block is repo source either way, but a module import keeps this file free of a dynamic-code
 // construct that a reviewer then has to reason about. `MAX_ROUNDS` is the one binding the block closes
@@ -365,6 +365,35 @@ check("workflow: Reconcile is asked for the package state as THREE values and to
   /packageState.*enum: \['exists', 'absent', 'unknown'\]/.test(wfSrc) && /do NOT resolve doubt into either answer/.test(wfSrc));
 check("workflow: the builders' answer is persisted BEFORE Verify runs — a stop in that window used to drop every blocker the round produced",
   /await persistPending\(`recording what round \$\{round\}'s builders reported`\)[\s\S]{0,400}lastVerifier = await verifyRound/.test(wfSrc));
+
+// --- PREFLIGHT RE-DERIVATION. `--units.preflight` is the PLAN's list of open questions, not a list of unanswered
+// ones, so a resumed run used to hand the whole thing back to the fan-out: measured on a real folder, 107 evidence
+// records were on file and every one was about to be re-resolved. Read-only, so the stand was never at risk — the
+// cost is agents, and the RISK is the merge overwriting a good record with a thinner second answer under the same id.
+const pfItems = [{ id: "a" }, { id: "b" }, { id: "c" }, { }];
+check("preflightToRun: an item with a record the judge has not rejected is LEFT ALONE — re-deriving an answer nobody faulted spends agents to risk a worse one",
+  () => (wf.preflightToRun(pfItems, ["a", "b"], []).map((p) => p.id).join(",") === "c"));
+check("preflightToRun: a REJECTED record IS re-run — a `convincing: false` is exactly where re-reading the stand beats waiting for a build round to repair it",
+  () => (wf.preflightToRun(pfItems, ["a", "b"], ["a"]).map((p) => p.id).join(",") === "a,c"));
+check("preflightToRun: nothing on file ⇒ everything runs, which is the first-run behaviour unchanged",
+  () => (wf.preflightToRun(pfItems, [], []).length === 3 && wf.preflightToRun(pfItems, undefined, undefined).length === 3));
+check("preflightToRun: an item with no id is dropped rather than dispatched as a nameless unit of work",
+  () => (wf.preflightToRun(pfItems, [], []).every((p) => !!p.id)));
+check("preflightToRun: an empty or missing item list is an empty run, not a throw",
+  () => (wf.preflightToRun([], ["a"], []).length === 0 && wf.preflightToRun(undefined, undefined, undefined).length === 0));
+// The helper deciding correctly is not the same as the run USING it. Pinned at the source level because the call
+// site closes over run state: without this, deleting the filter and passing the plan's whole list straight through
+// passed every case above — the helper stayed right while the run went back to re-deriving 107 answers.
+check("workflow: the ⚠ Confirm fan-out is fed THROUGH `preflightToRun` — never `--units.preflight` wholesale",
+  /const preflightItems = preflightToRun\(preflightAll, state\.evidenceFiled, state\.evidenceRejected\)/.test(wfSrc)
+    && !/const preflightItems = preflightAll\b/.test(wfSrc));
+check("workflow: the skip is REPORTED, never silent — a run that resolved 6 of 113 must not read like a run that found only 6",
+  /already have a record the judge has not rejected/.test(wfSrc) && /preflightAll\.length !== preflightItems\.length/.test(wfSrc));
+check("workflow: Reconcile is asked for BOTH lists the filter needs, off the built file",
+  /evidenceFiled: \{ type: 'array'/.test(wfSrc) && /evidenceRejected: \{ type: 'array'/.test(wfSrc)
+    // Matched on prose rather than on the backticked identifier: inside the workflow these names sit in a template
+    // literal as \`evidenceFiled\`, and a regex for that escaping is easier to get wrong than the thing it checks.
+    && wfSrc.includes("stops the ⚠ Confirm fan-out from re-deriving answers that are already on file"));
 
 // --- TEMPORAL DEAD ZONE. The bug this exists for SHIPPED: `buildMode` is a hoisted function called among the
 // constants at the head of the file, but its body read a module-level `const BUILD_MODES` declared ~550 lines
