@@ -282,7 +282,11 @@ const PREFLIGHT_ITEM = {
 
 const RECONCILE_SCHEMA = {
   type: 'object',
-  required: ['approval', 'planVersion', 'unitKeys', 'buildOrder', 'reachabilityState', 'verify', 'planGaps', 'roundOf'],
+  required: ['approval', 'planVersion', 'unitKeys', 'buildOrder', 'reachabilityState', 'verify', 'planGaps', 'roundOf',
+    // Both package facts are REQUIRED. A schema-valid result that simply omitted `packageState` left it `undefined`,
+    // which was neither 'unknown' (so nothing stopped) nor 'exists' (so an app unit was scheduled) — i.e. `create-app`
+    // against what may be a live application, on a run that never established whether the package was there.
+    'targetPackage', 'packageState'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
     // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
@@ -859,7 +863,10 @@ function shouldPauseAfter(mode, checkpointSet, unitKey) {
 // that spent 12 agents and 1.9M tokens discovering the same blocker four times. And a package that is absent with
 // no NAME published cannot be created at all — there is nothing to pass to `create-app`.
 function packagePreconditionStop(targetPackage, packageState) {
-  if (packageState === 'unknown') {
+  // Anything that is not one of the three published states — absent, empty, misspelled — is UNKNOWN. The schema
+  // requires the field; this is what makes a result that slipped through anyway stop the run instead of being read
+  // as "go ahead and create it".
+  if (packageState !== 'exists' && packageState !== 'absent') {
     return { stopped: 'target-package-unknown', next: 'the stand checks for the target package were inconclusive, so this run will neither create it (a second `create-app` over an existing application is not a no-op) nor assume it is there (which is what wasted the previous run) — check by hand with `list-packages` / `find-app`, then re-run; nothing has been built' }
   }
   if (packageState === 'absent' && !targetPackage) {
@@ -1117,7 +1124,11 @@ if (stopOnPackage) {
 // Operator findings name units too, and an unknown key there fails the same way a checkpoint key does — silently
 // in the wrong direction. Nothing schedules it, so the run reaches a green verdict having never looked at the defect
 // the operator reported. Same check, same refusal, for the same reason.
-const badFindings = unknownCheckpointKeys([...FINDING_KEYS], state.unitKeys || [])
+const badFindings = unknownCheckpointKeys([...FINDING_KEYS], [
+  ...(appUnitFor(state.targetPackage, state.packageState) ? ['app'] : []),
+  ...(state.unitKeys || []),
+  ...(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key),
+])
 if (badFindings.length) {
   log(`STOP — ${badFindings.length} finding(s) name no published unit: ${badFindings.join(', ')}`)
   return runReturn({
@@ -1130,7 +1141,15 @@ if (badFindings.length) {
     next: `\`findings[].unit\` must name a key \`--units\` publishes — this manifest publishes: ${(state.unitKeys || []).join(', ') || '(none)'}. Nothing was built: a finding nothing schedules would let the run close green with the reported defect untouched. Fix the key and re-run.`,
   })
 }
-const badCheckpoints = unknownCheckpointKeys(CHECKPOINT_AFTER, state.unitKeys || [])
+// Every SCHEDULED key, not just the page keys: the `app` unit and each applicable reachability key are scheduled
+// too, and `shouldPauseAfter` already pauses after them — so rejecting them here broke the mode's own contract for
+// exactly the two things an operator most wants to check by hand (the package, and the routing/wiring).
+const schedulableKeys = [
+  ...(appUnitFor(state.targetPackage, state.packageState) ? ['app'] : []),
+  ...(state.unitKeys || []),
+  ...(state.reachability || []).filter((r) => r.appliesWhen).map((r) => r.key),
+]
+const badCheckpoints = unknownCheckpointKeys(CHECKPOINT_AFTER, schedulableKeys)
 if (badCheckpoints.length) {
   log(`STOP — ${badCheckpoints.length} checkpoint key(s) name no published unit: ${badCheckpoints.join(', ')}`)
   return runReturn({
@@ -1142,7 +1161,7 @@ if (badCheckpoints.length) {
     verdict: verdictOf(state.verify),
     staleQueueKeys: state.staleQueueKeys || [],
     newKeys: state.newKeys || [],
-    next: `\`checkpointAfter\` must name keys \`--units\` publishes — this manifest publishes: ${(state.unitKeys || []).join(', ') || '(none)'}. Nothing was built. Fix the key(s) and re-run.`,
+    next: `\`checkpointAfter\` must name a SCHEDULED unit — this run schedules: ${schedulableKeys.join(', ') || '(none)'}. That includes \`app\` when the target package has to be created, and each applicable reachability key. Nothing was built. Fix the key(s) and re-run.`,
   })
 }
 if (MODE !== 'auto') {
@@ -1289,9 +1308,13 @@ if (!schedule.length) {
 // Shape-compatible with the success return by construction (both go through `runReturn`). The
 // stand already satisfies the plan — an idempotent skill has one command, and the honest answer
 // to "do the next undone thing" when nothing is undone is to say so, not to rebuild.
-if (state.verify?.complete === true || !openNow().length) {
+// Rests on `openNow()` ALONE. It used to short-circuit on `verify.complete === true` first, which made the operator
+// findings channel useless in exactly the case it exists for: a page the gate calls complete because a ported
+// handler carries no verification key, reopened by a finding — `openNow()` returned it and this branch returned
+// before anything was scheduled. If the gate is green AND nothing is open, the message still says so.
+if (!openNow().length) {
   const why = state.verify?.complete === true
-    ? 'the engine gate is already green on this stand — nothing to build'
+    ? 'the engine gate is already green on this stand and no unit is open — nothing to build'
     : 'every published unit is either already closed on this stand or parked — nothing left this run can build'
   log(why)
   // A park this baseline derived from a spent budget is not in the file yet, and this return is an exit.

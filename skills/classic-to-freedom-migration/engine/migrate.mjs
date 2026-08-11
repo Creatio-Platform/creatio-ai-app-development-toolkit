@@ -351,9 +351,15 @@ function stubDigestOf(changeSet) {
   }));
 }
 
-function memberDigestOf(changeSet) {
+// A MEMBER key carries its SCOPE, for the same reason a method key does. `<kind>:<item>` alone collides across the
+// pages of one surface: two child pages each declaring `attribute-virtual:IsEditable` produced the identical key, so
+// the behaviour run's coverage `Set` counted two distinct rows as one described row, and `applyBehaviourIndex`
+// applied ONE card to BOTH pages — two different behaviours closing the gate on a single answer.
+// `kind` and `item` stay on the entry: the prompts render them, and only the KEY needed disambiguating.
+function memberDigestOf(changeSet, scopeSchema) {
   return (changeSet?.needsDecision || []).filter((n) => HANDOFF_MEMBER_KINDS.has(n.kind))
-    .map((n) => ({ kind: n.kind, item: n.item, key: `${n.kind}:${n.item}` }));
+    .map((n) => ({ kind: n.kind, item: n.item,
+      key: scopeSchema ? `${scopeSchema}::${n.kind}:${n.item}` : `${n.kind}:${n.item}` }));
 }
 
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
@@ -361,7 +367,7 @@ function memberDigestOf(changeSet) {
 // ENG-94859 — without re-deriving which method belongs to which schema.
 function stubScope(role, schema, changeSet, standardMethodsFiltered) {
   const stubs = stubDigestOf(changeSet);
-  const members = memberDigestOf(changeSet);
+  const members = memberDigestOf(changeSet, schema);
   return {
     role, schema: schema || null,
     counts: {
@@ -423,6 +429,7 @@ function describedInOf(entry) {
 //
 //   "<schema>::<method>"   the scoped method form — disambiguates a name two scopes both define (`init`)
 //   "<method>"             the bare method form
+//   "<schema>::<kind>:<name>"  the scoped member form — disambiguates a member two pages both declare
 //   "<kind>:<name>"        a ⚠ Confirm member: `message:RefreshDecisionMaker`, `mixin:CompletenessMixin`, …
 //
 // Accepting both a scoped and a bare form is the rule `memberDispositions` already uses; without the scoped one,
@@ -447,7 +454,9 @@ function applyBehaviourIndex(changeSet, index, scopeSchema) {
   // outside this body, the aggregated `module-dep` row. These are the row types step 5.1 exists for just as much as
   // an unresolved method, and they carry no trigger — only the card that describes them.
   for (const n of changeSet?.needsDecision || []) {
-    const entry = map[`${n.kind}:${n.item}`];
+    // Scoped first, bare second — the same precedence the method lookup uses, and the bare fallback is what keeps a
+    // `behaviour-index.json` written before member keys carried a scope still resolving.
+    const entry = (scopeSchema ? map[`${scopeSchema}::${n.kind}:${n.item}`] : undefined) ?? map[`${n.kind}:${n.item}`];
     if (!entry || typeof entry !== "object") continue;
     const d = describedInOf(entry);
     if (d) { n.describedIn = d; described.push(`${n.kind}:${n.item}`); }
@@ -493,9 +502,13 @@ function wiringOnlyKeys(index, stubIndex) {
   };
   // Same scoped-key-first lookup applyBehaviourIndex uses, so both read the same entry for one row.
   const stubKey = (s, st) => (s.schema && map[`${s.schema}::${st.method}`] ? `${s.schema}::${st.method}` : st.method);
+  // Members get the SAME scoped-first-then-bare resolution. `m.key` is now scoped (two pages may declare the same
+  // member), so reading it alone stopped matching an index written with the bare `<kind>:<name>` form — and this leg
+  // is what prints the wiring-only banner, so it went quiet on exactly the rows it exists for.
+  const memberKey = (m) => (map[m.key] ? m.key : `${m.kind}:${m.item}`);
   const candidates = stubIndex.flatMap((s) => [
     ...s.stubs.filter((st) => st.externalRef).map((st) => stubKey(s, st)),
-    ...s.members.filter((m) => m.kind === "mixin").map((m) => m.key),
+    ...s.members.filter((m) => m.kind === "mixin").map((m) => memberKey(m)),
   ]);
   return [...new Set(candidates.filter(isWiringOnly))];
 }

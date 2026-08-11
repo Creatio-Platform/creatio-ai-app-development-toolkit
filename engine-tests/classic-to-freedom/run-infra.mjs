@@ -311,8 +311,10 @@ check("workflow: the checkpoint return is `stopped: 'paused-at-checkpoint'` — 
   /stopped: 'paused-at-checkpoint'/.test(wfSrc) && !/complete: true[\s\S]{0,80}paused-at-checkpoint/.test(wfSrc));
 check("workflow: the schedule reads openness THROUGH the findings-aware predicate, so a re-opened unit is actually dispatched",
   /const openNow = \(\) => schedule\.filter\([\s\S]{0,200}isUnitOpenWithFindings\(/.test(wfSrc));
-check("workflow: an unknown checkpoint key REFUSES the run before anything is built",
-  /stopped: 'unknown-checkpoint-key'/.test(wfSrc) && /unknownCheckpointKeys\(CHECKPOINT_AFTER, state\.unitKeys/.test(wfSrc));
+check("workflow: an unknown checkpoint key REFUSES the run before anything is built — validated against every SCHEDULED key, so `app` and the applicable reachability keys are acceptable checkpoints (both are scheduled, and `shouldPauseAfter` already pauses after them)",
+  /stopped: 'unknown-checkpoint-key'/.test(wfSrc)
+    && /unknownCheckpointKeys\(CHECKPOINT_AFTER, schedulableKeys\)/.test(wfSrc)
+    && /appUnitFor\(state\.targetPackage, state\.packageState\) \? \['app'\] : \[\]/.test(wfSrc));
 check("workflow: operator findings reach the BUILD prompt, and are marked as the operator's instructions rather than untrusted stand text",
   /function findingsPromptBlock\(/.test(wfSrc) && /OPERATOR'S words, not stand-derived content/.test(wfSrc)
     && /\$\{findingsPromptBlock\(unit\.key\)\}/.test(wfSrc));
@@ -685,7 +687,7 @@ const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
   cbaFrom >= 0 && cbaTo > cbaFrom, () => `BEGIN at ${cbaFrom}, END at ${cbaTo}`);
-const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete"];
+const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete", "digestKeyOf"];
 let cba = {};
 let tmpCba;
 try {
@@ -701,6 +703,44 @@ try {
 check("cba workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
   CBA_HELPERS.every((h) => typeof cba[h] === "function"),
   () => CBA_HELPERS.filter((h) => typeof cba[h] !== "function").join(", "));
+
+// --- the four branch-review findings. Each mutation below passed EVERY test in this suite before these pins existed,
+// which is the point: the cases above check that the mechanisms do what they were built to do, not that the intent
+// survives an edit. All three P1s are false-success paths — the run finishes and reports fine.
+check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short-circuiting on a green gate made the operator findings channel dead in exactly the case it exists for (a ported handler the gate cannot see)",
+  /\n\/\/ Rests on `openNow\(\)` ALONE/.test(wfSrc)
+    && /if \(!openNow\(\)\.length\) \{/.test(wfSrc)
+    && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(wfSrc));
+check("workflow: Reconcile MUST return both package facts — a schema-valid result that omitted `packageState` left it undefined, which stopped nothing and then scheduled `create-app` against what may be a live application",
+  /'targetPackage', 'packageState'\]/.test(wfSrc));
+check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
+  /if \(packageState !== 'exists' && packageState !== 'absent'\)/.test(wfSrc));
+check("engine: a MEMBER key carries its scope — two child pages declaring the same member produced one key, so the coverage Set counted two rows as one and ONE card closed both",
+  /function memberDigestOf\(changeSet, scopeSchema\)/.test(mgSrc)
+    && /key: scopeSchema \? `\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`/.test(mgSrc)
+    && /memberDigestOf\(changeSet, schema\)/.test(mgSrc));
+check("engine: the member lookup accepts the scoped form FIRST and the bare one after, so a `behaviour-index.json` written before scoping still resolves",
+  /map\[`\$\{scopeSchema\}::\$\{n\.kind\}:\$\{n\.item\}`\] : undefined\) \?\? map\[`\$\{n\.kind\}:\$\{n\.item\}`\]/.test(mgSrc));
+check("engine: the ADVISORY wiring-only leg resolves member keys the same way — reading the scoped key alone made its banner go quiet on an index using bare keys",
+  /const memberKey = \(m\) => \(map\[m\.key\] \? m\.key : `\$\{m\.kind\}:\$\{m\.item\}`\)/.test(mgSrc));
+
+// --- digestKeyOf: one normalizer for both legs. Digest MEMBER keys carry their scope now, because two child pages
+// of one surface can declare the same member (`attribute-virtual:IsEditable`) — the unscoped key made the coverage
+// Set count two distinct rows as one and let ONE card close both. An analysis agent may answer with either form.
+{
+  const keys = new Set(["DealMini::mixin:M", "main::mixin:M", "child:A::mixin:Only"]);
+  check("digestKeyOf: an EXACT key wins",
+    () => (cba.digestKeyOf("DealMini::mixin:M", keys) === "DealMini::mixin:M"));
+  check("digestKeyOf: a BARE answer resolves to the one scoped key that owns it — an index written before member keys carried a scope still matches",
+    () => (cba.digestKeyOf("mixin:Only", keys) === "child:A::mixin:Only"));
+  check("digestKeyOf: an AMBIGUOUS bare answer resolves to NOTHING — two pages declare `mixin:M`, so the answer cannot be attributed and is coverage of neither",
+    () => (cba.digestKeyOf("mixin:M", keys) === null));
+  check("digestKeyOf: a key nothing owns is null, and an empty key set is not a throw",
+    () => (cba.digestKeyOf("mixin:Nope", keys) === null && cba.digestKeyOf("x", new Set()) === null));
+  check("wiringOnlyMixinKeys: reads the kind off the RESOLVED key, so a scoped digest key is still recognised as a mixin row (the old `startsWith('mixin:')` matched none of them and this blocking leg went quiet)",
+    () => (cba.wiringOnlyMixinKeys([{ key: "mixin:M2", card: "main/C1" }], new Set(["child:B::mixin:M2"]))
+      .join(",") === "child:B::mixin:M2"));
+}
 
 // --- wiringOnlyMixinKeys: the two-card rule's computed floor. A `mixin:` row described by a wiring card alone is
 // measurably incomplete — its body is another schema and the Context phase cards every mixin body. The wiring card

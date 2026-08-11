@@ -360,14 +360,31 @@ function packBatches(list, target, cap) {
 // This is the BLOCKING leg — it counts against `coverage.complete` and feeds the repair round. The engine's
 // `wiringOnlyKeys` (engine/migrate.mjs) is the ADVISORY leg: wider membership (`mixin:` + `externalRef`), banner
 // only. Separate functions because this file may not `import` anything; edit one, look at the other.
+// AN ENTRY KEY → THE DIGEST KEY IT ANSWERS. Digest member keys carry their scope (`<schema>::<kind>:<name>`) because
+// two pages of one surface may declare the same member, while an analysis agent may legitimately answer with either
+// form. Normalising in ONE place is what keeps the coverage count and the wiring-only leg reading the same row: an
+// exact key wins, otherwise the UNIQUE digest key ending in `::<entry key>` does. Ambiguous — two scopes, same
+// suffix, no scope given — resolves to nothing, because an answer that cannot be attributed to one row is not
+// coverage of either. Lives inside this block so the suite that slices it out gets it too.
+function digestKeyOf(entryKey, keys) {
+  if (keys.has(entryKey)) return entryKey
+  const suffix = `::${entryKey}`
+  const hits = [...keys].filter((k) => k.endsWith(suffix))
+  return hits.length === 1 ? hits[0] : null
+}
 function wiringOnlyMixinKeys(entries, allKeys) {
   // A card NAMES something or it is absent. `""` is schema-valid (`INDEX_ENTRY` sets no `minLength`) and is what
   // a merge agent emits for "nowhere to put one"; read the same way by the engine's `cardRef`, so one entry
   // cannot clear the blocking leg while the advisory leg still counts it (or the reverse).
   const named = (v) => typeof v === 'string' && v.trim().length > 0
-  const mixinEntries = (entries || []).filter((e) => e?.key?.startsWith('mixin:') && allKeys.has(e.key))
-  const hasBody = new Set(mixinEntries.filter((e) => named(e.bodyCard)).map((e) => e.key))
-  return [...new Set(mixinEntries.filter((e) => named(e.card) && !hasBody.has(e.key)).map((e) => e.key))]
+  // Resolved to the DIGEST key first, then tested for the mixin kind. Digest member keys now carry their scope
+  // (`<schema>::mixin:X`), so `startsWith('mixin:')` matched nothing and `allKeys.has(e.key)` rejected the bare form
+  // an agent may legitimately answer with — this leg counts against `coverage.complete`, so it silently stopped
+  // blocking. The kind is read off the resolved key, which carries it in both forms.
+  const resolved = (entries || []).map((e) => ({ e, k: e?.key ? digestKeyOf(e.key, allKeys) : null }))
+    .filter((r) => r.k && /(^|::)mixin:/.test(r.k))
+  const hasBody = new Set(resolved.filter((r) => named(r.e.bodyCard)).map((r) => r.k))
+  return [...new Set(resolved.filter((r) => named(r.e.card) && !hasBody.has(r.k)).map((r) => r.k))]
 }
 
 // The repair round's target set: every row the arithmetic says is not described YET — uncovered by this run's own
@@ -451,8 +468,14 @@ const entriesOf = (rs) => rs.flatMap((r) => r.indexEntries || [])
 // A BLANK `card` is not coverage. The schema requires the field but sets no minLength, so `{ key, card: "" }`
 // validates — and the engine's own `cardRef` reads an empty card as absent, so the row would render with no card
 // while this arithmetic called it described. The nonblank test belongs here, next to the count that uses it.
+// AN ENTRY KEY → THE DIGEST KEY IT ANSWERS. Member keys in the digest now carry their scope (`<schema>::<kind>:<name>`)
+// because two pages of one surface may declare the same member, while an analysis agent may legitimately answer with
+// either form. Normalising in ONE place keeps coverage and the wiring-only leg reading the same row: an exact key
+// wins, otherwise the unique digest key that ends with `::<entry key>` does. Ambiguous (two scopes, same suffix, no
+// scope given) resolves to nothing — an answer that cannot be attributed to one row is not coverage of either.
 const hasCard = (e) => typeof e.card === 'string' && e.card.trim() !== ''
-const coveredKeys = (rs) => new Set(entriesOf(rs).filter(hasCard).map((e) => e.key).filter((k) => allKeys.has(k)))
+const coveredKeys = (rs) => new Set(entriesOf(rs).filter(hasCard)
+  .map((e) => digestKeyOf(e.key, allKeys)).filter(Boolean))
 let covered = coveredKeys(described)
 let uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
 // The computed floor under the two-card rule (mixin only — see `wiringOnlyMixinKeys` for why the other
