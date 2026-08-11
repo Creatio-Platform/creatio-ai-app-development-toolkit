@@ -711,6 +711,10 @@ check("workflow: the round budget is charged per DISPATCH, not per open unit —
     && /ROUND COUNTERS — INCREMENT/.test(wfSrc)
     && /PRESERVE the \\`rounds\\` counter each unit already has/.test(wfSrc)
     && !/INCREMENT \\`rounds\\` by 1 for every unit whose/.test(wfSrc));
+check("workflow: the dispatch set is CONSUMED on a confirmed write — `persistPending` runs more than once per round, and re-sending the same set charged one build attempt two or three times, parking a unit before it spent its real repair rounds",
+  /dispatched\.clear\(\)/.test(wfSrc)
+    && /dispatched\.clear\(\)[\s\S]{0,200}carryPersisted = carryFingerprint\(\)/.test(wfSrc)
+    && !/if \(persisted\?\.written\) \{ markParksPersisted\(\); carryPersisted = carryNowFp \}/.test(wfSrc));
 check("workflow: the dispatched set rides in the carry, so it is written by the persistence step that runs right after the build — a kill still cannot come back with the budget reset",
   /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
     && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\]\]\)/.test(wfSrc));

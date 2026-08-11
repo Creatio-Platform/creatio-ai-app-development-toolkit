@@ -56,7 +56,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy } from "./engine.mjs";
-import { mapToFreedom, STANDARD_CLASSIC_METHODS } from "./mapper.mjs";
+import { mapToFreedom, STANDARD_CLASSIC_METHODS, isScaffoldingMethod } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes } from "./designspec.mjs";
@@ -1029,7 +1029,10 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
     // worklist by the mapper, so it would otherwise land `unaccounted` and block every page. It is a recorded
     // `context` member — excluded by design and COUNTED — exactly like an inert module dep below.
     { kind: "method", list: eff.methods, name: (m) => m.name, prov: (m) => m.stack,
-      tpl: (m) => m.fromTemplate || STANDARD_CLASSIC_METHODS.has(m.name), mapped: () => false, detail: methodLedgerDetail },
+      // `isScaffoldingMethod`, not the NAME: an overridden `init` carrying real logic is a member to account for,
+      // not context. Reading the name alone let it be excluded here at the same time the mapper dropped it from the
+      // worklist — accounted for as context on both sides, and absent from the plan.
+      tpl: (m) => m.fromTemplate || isScaffoldingMethod(m), mapped: () => false, detail: methodLedgerDetail },
     { kind: "attribute", list: eff.attributes, name: (a) => a.name, prov: (a) => a.provenance,
       tpl: (a) => a.fromTemplate, mapped: (a) => mapped.has(a.name),
       // an `attribute-dependency` decision is keyed "<attr> ← <cols>", so match on that prefix too

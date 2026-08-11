@@ -1299,7 +1299,17 @@ Open ${QUEUE_FILE} (create it as \`{ "schemaVersion": 1, "manifest": "${input.ma
 Return \`written: true\` and the park keys you wrote. Change nothing on the stand and run no gate.`,
     { agentType: 'general-purpose', schema: PERSIST_SCHEMA, phase: 'Close', label: 'persist:carry' },
   )
-  if (persisted?.written) { markParksPersisted(); carryPersisted = carryNowFp }
+  if (persisted?.written) {
+    markParksPersisted()
+    // CONSUME the dispatch set: those increments are on file now. `persistPending` runs more than once per round
+    // (right after the build, and again on any later decision), and each call handed the SAME accumulated set to
+    // its agent with an instruction to increment — so one build attempt charged the budget two or three times and
+    // parked a unit before it had spent its real repair rounds. That is the same premature park this set was added
+    // to prevent, arriving from the other direction. Cleared here, so the instruction is emitted exactly once per
+    // attempt; if this write did NOT confirm, the set survives and the next Reconcile carries it instead.
+    dispatched.clear()
+    carryPersisted = carryFingerprint()   // recomputed AFTER the clear, or the next call would see a phantom change
+  }
   else log(`WARNING: the queue-file write did not confirm — ${unpersistedParks.length} park(s) and this round's proposals / blockers / discrepancies are in this return only; a resumed run will re-derive the parks from the round counters but the lists are lost`)
 }
 

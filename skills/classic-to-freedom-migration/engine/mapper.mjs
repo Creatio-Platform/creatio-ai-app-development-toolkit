@@ -1144,6 +1144,22 @@ function mapImperativeMembers(eff, cols) {
 // Framework/scaffolding method names that carry no page-specific business behaviour. Excluded from the Logic table,
 // the ⚠ Imperative logic worklist and the `method` decisions — and EXPORTED because the member ledger must still
 // count them: it resolves a name in this set to `context` (excluded by design, counted), never `unaccounted`.
+// A STANDARD NAME IS NOT A STANDARD METHOD. `init`, `onSaved`, `onEntityInitialized`, `onSaveButtonClick` and the
+// rest are scaffolding when a schema merely re-declares them — and are DOMAIN LOGIC when a customer overrode one
+// and put save/load behaviour inside it. Filtering on the name alone dropped that second case from the imperative
+// worklist AND classified it as `context` in the coverage ledger, so a plan could pass coverage with a customer's
+// inline save behaviour silently absent: the exact failure the ledger exists to make impossible.
+//
+// The BODY decides, from facts the parse already produced — a pure `callParent(arguments)` passthrough or an empty
+// body declares no behaviour of its own. NO FACTS ⇒ NOT scaffolding: a method whose body could not be parsed has
+// not been shown to be trivial, and a visible row someone must look at is the recoverable error. These are PAYLOAD
+// methods (a schema layer authored them), so this is not the base chain's hundreds of framework methods —
+// `fromTemplate` still keeps those out.
+export const isScaffoldingMethod = (m) => {
+  if (!m || !STANDARD_CLASSIC_METHODS.has(m.name)) return false;
+  const f = m.facts;
+  return !!f && !!(f.callParentOnly || f.isEmpty);
+};
 export const STANDARD_CLASSIC_METHODS = new Set([
   "init", "onSaved", "onEntityInitialized", "setValidationConfig", "createValidator", "asyncValidate",
   "getDefaultValues", "onGetSelectResult", "getSelectedButton", "onAnswerYes", "onAnswerNo",
@@ -1247,12 +1263,12 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   // the ⚠ Imperative logic worklist and the `method` decisions, so the plan stops listing init/onSaved/validator
   // config as "imperative → review" on every page. They remain MEMBERS — the coverage ledger counts them as
   // `context` via `STANDARD_CLASSIC_METHODS` (same treatment as an inert module dep), never as a silent drop.
-  const customMethods = payloadMethods.filter(m => !STANDARD_CLASSIC_METHODS.has(m.name));
+  const customMethods = payloadMethods.filter(m => !isScaffoldingMethod(m));
   // The NAMES this filter removed, published rather than only counted. A behaviour-analysis run (SKILL.md step
   // 5.1) enumerates every member of the surface, so its method count is legitimately HIGHER than the stub count;
   // without the excluded names the difference reads as a contradiction and gets reconciled by hand. It is a
   // deterministic filter — publishing the names makes the reconciliation a set difference instead of a diff.
-  const standardMethodsFiltered = payloadMethods.filter(m => STANDARD_CLASSIC_METHODS.has(m.name)).map(m => m.name);
+  const standardMethodsFiltered = payloadMethods.filter(m => isScaffoldingMethod(m)).map(m => m.name);
   const handlerStubs = customMethods.map(m => {
     const f = m.facts || null;
     return {

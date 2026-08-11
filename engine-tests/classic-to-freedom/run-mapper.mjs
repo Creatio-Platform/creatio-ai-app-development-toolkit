@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { mapToFreedom, FEATURE_CATALOG } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod} from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
@@ -3905,9 +3905,49 @@ check("inverse graph: a multi-caller row says so in the plan",
 const invDigest = invRun.stubIndex[0].counts;
 // unresolved = the three nothing calls (orphanHelper, callerOne, callerTwo); internalCallOnly = the two halves of
 // the recursion pair plus sharedHelper, all of which know their caller but not what starts the chain.
+// `unresolvedTrigger` is 4, not 3, since the fixture's `onSaved` (callParent PLUS a helper call) is customer logic
+// and now gets its own row — and a lifecycle hook has no CALLER to trace, so its own trigger is unresolved. Known
+// rough edge: its trigger is knowable by definition (the save event), so this row is more work for step 5.1 than it
+// needs to be. Counted honestly here rather than hidden by keeping the row off the table.
 check("inverse graph: the handoff digest counts `internalCallOnly` separately from `unresolvedTrigger`",
-  invDigest.unresolvedTrigger === 3 && invDigest.internalCallOnly === 3,
+  invDigest.unresolvedTrigger === 4 && invDigest.internalCallOnly === 3,
   () => JSON.stringify(invDigest));
+
+/* ---- A STANDARD NAME IS NOT A STANDARD METHOD. `init` / `onSaved` / `onEntityInitialized` / `onSaveButtonClick`
+   were filtered off the imperative worklist BY NAME, and classified `context` in the coverage ledger by the same
+   name — so a customer override carrying save/load logic was dropped from the plan while coverage stayed green.
+   Confirmed on the live Opportunity chain (stand eng94529-0818): `main.onSaved` makes 10 calls and writes an
+   attribute, and was silently absent from the plan; 10 such rows across that tree, none of them trivial. ---- */
+{
+  const mk = (methods) => runMigration({ entity: "S", schemas: [{ pkg: "P",
+    body: `define("SPage", [], function() { return { entitySchemaName: "S", methods: { ${methods} }, diff: [] }; });` }] }, { baseDir: FIX });
+  const names = (r) => r.changeSet.handlerStubs.map((h) => h.sourceMethod);
+  const ledger = (r, n) => r.coverage.rows.filter((x) => x.kind === "method" && x.name === n);
+
+  const pass = mk('init: function() { this.callParent(arguments); }');
+  check("scaffolding: a pure `callParent` override of a standard name stays OFF the worklist — the filter still does its original job",
+    () => !names(pass).includes("init"), () => JSON.stringify(names(pass)));
+  const empty = mk('onSaved: function() { }');
+  check("scaffolding: an EMPTY override of a standard name stays off it too",
+    () => !names(empty).includes("onSaved"), () => JSON.stringify(names(empty)));
+
+  const real = mk('onSaved: function() { var v = this.get("Amount"); this.set("Total", v * 2); this.save(); }');
+  check("scaffolding: an override with DOMAIN LOGIC is SURFACED — the customer save behaviour the name-only filter dropped",
+    () => names(real).includes("onSaved"), () => JSON.stringify(names(real)));
+  check("scaffolding: the surfaced row is not marked trivial, so nothing downstream reads it as a passthrough",
+    () => real.changeSet.handlerStubs.find((h) => h.sourceMethod === "onSaved")?.trivial === false);
+  check("scaffolding: the COVERAGE LEDGER agrees — an override with logic is no longer `context`, so a plan cannot pass coverage while omitting it",
+    () => { const r = ledger(real, "onSaved"); return r.length === 1 && r[0].disposition !== "context"; },
+    () => JSON.stringify(ledger(real, "onSaved")));
+  check("scaffolding: a passthrough override IS still ledger `context` — both sides read the body the same way, so one cannot call it work while the other calls it noise",
+    () => { const r = ledger(pass, "init"); return r.length === 1 && r[0].disposition === "context"; },
+    () => JSON.stringify(ledger(pass, "init")));
+  check("scaffolding: NO FACTS ⇒ not scaffolding — an unparsable body has not been shown trivial, and a visible row beats a silent drop",
+    () => (isScaffoldingMethod({ name: "init" }) === false
+      && isScaffoldingMethod({ name: "init", facts: { isEmpty: true } }) === true
+      && isScaffoldingMethod({ name: "init", facts: { callParentOnly: true } }) === true
+      && isScaffoldingMethod({ name: "notStandard", facts: { isEmpty: true } }) === false));
+}
 
 /* ---- folding a helper under the row that calls it ---- */
 // A helper traced to ONE caller present in the same table is part of that caller's implementation, so it is ordered
@@ -3943,8 +3983,11 @@ check("fold: a second-level helper nests deeper (↳↳) under its own caller",
 check("fold: a helper with SEVERAL callers is NOT folded — it is the row that becomes a shared converter",
   !/^\| ↳/.test(rowOf('sharedHelper') || ''),
   () => rowOf('sharedHelper'))
-check("fold: a helper whose caller is a STANDARD method (absent from this table) is not folded — no parent row exists",
-  !/^\| ↳/.test(rowOf('syncOwner') || ''),
+// The premise moved, and for the better: `onSaved` here is `callParent` PLUS `this.syncOwner()`, which is a customer
+// wiring behaviour into the save lifecycle — so it is a row now, and its single-caller helper folds UNDER it. The
+// plan therefore says "port syncOwner with onSaved" instead of leaving the reader to infer the trigger.
+check("fold: a helper whose caller is a STANDARD method WITH LOGIC folds under it — that caller is a row now, so the parent exists",
+  /^\| ↳ /.test(rowOf('syncOwner') || '') && /port with `onSaved`/.test(rowOf('syncOwner') || ''),
   () => rowOf('syncOwner'))
 check("fold: mutual recursion keeps BOTH rows (the cycle guard must not swallow one)",
   !!rowOf('pingPongA') && !!rowOf('pingPongB'))
