@@ -27,12 +27,10 @@ Provide a shared task registry.
 
 ### 3.1 Section object: Task
 
-Title: Task
-Code: `UsrTask`
-Object role: `main`
-Primary display field: `Name`
-Description: Central work item.
-Purpose: Central work item.
+**Title:** Task
+**Code:** `UsrTask`
+**Primary display field:** `Name`
+**Description:** Central work item.
 
 | Title | Code | Description | Data type | Required | Default |
 | --- | --- | --- | --- | --- | --- |
@@ -47,10 +45,6 @@ Minimum to create:
 
 - Title: Status; Code: `UsrTaskStatus`; Allowed values: New, Active, Done
 
-### 3.3 Relationships
-
-- Source object: Task; Target object: Status; Cardinality: N:1; Required child-side link: required; Business rationale: each task must have a status.
-
 ## 4. Lifecycle and Statuses
 
 Tasks move through New, Active, and Done.
@@ -61,11 +55,28 @@ Tasks move through New, Active, and Done.
 
 ## 6. UX Expectations
 
-- default list columns: Name, Status
-- default filters: Status
-- main form groups: Main information
+- list columns: Name, Status
+- list filters: Status
+- form groups: Main information
 
-## 7. Edge Cases and Exceptions
+## 7. Analytics
+
+### 7.1 Section analytics
+
+#### Tasks section dashboards
+
+- dashboard: Task overview
+  - access rights: All Employees
+  - scope: open tasks by status
+  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)
+
+### 7.2 Workplace analytics
+
+- home page: Team overview
+  - scope: how the whole team is performing right now
+  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity
+
+## 8. Edge Cases and Exceptions
 
 - Done tasks are excluded from active views.
 """
@@ -73,8 +84,7 @@ Tasks move through New, Active, and Done.
 
 class TestValidateRequirementsDocSections(unittest.TestCase):
     def test_valid_doc_passes(self):
-        result = validate_requirements_doc(VALID_DOC)
-        self.assertIsNone(result)
+        validate_requirements_doc(VALID_DOC)  # must not raise
 
     def test_missing_section_2_roles_and_permissions(self):
         doc = VALID_DOC.replace("## 2. Roles and Permissions", "## 2. Team Roles")
@@ -112,11 +122,337 @@ class TestValidateRequirementsDocSections(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("## 6. UX Expectations", str(ctx.exception))
 
-    def test_missing_section_7_edge_cases(self):
-        doc = VALID_DOC.replace("## 7. Edge Cases and Exceptions", "## 7. Notes")
+    def test_missing_section_7_analytics(self):
+        doc = VALID_DOC.replace("## 7. Analytics", "## 7. Reporting")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("## 7. Edge Cases and Exceptions", str(ctx.exception))
+        self.assertIn("## 7. Analytics", str(ctx.exception))
+
+    def test_missing_section_8_edge_cases(self):
+        doc = VALID_DOC.replace("## 8. Edge Cases and Exceptions", "## 8. Notes")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("## 8. Edge Cases and Exceptions", str(ctx.exception))
+
+
+class TestValidateRequirementsDocAnalytics(unittest.TestCase):
+    def test_missing_section_analytics_subsection(self):
+        doc = VALID_DOC.replace("### 7.1 Section analytics", "### 7.1 Reports")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.1 Section analytics", str(ctx.exception))
+
+    def test_missing_workplace_analytics_subsection(self):
+        doc = VALID_DOC.replace("### 7.2 Workplace analytics", "### 7.2 Company reports")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.2 Workplace analytics", str(ctx.exception))
+
+    def test_missing_dashboard_label_is_rejected(self):
+        # An analytics section with the subheadings but no concrete `dashboard:`
+        # block is a placeholder — it must fail the "must be populated" rule.
+        doc = VALID_DOC.replace("- dashboard: Task overview", "- Task overview").replace(
+            "- dashboard: Team workload", "- Team workload"
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("dashboard:", str(ctx.exception))
+
+    def test_missing_widgets_label_is_rejected(self):
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)", ""
+        ).replace("  - widgets: metric — total tasks; list — tasks due this week", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
+
+    def test_flat_section_analytics_without_section_grouping_is_rejected(self):
+        # 7.1 must group dashboards by section under a `#### <Section> section
+        # dashboards` heading; a flat list (grouping heading removed) must fail.
+        doc = VALID_DOC.replace("#### Tasks section dashboards\n\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("section dashboards", str(ctx.exception))
+
+    def test_grouping_heading_only_under_72_does_not_satisfy_71(self):
+        # The 7.1 grouping check must be scoped to the 7.1 slice: a flat 7.1 must
+        # NOT pass just because a `... section dashboards` heading exists under 7.2.
+        doc = VALID_DOC.replace("#### Tasks section dashboards\n\n", "")  # 7.1 now flat
+        doc = doc.replace(
+            "### 7.2 Workplace analytics\n",
+            "### 7.2 Workplace analytics\n\n#### Company section dashboards\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.1", str(ctx.exception))
+
+    def test_workplace_home_page_missing_widgets_is_rejected(self):
+        # The §7.2 home page must list its own widgets (it is the app's single home
+        # page — populated with metrics/charts, not left as a bare title).
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n",
+            "",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets", str(ctx.exception).lower())
+
+    def test_too_few_widgets_on_72_home_page_is_rejected(self):
+        # The §7.2 home page aggregates the whole app — it needs at least 10 widgets;
+        # a 9-widget home page fails.
+        doc = VALID_DOC.replace(
+            "chart — tasks by priority (bar); list — recent activity",
+            "chart — tasks by priority (bar)",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least 10 widgets", str(ctx.exception))
+
+    def test_widgets_missing_on_leading_dashboard_is_rejected(self):
+        # Symmetric to the above but strips the 7.1 (leading) dashboard's widgets,
+        # exercising the non-terminal block boundary (end == next dashboard start).
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)", ""
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
+
+    def test_empty_section_analytics_71_is_rejected(self):
+        # 7.1 must carry at least one dashboard, not just a grouping heading. Drop
+        # the only 7.1 dashboard block (keep its heading); the 7.2 dashboard remains.
+        doc = VALID_DOC.replace(
+            "- dashboard: Task overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: open tasks by status\n"
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n",
+            "",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.1", str(ctx.exception))
+
+    def test_access_rights_missing_on_a_dashboard_is_rejected(self):
+        # Every dashboard must state its access rights in the plan (surfaced to the
+        # developer). Drop the 7.1 dashboard's access-rights line; 7.2 keeps its own.
+        doc = VALID_DOC.replace("  - access rights: All Employees\n  - scope: open tasks by status\n", "  - scope: open tasks by status\n")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("access rights:", str(ctx.exception))
+
+    def test_empty_access_rights_value_is_rejected(self):
+        # Presence of the label is not enough: the value after `access rights:` must
+        # be non-empty (an agent leaving it blank must not pass).
+        doc = VALID_DOC.replace(
+            "- dashboard: Task overview\n  - access rights: All Employees\n",
+            "- dashboard: Task overview\n  - access rights:\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("access rights:", str(ctx.exception))
+
+    def test_non_all_employees_access_rights_is_rejected(self):
+        # Access is a STATIC default: the validator pins the exact value
+        # `All Employees`. A narrower/other grant (e.g. a role name) must fail, so an
+        # agent cannot silently invent a different access scope.
+        doc = VALID_DOC.replace(
+            "- dashboard: Task overview\n  - access rights: All Employees\n",
+            "- dashboard: Task overview\n  - access rights: Managers\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("All Employees", str(ctx.exception))
+
+    def test_empty_widgets_value_is_rejected(self):
+        # Same non-empty-value rule for widgets: a bare `widgets:` must fail.
+        doc = VALID_DOC.replace(
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n",
+            "  - widgets:\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("widgets:", str(ctx.exception))
+
+    def test_too_few_widgets_on_71_dashboard_is_rejected(self):
+        # Every §7.1 dashboard must carry at least 5 widgets; a 4-widget board fails.
+        doc = VALID_DOC.replace(
+            "metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)",
+            "metric — open tasks count; metric — tasks due this week; chart — tasks by status (bar); list — recent tasks",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least 5 widgets", str(ctx.exception))
+
+    def test_too_few_widgets_on_a_later_71_dashboard_is_rejected(self):
+        # The min-widgets rule is per dashboard, not just the first one: keep the
+        # first §7.1 dashboard valid (5 widgets) and add a SECOND dashboard (its own
+        # section group) with only 4 widgets — it must still be rejected.
+        second_group = (
+            "\n#### Contacts section dashboards\n\n"
+            "- dashboard: Contact directory\n"
+            "  - access rights: All Employees\n"
+            "  - scope: shows who owns which contacts\n"
+            "  - widgets: metric — total contacts; metric — new this month; chart — by owner (bar); list — recent contacts\n"  # 4 widgets
+        )
+        anchor = "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n"
+        assert anchor in VALID_DOC, "fixture 7.1 dashboard drifted"
+        doc = VALID_DOC.replace(anchor, anchor + second_group)
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least 5 widgets", str(ctx.exception))
+
+    def test_missing_scope_on_71_dashboard_is_rejected(self):
+        # `scope:` is a mandatory §7.1 dashboard field (never empty/TBD), enforced
+        # like `widgets:`. Dropping it must fail.
+        doc = VALID_DOC.replace("  - scope: open tasks by status\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("scope:", str(ctx.exception))
+
+    def test_empty_scope_value_on_71_dashboard_is_rejected(self):
+        # Presence of the label is not enough — the value after `scope:` must be
+        # non-empty.
+        doc = VALID_DOC.replace(
+            "  - scope: open tasks by status\n", "  - scope:\n"
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("scope:", str(ctx.exception))
+
+    def test_missing_scope_on_72_home_page_is_rejected(self):
+        # The §7.2 home page must also state its `scope:`.
+        doc = VALID_DOC.replace(
+            "  - scope: how the whole team is performing right now\n", ""
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("scope:", str(ctx.exception))
+
+    def test_order_of_71_and_72_does_not_matter_when_both_populated(self):
+        # The requirement is "both subsections present AND both populated" — the
+        # order between 7.1 and 7.2 is irrelevant. A doc that lists 7.2 before 7.1,
+        # with both populated, must still PASS (not be rejected on layout).
+        sec71 = (
+            "### 7.1 Section analytics\n\n"
+            "#### Tasks section dashboards\n\n"
+            "- dashboard: Task overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: open tasks by status\n"
+            "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n\n"
+        )
+        sec72 = (
+            "### 7.2 Workplace analytics\n\n"
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n\n"
+        )
+        assert sec71 in VALID_DOC, "fixture block 7.1 drifted"
+        assert sec72 in VALID_DOC, "fixture block 7.2 drifted"
+        doc = VALID_DOC.replace(sec71 + sec72, sec72 + sec71)  # 7.2 now precedes 7.1
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_empty_workplace_analytics_72_is_rejected(self):
+        # 7.2 must not be empty: drop its home-page block, leaving 7.1 intact.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n",
+            "",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.2", str(ctx.exception))
+
+    def test_workplace_analytics_with_dashboard_is_rejected(self):
+        # 7.2 is the app's single home page, NOT dashboards. A `dashboard:` block
+        # under 7.2 (the mistake this guard exists for) must be rejected.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n",
+            "- dashboard: Team overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: how the whole team is performing right now\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("7.2", str(ctx.exception))
+
+    def test_workplace_home_page_with_access_rights_is_rejected(self):
+        # A home page has no per-page access rights (its audience is the workplace);
+        # an `access rights:` line under 7.2 must be rejected.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n",
+            "- home page: Team overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: how the whole team is performing right now\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("access rights", str(ctx.exception).lower())
+
+    def test_two_home_pages_in_72_is_rejected(self):
+        # 7.2 is a single page — more than one `home page:` block must be rejected.
+        doc = VALID_DOC.replace(
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n",
+            "- home page: Team overview\n"
+            "  - scope: how the whole team is performing right now\n"
+            "  - widgets: metric — total tasks; metric — open tasks; metric — overdue tasks; metric — completed this month; metric — tasks due this week; chart — tasks by status (donut); chart — tasks by assignee (bar); chart — tasks created per week (column); chart — tasks by priority (bar); list — recent activity\n\n"
+            "- home page: Second page\n"
+            "  - scope: extra\n"
+            "  - widgets: metric — total tasks\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("home page", str(ctx.exception).lower())
+
+    def test_two_section_grouping_headings_in_71_pass(self):
+        # A real multi-section app has more than one `#### <Section> section
+        # dashboards` heading under §7.1, each with its own dashboards. The validator
+        # must accept several grouping headings and check every dashboard's own
+        # access-rights/widgets lines across all groups.
+        second_group = (
+            "\n#### Contacts section dashboards\n\n"
+            "- dashboard: Contact directory\n"
+            "  - access rights: All Employees\n"
+            "  - scope: contacts by owner\n"
+            "  - widgets: metric — total contacts; metric — new contacts this month; metric — active contacts; chart — contacts by owner (bar); chart — contacts by type (donut)\n"
+        )
+        anchor = "  - widgets: metric — open tasks count; metric — tasks due this week; metric — overdue tasks; chart — tasks by status (bar); chart — tasks by assignee (bar)\n"
+        assert anchor in VALID_DOC, "fixture 7.1 dashboard drifted"
+        doc = VALID_DOC.replace(anchor, anchor + second_group)
+        validate_requirements_doc(doc)  # must not raise (two grouping headings in 7.1)
+
+    def test_dashboard_before_first_grouping_heading_is_rejected(self):
+        # A dashboard that floats before the first `#### <Section> section dashboards`
+        # heading is not grouped — the grouping check must catch it (a lone heading
+        # elsewhere in §7.1 must not rescue a flat/floating dashboard).
+        floating = (
+            "- dashboard: Floating overview\n"
+            "  - access rights: All Employees\n"
+            "  - scope: everything\n"
+            "  - widgets: metric — everything\n\n"
+        )
+        anchor = "#### Tasks section dashboards\n"
+        assert anchor in VALID_DOC, "fixture 7.1 heading drifted"
+        doc = VALID_DOC.replace(anchor, floating + anchor)  # dashboard before the heading
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("before the first grouping heading", str(ctx.exception))
+
+    def test_empty_grouping_heading_is_rejected(self):
+        # A `#### <Section> section dashboards` heading with no dashboard under it
+        # (dashboards from several sections lumped under a single earlier heading,
+        # leaving later headings empty) must be rejected.
+        doc = VALID_DOC.replace(
+            "### 7.2 Workplace analytics",
+            "#### Contacts section dashboards\n\n### 7.2 Workplace analytics",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("at least one 'dashboard:' under it", str(ctx.exception))
 
 
 class TestValidateRequirementsDocTables(unittest.TestCase):
@@ -132,6 +468,16 @@ class TestValidateRequirementsDocTables(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("field table", str(ctx.exception).lower())
 
+    def test_table_header_below_first_line_of_block_is_accepted(self):
+        # Guards TABLE_HEADER_RE's re.MULTILINE: the field table sits several lines
+        # below the object heading (never the block's first line). Push it even
+        # further down with extra prose; it must still be found and accepted.
+        doc = VALID_DOC.replace(
+            "**Description:** Central work item.\n",
+            "**Description:** Central work item.\nExtra context line one.\nExtra context line two.\n",
+        )
+        validate_requirements_doc(doc)  # must not raise (header found on a non-first line)
+
 
 class TestValidateRequirementsDocMarkers(unittest.TestCase):
     def test_missing_minimum_to_create_marker(self):
@@ -140,25 +486,67 @@ class TestValidateRequirementsDocMarkers(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("Minimum to create:", str(ctx.exception))
 
-    def test_missing_default_list_columns_marker(self):
-        doc = VALID_DOC.replace("- default list columns:", "- list columns:")
+    def test_missing_list_columns_marker(self):
+        doc = VALID_DOC.replace("- list columns:", "- columns:")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("default list columns:", str(ctx.exception))
+        self.assertIn("list columns:", str(ctx.exception))
+
+    def test_retired_default_list_columns_label_is_rejected(self):
+        # The retired `default list columns:` label ends with `list columns:`, so a
+        # plain substring check would let an un-migrated doc pass silently.
+        doc = VALID_DOC.replace("- list columns: Name, Status", "- default list columns: Name, Status")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("default list", str(ctx.exception).lower())
+
+    def test_retired_default_list_filters_label_is_rejected(self):
+        doc = VALID_DOC.replace("- list filters: Status", "- default list filters: Status")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("default list", str(ctx.exception).lower())
+
+    def test_list_filters_carrier_resolves(self):
+        # filters branch of UX_CARRIER_RE: a filter title present in the object
+        # model must resolve to a carrier and pass.
+        doc = VALID_DOC.replace("- list filters: Status", "- list filters: Status, Name")
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_list_filters_title_without_carrier_is_rejected(self):
+        # Complementary negative for the filters branch: a filter title with no
+        # carrier in section 3 must be rejected (guards against the branch silently
+        # never running).
+        doc = VALID_DOC.replace("- list filters: Status", "- list filters: Nonexistent")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Nonexistent", str(ctx.exception))
 
 
 class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
-    def test_missing_object_role_marker(self):
-        doc = VALID_DOC.replace("Object role: `main`", "")
+    def test_object_block_starting_with_blank_line_names_heading_in_error(self):
+        # OBJECT_HEADING_RE's leading `^\s*` can begin a block on the blank line
+        # before the heading, so a block's first line may be blank. The error must
+        # name the first NON-BLANK line (the heading), not ''. Force extra blank
+        # lines before §3.1 and drop a required marker.
+        doc = VALID_DOC.replace("## 3. Object Model\n", "## 3. Object Model\n\n\n")
+        doc = doc.replace("**Primary display field:** `Name`\n", "")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
-        self.assertIn("Object role:", str(ctx.exception))
+        msg = str(ctx.exception)
+        self.assertIn("Primary display field:", msg)
+        self.assertIn("Section object: Task", msg)  # heading named, not ''
 
     def test_missing_title_line_in_entity(self):
-        doc = VALID_DOC.replace("Title: Task\n", "").replace("- Title: Status;", "- Status;")
+        doc = VALID_DOC.replace("**Title:** Task\n", "").replace("- Title: Status;", "- Status;")
         with self.assertRaises(WorkflowError) as ctx:
             validate_requirements_doc(doc)
         self.assertIn("Title:", str(ctx.exception))
+
+    def test_missing_description_marker(self):
+        doc = VALID_DOC.replace("**Description:** Central work item.\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Description:", str(ctx.exception))
 
     def test_missing_title_heading(self):
         doc = VALID_DOC.replace("# TestApp - Requirements", "# TestApp Notes")
@@ -166,6 +554,127 @@ class TestValidateRequirementsDocObjectMetadata(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("title must match", str(ctx.exception))
 
+    def test_missing_code_marker(self):
+        # `Code:` appears in both the object block and the lookup row, and the
+        # object block extends through the Lookups subsection, so drop both.
+        doc = VALID_DOC.replace("**Code:** `UsrTask`\n", "").replace("Code: `UsrTaskStatus`", "`UsrTaskStatus`")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Code:", str(ctx.exception))
+
+    def test_missing_primary_display_field_marker(self):
+        doc = VALID_DOC.replace("**Primary display field:** `Name`\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("Primary display field:", str(ctx.exception))
+
+    def test_object_role_and_purpose_are_optional(self):
+        # `Object role:` / `Purpose:` were dropped from the required metadata
+        # markers; VALID_DOC carries neither, and their absence must not fail.
+        self.assertNotIn("Object role:", VALID_DOC)
+        self.assertNotIn("Purpose:", VALID_DOC)
+        validate_requirements_doc(VALID_DOC)  # must not raise
+
+
+class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
+    @staticmethod
+    def _doc_with_related_list(*extra_lines):
+        anchor = "- form groups: Main information\n"
+        assert anchor in VALID_DOC, "fixture anchor missing from VALID_DOC"
+        block = "\n\n- Related list Subtasks\n  - list columns: Name, Status\n" + "".join(
+            f"  {line}\n" for line in extra_lines
+        )
+        return VALID_DOC.replace(anchor, anchor + block)
+
+    def test_inline_related_list_rejects_each_page_or_form_label(self):
+        for label in (
+            "form fields: Name, Status",
+            "form groups: Main",
+            "add page: mini page (Name)",
+            "edit page: full record page",
+        ):
+            with self.subTest(label=label):
+                doc = self._doc_with_related_list("add/edit: inline in the list", label)
+                with self.assertRaises(WorkflowError) as ctx:
+                    validate_requirements_doc(doc)
+                self.assertIn("inline related list", str(ctx.exception))
+
+    def test_digit_named_related_list_surface_is_not_a_false_conflict(self):
+        # A surface NAME may start with a digit (e.g. "360 Reviews"). It must be
+        # detected as its own surface so an adjacent inline list does not absorb
+        # its page/form labels and raise a false conflict.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- Related list Subtasks\n  - list columns: Name, Status\n  - add/edit: inline in the list\n\n"
+            "- Related list 360 Reviews\n  - list columns: Name, Status\n"
+            "  - add page: mini page (Name)\n  - edit page: full record page\n  - form fields: Name, Status\n",
+        )
+        validate_requirements_doc(doc)  # must not raise (two distinct surfaces)
+
+    def test_inline_related_list_without_page_labels_passes(self):
+        doc = self._doc_with_related_list("add/edit: inline in the list")
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_default_mini_page_related_list_passes(self):
+        doc = self._doc_with_related_list(
+            "add page: mini page (Name, Status)",
+            "edit page: full record page",
+            "form fields: Name, Status",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_inline_related_list_then_section_with_form_labels_passes(self):
+        # Regression: a trailing Section's page/form labels must NOT fold into
+        # the preceding inline related list's block.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- Related list Subtasks\n  - list columns: Name, Status\n  - add/edit: inline in the list\n\n"
+            "- Section Reports\n  - list columns: Name\n  - form groups: Overview\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
+
+    def test_backticked_bold_related_list_heading_is_detected(self):
+        # The §6 contract renders a surface as `- **`Related list <name>`**`. The
+        # heading regex must match that form, otherwise the inline conflict check
+        # silently becomes a no-op on contract-conforming plans.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- **`Related list Subtasks`**\n  - list columns: Name, Status\n"
+            "  - add/edit: inline in the list\n  - form groups: Main\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("inline related list", str(ctx.exception))
+
+    def test_cyrillic_named_related_list_surface_is_detected(self):
+        # The code comment at the surface regex claims non-Latin (Cyrillic) names
+        # are supported; pin it — a Cyrillic-named surface must still be detected
+        # so its own inline/page-label conflict fires.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- form groups: Main information\n\n"
+            "- Related list Підрядники\n  - list columns: Name, Status\n"
+            "  - add/edit: inline in the list\n  - add page: mini page (Name)\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("inline related list", str(ctx.exception))
+
+    def test_inline_related_list_then_bare_section_object_bullets_pass(self):
+        # A heading-less surface (the section object, or the "single full page"
+        # option) is described with bare top-level `form groups:` bullets. Those
+        # must NOT be absorbed into a preceding inline related list's block, which
+        # would raise a false conflict.
+        doc = VALID_DOC.replace(
+            "- form groups: Main information\n",
+            "- Related list Subtasks\n  - list columns: Name, Status\n"
+            "  - add/edit: inline in the list\n"
+            "- form groups: Main information\n",
+        )
+        validate_requirements_doc(doc)  # must not raise
 
 
 if __name__ == "__main__":

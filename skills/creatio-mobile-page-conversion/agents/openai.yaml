@@ -1,0 +1,5 @@
+---
+display_name: "Creatio Mobile Page Conversion"
+short_description: "Convert a Freedom UI web page into a mobile page through the gated conversion flow."
+default_prompt: "Use $creatio-mobile-page-conversion to convert a Creatio Freedom UI web page into a mobile list or form page and (optionally) register it as a mobile section, following the gated conversion flow (Gate M before any write, Gate S before any registration)."
+---

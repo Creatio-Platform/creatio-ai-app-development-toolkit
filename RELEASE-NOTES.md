@@ -2,7 +2,98 @@
 
 Releases are listed in reverse chronological order. Each release has a `## X.Y.Z (YYYY-MM-DD)` header. Subsections (`###`) under each release are free-form — pick what reflects the actual scope (Features, Bug Fixes, Breaking Changes, Migration Notes, Documentation, etc.).
 
+**Write each section as an announcement, not a changelog.** Open the section body with a one-sentence **bold hook** that says what the release unlocks and why it matters — the release workflow uses that leading `**bold**` sentence as the GitHub Release *title* (`X.Y.Z — <hook>`), so a section without one publishes under the bare version number. Then group the changes under short `###` sections, lead each bullet with the user-facing value (not the internal mechanism), and link the PR (`#NN`) so external readers can follow it. Emoji section headers (✨ / 🔒 / 🛠️) are welcome. See the most recent release below for the house style.
+
 To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)` section at the top of this file and runs `node scripts/bump-version.js X.Y.Z`, merge it, then trigger the `Release` GitHub Actions workflow with the same version. The workflow validates the prepared main branch, tags it, and uses this section as the body of the GitHub Release.
+
+---
+
+## 1.7.0 (2026-08-07)
+
+**Your new app now lands where users can actually find it.** Until this release the toolkit could build a complete Creatio app that nobody but an administrator could open — `create-app` drops every new section into the `My applications` workplace, which is granted to `System administrators` only, and nothing ever asked where the app really belonged. Navigation placement is now a required discovery question, asked in the first batch alongside the business questions and carried through the plan, the runbooks and the completion criteria. The same release fixes the reason the orchestrator was often skipped entirely, and sharpens what the Classic and mobile migration skills tell you they could not convert.
+
+### ✨ What's new
+
+- **Navigation placement and audience are settled before anything is built.** The first discovery batch now asks which workplace your section — and its home page — belongs to, and which roles should see it, offering a new workplace named for the app, `My applications`, or one you name. Asking later was never a smaller version of the same thing: it made you re-decide work that was already finished. When a section is added to an app that already exists, the recommendation is refined during requirements gathering by reading where that app's sections actually live — and deliberately never recommends `My applications` back to you, because an app sitting there is the very problem this question exists to catch. ([#77](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/77))
+- **The orchestrator is selectable from a plain request.** Its description named only the toolkit's own artifacts — "Business Plans", "implementation handoffs" — so "create a Todo app" or "add an Orders section" could miss it entirely and fall through to raw clio MCP with none of the toolkit's gates applied. All three trigger surfaces — the Claude skill, the Cursor rule and the OpenAI manifest — now carry the same user-intent wording, and a test keeps them from drifting apart again. ([#77](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/77))
+- **Embedded profile cards migrate to the Freedom side profile.** A Classic page that carried an embedded profile card now maps onto the Freedom side profile instead of being flattened into the main layout. ([#71](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/71))
+
+### 🛠️ Straighter answers about what did not convert
+
+- **Mobile conversion names the whole containers it dropped.** It reported only per-element drops, so a web container removed up front never appeared in "what was dropped" — you found out by noticing something missing. ([#78](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/78))
+- **Mobile page conversion emits targeted diff operations** instead of one root merge, so a converted page changes what it needs to and leaves the rest of the mobile template alone. ([#73](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/73))
+- **Classic → Freedom migration reads sources from the runtime only.** The hybrid runtime-plus-repository model is gone, so a migration can no longer be planned from a local checkout that disagrees with the environment it will be applied to. ([#66](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/66))
+- **A Flow & Engine explainer for the migration skill now lives in the repository**, so the documentation can be read and edited alongside the code it describes. ([#67](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/67))
+
+### 🔒 Fewer surprises in what gets applied
+
+- **Custom CSS is a last resort, and you are asked first.** Freedom UI guidance now tries native component properties before reaching for CSS, and warns and confirms before applying any. ([#57](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/57))
+- **A missing guidance topic stops the run instead of improvising.** Navigation writes depend on clio's `workplaces` guidance, which ships with the clio knowledge library from `1.13.0` onward. If it is unavailable the run stops and tells you, rather than guessing the write — a workplace bound with the wrong columns installs on the next environment as an unreachable entry and cannot be repaired by re-installing. ([#77](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/77))
+
+---
+
+## 1.6.0 (2026-07-29)
+
+**Beta — your Classic pages finally have a map to Freedom.** Migrating a Creatio Classic UI page to Freedom UI has always been archaeology — hunt down the client schema, work out which base template it inherits from, rebuild the merged tree by hand, then guess the Freedom equivalent and hope nothing got dropped. This first release hands that job to an agent skill backed by a deterministic engine: the mechanical work is reconstructed for you and only the real judgment calls come back for review. It ships as an early **Beta** with deliberately limited migration coverage — **layout, components, and business rules** — so treat its output as a reviewed draft to build from, not a finished migration (see *Beta scope* below).
+
+### ✨ What's new
+
+- **`classic-to-freedom-migration` — Classic → Freedom UI, planned before it's built.** Point it at a Classic section/page (or a whole package/application) and it reconstructs the *effective* Classic page from its full schema inheritance chain — correct dependency order, with the parent-template seed folded in — then emits a Freedom **ChangeSet** and a ready-to-present **design spec / migration plan** you approve before anything is written. Anything it can't decide deterministically is surfaced as an explicit **worklist**, and a hard correctness gate refuses to hand you a plan built on parse errors, an unresolved parent chain, or a skeletal seed — so a page is never silently half-migrated. ([#46](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/46))
+
+### 🧪 Beta scope
+
+- This Beta migrates the three areas that carry the most manual toil, and **only** those:
+  - **Layout** — profile islands, tab & group nesting, the 24-column grid, wide-header detection.
+  - **Components** — fields and their controls, standard features (Approvals / Attachments / Activities / Emails / Feed) recognised instead of flattened to generic lists, and the page **tree** (child, typed, and mini pages — cycle- and diamond-safe), plus section concerns (add-record mini page, section actions, quick filters, list columns).
+  - **Business rules** — the declarative page/entity rules carried over from the Classic page.
+- Everything outside those three — imperative handler logic, custom modules/widgets, process launches, and other page behaviour — is **surfaced for you to port manually**, not auto-migrated. Coverage will expand in later releases.
+
+### 🔒 Safe by construction
+
+- The engine reads **untrusted** Classic schema bodies through a vendored, integrity-pinned **acorn** parser and *statically evaluates* them — it never executes them, so a hostile page body can't reach `process`, `require`, or the filesystem. The vendored parser is tamper-evidenced against its recorded hash and independently anchored to its real npm release in CI (plus a weekly vulnerability audit), and hostile input is contained end-to-end: bounded name extraction (no catastrophic regex backtracking), clamped grid spans, null-safe merging, and path-traversal guards on file inputs. ([#46](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/46))
+
+### 🛠️ Under the hood
+
+- New-code quality is now enforced in CI — merges are blocked on newly introduced SonarCloud issues, keeping the engine reference-quality as it grows. ([#59](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/59))
+
+---
+
+## 1.5.0 (2026-07-27)
+
+### Features
+
+- Add the `creatio-branding-orchestrator` skill — brand or theme an app to match a brandbook, company site, or chosen colors and fonts: guided palette conversation, logo intake and application (with a white-logo preference for dark top panels), and a palette-matched app background. SVG assets are sanitized before upload, and background/branding upload mechanics are delegated to clio. (ENG-92981)
+- Apply a newly generated theme to the current user's profile by default, aligned with `clio set-user-theme` becoming a confirmed write. (ENG-93302)
+- Add the `creatio-mobile-page-conversion` skill — convert a Freedom UI web page into a Freedom UI mobile page, toggle-aware via a feature-flag preflight gate, with a preflight recovery message and a form-page guard. (ENG-91228)
+- Business Plan and UI guidelines now cover related lists (expanded lists / details). (ENG-92614)
+
+### Bug Fixes / Guidance
+
+- Clarify lookup/enum seeding guidance to prevent a runtime-insert fallback. (ENG-93865)
+- Add a transient section-creation failure playbook runbook. (ENG-93376)
+
+### CI
+
+- Bump `actions/checkout` from 7.0.0 to 7.0.1. (#54)
+- Bump `actions/setup-node` from 6.4.0 to 7.0.0. (#45)
+- Exclude engine fixtures and the vendored parser from SonarCloud analysis. (#50)
+
+---
+
+## 1.4.0 (2026-07-09)
+
+### Features
+
+- Auto-register a Creatio environment directly from its URL and create the app without an extra confirmation prompt, streamlining first-run onboarding. Host matching and auto-registration are hardened against unsafe or ambiguous hosts. (ENG-91558)
+- Reconcile the "prefer native tool-calls" guidance with the resident/clio-run rule so orchestration guidance is consistent. (ENG-92762)
+
+### Bug Fixes
+
+- Fix the `creatio-schema-naming` and `creatio-ui-guidelines` skills failing to load in GitHub Copilot. Their `SKILL.md` YAML frontmatter was invalid (an unquoted `description` containing `': '`), and the `creatio-ui-guidelines` description also exceeded Copilot's description-length cap. Descriptions are now valid, spec-compliant YAML and within the cap, with CI guards to prevent recurrence. (ENG-92957)
+
+### CI
+
+- Bump `actions/checkout` from 6.0.3 to 7.0.0. (#33)
 
 ---
 

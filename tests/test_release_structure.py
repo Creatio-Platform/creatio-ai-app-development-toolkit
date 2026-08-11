@@ -8,6 +8,46 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# GitHub Copilot's skill loader drops any skill whose `description` exceeds this
+# limit; Claude Code / Codex do not enforce it. ENG-92957: the
+# creatio-ui-guidelines description silently grew past the cap and Copilot
+# stopped loading the skill. Pin the invariant so a future edit fails CI here
+# rather than shipping green and breaking Copilot discovery.
+#
+# Measured in UTF-8 BYTES, not code points (hence the _BYTES name): descriptions
+# may contain multi-byte chars, so a byte-based loader cap can trip while the
+# code-point count still looks safe. Always compare against
+# len(description.encode("utf-8")).
+#
+# PROVISIONAL VALUE. 1024 is inferred, not documented by Copilot: ENG-92957
+# measured ~1084-byte description dropped, ~646 loaded, and ~1024 is the working
+# estimate of the threshold. The inclusive-vs-exclusive boundary is likewise
+# unconfirmed. Keep real headroom below this number (do not tune a description
+# right up to it), and tighten the value if Copilot's true cap is established.
+MAX_SKILL_DESCRIPTION_BYTES = 1024
+
+# Exact substrings a skill's description MUST keep so keyword/substring routers
+# (some agents) still auto-load it. This pins the LOWER bound the byte cap does
+# not: trimming under the cap must not silently drop a load-bearing trigger.
+# ENG-92957 dropped these during trimming and they were caught by hand, not CI.
+LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
+    # The orchestrator is the ENTRYPOINT, so its description is the only thing that can attract a
+    # cold "create an app" request. It previously named only the toolkit's own artifacts ("Business
+    # Plans", "approved plan"); a live run on the plain prompt "Create Verrify1 app. It should
+    # have..." never selected the skill and fell through to clio MCP alone, so none of the toolkit's
+    # gates applied. These substrings are the user-intent triggers that recovery depends on — a
+    # future trim must not drop them the way ENG-92957 dropped the ui-guidelines ones.
+    "creatio-app-orchestrator": [
+        "Creatio app", "create", "generate", "scaffold", "add", "section", "Apply proactively",
+    ],
+    "creatio-ui-guidelines": [
+        "Creatio", "Freedom UI", "record page", "form page", "list page", "detail",
+        "expanded list", "expansion panel", "datagrid", "lookup", "field group", "tab",
+        "profile island", "mini page", "dialog", "section", "page layout",
+        "UI review", "UX audit",
+    ],
+}
+
 
 def read_json(relative_path):
     return json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
@@ -297,14 +337,32 @@ class ReleaseStructureTests(unittest.TestCase):
             # on a malformed / unclosed front-matter fence.
             data = parse_fenced_flat_mapping(content)
             self.assertEqual(data.get("name"), skill_dir.name, skill_dir.name)
-            self.assertTrue((data.get("description") or "").strip(),
+            description = (data.get("description") or "").strip()
+            self.assertTrue(description,
                             f"{skill_dir.name}: empty or missing description:")
+            # Upper bound — pin the Copilot description-byte cap (ENG-92957): a
+            # description over the limit parses fine everywhere but is silently
+            # dropped by Copilot, so it must fail here rather than ship green.
+            description_bytes = len(description.encode("utf-8"))
+            self.assertLessEqual(
+                description_bytes, MAX_SKILL_DESCRIPTION_BYTES,
+                f"{skill_dir.name}: description is {description_bytes} bytes, "
+                f"exceeds Copilot cap of {MAX_SKILL_DESCRIPTION_BYTES}",
+            )
+            # Lower bound — a trim that stays under the cap must not drop a
+            # load-bearing trigger substring (the recurring ENG-92957 failure).
+            for phrase in LOAD_BEARING_DESCRIPTION_SUBSTRINGS.get(skill_dir.name, []):
+                self.assertIn(
+                    phrase, description,
+                    f"{skill_dir.name}: description lost load-bearing trigger "
+                    f"substring '{phrase}' — keyword routers may stop auto-loading it",
+                )
 
     # Skills the orchestrator MUST hand off to mid-workflow. These are the
     # orchestrator-driven skills only — standalone skills the user invokes
     # directly (e.g. a migration skill) are deliberately NOT listed and are not
     # expected to be wired into the orchestrator.
-    ORCHESTRATOR_HANDOFF_SKILLS = ("creatio-ui-guidelines", "creatio-schema-naming")
+    ORCHESTRATOR_HANDOFF_SKILLS = ("creatio-ui-guidelines", "creatio-schema-naming", "creatio-mobile-page-conversion")
 
     def test_orchestrator_wires_its_handoff_skills(self):
         """Each orchestrator-driven skill must exist and be referenced by name in
@@ -348,6 +406,36 @@ class ReleaseStructureTests(unittest.TestCase):
             for key in ("display_name", "short_description", "default_prompt"):
                 self.assertIn(key, data, f"{skill_dir.name}: openai.yaml missing `{key}`")
                 self.assertTrue(data[key].strip(), f"{skill_dir.name}: `{key}` is empty")
+
+    def test_orchestrator_openai_manifest_carries_the_same_load_bearing_triggers(self):
+        """`agents/openai.yaml` is the ONLY trigger surface an OpenAI-format host reads.
+
+        `LOAD_BEARING_DESCRIPTION_SUBSTRINGS` is enforced above against the SKILL.md front matter
+        only, and `test_every_skill_openai_manifest_has_consistent_shape` checks this file's keys but
+        never a word of their content. So the entrypoint-trigger fix reached SKILL.md and the Cursor
+        rule while this manifest kept the artifact-name-only wording, and nothing failed.
+
+        Scoped to the ENTRYPOINT skill on purpose. It is the one that must fire from a cold request,
+        so its three copies have to say the same thing. The other skills' manifests carry deliberately
+        shorter summaries than their SKILL.md descriptions, and holding them to the same substring
+        list is a separate decision, not this fix.
+
+        `Apply proactively` is excluded: it instructs a Claude-style skill router and has no meaning
+        in an OpenAI manifest, which routes on `short_description` / `default_prompt`.
+        """
+        skill_name = "creatio-app-orchestrator"
+        manifest_path = ROOT / "skills" / skill_name / "agents" / "openai.yaml"
+        data = parse_fenced_flat_mapping(manifest_path.read_text(encoding="utf-8"))
+        manifest_text = " ".join(
+            data.get(key, "") for key in ("short_description", "default_prompt"))
+        for phrase in LOAD_BEARING_DESCRIPTION_SUBSTRINGS[skill_name]:
+            if phrase == "Apply proactively":
+                continue
+            self.assertIn(
+                phrase, manifest_text,
+                f"{skill_name}: openai.yaml lost load-bearing trigger substring '{phrase}' — "
+                f"OpenAI-format hosts would stop matching a plain request",
+            )
 
     def test_skill_relative_references_are_anchored_and_resolve(self):
         """Every link inside a skill's SKILL.md that points to a file the skill

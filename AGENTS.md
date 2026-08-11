@@ -10,6 +10,7 @@ This section takes precedence over any host-environment plan template (e.g., VS 
 - **MUST** produce all app creation plans and Gate R business plans using the BA-style Business Plan structure.
 - This rule is active regardless of the editor mode or any system-injected plan style guide.
 - **The plan output MUST be a BA-style Business Plan.** The BA-style Business Plan (Agent 2 output) must be shown inline in the visible conversation body. A file saved to disk (e.g., `plan.md`, `requirements.md`) is not the deliverable; the deliverable is the plan visible in the conversation plus the developer's natural-language approval.
+- **Exception — Classic→Freedom UI migration.** Everything above governs **business-requirements planning** — app creation and any other business task that needs requirements working-through. A Classic→Freedom UI migration is **not** such a task: it is a deterministic technical UI-transformation. The `classic-to-freedom-migration` skill therefore does **not** use the BA-style Business Plan or Gate P/R — it presents its OWN engine-written migration plan (`node engine/migrate.mjs <manifest> --plan`: Overview / Main scope / Layout / Logic / ⚠ Confirm), and for it the written `plan.md` **is** the deliverable, presented verbatim. That skill's Contract governs its plan format and approval; do not force it into the BA-style Business Plan structure.
 
 
 The required top-level sections of every BA-style Business Plan are, in order:
@@ -20,12 +21,14 @@ The required top-level sections of every BA-style Business Plan are, in order:
 4. Lifecycle and Statuses
 5. Business Logic
 6. UX Expectations
-7. Edge Cases and Exceptions
+7. Analytics
+8. Edge Cases and Exceptions
 
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
+`Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
 
 Required BA-style Business Plan template:
 
@@ -36,7 +39,8 @@ Required BA-style Business Plan template:
 ## 4. Lifecycle and Statuses
 ## 5. Business Logic
 ## 6. UX Expectations
-## 7. Edge Cases and Exceptions
+## 7. Analytics
+## 8. Edge Cases and Exceptions
 ```
 
 ## Format Compliance Rule
@@ -94,6 +98,16 @@ Use full app generation or business-shaped feature work when the request is:
 - asking for a new feature where actors, statuses, object model, validations, or UX still need clarification
 - broad enough that the Business Plan depends on business discovery
 
+Use the branding flow when the request is about visual branding rather than business logic:
+
+- creating or restyling a theme, or matching a brandbook or company site
+- changing the app's brand colors or fonts
+- adding or changing the app's logos, or generating a palette-matched app background
+
+Route branding requests to the `creatio-branding-orchestrator` skill, which owns the flow end to end. Branding produces no Business Plan, so Gate P and Gate R do not apply.
+
+Precedence for hybrid requests: if a request includes any business-logic change (new fields, sections, workflows, data behavior) in addition to branding, the app workflow owns it end to end and Gate P and Gate R still apply. Route to `creatio-branding-orchestrator` only when the request is pure branding (colors, fonts, theme name, logos, background) with no business-logic component; when in doubt, treat it as app work, not branding.
+
 ## Support Mode (Troubleshooting)
 
 Support mode is a policy overlay for end-user troubleshooting and session traceability.
@@ -145,10 +159,11 @@ First-turn latency rule:
 - Optimize for first visible response latency over completeness on the first turn.
 - The first turn should include:
   - a short "What I understood"
-  - the main 3-5 highest-priority business discovery questions when they are needed
+  - the main highest-priority business discovery questions, up to the 10-question ceiling — cover the full critical set in this one batch, since a follow-up batch often does not happen
+  - for a NEW app or a new section, navigation placement and its audience among those questions (see the business-discovery priorities below) — it is a plan-level decision, and the file that documents it is not readable this turn
 - The first discovery questions should appear in that same first user-facing interaction, whether via compact text or structured input.
 - The first turn should not include a draft requirements plan, deep analysis, or internal consistency review.
-- Additional discovery questions should be asked in the next small themed batch.
+- Prefer to cover the full critical set in the first batch (up to the 10-question ceiling); ask a follow-up batch only if something critical genuinely remains, since a second round often does not happen.
 - Read deeper repository context only after the first user-facing clarification turn, unless the user explicitly asks about repository internals or agent design.
 - Do not read large repository files before the first clarification turn (routing + initial discovery batch) is completed for the current request.
 - First-run consent exception: when `get-telemetry-consent` returns `unknown` (a genuine first run), the single-purpose consent prompt is the first visible interaction and precedes the "What I understood" turn — do not merge them. It is a lightweight yes/no, not the repository inspection or large-file reading this rule defers. On every later run consent is already stored, so no prompt appears and `session_started` is emitted silently at workflow start.
@@ -156,8 +171,9 @@ First-turn latency rule:
 Business discovery must follow a Business Analyst style:
 
 - ask only the minimum critical questions
-- keep the discovery set within 3-7 questions
-- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria
+- keep the business discovery set within 10 questions (hard ceiling; still ask only the critical ones and assume the rest; technical questions stay limited to execution blockers)
+- prioritize: business goal, core problem, key users/roles, MVP scope, success criteria, and — for a NEW app or a new section — navigation placement and its audience
+- navigation placement is always critical for a NEW app or a new section, never a "minor implementation question": ask which workplace the section (and its home page, if requested) belongs to and which roles should see it. Ask it from the PROMPT ALONE — resolving where an existing app's sections already live needs a live `SysModuleInWorkplace` read, and the first-turn latency rule above forbids blocking this turn on environment inspection. So offer the generic set here — a new workplace named for the app, `My applications`, or an existing one the developer names — recommending the new named workplace when the request is to scaffold a NEW app, and say the current placement will be read back and confirmed before anything is applied. The read-then-order refinement, including the `My applications` carve-out and what to do when the sections span several workplaces, belongs to requirements gathering (`runbooks/02-requirements-gathering.md`), where environment reads are allowed. It cannot be safely assumed: `create-app` and `create-app-section` both place the section in `My applications`, which is granted to `System administrators` only, so a defaulted answer ships a section ordinary users cannot open. This applies to an added section as much as to a whole new app — the entrypoint trigger covers both, so the first batch must too. Keep it in the FIRST batch; the reference material that explains it (`context/business-checklist.md`) is deliberately not read until after that batch, so this line is the only thing carrying it there.
 - avoid minor implementation questions during approval of the business plan
 - make reasonable assumptions for non-critical gaps and label them explicitly inside `Business Outcome`
 - apply domain expertise when the app category is recognizable; include standard baseline business attributes and behaviors that a domain expert would normally expect unless they are explicitly out of scope
@@ -218,12 +234,13 @@ Execution order:
 
 Agent 2 -> Gate R -> runtime inputs -> Agent 1 -> implement plan with clio MCP tools
 
-**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan. Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
+**After Gate R approval**, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to fetch the available clio MCP tool list and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Do not hardcode tool names — always resolve them from `get-tool-contract` at runtime. Do not start implementation before the developer explicitly confirms the Business Plan.
 
 ## Agent Responsibilities
 
 1. Environment Setup — resolves env name, DataForge availability, and reports them in conversation
 2. Requirements Gathering — presents Business Plan and Technical Implementation Handoff inline in conversation, validates with `runtime/scripts/workflow_validators.py`
+3. App Implementation — post-Gate-R scaffolding via clio MCP: sequential section creation and the transient section-creation failure playbook (`runbooks/03-app-implementation.md`)
 
 Agent 2 is interactive and must not be delegated.
 
@@ -235,14 +252,15 @@ Gate P:
 
 Gate R:
 
+- **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
 - Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after section 7.
+- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`).
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
-- The visible draft must use the 7-section BA-style structure exactly, with no extra top-level sections.
+- The visible draft must use the 8-section BA-style structure exactly, with no extra top-level sections.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
-- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 7-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
+- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 8-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
 - A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
 Gate bypass rule:
@@ -282,7 +300,7 @@ Approval-ready vs delivery-ready rule:
 0. At workflow start, establish telemetry consent and emit `session_started` per `context/product-telemetry.md` (call `get-telemetry-consent`; on a first-run `unknown`, ask once in a single-purpose prompt before discovery). Telemetry is non-blocking — never let it gate the steps below.
 1. Confirm Gate P: understanding summary, assumptions/risks, and natural-language confirmation from the developer. Emit the `pre_plan_*` events as you ask for and receive pre-plan input.
 2. Run Agent 2 interactively and produce the BA-style Business Plan with Technical Implementation Handoff. After presenting the complete plan emit `business_plan_generated` (and `business_plan_regenerated` on each later revision). Gate R is satisfied when the developer explicitly confirms the presented Business Plan in the conversation; emit `business_plan_approved` then.
-3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan. Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
+3. After Gate R approval, collect required runtime inputs, run Agent 1 to set up the environment, then call `get-tool-contract` to discover available clio MCP tools and implement the approved Business Plan following `runbooks/03-app-implementation.md` (sequential section scaffolding and the transient section-creation failure playbook). Emit `implementation_started` before the first implementation action and the terminal `implementation_completed` or `implementation_failed` when the run ends. This is the final step.
 
 Optimization rule:
 - Do not repeat the same gate confirmation unnecessarily within the same uninterrupted stage transition.
@@ -306,9 +324,29 @@ Tool surface preference (clio MCP vs CLI):
 - After any MCP or environment failure has been resolved, return to MCP-first on the next call — do not stay on CLI fallback by default.
 - Do not parse CLI text output as a substitute for an MCP tool that returns the same data as structured fields. If parsing CLI output is required, that is a signal to switch back to the MCP equivalent.
 
+clio MCP availability preflight (fail fast on missing prerequisites):
+
+- Before the first clio operation of a task, run a clio MCP **availability preflight** — once, up front; never discover a missing or dead server mid-run. It resolves into three states, and the STOP decision is a **deterministic gate**, not a judgement call the agent can reason its way past:
+  - **State A — native clio MCP tools are surfaced to this host** (the host tool registry exposes the resident clio tools, e.g. `get-tool-contract`): proceed with native tool-calls for resident tools and `clio-run` for long-tail tools; do not touch `runtime/scripts/mcp_client.py`. No script is needed — this state is host-observable. Existing app/schema/page flows are unaffected. **Caveat (diagnosable, not silent):** State A is *assumed* from the host tool registry and is NOT verified by the gate, so a decoy/impersonating Creatio MCP server (e.g. the composable-app OData server, which lacks the clio app-modeling tools) could be mistaken for native clio transport — structurally the same wrong-path risk this gate exists to prevent. Before assuming State A, sanity-check that a genuine **clio resident tool** (`get-tool-contract`) is the one surfaced, and note the assumption so a misclassification is diagnosable after the fact. Precise State-A detection (rejecting a decoy server) is a **deferred hardening follow-up**, tracked separately.
+  - **No native clio tools surfaced** — the host did not wire clio MCP as native tool-calls. This is **not automatically a blocker**: it may simply be a host with no native MCP transport on which clio is perfectly healthy. Do not guess and do not self-bootstrap — run the gate script `runtime/scripts/clio_mcp_preflight.py` and act on its verdict (exit code + sentinel):
+    - **State B — `usable` (exit 0, `PREFLIGHT: clio-mcp-usable`)**: clio is healthy; the host just isn't surfacing native clio tool-calls. clio is **not** the blocker. Handle it in this order — do **not** jump straight to the wrapper:
+      1. **Prefer native transport.** Tell the developer that native clio MCP is the recommended path (it gives host-native await/progress; the wrapper has neither) and ask them to **connect clio as a native MCP server** in their coding agent — a stdio server that runs `clio mcp-server`. In the **user-facing message, include a concrete pointer** to the toolkit install docs (`README.md` / `docs/install.md`) so the developer knows *where* the per-host steps live — telling them *what* without *where* is not actionable. You **may also offer to show the exact config snippet to paste** (showing it is fine — the developer applies it; applying it yourself is the forbidden self-bootstrap). Do **not** hardcode host-specific connection steps in this contract: how an agent registers an MCP server varies by agent and changes over time — the install docs and the host's own MCP configuration are the source of truth. Then retry the preflight.
+         - **Reload caveat — be honest about it.** On most hosts, enabling a native MCP server needs a **session reload**, which starts a fresh context, so the "retry" happens in a **new session**, not this one. Recommend native strongly **at the start of a task**; if the developer is already **mid-task**, say so plainly and note that the fallback wrapper keeps the current session's context — a legitimate reason **for the developer** to opt in now rather than lose in-progress work to a reload. You *surface* this trade-off; you do **not** choose the wrapper on their behalf. Even mid-task, the wrapper still requires the developer's **explicit opt-in** (see the opt-in signal below) — "mid-task" is never a licence for the agent to self-select the wrapper. Do not present "connect native then retry" as a seamless in-session action when it is not.
+      2. **Fallback — only if native MCP cannot be connected right now:** `runtime/scripts/mcp_client.py` is the **sanctioned** degraded path, and only after the developer has seen the connect-native recommendation **and** explicitly opts in (see the opt-in signal below).
+      3. **Presenting the choice — native is listed first and marked recommended.** When you ask the developer how to proceed, the **connect-native-MCP option is the first choice and is labelled the recommended one**; the wrapper fallback comes **after it and is labelled not recommended**. Never list the wrapper as the first or default option, and never frame it as the "proceed now / work autonomously" path that makes connecting native look like extra work — leading with the wrapper (even when native is technically offered second) violates the prefer-native contract. Native is the recommended path even though it costs a session reload. Selecting the explicitly-labelled not-recommended wrapper option in this presented choice counts as the developer's explicit opt-in to the wrapper; a generic "yes" / "continue" outside such a labelled choice does not (see the opt-in signal below).
+    - **State C — `blocked` (exit 3, `BLOCKER: clio-mcp-unavailable`)**: clio could not be resolved, or its MCP server did not respond. STOP and return the gate's **prerequisites blocker** verbatim instead of silently degrading to a slower path. The blocker lists the prerequisites the developer fixes once, up front:
+      - install .NET (the SDK/runtime clio requires),
+      - install clio (`dotnet tool install clio -g`) — or, if it is already installed but not on PATH, add it to PATH or set `CLIO_CMD` instead of reinstalling,
+      - register the target environment (`clio reg-web-app`).
+- When the gate is blocked (State C), do NOT self-bootstrap the environment: **do not install** or download the .NET SDK, do not change PowerShell `ExecutionPolicy`, and do not silently register environments. These are developer-owned prerequisite fixes, not automatic agent actions. (The URL-based auto-register in `Workflow Routing` applies only once clio MCP is usable and a clio operation is running; it is not a license to register environments while the server is down.)
+- **Registered but unresponsive** — if an environment is registered but clio MCP does not respond (server crash, hang, transport error), the gate returns State C: treat it as unavailable, show the prerequisites blocker, and reach for the developer — not the Python wrapper — to fix it. The gate makes ONE bounded probe — the probe's own timeout defaults to 20s, but the watchdog's hard wall-clock ceiling (which also covers clio's cold-start `initialize` handshake) is up to ~55s before a hung server is force-killed and classified blocked; do not retry indefinitely and do not hand-roll a longer wait to force a dead server through.
+- **Opt-in signal (State B only):** the escape hatch is unlocked only by an explicit developer instruction to use the stdio wrapper on this host (for example "use the clio stdio wrapper" / "run clio via mcp_client.py"). A generic "yes" / "continue" / an approved command prefix is **not** opt-in. Before running the wrapper, frame the fallback in **plain language** so the choice is informed — that it is a **slower backup connection**, that it is **not the recommended path**, and that it shows **no progress** so long steps (like building the app) will look frozen for several minutes even though they are still running (the developer will not be able to tell "stuck" from "still working"). Do **not** bury this behind jargon such as "may appear to hang".
+- `runtime/scripts/mcp_client.py` is an **explicit opt-in escape hatch**, not the default degraded path. Offer it, and run it, only in State B after the developer explicitly opts in — never as the automatic response to State C (an unavailable clio MCP server).
+
 clio MCP transport preference (native tool-calls vs stdio wrapper):
 
-- When the host coding agent exposes clio MCP as native tool-calls, invoke those tools directly. Treat `runtime/scripts/mcp_client.py` as the stdio fallback for hosts that do not expose native MCP — not as the default transport.
+- Resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>`. Never wrap a resident tool in `clio-run`. (Canonical rule, mirrored verbatim from clio MCP's `core-rules` guidance.)
+- When the host coding agent exposes clio MCP as native tool-calls, invoke resident tools directly. `runtime/scripts/mcp_client.py` is an **explicit opt-in escape hatch** for hosts with no native MCP transport (see "clio MCP availability preflight" above) — never the automatic/default fallback and never the response to an unavailable server. Neither transport makes a long-tail (non-resident) tool callable by its own name: reach it through `clio-run` regardless of which transport is active.
 - Do not spend a turn reading the wrapper's `--help` or source to reverse-engineer its CLI contract when native tool-calls are available. Resolve tool arguments from `get-tool-contract`, never from the wrapper's argument-parsing behavior.
 - Single clio context: both transports — the native host MCP started from `.mcp.json` and the `mcp_client.py` stdio wrapper — must resolve the same `clio` binary through PATH / `CLIO_CMD`, so they share one clio config and one registered-environments list. Before the first environment resolution, confirm this single context; never let a native call report `environment not found` while the wrapper resolves the same environment (split-brain). If the two transports disagree on a known environment, stop and reconcile the clio resolution before continuing.
 

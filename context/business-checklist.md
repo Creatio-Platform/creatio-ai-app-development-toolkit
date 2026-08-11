@@ -14,10 +14,11 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | 4 | Lifecycle and Statuses | yes |
 | 5 | Business Logic | yes |
 | 6 | UX Expectations | yes |
-| 7 | Edge Cases and Exceptions | yes |
+| 7 | Analytics | yes |
+| 8 | Edge Cases and Exceptions | yes |
 
 The checklist groups below are discovery buckets, not an alternate final document structure.
-The plan body shown for Gate R approval must map the checklist outcome into the canonical 7-section Business Plan above.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 8-section Business Plan above.
 A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
 Section mapping rules:
@@ -25,6 +26,7 @@ Section mapping rules:
 - `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
 - `Roles and Permissions` must include actors, responsibilities, personas, and access posture.
 - `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
+- `Analytics` is mandatory and always proposed by the agent as a domain expert (never generic filler). It contains `### 7.1 Section analytics` — per-section **dashboards** (~2-3 per section unless the developer asks for more), each naming its `dashboard:` title, its `access rights: All Employees` (a static default — dashboards are created visible to everyone; the role a dashboard is for drives its content, not its access), its `scope:`, and its `widgets:` (**at least 5** widgets — a metric band plus charts/lists); and `### 7.2 Workplace analytics` — the app's **single home page** (one `home page:` block with its `scope:` and **at least 10** `widgets:`), which has **no** `access rights:` line (its audience is the workplace it is bound to) and is **not** a set of dashboards. Widgets may draw on any site object (the app's own objects and standard platform objects). The section must be populated, never left empty or `TBD`.
 
 ---
 
@@ -36,7 +38,7 @@ Use a Business Analyst discovery style:
 
 - start by analyzing the request in business terms
 - ask only the minimum critical questions
-- keep discovery within 3-7 questions
+- keep business discovery within 10 questions
 - prioritize: business goal, core problem, key users/roles, scope, success criteria
 - avoid minor implementation questions unless they are true blockers
 - if a gap is non-critical, make an explicit assumption and continue
@@ -84,6 +86,28 @@ If restrictions are not essential, explicitly state:
 
 Do not suggest optional restrictions without a business reason.
 
+Also required, and NOT covered by the sentence above — navigation placement and audience:
+- where the app belongs in the left navigation: a NEW workplace named for the app (recommend this when
+  scaffolding a new app), the default `My applications`, or an existing workplace the developer names
+- when the section is being added to an app that ALREADY exists, read where that app's sections live
+  and recommend that workplace instead — except when it is `My applications`, which
+  must not be recommended: an app sitting there is the very defect this question exists to catch, so
+  recommend a new workplace named for the app and say the current placement is administrators-only. A section can
+  legitimately sit in more than one workplace (`SysModuleInWorkplace` is one row per placement); when
+  the app's sections span several, recommend the one holding most of them and list the others, and
+  ask rather than choose when it is a tie
+- who should see that workplace (which roles)
+
+These are separate questions from record-level access, and the "no specific access restrictions"
+default does NOT answer them. Every app gets a navigation placement whether or not anyone chose one:
+`create-app` puts the section in `My applications`, which is granted to `System administrators` only,
+so silence here ships an app that ordinary users cannot reach. If the developer also asked for a home
+page, ask which workplace it should land on — a home page is only reachable through a workplace.
+
+Ask this in the discovery batch, not at implementation time: it changes the plan, not just the build.
+The mechanics (three tables, data bindings, transfer between environments) belong to clio — see
+`get-guidance name=workplaces`; the checklist only has to secure the developer's decision.
+
 ### Core process and business logic
 
 Required:
@@ -113,7 +137,7 @@ Required:
 - main objects
 - whether the app has one primary record type or several distinct business objects
 - lookup objects for enum-like fields
-- key relationships
+- key relationships — modeled as lookup (foreign-key) columns on the related objects; each 1:M child surfaces as a related list on its parent (there is no separate Relationships subsection)
 - record title / primary display field for each object and lookup
 - standard profile, contact, classification, or operational attributes that a domain expert would normally expect for the core business objects
 
@@ -131,6 +155,7 @@ Default unless critical:
 - form page field groups/layout notes
 - which field is shown as the record title in lists and forms
 - sorting/filtering expectations if important
+- for each related (child) list: its add/edit interaction — default a quick-add mini page + full edit page; inline editing only for simple line-item lists
 
 If the developer omits exact page fields or gives only a partial list, resolve deterministic defaults before handoff:
 - FormPage: keep `Name` as the record title/header when present and include all approved non-inherited business fields from the section object. Required business fields must always be included.
@@ -139,11 +164,7 @@ If the developer omits exact page fields or gives only a partial list, resolve d
 - Exclude inherited audit/system fields from default ListPage columns unless explicitly requested.
 - Exclude long/rich/blob fields from default ListPage columns unless explicitly requested or required.
 
-The BA draft must surface these defaults in the `UX Expectations` section:
-- default list columns
-- default sorting
-- default main filters
-- form field groups
+The BA draft must surface these defaults in the `UX Expectations` section using the section-6 labels defined in `runbooks/02-requirements-gathering.md` (the single source of truth for label names) — at minimum `list columns:` and `list filters:`, the form layout (`form groups:` / `form fields:`), default sort when records are time-based, and, for each related list, its add/edit interaction (`add page:` / `edit page:`, or `add/edit: inline in the list`).
 
 The visible BA draft should render the UX section as a short bullet list, not as a table.
 
@@ -195,12 +216,20 @@ Before presenting the BA draft to the developer, run a pre-analysis pass across 
 
 The pre-analysis must check for:
 - contradictions between business context, process, data model, UX assumptions, and assumptions
+- the SAME concept specified twice in the request in incompatible ways — most often a state modelled
+  both as a boolean and as a multi-value status (e.g. a `Completed` checkbox alongside a
+  `New / In progress / Completed` status). Pick ONE carrier and say which, or ask; never satisfy both
+  by creating both fields, because nothing then keeps them in agreement and every metric, filter, and
+  business rule silently picks a different source of truth
+- a workplace placement or workplace audience that no answer or assumption covers (see
+  "Users, access and ownership")
 - business logic that is not reflected in the data model or cannot be supported by the described UX
 - required fields in business logic that are not marked as required in the data model
 - defaults that do not identify an explicit business default or explicit absence of default
 - sorting, filtering, analytics, or ownership expectations that do not map to explicit fields or business objects
 - lookup usage that is inconsistent across objects or too broad for the stated business scope
 - supporting objects whose required parent links or cross-field constraints are not explicitly captured
+- a 1:M child object that is not surfaced as a `Related list` with a defined add/edit interaction in `## 6. UX Expectations`
 - assumptions that contradict confirmed answers
 - visible BA draft formatting that violates the fixed document contract
 - markdown tables outside the object model section
@@ -233,9 +262,9 @@ If not complete, continue clarification and do not proceed to implementation pla
 
 ## Clarification Strategy
 
-- Ask questions in themed batches, not all at once.
-- Prefer 3-5 decision-driving questions for the initial discovery pass.
-- Keep the full discovery within 3-7 questions unless the request is unusually ambiguous.
+- Group questions logically; if you will realistically ask only once, put the full critical set in that single batch (up to the ceiling) rather than holding questions back for a batch that may never come.
+- Cover the full set of decision-driving questions in the initial discovery pass — up to the 10-question ceiling — since follow-up batches often do not happen.
+- Keep the full business discovery within 10 questions unless the request is unusually ambiguous (technical questions stay limited to execution blockers).
 - Keep each question tied to one checklist gap.
 - If answer is ambiguous, rephrase and request concrete values.
 - Prefer business language; avoid technical implementation details unless required as blockers.

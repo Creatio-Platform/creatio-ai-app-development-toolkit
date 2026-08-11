@@ -20,7 +20,7 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - Packages can depend on other packages via `DependsOn` in `descriptor.json`
 
 **MCP-Orchestrated Runtime**
-- This repo invokes Creatio app generation and mutation through `clio` MCP. Prefer native MCP tool-calls when the host exposes them; `runtime/scripts/mcp_client.py` is the stdio fallback for hosts without native MCP. Both transports must resolve the same `clio` (one config, one registered-environments list) — see `AGENTS.md`, "clio MCP transport preference"
+- This repo invokes Creatio app generation and mutation through `clio` MCP. Resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>`. Never wrap a resident tool in `clio-run`. `runtime/scripts/mcp_client.py` is an explicit opt-in escape hatch for hosts without native MCP — not the default fallback and never the automatic response to an unavailable server (see `AGENTS.md`, "clio MCP availability preflight"); it does not change which tools are resident. Both transports must resolve the same `clio` (one config, one registered-environments list) — see `AGENTS.md`, "clio MCP transport preference"
 - The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
 - The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
 - Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation rather than persisted to repo-local files
@@ -39,6 +39,7 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
 - `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
 - `icon-background` for `create-app-section` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the same 16 palette colors listed under MCP Application Creation above.
+- Create sections sequentially, one at a time. On a transient `create-app-section` failure (DB-write contention), follow the transient section-creation failure playbook in `runbooks/03-app-implementation.md` — check `list-app-sections` for the existing section, wait, then retry once with the same name. Never vary the caption to probe the error and never run `compile-creatio` speculatively during scaffolding.
 
 **Entity Schema Sync (DB-first)**
 - Prefer `sync-schemas` for grouped entity work
@@ -62,7 +63,8 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
 - `create-data-binding-db` persists bindings in DB and installs data immediately
 - `upsert-data-binding-row-db` updates rows only in an already existing binding
-- For initial lookup seeding, prefer keeping the seeding inside the same schema batch; use explicit binding tools only as fallback
+- Lookup/enum values are package data: seed them inline via `sync-schemas`'s row-seeding parameter (name resolved via `get-tool-contract`) when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside the batch — both install immediately and neither needs a compile step
+- Never seed lookup values through runtime OData/DataService calls or raw SQL — those bypass the platform, so the row lands in the table but does not surface as real package data
 
 **Freedom UI (Angular-based)**
 - Modern UI pages are AMD modules
@@ -109,6 +111,27 @@ Creatio is a no-code/low-code platform for process management and CRM where app 
 - `SysModule` registers a section
 - `SysModuleEntity` binds an entity to a section
 - `SysModuleEdit` binds a form page to a section
+
+Registering a section is not the same as making it reachable. What a user actually sees in the left
+navigation is a **workplace**, and that spans three more tables:
+- `SysWorkplace` — the workplace itself (the entry in the navigation switcher). Also carries
+  `HomePageUId`, the workplace's home page.
+- `SysModuleInWorkplace` — one row per section placed in a workplace.
+- `SysAdminUnitInWorkplace` — one row per role that can see the workplace.
+
+Two consequences that decide whether a newly created app is usable:
+- `create-app` places the section in the `My applications` workplace, which is granted to
+  `System administrators` only. Left there, the app is invisible to ordinary users.
+- A **home page** is a page schema (`BaseHomePage`) that only becomes a workplace's landing page once
+  that workplace's `SysWorkplace.HomePageUId` points at it. Creating the page is half the job.
+
+Do not improvise these tables. clio owns the model, the recipes, and the data-binding column sets:
+read `get-guidance name=workplaces` (and `name=home-page` for `HomePageUId`) before any navigation
+write. Both topics ship from the clio knowledge library's `1.13.0` release onward; if the call returns
+an unknown-topic error the installed library is older than that, or inactive: STOP and tell the
+developer, rather than improvising the writes — see `runbooks/03-app-implementation.md`, "Place the
+app in the navigation". Navigation
+changes are cached — the user must log out and back in to see them; a browser refresh is not enough.
 
 ---
 

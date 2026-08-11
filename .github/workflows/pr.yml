@@ -16,12 +16,14 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install pytest
+        # --only-binary :all: → wheels only, so no source-dist setup scripts run (S8541); pinned version (S8544).
+        # Quoted: the unquoted `:all: ` (colon-space) makes YAML parse this as a nested mapping → workflow startup_failure.
+        run: "pip install --only-binary :all: pytest==8.3.4"
       - name: Run tests
         run: pytest tests/
 
@@ -29,9 +31,57 @@ jobs:
     name: Manifest version sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: '20'
       - name: Check manifest sync
         run: node scripts/bump-version.js --check
+
+  vendor-upstream:
+    name: Vendored parser authenticity (upstream npm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '20'
+      # supply-chain AUTHENTICITY anchor (the other half of verify-vendor.mjs): independently fetch the pinned
+      # acorn from the npm registry, verify the tarball against the registry's own dist.integrity, and confirm
+      # the vendored file's SHA-256 equals what npm publishes — so a pin bumped WITHOUT re-vendoring is caught
+      # in the PR, not just tamper-evidenced against a same-commit pin.
+      - name: Anchor vendored parser to upstream npm
+        run: node skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs
+
+  engine-goldens:
+    name: Classic→Freedom engine goldens (${{ matrix.os }})
+    strategy:
+      fail-fast: false   # a failure on one OS must NOT cancel the other — the engine + verify-vendor deliberately normalize CRLF/LF, so a platform-specific red is exactly the signal we need to see
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '20'
+      # supply-chain gate: the vendored acorn parser (the one executable processing untrusted schema-body)
+      # must match its pinned upstream SHA-256 — a swapped/drifted bundle fails the build here.
+      - name: Verify vendored parser integrity
+        run: node skills/classic-to-freedom-migration/engine/verify-vendor.mjs
+      # zero-dependency pure-ESM goldens (live in engine-tests/, outside the shipped skill); import the
+      # runtime engine from skills/…/engine. Each runner exits 1 on any failed check.
+      - name: Run merge goldens
+        if: always()   # run even if the integrity gate failed, so its result is still visible
+        working-directory: engine-tests/classic-to-freedom
+        run: node run.mjs
+      - name: Run mapper goldens
+        if: always()   # run even if the merge goldens failed, so one runner's failure never hides the other's results
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-mapper.mjs
+      # offline unit tests for the hand-rolled infra parsers (ustar reader / integrity / sonar glob matcher) that
+      # otherwise run only inside live-network / real-tree jobs — deterministic, network-free coverage.
+      - name: Run infra-parser goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-infra.mjs

@@ -39,24 +39,29 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Ready templates are reused where possible.
 - [ ] Header is not overloaded.
 - [ ] Important fields fit in the header/profile area.
-- [ ] Long pages are split into tabs, groups, islands, or wizard steps.
+- [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
 - [ ] Field groups have clear names and no unnecessary one-field duplicate-title groups.
-- [ ] No container (group / tab / profile island) holds a single lone field; each holds a logically related set (≥2–3 fields).
+- [ ] No container (group / tab / profile island) holds a single lone data-entry field, and thin 1–2-field groups are avoided; each holds a logically related block (≥3–4 fields as a rule of thumb) — merge or fill stubs rather than scatter tiny groups.
 - [ ] Fields are grouped by business meaning; related fields are adjacent.
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
+- [ ] Every related (1:M child) business object surfaced as a `Related list <name>` in §6 of the plan is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
+- [ ] Each related list has a **working** add affordance. Default: a quick-add **mini page** wired to "+ Add" plus the full record page for editing; **inline / editable-grid add** only for simple line-item lists or when explicitly requested. For a section-less child the add/edit pages are registered so "+ Add" resolves. No related list is read-only, and no add button is wired to an unregistered page.
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
-- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty.
+- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area.
 - [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
 - [ ] One-column/two-column mixes do not break reading flow.
 - [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2).
 - [ ] No empty layout gaps: within each container `layoutConfig.row` runs 1..N with no skipped indices, no oversized `rowSpan`, and group containers use `rows: "auto"`.
 - [ ] Every field's `parentName` is its intended group container (nesting is correct; coordinates are container-local, not global).
 - [ ] ExpansionPanels are full width and stacked vertically — none placed side by side, in two columns, or with a partial `colSpan`.
+- [ ] Read-only details have inline editing turned off on the List (not just the add button hidden), so existing rows can't be edited in place.
 - [ ] Analytic widgets are at the top (top of profile island or first in the tab; a dedicated Analytics tab if many); the profile island holds only small (XS/S) metrics, with icons, not large charts.
 - [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
-- [ ] When editing an existing page, new components match the styles already there (panel style, `labelPosition`, spacing/padding/radius, widget size, column count).
+- [ ] **Style parity — verified with tools, not eyeballed.** For EVERY component you added: open a shipped reference page on the same template, run `get-component-info` on that component type, and diff the concrete props against the native one — container `color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` (never a raw `title`), `labelPosition`, widget size, column count. A screenshot/metadata glance is NOT this check. New/empty page → copy these conventions from a shipped page on the same template. (`toggleType`, `title`-instead-of-`caption`, and island card settings are the props runs most often get wrong here.)
 - [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even.
+- [ ] Reference context or tools (customer summary, connected accounts) use a closable contextual side panel, not inline in the page body or a blocking modal.
+- [ ] Long-form content pages use a full-width reading column + meta/byline row, not the field grid or side islands.
 
 ### Fields and data entry
 
@@ -76,6 +81,12 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Default values, validation, and auto-substitution are configured where helpful.
 - [ ] Checkboxes/logical fields are placed after related fields.
 - [ ] Status/stage/order uses DCM/progress bar where appropriate.
+- [ ] Field guidance uses the right channel — placeholder (format) / tooltip (on-demand) / permanent description line (must-see) — not all three at once.
+- [ ] Empty optional fields show an actionable "Add …" placeholder, not a blank.
+- [ ] Toggles are used for settings/modes, checkboxes for plain record booleans.
+- [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
+- [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
+- [ ] The primary display name is auto-composed from key fields where derivable, and kept editable.
 
 ### Buttons, actions, and dialogs
 
@@ -92,6 +103,14 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Operations over 30 seconds or unknown duration are asynchronous with notification.
 - [ ] Dialogs follow Creatio/mini-page styling and place instructions before controls.
 - [ ] Dialog button labels are consistent and result-oriented.
+- [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M).
+- [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin.
+- [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
+- [ ] Record-level actions acting on a profile/summary island's record sit in that island's footer (flex), not the page header.
+- [ ] Primary actions with close variants use a split button; it still counts as the single primary per context.
+- [ ] Report printing uses the dedicated Print button (auto-builds its reports menu), not a custom button/menu.
+- [ ] A semantic-green primary is used only for launch/activate actions, with the meaning in the label; no ad-hoc button colors.
+- [ ] An operation needing a focused set of parameters gathers them in a modal (only the needed fields, required marked, instructions above) — not a full page.
 
 ### Copy and content
 
@@ -100,6 +119,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Error messages explain what the user can do next.
 - [ ] Admin technical details are not exposed to regular users unless necessary.
 - [ ] User-facing text is in one language or intentionally localized.
+- [ ] Non-obvious sections/tabs have a one-line localizable intro under the heading (skipped where self-explanatory).
 
 ### Typography and visual style
 
@@ -107,6 +127,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Font sizes/styles are minimized and based on Headline 1-4, Body, Caption.
 - [ ] Colors are minimized and based on predefined palette.
 - [ ] Color is not the only indication of status or meaning.
+- [ ] Status colors follow one semantic scale (green = on-track/ready/done, amber = draft/paused, red = stopped/overdue/lost, gray = inactive); same state = same color everywhere, always paired with a text label and adequate contrast.
 - [ ] Custom global styles/themes have a clear business reason.
 - [ ] Components keep the default Creatio appearance — no global restyle (e.g. `crt.Input` switched to `appearance: "outline"`, custom borders/fonts) that makes the form look different from the base product; no restyle done just to satisfy another rule (e.g. label position).
 
