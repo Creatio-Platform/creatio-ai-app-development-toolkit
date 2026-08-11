@@ -14,10 +14,11 @@ Every BA-style Business Plan presented to the developer **MUST** contain the fol
 | 4 | Lifecycle and Statuses | yes |
 | 5 | Business Logic | yes |
 | 6 | UX Expectations | yes |
-| 7 | Edge Cases and Exceptions | yes |
+| 7 | Analytics | yes |
+| 8 | Edge Cases and Exceptions | yes |
 
 The checklist groups below are discovery buckets, not an alternate final document structure.
-The plan body shown for Gate R approval must map the checklist outcome into the canonical 7-section Business Plan above.
+The plan body shown for Gate R approval must map the checklist outcome into the canonical 8-section Business Plan above.
 A wrapper such as `<proposed_plan>` is allowed by the host UI, but the body inside it must match the table above.
 
 Section mapping rules:
@@ -25,6 +26,7 @@ Section mapping rules:
 - `Business Outcome` must include business goal, core problem, success signal, and explicit assumptions.
 - `Roles and Permissions` must include actors, responsibilities, personas, and access posture.
 - `Business Logic` may carry the concrete "done" checks when they materially shape the MVP behavior.
+- `Analytics` is mandatory and always proposed by the agent as a domain expert (never generic filler). It contains `### 7.1 Section analytics` — per-section **dashboards** (~2-3 per section unless the developer asks for more), each naming its `dashboard:` title, its `access rights: All Employees` (a static default — dashboards are created visible to everyone; the role a dashboard is for drives its content, not its access), its `scope:`, and its `widgets:` (**at least 5** widgets — a metric band plus charts/lists); and `### 7.2 Workplace analytics` — the app's **single home page** (one `home page:` block with its `scope:` and **at least 10** `widgets:`), which has **no** `access rights:` line (its audience is the workplace it is bound to) and is **not** a set of dashboards. Widgets may draw on any site object (the app's own objects and standard platform objects). The section must be populated, never left empty or `TBD`.
 
 ---
 

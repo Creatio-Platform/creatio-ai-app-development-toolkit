@@ -105,7 +105,7 @@ The Business Plan is the business-facing requirements document.
 
 The Business Plan is presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
 
-Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 7-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
+Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 8-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
 
 Required sections:
 
@@ -116,7 +116,8 @@ Required sections:
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
-- `## 7. Edge Cases and Exceptions`
+- `## 7. Analytics`
+- `## 8. Edge Cases and Exceptions`
 
 ## Document Rendering Contract
 
@@ -133,11 +134,11 @@ Do not expose any of the following in the Business Plan:
 - implementation choreography
 
 Use tables only in `## 3. Object Model` unless the developer explicitly asks for a tabular business matrix elsewhere.
-Sections `1`, `2`, `4`, `5`, `6`, and `7` must use short paragraphs and bullets, not tables.
+Sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` must use short paragraphs and bullets, not tables.
 
 ## Pre-Write Self-Check
 
-Before presenting the Business Plan to the developer, verify the assembled draft contains all seven sections in the exact order:
+Before presenting the Business Plan to the developer, verify the assembled draft contains all eight sections in the exact order:
 
 1. `## 1. Business Outcome`
 2. `## 2. Roles and Permissions`
@@ -145,7 +146,8 @@ Before presenting the Business Plan to the developer, verify the assembled draft
 4. `## 4. Lifecycle and Statuses`
 5. `## 5. Business Logic`
 6. `## 6. UX Expectations`
-7. `## 7. Edge Cases and Exceptions`
+7. `## 7. Analytics`
+8. `## 8. Edge Cases and Exceptions`
 
 If any required section is absent, renamed, or out of order, do not present the draft.
 Regenerate the missing section from conversation context or business discovery before presenting.
@@ -195,7 +197,10 @@ Use this exact visible skeleton for the Business Plan:
 - `## 4. Lifecycle and Statuses`
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
-- `## 7. Edge Cases and Exceptions`
+- `## 7. Analytics`
+  - `### 7.1 Section analytics` — grouped by section: `#### <Section> section dashboards`, then one dashboard block beneath each
+  - `### 7.2 Workplace analytics` — exactly one `home page:` block (the app's single home page), with widgets and no access-rights line
+- `## 8. Edge Cases and Exceptions`
 
 `## 1. Business Outcome` must include:
 
@@ -296,6 +301,41 @@ Also include when applicable:
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
 
+`## 7. Analytics` is mandatory and the agent ALWAYS proposes it — never wait for the developer to ask. Propose analytics **as a domain expert**: for each role and section, propose exactly the dashboards, metrics, and charts that an experienced practitioner in the app's business domain would expect to see, so the boards are meaningful out of the box rather than generic filler. When the request does not pin a concrete widget set, use domain-aware judgment to propose one (same posture as the domain-baseline rule for the object model). The section must be populated — an empty or `TBD` `## 7. Analytics` fails the draft.
+
+Organize `## 7. Analytics` into two required subsections:
+
+- `### 7.1 Section analytics` — **dashboards** surfaced on a section, immediately useful to the role that works with that section. There may be several per section (different data slices or different roles). Default to 2-3 dashboards per section, each sized to fit roughly one screen; if the developer asks for more, that limit does not apply. **Group the dashboards by section**: under `### 7.1` add one `#### <Section> section dashboards` heading per section that gets analytics (e.g. `#### Appointments section dashboards`), and list that section's dashboard blocks beneath it. The grouping makes it explicit which section each dashboard is added to.
+- `### 7.2 Workplace analytics` — the app's **single home page** (a `BaseHomePage` bound to the app's workplace): app-wide indicators describing how the whole app is working. It is **one page, not a set of dashboards**, so describe **exactly one** `home page:` block. Because it aggregates the whole app, it is richer than a section dashboard — list **at least 10 widgets** (`;`-separated). A home page has **no per-page access rights** — its audience is the workplace it is bound to — so do **not** add an `access rights:` line here.
+
+Describe each **§7.1 dashboard** with these labels (colon included) — the validator checks `dashboard:`, `access rights:`, and `widgets:` verbatim:
+
+- `dashboard:` — the dashboard's business title, e.g. `dashboard: Order pipeline overview`
+- `access rights:` — **who the dashboard is created visible to**. This is a **static default: always `All Employees`** (every generated dashboard is visible to everyone). It is stated per dashboard purely so the developer sees the grant in the plan; write it verbatim as `access rights: All Employees`. The role a dashboard is for drives its **content** (which metrics/charts/slices — see `scope:`/`widgets:`), **not** its access rights.
+- `scope:` — a short, natural human sentence, **in the plan's language**, saying **what the dashboard shows / describes** (the question it answers for the role that uses it). Lead with a verb like *shows* / *describes* — and when the plan is not in English, use that language's equivalent (e.g. English `scope: shows open orders by stage this quarter`; Ukrainian `scope: показує відкриті замовлення за стадіями цього кварталу`). Do not write a bare noun phrase or a machine-style tag.
+- `widgets:` — the widgets in business terms, each as a metric, chart, or list, **`;`-separated**. A §7.1 dashboard must list **at least 5 widgets** — a metric band (a few key metrics) plus charts/lists — not one or two. e.g. `widgets: metric — open orders count; metric — orders won this month; metric — average deal size; chart — orders by stage (bar); chart — orders by owner (bar); list — orders due this week`
+
+**Layout:** render each label on its **own line** as an indented sub-bullet under the `dashboard:` / `home page:` title — do **not** put them inline on one line separated by `·`, `—`, or commas. Each dashboard/home-page block looks like this (the `access rights:` line is mandatory for §7.1 dashboards and sits right under the title):
+
+```
+- dashboard: Top clients
+  - access rights: All Employees
+  - scope: shows which customers visit most often
+  - widgets: metric — total clients; metric — new clients this month; metric — average orders per client; chart — top clients by number of work orders (bar); chart — clients by type (donut); list — clients ranked by visits
+```
+
+The **§7.2 home page** uses a `home page:` block instead — **no** `access rights:` line — like this:
+
+```
+- home page: Agency overview
+  - scope: shows how the whole agency is performing right now
+  - widgets: metric — open vacancies; metric — active candidates; metric — placements this month; metric — average time to fill; metric — revenue this month; chart — hiring funnel (submissions by stage); chart — vacancies opened vs closed per month (column); chart — placements by recruiter (bar); chart — candidates by source (donut); list — vacancies closing this week
+```
+
+In `### 7.1`, each dashboard sits under the `#### <Section> section dashboards` heading of the section whose list page hosts it, so the section binding is unambiguous. Do not list section-analytics dashboards as a flat list without their section grouping.
+
+Widgets may draw on any business object visible on the site — the app's own objects from `## 3. Object Model` and standard platform objects (for example Activity, Contact, Account) — whichever a domain expert would use to answer the dashboard's question. Keep the analytics business-facing: name metrics and charts by what they measure, not by widget schema or platform mechanics.
+
 Before finalizing the BA draft, verify at minimum:
 
 - each required business rule has a visible carrier in the object model, lifecycle/statuses, business logic, UX expectations, or an explicit assumption
@@ -305,8 +345,12 @@ Before finalizing the BA draft, verify at minimum:
 - an `inline` related list states only its `list columns:` plus the `add/edit: inline in the list` note — it must NOT also carry `form fields:`, `form groups:`, `add page:`, or `edit page:` (those duplicate the columns or imply a page that does not exist)
 - each section object and supporting object includes both the required metadata block and its own field table
 - the visible document reads as a business plan, not a validator report or machine contract
-- sections `1`, `2`, `4`, `5`, `6`, and `7` do not contain markdown tables
+- sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` do not contain markdown tables
 - `## 3. Object Model` contains the field tables and lookup bullets required by this contract
+- `## 7. Analytics` is present and populated: it contains both `### 7.1 Section analytics` and `### 7.2 Workplace analytics`, both non-empty
+- `### 7.1` groups its dashboards by section under `#### <Section> section dashboards` headings (never a flat list); every §7.1 dashboard block carries a non-empty `dashboard:` title, an `access rights: All Employees` line, a non-empty `scope:` line, and a `widgets:` line with **at least 5** `;`-separated widgets — the validator rejects a missing/value-less line, fewer than 5 widgets, and an `access rights:` value other than `All Employees`
+- every §7.1 dashboard states `access rights: All Employees` (the static default — dashboards are created visible to everyone; the validator pins this exact value). The role a dashboard is for shapes its **content** (`scope:`/`widgets:`), not its access
+- `### 7.2` describes exactly one `home page:` block with a non-empty `scope:` line and a `widgets:` line of **at least 10** `;`-separated widgets, and has **no** `dashboard:` blocks and **no** `access rights:` line (a home page is one page whose audience is the workplace, not a per-page grant) — the validator rejects `dashboard:`/`access rights:` under §7.2
 
 Before presenting the draft for approval, save the Business Plan to a temp file and validate using the platform-appropriate command:
 
@@ -378,7 +422,7 @@ The BA draft is incomplete if any of the following is true:
 
 ## Technical Implementation Handoff
 
-Present the Technical Implementation Handoff immediately after the 7-section Business Plan in the same message, before asking for approval.
+Present the Technical Implementation Handoff immediately after the 8-section Business Plan in the same message, before asking for approval.
 
 This block is **not** a BA section. It is not numbered and not subject to BA format rules.
 It is consumed by the implementation stage that runs after Gate R approval with clio MCP tools.
