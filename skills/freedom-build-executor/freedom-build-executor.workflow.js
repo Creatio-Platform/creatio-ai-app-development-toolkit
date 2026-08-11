@@ -529,6 +529,11 @@ const REFS_SCHEMA = {
   properties: {
     written: { type: 'boolean' },
     files: { type: 'array', items: { type: 'string' } },
+    // The page keys that ACTUALLY have a slice file. Not every published key does: a reused or unresolved child was
+    // never folded, so it has no design spec of its own and the engine refuses to render one. The build prompt only
+    // claims a slice for the keys in here — telling a unit its slice is ready when the file does not exist, while
+    // forbidding the fallback, would leave it with no spec at all.
+    slices: { type: 'array', items: { type: 'string' } },
     notes: { type: 'string' },
   },
 }
@@ -1415,7 +1420,10 @@ The plan targets the package \`${unit.package}\`, and the stand does not have it
       : ' No Freedom schema is recorded for this key yet, so nothing downstream can fetch it. Resolving it is part of your job, and it has a WRITTEN PROCEDURE — read "Resolving a page key to an already-existing Freedom schema" in the per-page recipe named below and follow it (`list-pages` by package or app code, matched on `schema-name` / `packageName` / `parentSchemaName`, with an explicit answer for both no match and several matches). Do not guess a schema name.'
     kindBlock = `YOUR UNIT is the page \`${unit.key}\`.${schemaNote} ${REF_BLOCK}
 
-YOUR PAGE'S SLICE IS ALREADY CUT — read it, do not go looking: \`${specFile(unit.key)}\` (this page's design spec plus the plan's \`Adjustments\` list in full). Do NOT grep \`${input.planFile}\` for your block: the slice is the same content, and the plan is hundreds of kilobytes of other pages. Your checklist rows for this page alone: \`${cliChecklistPage(unit.key)}\`.
+${sliceKeys.has(unit.key)
+      ? `YOUR PAGE'S SLICE IS ALREADY CUT — read it, do not go looking: \`${specFile(unit.key)}\` (this page's design spec plus the plan's \`Adjustments\` list in full). Do NOT grep \`${input.planFile}\` for your block: the slice is the same content, and the plan is hundreds of kilobytes of other pages.`
+      : `THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected: this page was not folded — it reuses an existing Freedom page, or its Classic source was never resolved — so the engine has no design spec of its own to render for it. Work from its ROW in the approved plan (\`${input.planFile}\`) and from the checklist rows below. Do not treat the missing file as a defect and do not invent a spec.`}
+Your checklist rows for this page alone: \`${cliChecklistPage(unit.key)}\`.
 
 SHARED DOCUMENTATION IS ALREADY CACHED for this run in \`${REFS_DIR}\` — read the file instead of re-fetching: \`contracts.md\` (the tool contracts a page build uses), \`components.md\` (\`get-component-info\` per component type, for THIS environment), \`guidance-<topic>.md\` per clio guidance topic, and \`${REFS_INDEX}\` listing them. This is a SHORTCUT, not a restriction: if you need a topic, contract or component that is not in there, call the tool as usual.
 
@@ -1726,6 +1734,9 @@ const REFS_CONTRACTS = ['create-page', 'update-page', 'get-page', 'list-pages', 
 const REFS_COMPONENTS = ['crt.ComboBox', 'crt.Input', 'crt.NumberInput', 'crt.DateTimePicker', 'crt.Checkbox',
   'crt.GridContainer', 'crt.FlexContainer', 'crt.Label']
 
+// The page keys that really have a slice on disk. A unit not in here is told so, rather than sent to a file that
+// does not exist with the plan fallback closed off.
+const sliceKeys = new Set()
 async function refsStep() {
   phase('Refs')
   const planned = [...new Set(state.componentTypes || [])]
@@ -1737,7 +1748,9 @@ async function refsStep() {
 ${RULES}
 ${READ_ONLY_RULE}
 
-FIRST: if \`${REFS_INDEX}\` already exists, this step is DONE — return \`{ "written": false, "notes": "already cached" }\` and stop. Do not refresh it.
+FIRST, DECIDE WHETHER THE CACHE IS STILL VALID. Read \`${REFS_INDEX}\`. It is REUSABLE only if it exists AND records BOTH \`planVersion: ${state.planVersion || '(none published)'}\` and \`environment: ${input.environment}\`. If so this step is DONE — return \`{ "written": false, "slices": [<every spec-*.md the index lists>], "notes": "already cached" }\` and stop.
+
+If the index is missing, or records a DIFFERENT plan version or a different environment, or does not record them at all, REBUILD EVERYTHING below — delete the stale files first, do not merge into them. Both mismatches are silent-wrong, not merely stale: a new plan version means the per-page slices and the \`Adjustments\` list belong to a plan the user did not approve, and those corrections live outside the generated tables by design, so nothing downstream would catch it; a different environment means the component documentation describes another stand.
 
 Otherwise create \`${REFS_DIR}\` and write:
 
@@ -1746,9 +1759,9 @@ Otherwise create \`${REFS_DIR}\` and write:
 3. \`${REFS_DIR}/components.md\` — \`get-component-info\` for each of: ${components.join(', ')} (environment \`${input.environment}\`). Head the file with the environment name: this cache is STAND-SPECIFIC and a later run on another stand must not trust it.
 4. THE PER-PAGE SLICES. For each published page key, run the engine and let it write the file — do not assemble one by hand:
 ${keys.map((k) => `   - \`${cliSpec(k)}\``).join('\n') || '   - (no page keys published)'}
-   A key the engine refuses (a reused or unresolved page has no spec of its own) is recorded in \`notes\`; that is expected for reuse units, not an error.
+   A key the engine refuses (a reused or unresolved page has no spec of its own) is EXPECTED, not an error — record it in \`notes\`. Return \`slices\` = every page key that now HAS a slice file, and only those.
 5. APPEND THE PLAN'S \`Adjustments\` LIST to EVERY slice file, verbatim and whole, under a \`## Adjustments (from the approved plan)\` heading. Read it from \`${input.planFile}\` — it is the section at the very END of the plan. These are the corrections the USER agreed to at approval time and they are not in the generated tables by design, so a slice without them is a slice that silently drops what was agreed. Do not filter it per page: copy the whole list into each.
-6. \`${REFS_INDEX}\` — one line per file you wrote, and the environment name. Its existence is what makes this step skip next time, so write it LAST.
+6. \`${REFS_INDEX}\` — one line per file you wrote, plus \`planVersion: ${state.planVersion || '(none published)'}\` and \`environment: ${input.environment}\` as their own lines. Those two are what a later run compares against before reusing any of this, so write them exactly. Write this file LAST: it is the marker that the rest is complete, and an index written before the files it lists would let a half-built cache read as a finished one.
 
 Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     { agentType: 'general-purpose', schema: REFS_SCHEMA, phase: 'Refs', label: 'refs:cache' },
@@ -1757,9 +1770,12 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     log('the REFS step returned nothing — build agents will fetch their own guidance and contracts, which is slower but correct')
     return
   }
+  for (const k of res.slices || []) sliceKeys.add(k)
   log(res.written === false
-    ? `refs: already cached in ${REFS_DIR}`
-    : `refs: ${(res.files || []).length} file(s) cached in ${REFS_DIR}${(res.notes || '') ? ' — ' + res.notes : ''}`)
+    ? `refs: reusing the cache in ${REFS_DIR} (same plan version and environment) — ${sliceKeys.size} page slice(s)`
+    : `refs: ${(res.files || []).length} file(s) cached in ${REFS_DIR}, ${sliceKeys.size} page slice(s)${(res.notes || '') ? ' — ' + res.notes : ''}`)
+  const noSlice = (state.unitKeys || []).filter((k) => k !== 'app' && !sliceKeys.has(k))
+  if (noSlice.length) log(`no spec slice for ${noSlice.length} unit(s) — they were not folded (reused or unresolved pages have no spec of their own): ${noSlice.join(', ')}`)
 }
 await refsStep()
 

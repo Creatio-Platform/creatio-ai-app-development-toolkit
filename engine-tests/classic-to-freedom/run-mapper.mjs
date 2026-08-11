@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport, subPageNodes} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -4997,6 +4997,20 @@ check("digest: a COMPLETE page drops its openRows and keeps its counters — nob
   () => { const done = Object.entries(dgDigest.pages).filter(([, p]) => p.complete === true);
     return done.length >= 1 && done.every(([, p]) => !('openRows' in p) && typeof p.missing === 'number'); },
   () => JSON.stringify(dgDigest.pages));
+
+// A GRANDCHILD is a published, scheduled build unit — `--units` recurses. The slice lookup did NOT: it scanned only
+// the immediate childPages/typedPages/miniPage, so every page below depth 1 was a unit whose spec the CLI reported
+// as non-existent, while the build prompt told that unit its slice was ready and closed off the plan fallback.
+// Verified against the walk that publishes the keys, so the two cannot answer differently about the same tree.
+{
+  const deep = { ...m12Run, childPages: [{ pageKey: "child:P", pageRows: [{}], spec: "PARENT SPEC",
+    childPages: [{ pageKey: "child:GC", pageRows: [{}], spec: "GRANDCHILD SPEC" }] }] };
+  const walked = subPageNodes(deep).map((n) => n.pageKey);
+  check("--spec --page: the slice lookup walks the tree RECURSIVELY — a grandchild is reachable, exactly as `--units` publishes it",
+    () => (walked.includes("child:P") && walked.includes("child:GC")), () => JSON.stringify(walked));
+  check("--spec --page: the walk dedupes, so a page reachable twice is one node (the same rule the published key set follows)",
+    () => (walked.filter((k) => k === "child:GC").length === 1), () => JSON.stringify(walked));
+}
 
 const pgGroups = checklistGroups(m12Run, m12Opts);
 check("--page: scopeGroups filters on the RAW pageKey the groups already carry, never on the rendered title",

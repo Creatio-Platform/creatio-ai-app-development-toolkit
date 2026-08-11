@@ -1502,7 +1502,11 @@ function parentEdge(result) {
   walk(result, "main");
   return parents;
 }
-function subPageNodes(result, seen = new Set(), out = []) {
+// Exported so `--spec --page <key>` resolves a key through the SAME walk that publishes it. It used to look only
+// at `result.childPages` / `typedPages` / `miniPage` — one level — while this walk recurses, so every GRANDCHILD
+// was a published, scheduled build unit whose slice the CLI said did not exist. Two traversals, two answers about
+// the same tree; now there is one.
+export function subPageNodes(result, seen = new Set(), out = []) {
   for (const c of result.childPages || []) if (takeSubPage(c, seen, out)) subPageNodes(c, seen, out);
   for (const t of result.typedPages || []) takeSubPage(t, seen, out);
   takeSubPage(result.miniPage, seen, out);

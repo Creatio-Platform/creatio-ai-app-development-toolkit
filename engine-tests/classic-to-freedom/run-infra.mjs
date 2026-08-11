@@ -371,10 +371,19 @@ check("workflow: the built payload records the page OBJECT — without it the ga
 // --- ENG-94859 the per-run REFS cache, the page slice and the split worklog. Measured on a real run: 40% of all
 // tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
 // migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
-check("workflow: the REFS step is its OWN phase, gated on the index file, and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
+check("workflow: the REFS step is its OWN phase and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
   /phase\('Refs'\)/.test(wfSrc) && /await refsStep\(\)/.test(wfSrc)
-    && /if \\`\$\{REFS_INDEX\}\\` already exists, this step is DONE/.test(wfSrc)
+    && /Read \\`\$\{REFS_INDEX\}\\`\. It is REUSABLE only if/.test(wfSrc)
     && wfSrc.indexOf("await refsStep()") < wfSrc.indexOf("while (true) {"));
+check("workflow: the refs cache is invalidated on a DIFFERENT plan version or environment, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch",
+  /records BOTH \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
+    && /REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc)
+    && /planVersion: \$\{state\.planVersion/.test(wfSrc));
+check("workflow: the index is written LAST, so a half-built cache cannot read as a finished one",
+  /Write this file LAST/.test(wfSrc));
+check("workflow: a unit with NO slice is told so — a reused or unresolved page has no spec of its own, and claiming one while closing off the plan fallback would leave it with nothing",
+  /sliceKeys\.has\(unit\.key\)/.test(wfSrc) && /THERE IS NO SLICE FILE FOR THIS UNIT, and that is expected/.test(wfSrc)
+    && /Do not treat the missing file as a defect/.test(wfSrc));
 check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
   /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
 check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",

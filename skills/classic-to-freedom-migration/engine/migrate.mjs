@@ -59,7 +59,7 @@ import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom, STANDARD_CLASSIC_METHODS } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp } from "./designspec.mjs";
+  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp, subPageNodes } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -1520,7 +1520,10 @@ function pageScopedChecklist(result, manifest, pageKey, fail) {
 }
 function pageScopedSpec(result, pageKey, fail) {
   if (!pageKey || pageKey === "main") return result.designSpec;
-  const nodes = [...(result.childPages || []), ...(result.typedPages || []), ...(result.miniPage ? [result.miniPage] : [])];
+  // The SAME recursive, deduped walk `--units` publishes from. A one-level scan here meant every grandchild was a
+  // scheduled build unit whose slice the CLI reported as non-existent — and the build prompt tells that unit its
+  // slice is ready and not to go looking in the plan, so it would have built with no spec at all.
+  const nodes = subPageNodes(result);
   const hit = nodes.find((n) => n && (n.pageKey === pageKey || n.pageKeyAlt === pageKey));
   if (!hit) {
     const keys = nodes.map((n) => n?.pageKey).filter(Boolean);
