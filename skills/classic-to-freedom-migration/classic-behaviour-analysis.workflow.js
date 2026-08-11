@@ -485,8 +485,7 @@ log(`coverage after round 1: ${covered.size}/${allKeys.size} row(s) carry a card
 
 phase('Critique')
 
-const critique = await agent(
-  `You are the CRITIQUE phase of a Classic-behaviour analysis run (migration step 5.1). Your job is COMPLETENESS, not plausibility: in this run the expensive failure is a row nobody described, not a card that overreaches.
+const critiquePrompt = `You are the CRITIQUE phase of a Classic-behaviour analysis run (migration step 5.1). Your job is COMPLETENESS, not plausibility: in this run the expensive failure is a row nobody described, not a card that overreaches.
 
 ${RULES}
 
@@ -507,9 +506,27 @@ ANSWER THREE QUESTIONS, each grounded in the report parts (read them — do not 
 2. \`conflicts\` — which key is described by TWO different cards, or which subject (a mixin, a base-layer method) got a card in a part AND in the shared core. This is the failure a per-scope split introduces; a whole-surface run cannot have it.
 3. \`settledElsewhere\` — which refusal or gap recorded by one scope is actually ANSWERED by another scope's findings or by the message register. Name the refusal, the scope that settles it, and how.
 
-Do not rewrite the cards. Report.`,
-  { agentType: 'general-purpose', schema: CRITIQUE_SCHEMA, phase: 'Critique', label: 'critique:coverage' },
-)
+Do not rewrite the cards. Report.`
+
+// Retried like a describe scope: a dead Critique otherwise ends the run with no
+// contradiction check and nothing machine-readable saying so.
+let critique = null
+for (let attempt = 1; attempt <= 2 && !critique; attempt++) {
+  if (attempt > 1) log('critique agent died — retrying once')
+  try {
+    critique = await agent(critiquePrompt, {
+      agentType: 'general-purpose',
+      schema: CRITIQUE_SCHEMA,
+      phase: 'Critique',
+      label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
+    })
+  } catch {
+    // agent() resolves null on a terminal death per the Workflow contract; the catch covers a host
+    // that REJECTS instead — either way a dead Critique must reach the loud log below, not throw past it.
+    critique = null
+  }
+}
+if (!critique) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
 
 // --- One repair round, and only when there is something to repair ----------
 // Scoped to the SCOPES that own the uncovered rows — never to a bare row list,
@@ -596,6 +613,10 @@ return {
   describeAgents: batches.length,
   cardCount: merged?.cardCount ?? null,
   droppedDuplicates: merged?.droppedDuplicates || [],
+  // false = the adversarial pass died even after the retry: conflicts and settledElsewhere below are
+  // unchecked (not verified-empty), and coverage.complete is arithmetic-only — no pass verified that
+  // cited cards actually describe their rows.
+  critiqueRan: !!critique,
   conflicts: critique?.conflicts || [],
   settledElsewhere: critique?.settledElsewhere || [],
   gaps: described.flatMap((r) => r.gaps || []),

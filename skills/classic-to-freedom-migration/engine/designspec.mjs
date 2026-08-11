@@ -937,6 +937,13 @@ function renderPlanBanners(result, opts) {
     `> ⚠ **${rt.wiringOnly.length} \`manifest.behaviourIndex\` key(s) name only a wiring card for a row whose body lives in another schema:** ` +
     rt.wiringOnly.map((k) => "`" + esc(k) + "`").join(", ") +
     ". Add the body's own card as `bodyCard`/`bodyAc` — the behaviour report's attribution table names it (`body <scope>/Cnn`, usually a shared-core card).", "");
+  // A step-5.1 answer addressing ONLY the section scope. Matched in the digest, but applyBehaviourIndex folds
+  // cards into PAGE rows only, so no worklist row cites it — advisory like its siblings, never silent: without
+  // the banner the merge-index → re-run --plan loop reads as complete while the section answer rendered nowhere.
+  if ((rt.sectionOnly || []).length) P.push(
+    `> ⚠ **${rt.sectionOnly.length} \`manifest.behaviourIndex\` key(s) address only the SECTION scope:** ` +
+    rt.sectionOnly.map((k) => "`" + esc(k) + "`").join(", ") +
+    ". The plan's worklist carries page rows only, so these answers render in no table — carry each behaviour (and its card) into the List-page part of the plan by hand, and verify it at the list-page checkpoint.", "");
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const signalsMissing = opts.signalsMissing || [];

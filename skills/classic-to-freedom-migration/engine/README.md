@@ -114,7 +114,9 @@ card, typically in the shared core, says what it does (`bodyCard`/`bodyAc`). Bot
 that names only the wiring card reads as described while the guards are missing. Where that omission is
 mechanically provable — a `mixin:` row or an `externalRef` method carrying a wiring card alone — the plan gets a
 ⚠ banner (`behaviourIndex.wiringOnly`). A key that matches no row anywhere becomes a plan banner rather than a
-silent drop. This is why the reference belongs in the manifest and not in the plan's hand-written `Adjustments`
+silent drop. A key addressing only the SECTION scope gets its own ⚠ banner (`behaviourIndex.sectionOnly`): it is
+matched in the digest, but the worklist carries page rows only, so the answer renders in no table and must be
+carried into the List-page part of the plan by hand. This is why the reference belongs in the manifest and not in the plan's hand-written `Adjustments`
 section: `--plan --out` rewrites the file, so an appended index is lost on every regenerate.
 
 `--out <file>` writes the `--plan`/`--spec` output to a file so the agent presents the file verbatim instead

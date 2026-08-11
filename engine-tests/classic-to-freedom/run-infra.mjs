@@ -397,6 +397,8 @@ check("findings: a key naming no published unit REFUSES the run — nothing sche
 check("--stubs totals carry `members`, and the shortcut needs BOTH counts explicitly zero — `!totals.members` was true for a digest that never had the field, so a surface with message/mixin members skipped its analysis",
   /members: result\.stubIndex\.reduce/.test(mgSrc)
     && /zeroCount\(declaredTotals\.stubs\) && zeroCount\(declaredTotals\.members\)/.test(bhSrc));
+check("--stubs section scope is ROOT-ONLY — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
+  /const sectionChangeSet = !opts\.scopeSchema && sectionSchemas\.length/.test(mgSrc));
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
@@ -853,6 +855,13 @@ check("cba workflow: the verdict is `isComplete` over the run's counts — not a
   /const complete = mergeOk && isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc));
 check("cba workflow: the repair set is built by `repairKeys` off all three lists, so the flagged rows are re-described rather than only reported",
   /const toRepair = repairKeys\(uncoveredKeys, critiqueUncovered, wiringOnly\)/.test(cbaSrc));
+check("cba workflow: a dead Critique is retried once, and a REJECTING host lands in `critique = null` too — either failure path must reach the loud log, not throw past it",
+  /for \(let attempt = 1; attempt <= 2 && !critique; attempt\+\+\)/.test(cbaSrc)
+    && /critique = await agent\(critiquePrompt/.test(cbaSrc)
+    && /catch \{[\s\S]{0,400}?critique = null/.test(cbaSrc));
+check("cba workflow: a Critique that never ran is LOUD and machine-readable — the log says coverage.complete is arithmetic-only, and the result carries `critiqueRan` so the caller sees it without reading logs",
+  /if \(!critique\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
+    && /critiqueRan: !!critique,/.test(cbaSrc));
 check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
   /MIXIN ROWS NAMING ONLY A WIRING CARD/.test(cbaSrc) && /MIXIN ROWS STILL NAMING ONLY A WIRING CARD/.test(cbaSrc)
     && /uncovered: uncoveredKeys, wiringOnly/.test(cbaSrc));

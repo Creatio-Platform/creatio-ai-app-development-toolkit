@@ -4069,6 +4069,41 @@ check("handoff BACK: an undescribed row reads ⚠, not a blank",
 check("handoff BACK: unmatched keys surface as a plan banner",
   /matched no imperative row/.test(hoPlan));
 
+// SECTION scope: the *Section chain's imperative rows (methods, mixins) travel in the digest too — without
+// this scope, list-page behaviour structurally never reaches the step-5.1 analysis.
+const SECTION_BODY = `define("DealSection", [], function() { return {
+  mixins: { orderUtil: "Terrasoft.OrderUtil" },
+  methods: {
+    setOwner: function() { this.set("Owner", 1); },
+    getSectionActions: function() { return this.callParent(arguments); }
+  },
+  diff: []
+}; });`;
+const sectionScopeRun = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }] });
+const secScope = sectionScopeRun.stubIndex[sectionScopeRun.stubIndex.length - 1];
+check("handoff OUT: `manifest.section` yields a section scope, placed LAST (stubIndex[0] stays the record page; nested folds slice(1))",
+  sectionScopeRun.stubIndex[0].role === "main page" && secScope.role === "section"
+    && sectionScopeRun.stubIndex.filter((s) => s.role === "section").length === 1);
+check("handoff OUT: the section scope carries the section's own imperative rows and member rows",
+  secScope.stubs.some((s) => s.method === "setOwner")
+    && secScope.members.some((m) => m.key === "DealSection::mixin:orderUtil"));
+check("handoff OUT: no `manifest.section` → no section scope",
+  !ho.stubIndex.some((s) => s.role === "section"));
+const secNoMeta = runMigration({ ...handoffManifest, section: [{ pkg: "DealPkg", body: SECTION_BODY }] });
+const secNoMetaScope = secNoMeta.stubIndex[secNoMeta.stubIndex.length - 1];
+check("handoff OUT: a section scope NEVER has a null schema — without `planMeta.sectionSchema` the deterministic `Section` label keeps its digest keys distinct from the main page's bare keys",
+  secNoMetaScope.role === "section" && secNoMetaScope.schema === "Section"
+    && secNoMetaScope.members.some((m) => m.key === "Section::mixin:orderUtil"));
+// BACK: a section-only answer is matched (not `unmatched`) but folds into no plan row — it must surface under
+// its own advisory key so "matched" cannot read as "rendered in the plan".
+const secBack = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }],
+  behaviourIndex: { setOwner: { card: "C05", ac: ["AC-1"] } } });
+check("handoff BACK: a section-only behaviourIndex key is NOT `unmatched` and IS reported as `sectionOnly`",
+  !secBack.behaviourIndex.unmatched.includes("setOwner")
+    && secBack.behaviourIndex.sectionOnly.includes("setOwner"));
+check("handoff BACK: a section-only key renders a ⚠ plan banner — matched must not read as rendered",
+  /address only the SECTION scope/.test(renderPlan(secBack, {})));
+
 // TWO cards per row. A member whose behaviour lives in another scope — a `mixin:`, or a method that only wires one
 // in — is described by the owning scope's card (the wiring) AND the body's own card (shared core). Carrying only
 // the first leaves the row citing criteria that say the behaviour MAY happen, while the conditions that gate it
