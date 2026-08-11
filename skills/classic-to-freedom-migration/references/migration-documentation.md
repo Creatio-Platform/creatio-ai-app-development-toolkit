@@ -119,6 +119,13 @@ Append-only. Every entry has a date.
 
 ### worklog.md — session log and evidence
 Append-only, chronological. One entry per working session.
+
+> **A delegated build writes it in two stages.** The `freedom-build-executor` skill gives each work unit its own
+> `worklog/<page-key>.md`, and its `Close` phase APPENDS the assembled section to `worklog.md`. The reason is
+> measured, not stylistic: to append to one shared log an agent first reads it, which cost 37 reads of a growing
+> file on a single 20-page run. `worklog.md` stays the document this standard requires and the one a human reads;
+> `worklog/` is the per-unit audit trail it is built from, and it is kept, not cleaned up. A single-session
+> hand-run migration needs no folder — one file, one entry, as above.
 - date, scope of the session, actions taken, tools/operations used
 - runtime read-back evidence (see Definition Of Done)
 - which roadmap tasks changed status

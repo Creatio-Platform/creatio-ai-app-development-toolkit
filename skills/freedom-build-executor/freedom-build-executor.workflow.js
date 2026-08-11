@@ -4,6 +4,7 @@ export const meta = {
     'Build an APPROVED Classic→Freedom migration plan on a live stand until the engine gate is green. Reconcile reads the queue file and runs `--units` + `--verify --verify-json` to learn what the stand already has, Preflight resolves the ⚠ worklist in parallel (read-only), Build runs SEQUENTIALLY leaf-first with one fresh-context agent per page, a SEPARATE read-only verifier assembles `--built` from get-page, a THIRD agent writes only `judge`, and repair rounds run until every unit closes or is parked. Every verdict is arithmetic over the engine\'s own numbers, never an agent\'s assertion.',
   phases: [
     { title: 'Reconcile', detail: 'one read-only agent: queue file + `--units` + a get-page sweep + `--verify --verify-json` — the baseline, and the round counters, written BEFORE the round runs' },
+    { title: 'Refs', detail: 'one read-only agent, once per run: caches the guidance/contracts/component docs every fresh-context builder would refetch, and writes the per-page spec slice' },
     { title: 'Preflight', detail: 'parallel read-only agents: resolve the ⚠ Confirm worklist into evidence records (no stand writes)' },
     { title: 'Build', detail: 'SEQUENTIAL — one agent per page unit, leaf-first, fresh context; the stand is a shared mutable resource' },
     { title: 'Verify', detail: 'one read-only agent: get-page every built key → `pages` / `reachability` / `evidence` in the built file' },
@@ -187,11 +188,32 @@ const VERIFY_TABLE = `${input.outDir}/verify.md`
 // The machine-readable verdict (`--verify-json`). The table is the HUMAN report and stays the run's
 // closing artifact; this file is what the scheduling arithmetic reads.
 const VERIFY_JSON = `${input.outDir}/verify.json`
+// The SCHEDULING DIGEST — the same verdict shape with the open rows of already-complete pages dropped. This is the
+// file Reconcile transcribes into its return, and it exists because a workflow script has no filesystem: the ONLY
+// route from a file into this script's arithmetic is an agent retyping it into a tool call. On a real 20-page run
+// the full verdict was 102 KB and its Reconcile spent 41 minutes, 19 of 40 shell commands slicing that JSON and
+// three attempts at its structured answer. `verify.json` is still written, unchanged, for audit and the table.
+const VERIFY_DIGEST = `${input.outDir}/verify-digest.json`
+// SHARED KNOWLEDGE, fetched ONCE per run instead of by every fresh-context agent. Measured on that run: tool and
+// component documentation was 40% of everything the build agents consumed (1.83 MB over 118 calls), the same
+// guidance topics and the same six component types over and over, because a fresh context by design starts blank.
+// Files, handed as PATHS — never pasted into a prompt: 5 contracts inlined into 15 build prompts is 1.16 MB, where
+// fetching them on demand cost 0.64 MB. The cache is a SHORTCUT, never a restriction: an agent that needs something
+// not in here still calls the tool.
+const REFS_DIR = `${input.outDir}/refs`
+const REFS_INDEX = `${REFS_DIR}/index.md`
+const specFile = (key) => `${REFS_DIR}/spec-${key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')}.md`
+// One worklog FILE per unit, so a builder writes its own and reads nobody else's. The single append-only file was
+// read 37 times in one run for one reason: to append to it you first read it. `worklog.md` is still the human
+// artifact the documentation standard requires — the Close phase assembles it from these.
+const worklogFile = (key) => `${input.outDir}/worklog/${key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')}.md`
 // One place builds every engine command line, so the resolved path and the manifest are never retyped.
 const cli = (flags) => `node ${ENGINE} ${input.manifest} ${flags}`
 const CLI_UNITS = cli('--units')
 const CLI_CHECKLIST = cli('--checklist')
-const CLI_VERIFY = cli(`--verify --built ${BUILT_FILE} --out ${VERIFY_TABLE} --verify-json ${VERIFY_JSON}`)
+const CLI_VERIFY = cli(`--verify --built ${BUILT_FILE} --out ${VERIFY_TABLE} --verify-json ${VERIFY_JSON} --verify-digest ${VERIFY_DIGEST}`)
+const cliSpec = (key) => cli(`--spec --page ${key} --out ${specFile(key)}`)
+const cliChecklistPage = (key) => cli(`--checklist --page ${key}`)
 
 // ---------------------------------------------------------------------------
 // Schemas. Structured output everywhere a later phase or this script COMPUTES on
@@ -292,6 +314,9 @@ const RECONCILE_SCHEMA = {
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
+    // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
+    // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
+    componentTypes: { type: 'array', items: { type: 'string' } },
     // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
     // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
     // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
@@ -498,6 +523,15 @@ const BUILD_SCHEMA_APP = {
   },
 }
 
+const REFS_SCHEMA = {
+  type: 'object',
+  required: ['written'],
+  properties: {
+    written: { type: 'boolean' },
+    files: { type: 'array', items: { type: 'string' } },
+    notes: { type: 'string' },
+  },
+}
 const VERIFIER_SCHEMA = {
   type: 'object',
   required: ['pagesWritten', 'builtFile'],
@@ -963,7 +997,7 @@ DO SIX THINGS, in order:
 
 1. FIND THE APPROVAL. Read decisions.md in the migration folder — the migration skill's documentation standard requires it at BOTH scopes precisely so this entry has one home, and a single-section folder may hold nothing else in it; fall back to worklog.md only for a folder written before that rule — and locate the entry recording that the plan was approved — plan VERSION, date, who. Return \`approval\`, with the entry quoted verbatim and \`approval.version\` the version string the entry names. Report what you find; do NOT create an approval, do NOT infer one from the plan's existence, and do NOT treat "the user asked for a build" as approval. If there is no entry, return \`approval.found: false\` — this run then stops before touching the stand, which is the correct outcome. Do NOT go looking for a version inside ${input.planFile}: the plan file is ENGINE-WRITTEN and is presented verbatim, so its version is whatever \`--plan\` printed into it, and step 2 reads that same value from the engine in machine-readable form.
 
-2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
+2. RUN \`--units\`: \`${CLI_UNITS}\`. Return \`planVersion\` — \`--units.planVersion\`, VERBATIM. That is the engine's own deterministic version of THIS plan (a hash over the manifest inputs that define it: same manifest ⇒ same string, changed planMeta or schema ⇒ a different one), and it is the string step 1's approval entry is compared against. It is also exactly the string \`--plan\` printed into the plan file as \`**Plan version:**\`, so an operator who recorded what the plan showed matches by construction. Return \`componentTypes\` — the UNION of every \`pages[].componentTypes\` array, deduped (the gated \`crt.*\` types this plan needs; the Refs step caches their documentation once for the whole run). Return \`mainEntity\` — \`pages[]\` for \`main\`, its \`entity\` field, VERBATIM: that is the object the migration is about, the one the app unit binds its section to and the one every built page is gated against. Then return \`unitKeys\` (every \`pages[].key\`, VERBATIM), \`buildOrder\` (verbatim — it is post-order: a page's own sub-pages come before it, \`main\` last), \`reachability\` (each \`{ key, appliesWhen, pages, what, miss }\`), \`preflightItems\` and \`evidenceIds\`. Copy every key and id character for character; this script computes on them, so a reformatted key reads as a unit that does not exist.
 
 2b. ESTABLISH WHETHER THE TARGET PACKAGE EXISTS. Return \`targetPackage\` — \`--units.pages[]\` for \`main\`, its \`targetPackage\` field, VERBATIM (\`null\` if the engine published none). Then find out whether that package is on the stand and return \`packageState\`: \`'exists'\`, \`'absent'\` or \`'unknown'\`. Check with \`list-packages\` filtered on the name AND \`find-app\` — one negative alone is weaker than it looks, since the package name and the application name need not match. **Report \`'unknown'\` when a check failed or was inconclusive; do NOT resolve doubt into either answer.** Both wrong readings are expensive: \`'absent'\` on an existing application means a second \`create-app\` over it, and \`'exists'\` on a missing one is exactly what made a previous run spend 12 agents discovering the same blocker on four units in a row. This is a READ — never create the package here; a build unit owns that.
 
@@ -971,7 +1005,7 @@ DO SIX THINGS, in order:
    - \`pageSchemas\` — \`units["<key>"].schemaName\` for every key that has one. THIS IS THE ONLY RECORD of which Freedom schema a page key names: \`--units.pages[].schema\` is the CLASSIC source schema and is \`null\` for \`main\` and for an unfolded child, so nothing else in the run can turn a key into a page to fetch. A key with no recorded schema is reported, never guessed.
    - \`parkedUnits\` — every entry with \`parked: true\`, as \`{ key, parkedWhy, rounds }\`. A park is terminal: without this a resumed run spends a whole stand-writing round on a unit its predecessor already gave up on.
    - \`proposals\`, \`blocked\`, \`discrepancies\` — whatever the file holds, verbatim.
-   - Also SUPPLY THE PARENT EDGE if you can. \`--units\` does not publish it. Read the approved plan's nested \`### Child page mappings\` and return \`parents\` — one entry per unit key, its PARENT's key, or \`null\` for a root-level page. Return an entry for EVERY key or none at all: a partial map is worse than none, because the park arithmetic would then treat unmapped units as roots. If the nesting does not make it derivable, omit \`parents\` entirely and this run will say its branch-independence is approximated.
+   - \`parents\` — the parent edge, now PUBLISHED by \`--units\` as \`parents\`: copy it verbatim. Do NOT reconstruct it by reading the plan's nested \`### Child page mappings\` — that was recovering a machine fact from prose the same engine printed, and a partial parse made the park arithmetic treat grandchildren as roots. Only if \`--units\` carries no \`parents\` at all, omit the field; this run then says its branch-independence is approximated.
 
 4. REFRESH THE BUILT FILE AND RUN THE GATE.
    - If \`${BUILT_FILE}\` does not exist, CREATE it as \`{ "pages": {}, "reachability": {}, "evidence": {}, "judge": {} }\` before anything else. That empty skeleton is a VALID payload and makes the gate report every deliverable unverified — which is the truth on a first run. Without the file \`--verify\` dies at exit 1 and this run gets no verdict at all.
@@ -980,7 +1014,7 @@ DO SIX THINGS, in order:
    - MERGE, NEVER REPLACE. Keep every \`evidence\` and \`judge\` entry already in the file, and keep every \`pages\` entry already in the file for a key you did NOT refresh this round — the built file ACCUMULATES, and deleting a settled entry re-opens work that was closed (a page you did not fetch would go from recorded to "nobody looked"). To be explicit about the two directions: a key you DID fetch is overwritten with what get-page just returned; a key you did NOT fetch keeps whatever the file already had, and you still write NOTHING for a key that has never been fetched by anyone. Return \`unjudgedEvidenceIds\` — every id whose \`evidence\` entry is a filed RECORD (an object) and which has no \`judge\` entry. Those are what the judge must still rule on; an unjudged record keeps its page open forever if nobody names it. Also return \`evidenceFiled\` — EVERY id whose \`evidence\` entry is a record object, judged or not — and \`evidenceRejected\` — every id whose \`judge\` entry says \`convincing: false\`. Those two are what stops the ⚠ Confirm fan-out from re-deriving answers that are already on file: without them a resumed run re-resolves all of them and overwrites each record with the second answer.
    - Return \`reachabilityState\` — one entry per APPLICABLE reachability key, and the value is one of exactly three LITERAL STRINGS: \`'true'\` (the file records the wiring confirmed), \`'false'\` (recorded as confirmed absent), \`'unset'\` (the key is not in the file — nobody checked). Strings, not booleans: this script compares against the literal \`'true'\`, and a real boolean reads as "still open" and would send a build agent to redo wiring that is already done. Every applicable key must appear.
    - Run the gate: \`${CLI_VERIFY}\`. \`--out\` writes the human table; \`--verify-json\` writes the machine verdict.
-   - Return \`verify\` = the CONTENTS of ${VERIFY_JSON}, copied verbatim: \`complete\`/\`missing\`/\`unverified\`/\`planGaps\` and \`pages["<key>"] = { complete, missing, unverified, openRows }\`. Do NOT read the numbers off the table, do not re-add them, do not summarise \`openRows\` — its \`deliverable\`/\`status\`/\`evidence\` strings are handed to the next build round verbatim, and a paraphrase there sends an agent to repair something the gate did not say. Also return \`exitCode\` and \`verifyTablePath\`.
+   - Return \`verify\` = the CONTENTS of ${VERIFY_DIGEST}, copied verbatim — the DIGEST, not ${VERIFY_JSON}. Same shape, minus the open rows of pages that are already complete (nothing reads those). ${VERIFY_JSON} is still written and is the audit copy; do not transcribe it, it is several times larger and the difference is rows no one consumes: \`complete\`/\`missing\`/\`unverified\`/\`planGaps\` and \`pages["<key>"] = { complete, missing, unverified, openRows }\`. Do NOT read the numbers off the table, do not re-add them, do not summarise \`openRows\` — its \`deliverable\`/\`status\`/\`evidence\` strings are handed to the next build round verbatim, and a paraphrase there sends an agent to repair something the gate did not say. Also return \`exitCode\` and \`verifyTablePath\`.
 
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
@@ -1381,6 +1415,10 @@ The plan targets the package \`${unit.package}\`, and the stand does not have it
       : ' No Freedom schema is recorded for this key yet, so nothing downstream can fetch it. Resolving it is part of your job, and it has a WRITTEN PROCEDURE — read "Resolving a page key to an already-existing Freedom schema" in the per-page recipe named below and follow it (`list-pages` by package or app code, matched on `schema-name` / `packageName` / `parentSchemaName`, with an explicit answer for both no match and several matches). Do not guess a schema name.'
     kindBlock = `YOUR UNIT is the page \`${unit.key}\`.${schemaNote} ${REF_BLOCK}
 
+YOUR PAGE'S SLICE IS ALREADY CUT — read it, do not go looking: \`${specFile(unit.key)}\` (this page's design spec plus the plan's \`Adjustments\` list in full). Do NOT grep \`${input.planFile}\` for your block: the slice is the same content, and the plan is hundreds of kilobytes of other pages. Your checklist rows for this page alone: \`${cliChecklistPage(unit.key)}\`.
+
+SHARED DOCUMENTATION IS ALREADY CACHED for this run in \`${REFS_DIR}\` — read the file instead of re-fetching: \`contracts.md\` (the tool contracts a page build uses), \`components.md\` (\`get-component-info\` per component type, for THIS environment), \`guidance-<topic>.md\` per clio guidance topic, and \`${REFS_INDEX}\` listing them. This is a SHORTCUT, not a restriction: if you need a topic, contract or component that is not in there, call the tool as usual.
+
 Get your inputs from the engine, not from memory:
 - \`${CLI_UNITS}\` → this page's \`expectedTemplate\`, \`targetPackage\` and \`expect\` (\`fields\`, \`fieldNames\`, \`tabs\`, \`details\`, \`images\`). \`expect.fieldNames\` is load-bearing: the gate matches fields BY ELEMENT NAME. Those names are the bound COLUMN names, with the engine's own \`_2\` / \`_3\` suffixes wherever several Classic items bind the SAME column — so name each element exactly as \`fieldNames\` gives it, including the suffixed variants, instead of picking a nicer name.
 - \`${CLI_CHECKLIST}\` → your acceptance criteria. Every group title for a SUB-page is prefixed with its page key (\`child:Education · Form — Coverage\`); the \`main\` page's groups carry NO prefix, so for \`main\` your rows are exactly the unprefixed groups.
@@ -1401,7 +1439,7 @@ MANDATORY WHILE BUILDING:
 - Invoke the \`creatio-ui-guidelines\` skill BEFORE authoring the page body, and run its review AFTER saving — the review is tool-based: open a SHIPPED reference page on the same template and diff concrete props (\`color\`/\`padding\`/\`borderRadius\`/\`gap\`, panel \`toggleType\`, \`caption\` not raw \`title\`, \`labelPosition\`, column count) with \`get-component-info\` per component you added. A screenshot glance is not the gate.
 - Build the plan EXACTLY: every profile island is its own container, every tab and group exists, and BOTH halves of a two-part component (Approvals = the approval module above the island AND \`crt.ApprovalList\`; DCM = the progress bar in \`MainContainer\` AND the Next steps tab). If you think the plan is wrong, put it in \`proposals\` AND BUILD THE PLAN. Never simplify silently.
 - When you create a page on a non-default template, RE-BIND the object to it and drop the old binding. A page built but not re-bound is an orphan and is not migrated.
-- Render-check the page before reporting it done, and append a worklog entry + update the roadmap as part of closing this unit — not at the end of the run. An interrupted run must not lose the history.
+- Render-check the page before reporting it done, and write YOUR unit's worklog entry to \`${worklogFile(unit.key)}\` (create it; one file per unit) plus the roadmap update, as part of closing this unit — not at the end of the run. An interrupted run must not lose the history. Do NOT read or append to the shared \`worklog.md\`: the Close phase assembles it from these per-unit files, and reading a growing shared log just to append to it cost 37 reads on one run.
 - Touch NO other unit's page. The stand is shared and units run one at a time for that reason.
 
 WHAT YOU DO NOT DO: you do not file the evidence record, you do not write \`--built\`, and you do not run \`--verify\`. A separate read-only agent fetches the stand and files what it finds; a third agent judges. Your \`claimedBuilt\` is a CLAIM and is compared against what get-page actually returns.
@@ -1669,6 +1707,62 @@ if (DRY_RUN) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// REFS — the shared knowledge every build agent would otherwise re-fetch from scratch.
+// Its own step, not part of Preflight: Preflight is skipped entirely once the ⚠ Confirm worklist is answered, which
+// is exactly the resumed run this saves the most on. Gated on the INDEX FILE being absent, which is the whole
+// invalidation story — no versions, no timestamps. Read-only against the stand.
+// ---------------------------------------------------------------------------
+// The guidance topics and tool contracts a page build actually uses. A FIXED list, and deliberately not derived
+// from the plan: these are facts about clio, not about this migration, so the engine has no business publishing
+// them. Taken from what the build agents on a real run actually asked for.
+const REFS_GUIDANCE = ['core-rules', 'routing', 'page-modification', 'page-modification-field-contract',
+  'related-page-binding', 'business-rules', 'business-rule-filters', 'page-schema-resources']
+const REFS_CONTRACTS = ['create-page', 'update-page', 'get-page', 'list-pages', 'get-component-info',
+  'get-entity-schema-properties', 'create-app-section', 'delete-app-section']
+// The field controls every migration uses, whatever the plan says — the engine publishes the GATED types per page
+// (`--units.pages[].componentTypes`), and these are the rest. Kept here for the same reason as the contracts: they
+// are not plan-specific, so they are not the engine's to know.
+const REFS_COMPONENTS = ['crt.ComboBox', 'crt.Input', 'crt.NumberInput', 'crt.DateTimePicker', 'crt.Checkbox',
+  'crt.GridContainer', 'crt.FlexContainer', 'crt.Label']
+
+async function refsStep() {
+  phase('Refs')
+  const planned = [...new Set(state.componentTypes || [])]
+  const components = [...new Set([...REFS_COMPONENTS, ...planned])].sort((a, b) => a.localeCompare(b))
+  const keys = (state.unitKeys || []).filter((k) => k !== 'app')
+  const res = await agent(
+    `You are the REFS step of a Freedom build run. You write a per-run cache of things every build agent would otherwise fetch again from a fresh context. You build NOTHING.
+
+${RULES}
+${READ_ONLY_RULE}
+
+FIRST: if \`${REFS_INDEX}\` already exists, this step is DONE — return \`{ "written": false, "notes": "already cached" }\` and stop. Do not refresh it.
+
+Otherwise create \`${REFS_DIR}\` and write:
+
+1. \`${REFS_DIR}/guidance-<topic>.md\` for each of: ${REFS_GUIDANCE.join(', ')} — the \`get-guidance\` output for that topic, VERBATIM. A topic that does not exist is recorded in \`notes\`, never invented.
+2. \`${REFS_DIR}/contracts.md\` — \`get-tool-contract\` for exactly these tools: ${REFS_CONTRACTS.join(', ')}. Pass the tool names; do NOT call it with no arguments, which dumps the whole catalogue.
+3. \`${REFS_DIR}/components.md\` — \`get-component-info\` for each of: ${components.join(', ')} (environment \`${input.environment}\`). Head the file with the environment name: this cache is STAND-SPECIFIC and a later run on another stand must not trust it.
+4. THE PER-PAGE SLICES. For each published page key, run the engine and let it write the file — do not assemble one by hand:
+${keys.map((k) => `   - \`${cliSpec(k)}\``).join('\n') || '   - (no page keys published)'}
+   A key the engine refuses (a reused or unresolved page has no spec of its own) is recorded in \`notes\`; that is expected for reuse units, not an error.
+5. APPEND THE PLAN'S \`Adjustments\` LIST to EVERY slice file, verbatim and whole, under a \`## Adjustments (from the approved plan)\` heading. Read it from \`${input.planFile}\` — it is the section at the very END of the plan. These are the corrections the USER agreed to at approval time and they are not in the generated tables by design, so a slice without them is a slice that silently drops what was agreed. Do not filter it per page: copy the whole list into each.
+6. \`${REFS_INDEX}\` — one line per file you wrote, and the environment name. Its existence is what makes this step skip next time, so write it LAST.
+
+Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
+    { agentType: 'general-purpose', schema: REFS_SCHEMA, phase: 'Refs', label: 'refs:cache' },
+  )
+  if (!res) {
+    log('the REFS step returned nothing — build agents will fetch their own guidance and contracts, which is slower but correct')
+    return
+  }
+  log(res.written === false
+    ? `refs: already cached in ${REFS_DIR}`
+    : `refs: ${(res.files || []).length} file(s) cached in ${REFS_DIR}${(res.notes || '') ? ' — ' + res.notes : ''}`)
+}
+await refsStep()
+
 let lastVerifier = null
 
 while (true) {
@@ -1821,6 +1915,31 @@ while (true) {
 }
 
 phase('Close')
+
+// THE HUMAN WORKLOG. Builders write one file per unit so none of them has to read a growing shared log to append to
+// it; the documentation standard still requires `worklog.md` as the append-only record of what happened, so it is
+// assembled here, once, from those files. Chronological by the run's own build order, which is the order things
+// actually happened.
+if (round > 0) {
+  const wl = await agent(
+    `You are the CLOSE step of a Freedom build run. You write ONE document and touch nothing else.
+
+${RULES}
+${READ_ONLY_RULE} (The one exception is the file you are asked to write.)
+
+Read every file in \`${input.outDir}/worklog/\` and APPEND their contents to \`${input.outDir}/worklog.md\` as this run's section, in this order (the run's build order — the order they happened): ${(state.buildOrder || []).join(', ') || '(none)'}.
+
+- Head the section with today's date and the surface (\`${SURFACE}\`), matching the file's existing entry style.
+- APPEND. Never rewrite or reorder what \`worklog.md\` already holds — it is the append-only record of every earlier session, and this run is one more entry in it.
+- Copy each per-unit file's content VERBATIM. You are assembling, not summarising: these are the units' own accounts of what they did, and a paraphrase of an account is not the account.
+- Leave the per-unit files in place. They are the audit trail this document is built from.
+- If the folder is missing or empty, write nothing and say so in \`notes\` — that means no unit closed, which is a fact about the run, not a gap to fill in.
+
+Return \`written\` and \`notes\`.`,
+    { agentType: 'general-purpose', schema: REFS_SCHEMA, phase: 'Close', label: 'close:worklog' },
+  )
+  if (!wl?.written) log(`worklog.md was NOT assembled from ${input.outDir}/worklog/ — the per-unit files are still there and hold the history; assemble it by hand or re-run`)
+}
 
 // A park decided after the last Reconcile lives only in this process, and contract rule 7 says
 // everything that matters is in a file — a park is the run's QUESTION to the user, so losing it

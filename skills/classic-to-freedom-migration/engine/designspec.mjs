@@ -1361,6 +1361,11 @@ function buildListItems(pm, section, result, isMain) {
 // unreproducible for the caller that has to supply the evidence under it. Only the RENDERED title is escaped:
 // that is where a stand-derived entity/schema name reaches the Markdown. The main page is NOT prefixed, so the
 // existing single-page tables read exactly as before.
+// ONE page's groups, or all of them when no scope is asked for.
+export function scopeGroups(groups, pageKey) {
+  if (pageKey == null || pageKey === "") return groups;
+  return (groups || []).filter((g) => g.pageKey === pageKey);
+}
 function pageGroup(pageKey, title, rows) {
   return {
     title: pageKey === "main" ? title : `${esc(pageKey)} · ${title}`,
@@ -1471,6 +1476,32 @@ export function unresolvedChildGroups(pageKey, c) {
 // The WALK is over NODES, and the row splice is a projection of it — one traversal, so the key set `--units`
 // publishes and the keys stamped on the spliced rows cannot drift apart (they are the same nodes, in the same
 // order, deduped by the same `pageDedupeId`).
+// THE PARENT EDGE, from the tree the engine itself folded. `--units` did not publish it, so the executor
+// reconstructed it by parsing the nested `### Child page mappings` out of `plan.md` — a machine fact recovered from
+// prose the same engine had printed. When that parse came back partial the park arithmetic degraded to
+// "approximated" and a parked page blocked `main` instead of only its own ancestors.
+//
+// MIRRORS `subPageNodes` deliberately: same order, same first-seen dedupe, so every key that walk publishes gets an
+// entry here and the map is never partial (the executor treats a partial map as worse than none, and rightly —
+// unmapped keys would read as roots).
+function parentEdge(result) {
+  const parents = { main: null };
+  const seen = new Set();
+  function claim(node, parentKey) {
+    const key = node?.pageKey;
+    if (!key || !node.pageRows || seen.has(key)) return false;
+    seen.add(key);
+    parents[key] = parentKey;
+    return true;
+  }
+  function walk(node, parentKey) {
+    for (const c of node.childPages || []) if (claim(c, parentKey)) walk(c, c.pageKey);
+    for (const t of node.typedPages || []) claim(t, parentKey);
+    claim(node.miniPage, parentKey);
+  }
+  walk(result, "main");
+  return parents;
+}
 function subPageNodes(result, seen = new Set(), out = []) {
   for (const c of result.childPages || []) if (takeSubPage(c, seen, out)) subPageNodes(c, seen, out);
   for (const t of result.typedPages || []) takeSubPage(t, seen, out);
@@ -1650,6 +1681,34 @@ function pageExpect(rows) {
 // plan instead — that is prose, and the one thing a migration must never get wrong is which object the page sits
 // on. Omitted (not null) when the merged chain named no entity, matching `expectedTemplate`'s rule: no row to
 // satisfy, so no obligation to publish.
+// THE `crt.*` TYPES THIS PAGE'S GATE WILL LOOK FOR, so the executor can fetch each component's documentation ONCE
+// per run instead of every fresh-context build agent re-fetching the same handful (measured: 18 `get-component-info`
+// calls at 23 KB each, six types repeating). Read off the SAME vks the gate resolves, so the list cannot drift from
+// what a builder is actually judged on.
+//
+// Deliberately the GATED set only. The field controls a page also needs (`crt.ComboBox`, `crt.Input`, …) are not
+// derivable here — the fold keeps a child's rendered spec, not its ChangeSet — but they are also not plan-specific:
+// they are the same small set on every migration, so they belong to the executor's own fixed list. Publishing a
+// half-guessed superset would be worse than publishing exactly what is known.
+function componentTypesOf(rows) {
+  const out = new Set();
+  for (const r of rows || []) {
+    const vk = r.vk;
+    if (!vk) continue;
+    if (vk.type === "feature" && typeof vk.ftype === "string") out.add(vk.ftype);
+    else if (vk.type === "dcm-bar") out.add("crt.EntityStageProgressBar");
+    else if (vk.type === "dcm-next") out.add("crt.NextSteps");
+    else if (vk.type === "card") out.add("crt.Button");
+    else if (vk.type === "image") out.add("crt.ImageInput");
+    // TAB_TYPES carries the LEGACY spelling too, because the gate must accept a page that still reports it. This
+    // list is for FETCHING a component's documentation, so it takes only the spelling a current platform actually
+    // builds (`TAB_TYPES[0]`, the same choice `resolveCountVk` makes for its message) — asking the stand about
+    // `crt.Tab` is a call that cannot succeed.
+    else if (vk.type === "tabs") out.add(TAB_TYPES[0]);
+    else if (vk.type === "details") out.add("crt.DataGrid");
+  }
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
 function pageUnit(key, node, rows) {
   const tpl = vkOfType(rows, "template")?.exp;
   const pkg = vkOfType(rows, "placement")?.exp;
@@ -1660,6 +1719,7 @@ function pageUnit(key, node, rows) {
     ...(ent == null ? {} : { entity: ent }),
     targetPackage: pkg == null ? null : pkg,
     expect: pageExpect(rows),
+    componentTypes: componentTypesOf(rows),
   };
 }
 // The five REACHABILITY keys, each with its applicability decided HERE: `appliesWhen: true` iff this run actually
@@ -1733,13 +1793,18 @@ export function pageUnits(result, opts = {}) {
       .map((r) => ({ id: r.vk.id, pageKey: r.pageKey, kind: r.confirm.kind, item: r.confirm.item, requires: [...r.vk.requires] })),
     evidenceRows: evidence.map((r) => ({ id: r.vk.id, pageKey: r.pageKey, requires: [...r.vk.requires] })),
     buildOrder: [...buildOrderNodes(result, new Set(), []), "main"],
+    parents: parentEdge(result),
   };
 }
 
 // `--checklist` — the grouped Plan-vs-Done skeleton (all rows `☐ pending`), presented AFTER implementing. Not part
 // of `--plan`. The verified version is `--verify` below (SAME structure, Status auto-filled from the built page).
 export function renderChecklist(result, opts = {}) {
-  const groups = checklistGroups(result, opts);
+  // `opts.scopePageKey` scopes the render to ONE page (`--checklist --page <key>`). Filtered on the RAW `pageKey`
+  // every group already carries — never on the rendered title, which passes through `esc` and is prefixed for
+  // sub-pages only. Deliberately NOT called `pageKey`: that name is already taken in these opts — `subPageOpts`
+  // sets it to stamp a sub-page's rows — so reusing it silently changed what got RENDERED instead of filtering it.
+  const groups = scopeGroups(checklistGroups(result, opts), opts.scopePageKey);
   if (!groups.length) return "";
   const L = ["### ✅ Plan-vs-Done checklist", "",
     "> Present this **AFTER implementing** (not part of the approval plan). One row per deliverable / handler / ⚠ Confirm item. Fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) and **Evidence** for EVERY row. A row left `☐ pending` = not verified. **Do not delete rows.** (Prefer `--verify --built <get-page>` — it auto-fills Status from the built page and hard-blocks on any ❌.)"];
@@ -2181,4 +2246,22 @@ export function verifyReport(result, v) {
     planGaps: planGaps(result),
     pages: v.pages,
   };
+}
+
+// THE SCHEDULING DIGEST (`--verify-digest <file>`). SAME SHAPE as `verifyReport`, deliberately — a caller swapping
+// one file for the other changes nothing but size. What it drops is `openRows` on pages that are COMPLETE, because
+// nothing reads them: every consumer of an open row asks about a page it is about to build, park or preview, and
+// all three are open by construction.
+//
+// Why this exists: a workflow script has no filesystem, so the only way these numbers reach it is inside an AGENT's
+// structured return — the agent has to TRANSCRIBE the file into a tool call. Measured on a real 20-page run, the
+// full verdict was 102 KB and its Reconcile agent spent 41 minutes, 19 of its 40 shell commands slicing that JSON,
+// and three attempts at its structured answer. The rows of pages that were already finished were most of the bulk
+// and none of the value. The FULL report stays exactly as it was, for audit and for the human table.
+export function verifyDigest(result, v) {
+  const pages = {};
+  for (const [k, p] of Object.entries(v.pages || {})) {
+    pages[k] = p && p.complete === true ? { complete: true, missing: p.missing, unverified: p.unverified } : p;
+  }
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, planGaps: planGaps(result), pages };
 }

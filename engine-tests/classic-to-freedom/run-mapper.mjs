@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, scopeGroups, verifyReport} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -4973,6 +4973,54 @@ check("ENG-94975 M1: a built page carrying the right COUNT of the right TYPE but
 // expected name present, close the row. (`n` and `names` come from the same `fieldOps` array at the emission site,
 // so `n === names.length` and a fully built page always can reach ✅.)
 const m1Named = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED)));
+/* ---- ENG-94859/94975 THE SCHEDULING DIGEST, --page SLICES, THE PARENT EDGE AND THE COMPONENT LIST. All four exist
+   for one measured reason: a workflow script has no filesystem, so every machine fact reaches it through an AGENT —
+   either transcribed into a structured return or grepped out of a rendered artifact. On a real 20-page run that cost
+   4.5 MB of tool output, of which 40% was documentation re-fetched per fresh-context agent and 35% was reading the
+   plan; Reconcile alone spent 41 minutes, 19 of its 40 shell commands slicing a 102 KB verdict. ---- */
+const dgRun = m12Run, dgOpts = m12Opts;
+const dgFull = renderVerify(dgRun, dgOpts, m12Built(m12Page(M12_NAMED)));
+const dgReport = verifyReport(dgRun, dgFull);
+const dgDigest = verifyDigest(dgRun, dgFull);
+check("digest: SAME shape as the full report — a caller swapping one file for the other must not have to branch",
+  () => (JSON.stringify(Object.keys(dgReport).sort()) === JSON.stringify(Object.keys(dgDigest).sort())
+    && dgDigest.complete === dgReport.complete && dgDigest.missing === dgReport.missing
+    && dgDigest.unverified === dgReport.unverified
+    && JSON.stringify(Object.keys(dgDigest.pages).sort()) === JSON.stringify(Object.keys(dgReport.pages).sort())),
+  () => ({ report: Object.keys(dgReport), digest: Object.keys(dgDigest) }));
+check("digest: an OPEN page keeps its openRows — they are the repair instruction the next build round is handed",
+  () => { const v = renderVerify(dgRun, dgOpts, m12Built(m12Page(M12_NAMED, "UsrXMig")));
+    const d = verifyDigest(dgRun, v);
+    return d.pages.main.complete !== true && Array.isArray(d.pages.main.openRows) && d.pages.main.openRows.length >= 1; },
+  () => JSON.stringify(verifyDigest(dgRun, renderVerify(dgRun, dgOpts, m12Built(m12Page(M12_NAMED, "UsrXMig")))).pages));
+check("digest: a COMPLETE page drops its openRows and keeps its counters — nobody reads the rows of a finished page, and they were most of the 102 KB",
+  () => { const done = Object.entries(dgDigest.pages).filter(([, p]) => p.complete === true);
+    return done.length >= 1 && done.every(([, p]) => !('openRows' in p) && typeof p.missing === 'number'); },
+  () => JSON.stringify(dgDigest.pages));
+
+const pgGroups = checklistGroups(m12Run, m12Opts);
+check("--page: scopeGroups filters on the RAW pageKey the groups already carry, never on the rendered title",
+  () => { const only = scopeGroups(pgGroups, "main"); return only.length >= 1 && only.every((g) => g.pageKey === "main"); });
+check("--page: an unknown key yields NO groups — the caller is told, never handed the whole tree as one page's slice",
+  () => (scopeGroups(pgGroups, "child:Nope").length === 0));
+check("--page: no scope asked for ⇒ every group, unchanged (the full render is not affected)",
+  () => (scopeGroups(pgGroups, undefined).length === pgGroups.length && scopeGroups(pgGroups, "").length === pgGroups.length));
+check("--page: the scope key is `scopePageKey`, NOT `pageKey` — that name already means 'stamp these rows with this page' inside checklistGroups, and reusing it changed what got RENDERED instead of filtering it",
+  () => { const full = renderChecklist(m12Run, m12Opts);
+    const collided = renderChecklist(m12Run, { ...m12Opts, pageKey: "child:Nope" });
+    const scoped = renderChecklist(m12Run, { ...m12Opts, scopePageKey: "child:Nope" });
+    return scoped === "" && collided !== "" && full !== ""; });
+
+const dgUnits = pageUnits(m12Run, m12Opts);
+check("--units: the PARENT EDGE is published, so nobody has to recover it by parsing the plan's prose",
+  () => (dgUnits.parents && dgUnits.parents.main === null
+    && dgUnits.pages.every((p) => Object.prototype.hasOwnProperty.call(dgUnits.parents, p.key))),
+  () => JSON.stringify(dgUnits.parents));
+check("--units: componentTypes lists the GATED crt.* types and uses the CURRENT tab spelling only — fetching documentation for the legacy `crt.Tab` is a call that cannot succeed",
+  () => { const t = dgUnits.pages.flatMap((p) => p.componentTypes || []);
+    return t.every((x) => x.startsWith("crt.")) && !t.includes("crt.Tab"); },
+  () => JSON.stringify(dgUnits.pages.map((p) => ({ k: p.key, t: p.componentTypes }))));
+
 /* ---- ENG-94975 ENTITY BINDING — the migration invariant, and the one that had NO machine check at all. A
    Classic→Freedom migration is a new PRESENTATION of data that already exists: the page must be bound to the SAME
    object, or the customer's records stay behind and nothing was migrated. Measured failure this closes: `create-app`

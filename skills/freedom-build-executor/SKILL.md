@@ -119,6 +119,57 @@ instructions to act on; the untrusted-data rule in contract rule 8 does not appl
 re-opened by a finding is never parked by the round budget: the machine sees no open row on it, so
 a budget park would state a reason no one could answer.
 
+## What a build agent is handed — and what it must not go looking for
+
+Every unit runs in a fresh context. That is what keeps a 20-page build honest, and it also means anything an agent
+discovers for itself is discovered again by the next one. Measured on a real 20-page run: 4.5 MB of tool output, of
+which **40% was documentation** (`get-guidance` / `get-tool-contract` / `get-component-info` — 1.83 MB over 118
+calls, the same topics and the same six component types repeating) and **35% was reading the migration artifacts**
+(`plan.md` 20 times, `worklog.md` 37, `customizations.md` 8 — at 567 KB). 401 of the ~1000 tool calls were `Bash`,
+mostly python and grep cutting those files down to the one page an agent cared about. Stand interaction — the actual
+work — was about 7%.
+
+So the run prepares it once, in a **`refs`** folder inside the migration folder, and hands **paths**. The files, by
+name, all inside that folder:
+
+| File | What it is |
+| --- | --- |
+| `spec-<key>.md` | that page's design spec (`--spec --page <key>`) **plus the plan's `Adjustments` list in full** |
+| `contracts.md` | the tool contracts a page build uses, fetched by NAME (never argument-less, which dumps the whole catalogue) |
+| `components.md` | `get-component-info` per component type, headed with the environment it came from |
+| `guidance-<topic>.md` | one file per clio guidance topic a build needs |
+| `index.md` | what was written; its existence is what makes the step skip next run |
+
+Three rules make this safe rather than merely cheaper:
+
+- **Paths, never pasted bodies.** Inlining five contracts into fifteen build prompts is 1.16 MB; fetching them on
+  demand cost 0.64 MB. Inlining shared documentation is a pessimization, not an optimization.
+- **The cache is a SHORTCUT, not a restriction.** An agent that needs a topic, contract or component the cache does
+  not hold calls the tool as usual. A cache that forbids is a defect generator.
+- **It is stand-specific.** `components.md` records its environment; a run on another stand must not trust it.
+
+The **`Refs` step** owns this. It is its own phase, not part of Preflight — Preflight is skipped entirely once the
+⚠ Confirm worklist is answered, which is exactly the resumed run that benefits most. It is gated on that folder's `index.md`
+being absent, which is the whole invalidation story: no versions, no timestamps.
+
+**The slice carries `Adjustments` whole and unfiltered.** Those are the corrections the user agreed to at approval
+time, and rule 2 of the parent skill keeps them out of the generated tables by design — so a slice without them is a
+slice that silently drops what was agreed.
+
+**Reconcile transcribes the DIGEST.** `--verify-digest` is the same verdict shape with the open rows of already-
+complete pages dropped, because a workflow script has no filesystem: the only route from a file into its arithmetic
+is an agent retyping it into a tool call. On that run the full verdict was 102 KB and Reconcile spent 41 minutes, 19
+of its 40 shell commands slicing it and three attempts at its structured answer. `verify.json` is still written,
+unchanged, for audit and for the human table.
+
+**The parent edge comes from `--units`, not from the plan.** The engine folded the tree; recovering it by parsing
+the `### Child page mappings` prose the same engine printed is how a partial parse made grandchildren read as roots
+and a park block more than it should.
+
+**One worklog file per unit.** A `<key>.md` in the run's `worklog` folder, written by that unit's builder, read by nobody else — the single
+shared log was read 37 times for one reason: to append to it you first read it. The `Close` phase appends the
+assembled section to `worklog.md`, which the documentation standard still requires as the append-only record.
+
 ## The unit model
 
 **A unit is one page.** Its `--spec` block is the input, its checklist rows are the acceptance

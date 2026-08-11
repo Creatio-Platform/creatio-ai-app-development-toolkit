@@ -59,7 +59,7 @@ import { parseSchema, mergeHierarchy } from "./engine.mjs";
 import { mapToFreedom, STANDARD_CLASSIC_METHODS } from "./mapper.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, isTabOp } from "./designspec.mjs";
+  planGaps, pageUnits, verifyReport, verifyDigest, isTabOp } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / view-only
@@ -1503,10 +1503,34 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--page"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
+// ONE page's design spec. `main` is the run's own; every folded sub-page keeps its rendered spec on its node
+// (`c.spec` / `t.spec` / `miniPage.spec`) — the same string the plan nests. An unknown key FAILS: a caller that
+// asked for one page must never be handed the whole tree as though it were that page's slice.
+// ONE page's checklist. An EMPTY render for an explicitly requested key is an error, not an empty table: the key
+// either names no page or names one that emits no gated row, and both are things the caller must know rather than
+// hand to a build agent as "nothing to do here".
+function pageScopedChecklist(result, manifest, pageKey, fail) {
+  const md = renderChecklist(result, { ...checklistOpts(manifest), scopePageKey: pageKey });
+  if (!md) fail(`--page '${pageKey}' produced no checklist rows — it matches no page in this plan, or that page emits no gated deliverable. Use a key --units publishes.`);
+  return md;
+}
+function pageScopedSpec(result, pageKey, fail) {
+  if (!pageKey || pageKey === "main") return result.designSpec;
+  const nodes = [...(result.childPages || []), ...(result.typedPages || []), ...(result.miniPage ? [result.miniPage] : [])];
+  const hit = nodes.find((n) => n && (n.pageKey === pageKey || n.pageKeyAlt === pageKey));
+  if (!hit) {
+    const keys = nodes.map((n) => n?.pageKey).filter(Boolean);
+    fail(`--page '${pageKey}' matches no page in this plan. Published keys: main${keys.length ? ", " + keys.join(", ") : ""}. Use a key --units publishes.`);
+  }
+  if (!hit.spec) {
+    fail(`--page '${pageKey}' names a page this run did not fold — it is reused or unresolved, so it has no design spec of its own and there is no slice to render. See its row in the plan.`);
+  }
+  return hit.spec;
+}
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -1565,6 +1589,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // It REQUIRES `--verify`: in any other mode there is no verdict to write, and silently ignoring the flag would
   // leave a caller believing it had a verdict file it never got.
   const verifyJsonFile = valueFlagArg(argv, "--verify-json", "--verify-json verify.json", fail);
+  // `--verify-digest <file>` — the SAME verdict, minus the open rows of pages that are already complete. For a
+  // caller whose only route from a file into its own arithmetic is an agent transcribing it (a workflow script has
+  // no filesystem), the full 102 KB report was most of that agent's cost and none of its value.
+  const verifyDigestFile = valueFlagArg(argv, "--verify-digest", "--verify-digest verify-digest.json", fail);
+  if (verifyDigestFile && !verifyMode)
+    fail("`--verify-digest <file>` only applies to `--verify` — it writes THAT run's scheduling digest. Add `--verify --built <file>`, or drop `--verify-digest`.");
+  // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
+  // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
+  // for one page and got all of them hands a build agent another page's rows.
+  const pageArg = valueFlagArg(argv, "--page", "--page main", fail);
+  if (pageArg && !(specMode || checklistMode))
+    fail("`--page <key>` applies to `--spec` and `--checklist` — it renders that page's slice. Add one of them, or drop `--page`.");
   if (verifyJsonFile && !verifyMode)
     fail("`--verify-json <file>` only applies to `--verify` — it writes THAT run's machine-readable verdict. Add `--verify --built <file>`, or drop `--verify-json`.");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
@@ -1589,8 +1625,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null;
   if (planMode) output = result.plan + "\n";
-  else if (specMode) output = result.designSpec + "\n";
-  else if (checklistMode) output = result.checklist + "\n";
+  else if (specMode) output = pageScopedSpec(result, pageArg, fail) + "\n";
+  else if (checklistMode) output = pageArg
+    // Re-rendered rather than cut out of `result.checklist`: that string is already assembled, and slicing a
+    // rendered table by eye is the "paraphrase between the engine and its caller" this gate exists to avoid.
+    // `renderChecklist` filters on the RAW `pageKey` its groups carry, so the slice is exact.
+    ? pageScopedChecklist(result, manifest, pageArg, fail) + "\n"
+    : result.checklist + "\n";
   // `--stubs` ⇒ ONLY the handoff digest. Deliberately a separate artifact from the full result JSON: this is the
   // payload a behaviour-analysis run receives, and the full JSON carries megabytes of schema bodies and rendered
   // Markdown it has no use for. The correctness gates still apply — a broken merge produces unreliable rows, so a
@@ -1635,6 +1676,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (verifyJsonFile) {
       try { fs.writeFileSync(verifyJsonFile, JSON.stringify(verifyReport(result, verifyRes), null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
+    }
+    if (verifyDigestFile) {
+      try { fs.writeFileSync(verifyDigestFile, JSON.stringify(verifyDigest(result, verifyRes), null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --verify-digest '${verifyDigestFile}': ${e.message}`); }
       // stderr, not stdout: stdout is the artifact itself when there is no `--out`, and a note there would end up
       // inside the table the agent presents verbatim.
       process.stderr.write(`migrate.mjs: wrote the machine-readable verdict to ${verifyJsonFile} — schedule from THAT file (complete / missing / unverified / planGaps / pages[key].openRows), not from the table.\n`);

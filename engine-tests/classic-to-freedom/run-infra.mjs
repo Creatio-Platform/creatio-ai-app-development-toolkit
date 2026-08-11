@@ -368,6 +368,31 @@ check("workflow: the app unit creates the section on the EXISTING object via `cr
 check("workflow: the built payload records the page OBJECT — without it the gate cannot tell the real entity from a stub, which is how a whole run stayed green on the wrong one",
   /entitySchemaName/.test(wfSrc) && /modelConfig: <bundle\.modelConfig VERBATIM>/.test(wfSrc)
     && /primaryDataSourceName/.test(wfSrc));
+// --- ENG-94859 the per-run REFS cache, the page slice and the split worklog. Measured on a real run: 40% of all
+// tool output was documentation re-fetched by every fresh-context agent (1.83 MB / 118 calls), 35% was reading the
+// migration artifacts (plan.md 20x, worklog.md 37x), and 401 Bash calls were mostly python/grep cutting those files.
+check("workflow: the REFS step is its OWN phase, gated on the index file, and runs BEFORE the round loop — not inside Preflight, which is skipped entirely once the worklist is answered (exactly the resumed run this saves most on)",
+  /phase\('Refs'\)/.test(wfSrc) && /await refsStep\(\)/.test(wfSrc)
+    && /if \\`\$\{REFS_INDEX\}\\` already exists, this step is DONE/.test(wfSrc)
+    && wfSrc.indexOf("await refsStep()") < wfSrc.indexOf("while (true) {"));
+check("workflow: the cache is handed as PATHS and is a SHORTCUT, not a restriction — an agent needing something uncached still calls the tool",
+  /SHARED DOCUMENTATION IS ALREADY CACHED/.test(wfSrc) && /SHORTCUT, not a restriction/.test(wfSrc));
+check("workflow: the component cache records its ENVIRONMENT — component docs are stand-specific and a later run elsewhere must not trust them",
+  /this cache is STAND-SPECIFIC/.test(wfSrc));
+check("workflow: `get-tool-contract` is called with NAMES — the argument-less form dumps the whole catalogue and did so 7 times in one run",
+  /do NOT call it with no arguments, which dumps the whole catalogue/.test(wfSrc));
+check("workflow: the build agent is handed its OWN page slice and told not to grep the plan",
+  /YOUR PAGE'S SLICE IS ALREADY CUT/.test(wfSrc) && /Do NOT grep/.test(wfSrc) && /specFile\(unit\.key\)/.test(wfSrc));
+check("workflow: the slice carries the plan's Adjustments IN FULL — they are the user's agreed corrections and live outside the generated tables by design",
+  /APPEND THE PLAN'S \\`Adjustments\\` LIST to EVERY slice file, verbatim and whole/.test(wfSrc)
+    && /Do not filter it per page/.test(wfSrc));
+check("workflow: Reconcile transcribes the DIGEST, not the full verdict, and the full one is still written for audit",
+  /--verify-digest \$\{VERIFY_DIGEST\}/.test(wfSrc) && /the DIGEST, not \$\{VERIFY_JSON\}/.test(wfSrc));
+check("workflow: the parent edge is COPIED from `--units`, and reconstructing it from the plan's prose is forbidden",
+  /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
+check("workflow: each unit writes its OWN worklog file and is told not to read the shared log; Close assembles worklog.md by APPENDING",
+  /worklogFile\(unit\.key\)/.test(wfSrc) && /Do NOT read or append to the shared/.test(wfSrc)
+    && /APPEND\. Never rewrite or reorder/.test(wfSrc) && /close:worklog/.test(wfSrc));
 check("workflow: the app unit's package answer is checked as an EQUALITY against the plan's target — a near-match is a blocker, not an acceptance, because every placement row gates on the plan's package",
   /got === unit\.package/.test(wfSrc) && /package MISMATCH/.test(wfSrc) && /packageState = 'exists'/.test(wfSrc));
 check("workflow: the starter page `create-app` minted is recorded as `main`'s schema, so `main` EDITS it instead of trying to create the page again",
