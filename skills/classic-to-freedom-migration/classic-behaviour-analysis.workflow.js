@@ -1,5 +1,10 @@
 export const meta = {
-  name: 'classic-behaviour-analysis',
+  // Namespaced because the installer mirrors this script into user scope
+  // (~/.claude/workflows/<name>.js), which is shared across every project and
+  // plugin — an unprefixed `classic-behaviour-analysis` is generic enough to be
+  // shadowed by a project-scope workflow of the same name. Keep `name` and that
+  // mirrored basename identical: named-workflow resolution may key on either.
+  name: 'creatio-classic-behaviour-analysis',
   description:
     'Step 5.1 of a Classic→Freedom migration: describe the imperative rows the engine can enumerate but not explain. One Context agent builds the stand-wide census and the shared core, a size-adaptive fan-out describes each surface scope through the classic-ui-expert skill, a Critique agent hunts UNCOVERED rows, and Merge emits one report plus the behaviourIndex the plan folds in. Coverage is computed in the script, never asserted by an agent.',
   phases: [

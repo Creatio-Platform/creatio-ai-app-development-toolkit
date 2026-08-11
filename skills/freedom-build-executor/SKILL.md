@@ -320,16 +320,29 @@ Read the file that matches what you are doing. Do not read them all up front.
 The deliverables are the same whichever route runs (the queue file, the built file, the
 `--verify` table), so pick by what the host actually allows, and say in worklog.md which route
 ran. This is the same route list `../classic-to-freedom-migration/SKILL.md` uses for its step 5.1
-and names in its step 7, which is where this skill is invoked from.
+and names in its step 7, which is where this skill is invoked from — including its **ROUTE GATE**,
+which applies here in full and is stricter for a build than for an analysis.
+
+> **The gate, restated because this is the skill it protects.** A session may carry a host
+> instruction ("do not use workflows / do not call the Agent tool unless the user requested it")
+> that sits ABOVE this file; route 1's opt-in sentence cannot override it, and a real run read the
+> host rule as binding despite that sentence. When routes 1 and 2 look blocked, do **not** start
+> building inline. Ask ONE `AskUserQuestion` — grant `Workflow` for this skill, or build inline
+> knowing it cannot finish — and stop until it is answered. **Measured cost of getting this wrong:**
+> the inline route was taken twice in one session and ended both times with the context exhausted
+> and zero units built (~45 min); after the user granted `Workflow` in one turn, the same build ran
+> to a green gate. A build is many units in sequence — route 3 is a dead end here unless the user
+> chose it with that stated.
 
 1. **The `Workflow` tool (preferred on Claude Code).** Invoking this skill is the user's opt-in
    to the orchestration its own steps call for, so the workflow needs no separate permission —
    and, unlike the Agent tool, it is not subject to the host rule some sessions carry that
-   forbids launching a sub-agent unless the user asked for one in that turn. The script ships
-   beside this file, as `./freedom-build-executor.workflow.js`:
-   `Workflow({ scriptPath: "./freedom-build-executor.workflow.js", args: {
+   forbids launching a sub-agent unless the user asked for one in that turn. Call it **by name**:
+   `Workflow({ name: "creatio-freedom-build-executor", args: {
    manifest, environment, outDir, planFile, engine, customizations, behaviourIndex,
-   sectionSchema } })` — resolve `scriptPath` to its absolute path in the plugin dir, and resolve
+   sectionSchema } })`. The script also ships beside this file as
+   `./freedom-build-executor.workflow.js` — pass it as `scriptPath`, resolved to its absolute path
+   in the plugin dir, when the name does not resolve (see "Named-workflow availability" below). Resolve
    `engine` the same way: it is the absolute path to the migration skill's `engine/migrate.mjs`
    (or the `engine/` directory holding it), it is resolved ONCE and interpolated into every
    prompt, and the run refuses to start without it rather than sending a placeholder to an agent.
@@ -341,9 +354,22 @@ and names in its step 7, which is where this skill is invoked from.
 2. **The `Agent` tool.** One sub-agent per unit, driven from the calling session, with the same
    role separation. Correct where it is permitted; if the host refuses it without an explicit
    user request, do not stall — go to 1, or to 3 and say so.
-3. **Inline via the `Skill` tool.** The fallback for a host with no sub-agents at all. It costs
-   the session's context and it loses the role separation for the verifier and the judge, which
-   is a real weakening — say so in worklog.md, and prefer 1 or 2 whenever either can run.
+3. **Inline via the `Skill` tool.** The fallback for a host with no sub-agents at all, reachable
+   only **through the gate above** — never as a silent third choice. It costs the session's context
+   and it loses the role separation for the verifier and the judge, which is a real weakening; on a
+   multi-unit build it has not once reached a first closed unit before the context ended — say so in
+   worklog.md, and prefer 1 or 2 whenever either can run.
+
+**Named-workflow availability.** The toolkit's installer mirrors this script into user scope on
+install — under `~/.claude/workflows/` as `creatio-freedom-build-executor.js`, named after this
+script's own `meta.name` — and re-mirrors it from the updated plugin cache on every Claude update.
+The marketplace itself cannot register a named workflow. That is why `name:` is the normal call: no absolute path to resolve into a
+plugin-cache directory that moves with every version. `scriptPath` stays correct in two cases, and
+neither is an error: user-scope workflows are discovered at **session start**, so a freshly installed
+name only resolves in the next session, and a checkout the installer never ran against has no mirror.
+The in-tree script is the version-matched one by construction — if a `name:` run rejects an argument
+this file documents, the mirror is stale: use `scriptPath` and re-run the installer. **Neither form
+changes permission** — a named workflow is not pre-authorized, so the gate above applies to both.
 
 ## Scope
 

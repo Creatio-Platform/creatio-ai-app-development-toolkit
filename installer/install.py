@@ -32,6 +32,9 @@ from agent_cli import (  # noqa: E402
 
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
+NAMED_WORKFLOW_DIR_NAME = "workflows"
+WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
+WORKFLOW_META_NAME_PATTERN = re.compile(r"^\s*name:\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
 SETUP_WIZARD_MANIFEST_DIR = ".caadt"
@@ -375,6 +378,69 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
             target_skill_dir,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+
+
+def workflow_meta_name(script_path: Path) -> str:
+    """Return the `meta.name` a bundled ``*.workflow.js`` declares.
+
+    The name is read from the source instead of derived from the filename
+    because the mirrored copy must agree with it: Claude Code resolves a named
+    workflow from ``~/.claude/workflows/``, and which of the two identities it
+    keys on (basename or ``meta.name``) is not part of any documented contract.
+    Writing ``<meta.name>.js`` makes both agree, so resolution works either way.
+    """
+    text = script_path.read_text(encoding="utf-8")
+    match = WORKFLOW_META_NAME_PATTERN.search(text)
+    if not match:
+        raise RuntimeError(
+            f"Workflow script declares no `meta.name`, so it cannot be provisioned "
+            f"as a named workflow: {script_path}"
+        )
+    return match.group(1)
+
+
+def discover_workflow_scripts(source_root: Path) -> list[Path]:
+    """Bundled ``skills/*/**.workflow.js`` scripts, sorted for a stable order."""
+    skills_dir = source_root / "skills"
+    if not skills_dir.is_dir():
+        return []
+    return sorted(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+
+
+def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]:
+    """Mirror bundled workflow scripts into user scope as NAMED workflows.
+
+    The marketplace ships skills, agents and MCP servers — it cannot register a
+    named workflow, so a skill can otherwise only reach its own orchestration
+    through `Workflow({ scriptPath })` with a hand-resolved absolute path into
+    the versioned plugin cache. Copying each script to
+    ``~/.claude/workflows/<meta.name>.js`` makes `Workflow({ name })` work
+    instead, which is the same convention the `creatio-development` plugin uses.
+
+    This is a MIRROR, not a second source: it is rewritten on every install and
+    on every Claude update, because the plugin itself auto-updates and a stale
+    user-scope copy would run an older `args` contract against a newer skill.
+    That is also why both skills keep `scriptPath` documented as the fallback —
+    the in-tree script is version-matched by construction, and user-scope
+    discovery only happens at session start, so a freshly provisioned workflow
+    is not resolvable by name until the next session.
+
+    Returns the provisioned workflow names. A source tree without workflow
+    scripts provisions nothing rather than failing — not every checkout or
+    release the installer runs against bundles one.
+    """
+    scripts = discover_workflow_scripts(source_root)
+    if not scripts:
+        return []
+
+    workflows_dir = claude_home / NAMED_WORKFLOW_DIR_NAME
+    workflows_dir.mkdir(parents=True, exist_ok=True)
+    provisioned: list[str] = []
+    for script in scripts:
+        name = workflow_meta_name(script)
+        shutil.copyfile(script, workflows_dir / f"{name}.js")
+        provisioned.append(name)
+    return provisioned
 
 
 def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
@@ -770,6 +836,10 @@ def install_claude(repo_root: Path, home: Path) -> None:
         pre_remove_marketplace=True,
     )
     enable_claude_marketplace_auto_update(claude_home / "settings.json")
+    # Named workflows are user scope, not plugin scope — the marketplace install
+    # above cannot register them, so mirror them here (see
+    # provision_named_workflows). Claude-only: no other agent reads this dir.
+    provision_named_workflows(repo_root, claude_home)
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:

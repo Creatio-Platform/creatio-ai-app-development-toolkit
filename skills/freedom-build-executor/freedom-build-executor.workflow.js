@@ -1,5 +1,9 @@
 export const meta = {
-  name: 'freedom-build-executor',
+  // Namespaced because the installer mirrors this script into user scope
+  // (~/.claude/workflows/<name>.js), which is shared across every project and
+  // plugin. Keep `name` and that mirrored basename identical: named-workflow
+  // resolution may key on either.
+  name: 'creatio-freedom-build-executor',
   description:
     'Build an APPROVED Classic→Freedom migration plan on a live stand until the engine gate is green. Reconcile reads the queue file and runs `--units` + `--verify --verify-json` to learn what the stand already has, Preflight resolves the ⚠ worklist in parallel (read-only), Build runs SEQUENTIALLY leaf-first with one fresh-context agent per page, a SEPARATE read-only verifier assembles `--built` from get-page, a THIRD agent writes only `judge`, and repair rounds run until every unit closes or is parked. Every verdict is arithmetic over the engine\'s own numbers, never an agent\'s assertion.',
   phases: [

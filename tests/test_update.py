@@ -199,6 +199,10 @@ class UpdateAgentsTests(unittest.TestCase):
         self.fresh_root = Path(self._tmp.name)
         (self.fresh_root / "installer").mkdir()
         (self.fresh_root / "installer" / "install.py").write_text("# x\n", encoding="utf-8")
+        # A Claude update re-mirrors the named workflows into <home>/.claude;
+        # every claude case passes this so the run cannot touch the real home.
+        self.home = self.fresh_root / "home"
+        (self.home / ".claude").mkdir(parents=True)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -222,7 +226,7 @@ class UpdateAgentsTests(unittest.TestCase):
 
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=record):
-            updated, failed = self.upd.update_agents(["claude"], silent=True)
+            updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
 
         self.assertEqual((updated, failed), (["claude"], []))
         self.assertEqual(
@@ -309,8 +313,94 @@ class UpdateAgentsTests(unittest.TestCase):
         with patch.object(
             self.upd.agent_cli, "resolve_claude_command", side_effect=RuntimeError("not in PATH")
         ):
-            updated, failed = self.upd.update_agents(["claude"], silent=True)
+            updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
         self.assertEqual((updated, failed), ([], ["claude"]))
+
+
+class NamedWorkflowRefreshTests(unittest.TestCase):
+    """`claude plugin update` never touches user scope, so the mirror in
+    ~/.claude/workflows/ has to be rewritten from the updated plugin cache."""
+
+    def setUp(self):
+        self.upd = load_update()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        (self.home / ".claude").mkdir()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_cached_plugin(self, version, meta_name, body=""):
+        root = (
+            self.home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / self.upd.agent_cli.MARKETPLACE_NAME
+            / self.upd.agent_cli.PLUGIN_NAME
+            / version
+        )
+        skill_dir = root / "skills" / "some-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "some.workflow.js").write_text(
+            f"export const meta = {{\n  name: '{meta_name}',\n}}\n{body}",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_picks_the_highest_cached_version_not_the_lexical_one(self):
+        # Versions coexist in the cache; 10.0.0 must beat 9.0.0 despite sorting
+        # lower as a string.
+        self._write_cached_plugin("9.0.0", "creatio-x", body="// old\n")
+        self._write_cached_plugin("10.0.0", "creatio-x", body="// new\n")
+
+        self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), ["creatio-x"])
+        mirrored = self.home / ".claude" / "workflows" / "creatio-x.js"
+        self.assertIn("// new", mirrored.read_text(encoding="utf-8"))
+
+    def test_no_cached_plugin_leaves_the_previous_mirror_alone(self):
+        workflows_dir = self.home / ".claude" / "workflows"
+        workflows_dir.mkdir()
+        (workflows_dir / "creatio-x.js").write_text("// kept\n", encoding="utf-8")
+
+        self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), [])
+        self.assertEqual((workflows_dir / "creatio-x.js").read_text(encoding="utf-8"), "// kept\n")
+
+    def test_a_broken_cached_script_never_fails_the_update(self):
+        root = self._write_cached_plugin("1.0.0", "creatio-x")
+        (root / "skills" / "some-skill" / "some.workflow.js").write_text(
+            "export const meta = { description: 'no name' }\n", encoding="utf-8"
+        )
+        # RuntimeError from the provisioner is swallowed: the plugin update
+        # itself succeeded and the scriptPath fallback still resolves in-tree.
+        self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), [])
+
+    def test_claude_update_refreshes_the_mirror(self):
+        self._write_cached_plugin("1.0.0", "creatio-x")
+
+        def ok(cmd, **kw):
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with patch.object(
+            self.upd.agent_cli, "resolve_claude_command", return_value=["claude"]
+        ), patch.object(self.upd.subprocess, "run", side_effect=ok):
+            updated, failed = self.upd.update_agents(["claude"], silent=True, home=self.home)
+
+        self.assertEqual((updated, failed), (["claude"], []))
+        self.assertTrue((self.home / ".claude" / "workflows" / "creatio-x.js").exists())
+
+    def test_a_non_claude_update_does_not_touch_user_scope(self):
+        self._write_cached_plugin("1.0.0", "creatio-x")
+
+        def ok(cmd, **kw):
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with patch.object(
+            self.upd.agent_cli, "resolve_codex_command", return_value=["codex"]
+        ), patch.object(self.upd.subprocess, "run", side_effect=ok):
+            self.upd.update_agents(["codex"], silent=True, home=self.home)
+
+        self.assertFalse((self.home / ".claude" / "workflows").exists())
 
 
 # ---------------------------------------------------------------------------
@@ -401,12 +491,18 @@ class UpdateMainTests(unittest.TestCase):
             patch.object(self.upd.agent_cli, "resolve_claude_command", return_value=["claude"]),
             patch.object(self.upd.subprocess, "run", side_effect=record),
             patch.object(self.upd.os, "chdir"),
+            # main() does not inject a home (production writes to the real one),
+            # and update_agents is deliberately NOT mocked here — so stub the
+            # refresh instead of letting the test touch ~/.claude/workflows.
+            patch.object(self.upd, "refresh_claude_named_workflows", return_value=[]) as refresh,
             patch("builtins.print") as mock_print,
         ):
             result = self.upd.main([])
 
         self.assertEqual(result, 0)
         acquire.assert_called_once()
+        # The named-workflow mirror is refreshed as part of the Claude update.
+        refresh.assert_called_once()
         # Claude two-step + Cursor install.py reinstall = 3 subprocess calls.
         self.assertEqual(len(calls), 3)
         self.assertEqual(calls[0], ["claude", "plugin", "marketplace", "update", "creatio"])
