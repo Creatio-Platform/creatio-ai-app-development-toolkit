@@ -65,8 +65,10 @@ Before the Load order below, verify the converter is available: list the server 
 1. Read `./references/page-to-mobile-conversion.md` — the **AUTHORITATIVE playbook**. It defines the
    full flow, the approval gates (Gate M, Gate S), the exact tool sequence, and the conversion report.
    Follow it exactly.
-2. Read clio `get-guidance` with name `freedom-page-web-to-mobile-conversion` — the advisory engine
-   guidance (component classification, the paste-verbatim data-section rules, the hard mobile rules).
+2. Read clio `get-guidance` with name `freedom-page-web-to-mobile-conversion` — the advisory ENGINE-layer
+   guidance and the single source of truth for the body-building mechanics (component classification,
+   per-operation `elementMap` rules, `mobileValues` paste, the paste-verbatim data-section rules, adaptive /
+   tab-body / normalization behavior, the hard mobile rules). The playbook defers to it for all mechanics.
 3. Read `../../context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics
    (separate web/mobile pages, body format, component-registry differences).
 4. **Before authoring the mobile page body (Flow step 7):** (a) call clio `get-guidance` with name
@@ -99,5 +101,9 @@ request collapse this into a single unattended pass. The invariants:
 
 The AUTHORITATIVE, detailed gate rules — the two-choice (View details / Adjust vs Approve) flow, what the
 plan must contain, and the exact FORBIDDEN-until-approved tool lists — live in the "Gate M" / "Gate S"
-sections of `./references/page-to-mobile-conversion.md`. That file is the single source of truth: follow
-it, and make gate-rule changes there rather than duplicating them here.
+sections of `./references/page-to-mobile-conversion.md`. That file is the single source of truth for the
+**PROCESS** layer (the flow, the gates, the plan/report format, environment resolution, section
+registration): follow it, and make gate/process changes there. The body-building **MECHANICS** are a
+separate layer whose single source of truth is the clio `freedom-page-web-to-mobile-conversion` guidance
+article (Load order step 2) — make mechanic changes there, not in the playbook, and if the two ever
+disagree the guidance article wins on mechanics.
