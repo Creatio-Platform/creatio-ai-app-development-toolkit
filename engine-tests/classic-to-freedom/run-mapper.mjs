@@ -1288,6 +1288,14 @@ check("placement: `--units` republishes the approved sectionHost so a fresh-cont
   && unitsFor(FULL_PLACEMENT).sectionHost === "existing-app"
   && unitsFor(undefined).sectionHost === null,
   () => ({ newApp: unitsFor(newAppPlacement).sectionHost, pagesOnly: unitsFor(pagesOnlyPlacement).sectionHost, none: unitsFor(undefined).sectionHost }));
+// …and the APPLICATION the section goes into. The agent that registered the section in the failing run had no
+// code in front of it and resolved one by name off the stand — landing on an app that could not host a section.
+check("placement: `--units` publishes the approved applicationCode for `existing-app`, and null wherever no app is approved yet",
+  unitsFor(FULL_PLACEMENT).applicationCode === "UsrSUApp"
+  && unitsFor(newAppPlacement).applicationCode === null
+  && unitsFor(pagesOnlyPlacement).applicationCode === null
+  && unitsFor(undefined).applicationCode === null,
+  () => ({ existing: unitsFor(FULL_PLACEMENT).applicationCode, newApp: unitsFor(newAppPlacement).applicationCode }));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],

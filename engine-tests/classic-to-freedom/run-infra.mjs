@@ -338,6 +338,27 @@ check("appUnitFor: an EXISTING package schedules nothing — the unit is a prere
   () => (wf.appUnitFor("UsrOpportunityMig", "exists") === null));
 check("appUnitFor: no package NAME ⇒ no unit (there is nothing to pass to `create-app`); the hard stop covers that case instead",
   () => (wf.appUnitFor(null, "absent") === null && wf.appUnitFor("", "absent") === null));
+// --- PLACEMENT: the approved section host reaches the build side. Before it, the app unit fired on the package
+// state ALONE and the registration agent had no application code in front of it — so a run registered a section
+// into an install-time wrapper it resolved by name, which had no primary package and could not host one.
+check("appUnitFor: the unit CARRIES the approved section host — the prompt branches on it, and an old plan that publishes none keeps `null`",
+  () => (wf.appUnitFor("Pkg", "absent", "E", "pages-only-no-menu").sectionHost === "pages-only-no-menu"
+    && wf.appUnitFor("Pkg", "absent", "E", "new-app").sectionHost === "new-app"
+    && wf.appUnitFor("Pkg", "absent", "E").sectionHost === null));
+check("appUnitFor: the SCHEDULING condition is still the package state alone — `isOpenApp` decides when the unit closes, so a unit scheduled on a different condition would be born closed",
+  () => (wf.appUnitFor("Pkg", "exists", "E", "new-app") === null && wf.appUnitFor("Pkg", "exists", "E", "pages-only-no-menu") === null
+    && wf.isOpenApp("exists") === false && wf.isOpenApp("absent") === true));
+check("packagePreconditionStop: `new-app` over a package that ALREADY exists is a STOP — create-app mints its own package, so it can never produce one that is already there, and attaching an existing package to an app is a user decision",
+  () => { const s = wf.packagePreconditionStop("UsrPkg", "exists", "new-app");
+    return s && s.stopped === "new-app-over-existing-package" && /re-plan/.test(s.next) && /BY HAND/.test(s.next); });
+check("packagePreconditionStop: every other host mode over an existing package is unchanged — `existing-app`, `pages-only-no-menu` and a plan with NO placement all proceed exactly as before",
+  () => (wf.packagePreconditionStop("UsrPkg", "exists", "existing-app") === null
+    && wf.packagePreconditionStop("UsrPkg", "exists", "pages-only-no-menu") === null
+    && wf.packagePreconditionStop("UsrPkg", "exists", null) === null
+    && wf.packagePreconditionStop("UsrPkg", "absent", "new-app") === null));
+check("packagePreconditionStop: the unknown/unnamed stops still win — a `new-app` plan whose package state was inconclusive stops on THAT, not on the host mode",
+  () => (wf.packagePreconditionStop("UsrPkg", "unknown", "new-app").stopped === "target-package-unknown"
+    && wf.packagePreconditionStop(null, "absent", "new-app").stopped === "target-package-unnamed"));
 check("scheduleUnits: the app unit lands FIRST, ahead of the leaf-first page order",
   () => (wf.scheduleUnits(["child:A", "main"], [], wf.appUnitFor("Pkg", "absent")).map((u) => u.key).join(",") === "app,child:A,main"));
 check("scheduleUnits: with no app unit the order is exactly what it was — the existing schedule does not change shape",
@@ -709,8 +730,11 @@ check("cba workflow: every helper this suite covers is inside the markers (a mov
 check("workflow: EVERY refreshed state goes through one acceptance path that re-checks the approval, the package state and the entity — three guarantees were first-pass only, so a mid-run re-plan could build a version nobody approved",
   /function acceptReconciled\(next, whereFrom\)/.test(wfSrc)
     && /approvalStop\(state\.approval \|\| approval, state\.planVersion/.test(wfSrc)
-    && /packagePreconditionStop\(state\.targetPackage, state\.packageState\)/.test(wfSrc)
-    && /appUnitFor\(state\.targetPackage, packageState, state\.mainEntity\)/.test(wfSrc));
+    // Both calls are matched WITHOUT their closing paren: the guarantee under test is that the acceptance path
+    // re-runs them on the refreshed state, not how many facts they consult (placement added a third argument to
+    // each). Pinning the exact arity here made an additive change look like a lost guarantee.
+    && /packagePreconditionStop\(state\.targetPackage, state\.packageState/.test(wfSrc)
+    && /appUnitFor\(state\.targetPackage, packageState, state\.mainEntity/.test(wfSrc));
 // The negative is scoped to the OLD assignment the two call sites used. `acceptReconciled` itself contains
 // `state = next` by construction — that is the one place allowed to move it.
 check("workflow: both refresh sites USE it — the post-preflight rebuild and the round tail — and neither assigns `state` itself any more",
@@ -722,7 +746,10 @@ check("workflow: the post-preflight rebuild passes `mainEntity`, so the app unit
   !/appUnitFor\(state\.targetPackage, packageState\)\)/.test(wfSrc));
 check("workflow: the app unit closes only on its FULL deliverable — the planned package AND a section page for `main` AND no blockers; closing on `create-app` alone left the run with no section on the migrated entity or an orphan stub",
   /const sectionPage = \(res\.starterFormPage \|\| ''\)\.trim\(\)/.test(wfSrc)
-    && /if \(got && got === unit\.package && sectionPage && !unitBlocked\)/.test(wfSrc)
+    // `sectionPage || !needsSectionPage` — the section leg still gates every host mode that PLANS a section; only
+    // `pages-only-no-menu`, where the unit was told not to create one, is exempt (else it would never close).
+    && /if \(got && got === unit\.package && \(sectionPage \|\| !needsSectionPage\) && !unitBlocked\)/.test(wfSrc)
+    && /const needsSectionPage = unit\.sectionHost !== 'pages-only-no-menu'/.test(wfSrc)
     && /the app unit did not finish/.test(wfSrc));
 check("engine: `memberDispositions` accepts only the four dispositions the gate's own remediation text names — any string counted as resolved, so a typo cleared a member",
   /const MEMBER_DISPOSITIONS = new Set\(\["ported", "dropped", "blocked", "n\/a"\]\)/.test(mgSrc)

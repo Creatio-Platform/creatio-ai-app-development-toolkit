@@ -1805,6 +1805,10 @@ export function pageUnits(result, opts = {}) {
     // unit runs (`create-app` gives it an editable primary package); `pages-only-no-menu` means no registration is
     // planned at all, so an executor must not "helpfully" add one. `null` = a plan that recorded no placement.
     sectionHost: opts.sectionHostMode || null,
+    // The application code the section belongs in — `null` under `new-app` (it does not exist yet) and under
+    // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
+    // approved app instead of resolving one off the stand.
+    applicationCode: opts.applicationCode || null,
     pages: [...byKey.entries()].map(([k, r]) => pageUnit(k, nodes.get(k) || null, r)),
     reachability: reachabilityUnits(rows),
     // A ⚠ Confirm item is a DECISION to resolve before the page is done; its id is in the evidence namespace, so

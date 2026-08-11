@@ -213,6 +213,33 @@ properties make it honest:
 `packageState: 'unknown'` is a **stop**, not a default. Guessing `absent` runs `create-app` over what
 may be a live application; guessing `exists` restores exactly the loop that wasted the run.
 
+**The approved SECTION HOST travels with the queue.** `--units` publishes `sectionHost`
+(`existing-app` · `new-app` · `pages-only-no-menu`) and `applicationCode` — the plan's placement
+decision, gated by the migration skill's step 3.1. A build agent owns ONE unit and cannot see the
+plan's placement, so without these it improvises: in the run they come from, the agent registering
+the section resolved an application off the stand by name and hit an install-time wrapper that had no
+primary package and could not host a section at all. What each mode changes here:
+
+- **`existing-app`** — the `sectionRegistered` unit is told the approved `applicationCode` and must
+  use exactly it. No code published ⇒ report `blocked` and stop; resolving one off the stand is the
+  failure this field exists to prevent, and a `create-app-section` error is never a cue to try
+  another app.
+- **`new-app`** — the `app` unit already does the whole job (`create-app` → `create-app-section` on
+  the MIGRATED object → `delete-app-section` for the stub), provided the plan targets a package that
+  is not on the stand yet. `new-app` over a package that ALREADY exists is a **stop**
+  (`new-app-over-existing-package`): `create-app` mints its own package and can never produce one
+  that is already there, so the unit's name-equality could not pass. The two ways out — re-plan
+  against a package that does not exist yet, or attach the existing package to an application and
+  make it primary by hand, then re-plan as `existing-app` — are the user's to choose, because
+  changing which package owns an app's identity is not a build decision.
+- **`pages-only-no-menu`** — no section is registered anywhere. If a package still has to be created,
+  the `app` unit creates the application (the only route to a package) but is told NOT to call
+  `create-app-section`, and it closes on the package alone; `main` then builds its own page. The
+  engine publishes no `sectionRegistered` row for this mode, so nothing here is left silently open.
+
+A plan written before placement was gated publishes `sectionHost: null`, and every predicate keeps
+its pre-placement behaviour exactly.
+
 **Preflight resolves what is UNANSWERED, not what the plan listed.** `--units.preflight` is the plan's
 list of open questions and says nothing about which have been answered, so a resumed run used to hand
 all of it back to the fan-out — measured on a real folder, 107 evidence records were on file and every

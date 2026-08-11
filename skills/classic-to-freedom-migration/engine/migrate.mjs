@@ -609,6 +609,10 @@ export function checklistOpts(manifest, opts = {}) {
     // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
     // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
     sectionHostMode: manifest.placement?.sectionHost?.mode ?? null,
+    // The app the section is registered INTO, published so the build side never has to guess one. In the run this
+    // exists for, the agent doing the registration had no application code in front of it and invented one off the
+    // stand — against an app that could not host a section at all.
+    applicationCode: manifest.placement?.application?.code ?? null,
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
   };
