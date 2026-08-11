@@ -1,6 +1,6 @@
 ---
 name: creatio-schema-naming
-description: Creatio data-model naming assistant for creating names for Creatio object schemas, object titles, object columns, field titles, lookup objects, lookup columns, Guid columns, UId references, and relation/link objects. Use when generating new Creatio schemas, metadata, migration scripts, specifications, or implementation plans that require choosing object or column names and basic column metadata — including via clio MCP (create-entity-schema, update-entity-schema, create-lookup, create-app, create-app-section). Triggers include: creatio, schema, entity, object, column, field, lookup, naming, PascalCase, Id/UId suffix, relation object.
+description: 'Creatio data-model naming assistant for creating names for Creatio object schemas, object titles, object columns, field titles, lookup objects, lookup columns, Guid columns, UId references, and relation/link objects. Use when generating new Creatio schemas, metadata, migration scripts, specifications, or implementation plans that require choosing object or column names and basic column metadata — including via clio MCP (create-entity-schema, update-entity-schema, create-lookup, create-app, create-app-section). Triggers include: creatio, schema, entity, object, column, field, lookup, naming, PascalCase, Id/UId suffix, relation object.'
 ---
 
 # Creatio Schema Naming

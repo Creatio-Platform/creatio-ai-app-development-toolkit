@@ -1,0 +1,11 @@
+{
+  "name": "classic-freedom-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic Classic→Freedom merge engine + mapper (runtime only). Golden runners + fixtures live in the repo-root engine-tests/classic-to-freedom (outside the shipped skill). The vendored acorn parser is the CommonJS build (vendor/acorn.cjs), loaded via a plain synchronous require() after the integrity check — so there is NO raised Node floor (works on the repo's Node 20 baseline and up).",
+  "scripts": {
+    "test": "node ../../../engine-tests/classic-to-freedom/run.mjs && node ../../../engine-tests/classic-to-freedom/run-mapper.mjs && node ../../../engine-tests/classic-to-freedom/run-infra.mjs",
+    "test:verify-vendor": "node verify-vendor.mjs"
+  }
+}

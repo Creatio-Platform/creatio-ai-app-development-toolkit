@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "creatio-ai-app-development-toolkit",
-      "version": "1.3.0",
+      "version": "1.7.0",
       "source": {
         "source": "url",
         "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
