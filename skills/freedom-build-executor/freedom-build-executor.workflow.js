@@ -176,6 +176,12 @@ const FINDINGS = (Array.isArray(input.findings) ? input.findings : [])
   .filter((f) => f && typeof f.unit === 'string' && f.unit.trim() && typeof f.problem === 'string' && f.problem.trim())
   .map((f) => ({ unit: f.unit.trim(), problem: f.problem.trim() }))
 const FINDING_KEYS = findingKeySet(FINDINGS)
+// A finding reopens its unit for ONE repair attempt, and this set is what makes that terminate. `FINDING_KEYS` is
+// constant for the invocation, and a unit open only because of a finding is deliberately exempt from parking (the
+// machine sees no open row on it) — so reading the constant set every round meant `auto` mode rebuilt that unit
+// forever: openNow() never emptied and the loop had no exit. The operator's channel is per-invocation by design: if
+// the page is still wrong after the attempt, they pass the finding again.
+const findingsPending = new Set(FINDING_KEYS)
 const QUEUE_FILE = `${input.outDir}/build-queue.json`
 const BUILT_FILE = `${input.outDir}/built.json`
 // Per-preflight-agent output files. The ⚠ Confirm fan-out is READ-ONLY AGAINST THE STAND — but "read-only" is
@@ -1108,6 +1114,22 @@ if (stopOnPackage) {
 // checkpoint that matches nothing fails SILENTLY in the worst possible direction: the operator asked to be
 // stopped for a look, the run would never stop, and the whole section would be written before they found out.
 // Same rule the run applies to page keys and evidence ids everywhere else — keys are read, never constructed.
+// Operator findings name units too, and an unknown key there fails the same way a checkpoint key does — silently
+// in the wrong direction. Nothing schedules it, so the run reaches a green verdict having never looked at the defect
+// the operator reported. Same check, same refusal, for the same reason.
+const badFindings = unknownCheckpointKeys([...FINDING_KEYS], state.unitKeys || [])
+if (badFindings.length) {
+  log(`STOP — ${badFindings.length} finding(s) name no published unit: ${badFindings.join(', ')}`)
+  return runReturn({
+    stopped: 'unknown-finding-key',
+    unknownFindings: badFindings,
+    unitKeys: state.unitKeys || [],
+    approval,
+    planVersion: state.planVersion || null,
+    verdict: verdictOf(state.verify),
+    next: `\`findings[].unit\` must name a key \`--units\` publishes — this manifest publishes: ${(state.unitKeys || []).join(', ') || '(none)'}. Nothing was built: a finding nothing schedules would let the run close green with the reported defect untouched. Fix the key and re-run.`,
+  })
+}
 const badCheckpoints = unknownCheckpointKeys(CHECKPOINT_AFTER, state.unitKeys || [])
 if (badCheckpoints.length) {
   log(`STOP — ${badCheckpoints.length} checkpoint key(s) name no published unit: ${badCheckpoints.join(', ')}`)
@@ -1163,7 +1185,7 @@ const unknownSchemaNow = () => [...new Set([...unknownSchemaSeen, ...(state.unit
 // `isUnitOpen` is the SHARED openness predicate (pure block) — the same one the park arithmetic uses, so the
 // schedule and `parkableKeys` cannot disagree about what "open" means.
 const openNow = () => schedule.filter((u) => !parkedSet.has(u.key) && !blockedSet.has(u.key) &&
-  isUnitOpenWithFindings(u, state.verify, state.reachabilityState, FINDING_KEYS, packageState))
+  isUnitOpenWithFindings(u, state.verify, state.reachabilityState, findingsPending, packageState))
 
 // One open row, rendered as the engine wrote it — Deliverable, Status, Evidence. The evidence cell IS the repair
 // instruction ("missing: Amount", "built in `X` but the plan targets `Y`", "filed but NOT judged"), so it travels
@@ -1519,6 +1541,9 @@ async function buildRound(open) {
       continue
     }
     built.push(unit.key)
+    // The finding has now had its repair attempt. Consumed here, at dispatch, rather than after the verifier: the
+    // machine verdict cannot confirm a fix it could not see the defect in, so waiting for it would never consume.
+    if (findingsPending.delete(unit.key)) log(`operator finding for \`${unit.key}\` has had its repair round — it no longer forces the unit open`)
     claims.push({
       unit: unit.key, kind: unit.kind,
       schemaName: res.schemaName || pageSchemas[unit.key] || null,

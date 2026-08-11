@@ -71,7 +71,12 @@ const SURFACE = input.sectionSchema || '(surface not named)'
 // agent and then report `complete: false` on a surface that had nothing to describe — an empty worklist is DONE, not
 // incomplete. The same check runs again after Context for a caller that did not pass `totals`.
 const declaredTotals = input.totals && typeof input.totals === 'object' ? input.totals : null
-if (declaredTotals && !declaredTotals.stubs && !declaredTotals.members) {
+// BOTH counts must be present AND zero. `!totals.members` was true for a digest that never carried the field, so a
+// surface with zero method stubs and real message/mixin members took the "nothing to describe" exit — the engine now
+// sums `members`, and requiring the NUMBER here means an older digest without it falls through to Context (which
+// computes the census itself) instead of silently skipping the analysis.
+const zeroCount = (v) => typeof v === 'number' && v === 0
+if (declaredTotals && zeroCount(declaredTotals.stubs) && zeroCount(declaredTotals.members)) {
   log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
   return {
     surface: SURFACE,
@@ -276,6 +281,20 @@ Return the schema. The cards live in the FILE; the return carries the inventory,
 )
 
 // --- Size-adaptive fan-out, decided here in code from the inventory ---------
+// A Context agent that returned NOTHING is an orchestration failure, not a surface with nothing on it. Both used to
+// reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete zero-row
+// analysis for a digest that may be full — the one outcome this workflow exists to make impossible.
+if (!ctx) {
+  log('the Context agent returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
+  return {
+    surface: SURFACE,
+    skipped: false,
+    stopped: 'context-failed',
+    reason: 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
+    coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
+    conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
+  }
+}
 const scopes = (ctx?.scopes || []).map((s) => ({
   ...s,
   methodKeys: s.methodKeys || [],
@@ -429,7 +448,11 @@ described = described.filter(Boolean)
 // --- Coverage is COMPUTED, never asserted ----------------------------------
 const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
 const entriesOf = (rs) => rs.flatMap((r) => r.indexEntries || [])
-const coveredKeys = (rs) => new Set(entriesOf(rs).map((e) => e.key).filter((k) => allKeys.has(k)))
+// A BLANK `card` is not coverage. The schema requires the field but sets no minLength, so `{ key, card: "" }`
+// validates — and the engine's own `cardRef` reads an empty card as absent, so the row would render with no card
+// while this arithmetic called it described. The nonblank test belongs here, next to the count that uses it.
+const hasCard = (e) => typeof e.card === 'string' && e.card.trim() !== ''
+const coveredKeys = (rs) => new Set(entriesOf(rs).filter(hasCard).map((e) => e.key).filter((k) => allKeys.has(k)))
 let covered = coveredKeys(described)
 let uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
 // The computed floor under the two-card rule (mixin only — see `wiringOnlyMixinKeys` for why the other
@@ -530,7 +553,12 @@ PRODUCE:
 // The workflow's verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after
 // the repair round, so it reads the repaired counts: hoisted above that block it would rule on the round-1
 // numbers and report a run complete that the repair round had not finished.
-const complete = isComplete(allKeys.size, uncoveredKeys, wiringOnly)
+// Coverage alone is not completion: the report and the index are the DELIVERABLES, and a Merge agent that returned
+// nothing wrote neither. Without this the run reported complete and handed back fallback paths for
+// `customizations.md` / `behaviour-index.json` that may be absent or left over from an earlier run.
+const mergeOk = !!(merged && merged.reportPath && merged.indexPath)
+if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
+const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
 const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
 log(complete
   ? `complete: ${covered.size}/${allKeys.size} rows described`

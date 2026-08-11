@@ -1147,6 +1147,17 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
     return;
   }
   if (value && typeof value === "object") {
+    // A `{ file: … }` / `{ body: … }` reference contributes its CONTENT, wherever in the manifest it sits — not
+    // only inside a `schemas`/`seed` array. Before this, `section` entries and file-backed `detailSchemas` /
+    // `profileSchemas` were walked generically, which hashed the PATH STRING: editing one of those files changed
+    // the rendered plan and left `planVersion` identical, so an old approval authorised a plan the user never saw.
+    // Reproduced on a two-file manifest before the fix — same version before and after rewriting the detail body.
+    // The remaining keys (`title`, `entity`, …) are still hashed below; only `body`/`file` are replaced by content.
+    if (typeof value.file === "string" || typeof value.body === "string") {
+      h.update("\u0001B");
+      h.update(schemaBodyFor(value, readBody));
+      h.update("\u0001");
+    }
     // Object key order is NOT a plan input, so keys are sorted — two manifests differing only in key order must
     // not read as two different plans.
     h.update("\u0001O");
@@ -1157,6 +1168,9 @@ function feedPlanVersion(h, value, key, readBody, state, depth) {
       if (a > b) { return 1; }
       return 0;
     })) {
+      // `body`/`file` were already replaced by CONTENT above; hashing the raw path here as well would put the
+      // temp-directory name back into the version and break re-planning the same bodies from a fresh folder.
+      if ((k === "file" || k === "body") && (typeof value.file === "string" || typeof value.body === "string")) continue;
       h.update(k);
       h.update("\u0001");
       feedPlanVersion(h, value[k], k, readBody, state, depth + 1);
@@ -1648,6 +1662,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       totals: {
         scopes: result.stubIndex.length,
         stubs: result.stubIndex.reduce((n, s) => n + s.counts.stubs, 0),
+        // The ⚠ Confirm MEMBER rows (message / mixin / module-dep), summed like the stubs. Absent from this object
+        // until now, while the consumer's "nothing to describe" shortcut tested `!totals.members` — so a surface
+        // with zero method stubs but real message/mixin members read as empty and skipped its analysis entirely.
+        members: result.stubIndex.reduce((n, s) => n + s.counts.members, 0),
         unresolvedTrigger: result.stubIndex.reduce((n, s) => n + s.counts.unresolvedTrigger, 0),
         externalRef: result.stubIndex.reduce((n, s) => n + s.counts.externalRef, 0),
       },

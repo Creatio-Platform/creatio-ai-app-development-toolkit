@@ -375,6 +375,34 @@ check("workflow: the REFS step is its OWN phase and runs BEFORE the round loop �
   /phase\('Refs'\)/.test(wfSrc) && /await refsStep\(\)/.test(wfSrc)
     && /Read \\`\$\{REFS_INDEX\}\\`\. It is REUSABLE only if/.test(wfSrc)
     && wfSrc.indexOf("await refsStep()") < wfSrc.indexOf("while (true) {"));
+// --- the seven findings from the branch review. Each one is a FALSE SUCCESS or a nontermination path: the run
+// reports done, or never stops, while the thing it exists to guarantee did not happen.
+const bhSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+  "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
+const mgSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+  "skills/classic-to-freedom-migration/engine/migrate.mjs"), "utf8");
+
+check("plan version: EVERY file-backed manifest input contributes its CONTENT, not its path — a `section` / `detailSchemas` / `profileSchemas` file could be rewritten with the version unchanged, so an old approval authorised a plan the user never saw",
+  /typeof value\.file === "string" \|\| typeof value\.body === "string"/.test(mgSrc)
+    && /h\.update\(schemaBodyFor\(value, readBody\)\)/.test(mgSrc)
+    && /\(k === "file" \|\| k === "body"\)/.test(mgSrc));
+check("findings: a reopened unit gets ONE repair attempt — the constant key set made `auto` mode rebuild a machine-green page forever, and it is exempt from parking by design",
+  /const findingsPending = new Set\(FINDING_KEYS\)/.test(wfSrc)
+    && /isUnitOpenWithFindings\(u, state\.verify, state\.reachabilityState, findingsPending/.test(wfSrc)
+    && /findingsPending\.delete\(unit\.key\)/.test(wfSrc));
+check("findings: a key naming no published unit REFUSES the run — nothing schedules it, so the run would close green with the reported defect untouched",
+  /stopped: 'unknown-finding-key'/.test(wfSrc) && /unknownCheckpointKeys\(\[\.\.\.FINDING_KEYS\]/.test(wfSrc));
+check("--stubs totals carry `members`, and the shortcut needs BOTH counts explicitly zero — `!totals.members` was true for a digest that never had the field, so a surface with message/mixin members skipped its analysis",
+  /members: result\.stubIndex\.reduce/.test(mgSrc)
+    && /zeroCount\(declaredTotals\.stubs\) && zeroCount\(declaredTotals\.members\)/.test(bhSrc));
+check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
+  /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
+check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
+  /const mergeOk = !!\(merged && merged\.reportPath && merged\.indexPath\)/.test(bhSrc)
+    && /const complete = mergeOk && isComplete\(/.test(bhSrc));
+check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
+  /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
+
 check("workflow: the refs cache is invalidated on a DIFFERENT plan version or environment, not merely on the index being absent — a stale slice carries another plan's Adjustments, which live outside the generated tables and so nothing downstream would catch",
   /records BOTH \\`planVersion:/.test(wfSrc) && /a different environment/.test(wfSrc)
     && /REBUILD EVERYTHING below — delete the stale files first/.test(wfSrc)
@@ -733,8 +761,8 @@ check("isComplete: missing lists do not throw and do not silently pass",
 check("cba workflow: the run FEEDS the filter and RE-COMPUTES it after the repair round",
   (cbaSrc.match(/wiringOnly\s*=\s*wiringOnlyMixinKeys\(entriesOf\(described\), allKeys\)/g) || []).length === 2,
   () => cbaSrc.split("\n").filter((l) => /wiringOnlyMixinKeys/.test(l)).join("\n"));
-check("cba workflow: the verdict is `isComplete` over the run's counts — not a hand-inlined boolean that can drift from the tested one",
-  /const complete = isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc));
+check("cba workflow: the verdict is `isComplete` over the run's counts — not a hand-inlined boolean that can drift from the tested one — AND it also requires a Merge that produced the deliverables",
+  /const complete = mergeOk && isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc));
 check("cba workflow: the repair set is built by `repairKeys` off all three lists, so the flagged rows are re-described rather than only reported",
   /const toRepair = repairKeys\(uncoveredKeys, critiqueUncovered, wiringOnly\)/.test(cbaSrc));
 check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
@@ -745,7 +773,7 @@ check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prom
 // counts and reported a run finished that the repair round had not finished. That is the one mutation source-level
 // pinning cannot see unless position is asserted outright.
 const cbaRepairAt = cbaSrc.indexOf("if (toRepair.length) {");
-const cbaVerdictAt = cbaSrc.indexOf("const complete = isComplete(");
+const cbaVerdictAt = cbaSrc.indexOf("const complete = mergeOk && isComplete(");
 check("cba workflow: the verdict is computed AFTER the repair round — hoisting it above would read the stale round-1 counts and pass every pin above",
   cbaRepairAt > 0 && cbaVerdictAt > cbaRepairAt,
   () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
