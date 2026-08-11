@@ -1210,10 +1210,84 @@ const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "
 // resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
 // (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
 const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+// settled PLACEMENT — the app-hosting facts a `--plan` run must carry: the target package is writable, and the
+// app that will host the section is decided. This shape is the `existing-app` happy path: the app's primary
+// package IS the target package and is editable, so `create-app-section` (which takes no package parameter)
+// would land the section exactly where the plan says.
+const FULL_PLACEMENT = {
+  targetPackageEditable: { resolved: true, value: true, evidence: "InstallType 0" },
+  application: { resolved: true, code: "UsrSUApp" },
+  primaryPackage: { resolved: true, name: "UsrSU", editable: true },
+  targetPackageInApplication: { resolved: true, value: true },
+  sectionHost: { resolved: true, mode: "existing-app" },
+};
 const planRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], {
-  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS }), encoding: "utf8" });
+  input: JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT }), encoding: "utf8" });
 check("migrate.mjs --plan: gate-clean, planMeta-complete run prints the plan skeleton (## … Classic → Freedom UI), no JSON envelope, exit 0",
   planRun.status === 0 && /Classic → Freedom UI/.test(planRun.stdout || "") && !/"changeSet"/.test(planRun.stdout || "") && !/GATE BLOCKED/.test(planRun.stdout || "") && !/PLAN INCOMPLETE/.test(planRun.stdout || ""));
+// ⛔ PLACEMENT GATE — the app-hosting facts. A run once cleared every other gate, built five pages, and only then
+// found that `create-app-section` could not run at all: the owning app was an install-time wrapper with no primary
+// package, its one package was locked, and the editable target package was not in the app's composition. Each leg
+// below is one of those three, plus the "never checked" case the whole gate exists for.
+const placementBase = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS };
+const runWithPlacement = (placement, mode) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", mode], {
+  input: JSON.stringify(placement === undefined ? placementBase : { ...placementBase, placement }), encoding: "utf8" });
+const planWithPlacement = (placement) => runWithPlacement(placement, "--plan");
+// The section-registration DELIVERABLE lives in the control table (`--checklist`), not in the plan body — the
+// plan deliberately carries no post-implementation table. So the row assertions below read `--checklist`, while
+// the gate assertions read `--plan` (the only mode placement gates, like planMeta/signals).
+const checklistWithPlacement = (placement) => runWithPlacement(placement, "--checklist");
+// (a) never checked — the state EVERY pre-gate run was in. Silence is not a "yes".
+const plNone = planWithPlacement(undefined);
+check("placement gate: a --plan run with NO manifest.placement is INCOMPLETE (exit 2) and names every unresolved key",
+  plNone.status === 2 && /PLAN INCOMPLETE — placement not settled/.test(plNone.stderr || "")
+  && /targetPackageEditable/.test(plNone.stderr || "") && /sectionHost/.test(plNone.stderr || ""),
+  () => plNone.stderr);
+// (b) the app has NO primary package — the live failure: `create-app-section` writes to the app's primary package,
+// so with none it cannot run. A resolved `null` is a real answer (get-app-info erroring with "Primary package not
+// found in response." IS the evidence) — the gate must still refuse `existing-app`.
+const plNoPrimary = planWithPlacement({ ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false } });
+check("placement gate: mode 'existing-app' + app with NO primary package → INCOMPLETE, and the message offers new-app / pages-only-no-menu",
+  plNoPrimary.status === 2 && /has NO primary package/.test(plNoPrimary.stderr || "")
+  && /new-app/.test(plNoPrimary.stderr || "") && /pages-only-no-menu/.test(plNoPrimary.stderr || ""));
+// (c) the app HAS a primary package, but it is not the target package — the second-order miss the primary failure
+// masked: the section would be created into a package the migration does not own.
+const plWrongPrimary = planWithPlacement({ ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "SomeVendorPkg", editable: true }, targetPackageInApplication: { resolved: true, value: false } });
+check("placement gate: mode 'existing-app' + primary package ≠ targetPackage → INCOMPLETE (create-app-section takes no package parameter)",
+  plWrongPrimary.status === 2 && /primary package is 'SomeVendorPkg', not the target package 'UsrSU'/.test(plWrongPrimary.stderr || ""));
+// (d) a locked target package blocks EVERY mode — nothing can be built, menu entry or not.
+const plLockedTarget = planWithPlacement({ ...FULL_PLACEMENT, targetPackageEditable: { resolved: true, value: false, evidence: "InstallType 1; layers isClientEditable:false" }, sectionHost: { resolved: true, mode: "pages-only-no-menu" } });
+check("placement gate: a NON-editable target package is INCOMPLETE even for pages-only-no-menu (no page can be built there)",
+  plLockedTarget.status === 2 && /cannot receive design-time writes/.test(plLockedTarget.stderr || ""));
+// (e) an APPROVED pages-only-no-menu run is clean — and the plan says the section is deliberately not registered,
+// instead of carrying a gated row nothing will ever satisfy.
+const pagesOnlyPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "pages-only-no-menu" } };
+const plPagesOnly = planWithPlacement(pagesOnlyPlacement);
+check("placement gate: an approved 'pages-only-no-menu' plan is NOT blocked — the missing menu entry is a decision, not a defect",
+  plPagesOnly.status === 0 && !/PLAN INCOMPLETE/.test(plPagesOnly.stderr || ""),
+  () => plPagesOnly.stderr);
+const clPagesOnly = checklistWithPlacement(pagesOnlyPlacement);
+check("placement: 'pages-only-no-menu' renders the section row as deliberately NOT built — no gated row nothing will ever satisfy",
+  /Navigable section registered — \*\*deliberately NOT built\*\*/.test(clPagesOnly.stdout || "")
+  && !/Navigable section registered — the Freedom section appears/.test(clPagesOnly.stdout || ""),
+  () => (clPagesOnly.stdout || "").split("\n").filter((l) => /Navigable section/.test(l)).join("\n"));
+// (f) 'new-app' needs no primary match — the build creates its own app — but it KEEPS the gated registration row.
+const newAppPlacement = { ...FULL_PLACEMENT, application: { resolved: true, code: null }, primaryPackage: { resolved: true, name: null, editable: false }, targetPackageInApplication: { resolved: true, value: false }, sectionHost: { resolved: true, mode: "new-app" } };
+check("placement gate: mode 'new-app' clears the gate (the build creates its own app, so no primary match is required)",
+  planWithPlacement(newAppPlacement).status === 0);
+check("placement: 'new-app' still carries the GATED navigable-section deliverable (a menu entry is planned, so it must be evidenced)",
+  /Navigable section registered — the Freedom section appears/.test(checklistWithPlacement(newAppPlacement).stdout || ""));
+// …and the decision reaches the BUILD side. A build agent owns one page and never sees `manifest.placement`, so
+// `--units` republishes the host mode: without it `new-app` would be an approvable plan whose build still fails at
+// the last unit (an agent calling create-app-section against an app that cannot host a section) — a milder form of
+// the very failure this gate exists to prevent.
+const unitsFor = (placement) => JSON.parse(runWithPlacement(placement, "--units").stdout || "{}");
+check("placement: `--units` republishes the approved sectionHost so a fresh-context build agent can see it (new-app / pages-only-no-menu / null)",
+  unitsFor(newAppPlacement).sectionHost === "new-app"
+  && unitsFor(pagesOnlyPlacement).sectionHost === "pages-only-no-menu"
+  && unitsFor(FULL_PLACEMENT).sectionHost === "existing-app"
+  && unitsFor(undefined).sectionHost === null,
+  () => ({ newApp: unitsFor(newAppPlacement).sectionHost, pagesOnly: unitsFor(pagesOnlyPlacement).sectionHost, none: unitsFor(undefined).sectionHost }));
 // Smell #2 — planMeta fills the plan's Overview/Main-scope so the engine renders a COMPLETE plan (no hand-editing).
 const pmRun = runMigration({ entity: "Applicant",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -1241,7 +1315,7 @@ const outPath = path.join(os.tmpdir(), `c2f_planout_test_${process.pid}.md`);
 try {
   fs.rmSync(outPath, { force: true });
   const outRun = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan", "--out", outPath], {
-    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
+    input: JSON.stringify({ entity: "X", seed: CLEAN_SEED, targetPackage: "UsrSU", planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, placement: FULL_PLACEMENT, schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }] }), encoding: "utf8" });
   const outWritten = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : "";
   check("--out: engine WRITES the plan to the file; stdout is a confirmation, not the plan body",
     outRun.status === 0 && /Classic → Freedom UI/.test(outWritten)
@@ -4797,6 +4871,24 @@ check("ENG-94975 P2 reachability: a key in `built.reachability` CLOSES its row �
   allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /sectionRegistered confirmed on-stand/.test(rcSection.markdown)
   && allEq(marksFor(rcNothing.markdown, SECTION_RE), "⚠ verify"),
   () => ({ section: marksFor(rcSection.markdown, SECTION_RE), nothing: marksFor(rcNothing.markdown, SECTION_RE) }));
+// …and the SAME row under an approved `pages-only-no-menu` placement. This is the leg that decides whether the
+// mode is usable at all: the plan gate and the checklist label are cosmetic if `--verify` — the gate the build
+// executor actually loops on until green — still counts the un-registered section as an open deliverable. A run
+// that deliberately ships no menu entry must be able to reach `complete` with NO `sectionRegistered` evidence,
+// while the SAME manifest under a menu-planning mode must still report it open.
+const rcPagesOnly = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "pages-only-no-menu" }, { pages: rcPages, reachability: {}, miniPageWired: true });
+const rcNewApp = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "new-app" }, { pages: rcPages, reachability: {}, miniPageWired: true });
+// The row stays VISIBLE (nothing silently drops off the control table) but loses its `vk`, so it resolves to
+// `☐ confirm on-stand` — outcome `skip`, which is tallied into neither `missing` nor `unverified`. That is what
+// makes the mode usable: the executor loops on `--verify` until green, and a machine-gated row for a deliverable
+// the plan deliberately dropped would never close.
+check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but un-gated — it adds nothing to missing/unverified, so `--verify` can still reach green",
+  allEq(marksFor(rcPagesOnly.markdown, SECTION_RE), "☐ confirm on-stand") && /deliberately NOT built/.test(rcPagesOnly.markdown)
+  && rcPagesOnly.missing === rcNewApp.missing && rcPagesOnly.unverified === rcNewApp.unverified - 1,
+  () => ({ marks: marksFor(rcPagesOnly.markdown, SECTION_RE), pagesOnly: { missing: rcPagesOnly.missing, unverified: rcPagesOnly.unverified }, newApp: { missing: rcNewApp.missing, unverified: rcNewApp.unverified } }));
+check("placement verify (control): the SAME payload under 'new-app' still leaves the section row OPEN — the drop is the approved mode's doing, not a hole in the gate",
+  allEq(marksFor(rcNewApp.markdown, SECTION_RE), "⚠ verify"),
+  () => marksFor(rcNewApp.markdown, SECTION_RE));
 // PRECEDENCE, the rule that was asserted only in a comment: the payload carries BOTH, and they disagree.
 const rcConflict = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { miniPageWired: false }, miniPageWired: true });
 check("ENG-94975 P2 reachability PRECEDENCE: `reachability.miniPageWired = false` is a HARD ❌ MISSING EVEN THOUGH the payload root also carries `miniPageWired: true` — the verifier's considered answer is never overturned by a stale root-level boolean",

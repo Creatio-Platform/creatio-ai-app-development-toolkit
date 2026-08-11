@@ -120,18 +120,61 @@ Decide *where* Freedom artifacts can be created before choosing templates. Follo
 2. Classify: **same package** (editable + source-owned + matches ownership) · **replacing/extension package** (original locked but replacement is supported) · **new package/app** (read-only, vendor/base, unsafe, or user wants isolation) · **blocked/manual** (ownership/lock unverifiable and touching it risks a shared/base package).
 3. Record evidence + decision in the plan. If the user specified a strategy, still verify it is technically possible and call out conflicts. Whole-package → decide once and reuse (a vendor/locked owning package ⇒ new package/app for the app's own sections + replacing deltas for base sections it extends).
 
+**3.1 — A writable package is NOT enough: settle whether an APP can host the section (`manifest.placement`).**
+Finding an editable package answers "where do pages go". It does not answer "can the section be
+registered in the menu" — and a run that conflates the two builds every page, then discovers at the
+last unit that `create-app-section` cannot run at all. **`create-app-section` takes no package
+parameter: it writes to the APP's PRIMARY package.** So a menu-registered section needs the app's
+primary package to BE the target package, and to be writable. Customer stands carry every
+combination — fully locked packages, partly unlocked ones (an extension package unlocked over a
+locked base), install-time app wrappers with **no primary package at all** (an app created by
+installing a package carries one only when the package shipped an app descriptor). None of this is
+derivable from the page bodies, so record it as facts, not prose — the engine gates `--plan` on it:
+
+```json
+"placement": {
+  "targetPackageEditable":      { "resolved": true, "value": true,  "evidence": "InstallType 0; every layer isClientEditable:true" },
+  "application":                { "resolved": true, "code": "UsrTasksApp" },
+  "primaryPackage":             { "resolved": true, "name": "UsrTasks", "editable": true },
+  "targetPackageInApplication": { "resolved": true, "value": true },
+  "sectionHost":                { "resolved": true, "mode": "existing-app" }
+}
+```
+
+Collect every value **read-only**, and record a verified `null`/`false` exactly like a verified
+"none" elsewhere — "never checked" is what the gate rejects:
+
+| Fact | How to read it |
+|---|---|
+| `targetPackageEditable` | `list-packages` + `SysPackage.InstallType` (0 = editable) + per-layer `isClientEditable` |
+| `application` | `find-app` / `get-app-info` for the package that owns the entity; `code: null` when no app owns it |
+| `primaryPackage` | `get-app-info`. **`{"success":false,"error":"Primary package not found in response."}` IS the answer** — that app has none: record `{"resolved": true, "name": null, "editable": false}`, do not treat it as a tool failure |
+| `targetPackageInApplication` | `odata-read SysPackageInInstalledApp` filtered by `SysPackage/Id` of the target package (`count: 0` ⇒ `false`) |
+
+Then decide `sectionHost.mode` — and put the decision to the user whenever it is not `existing-app`:
+
+| Mode | When | What the build does |
+|---|---|---|
+| `existing-app` | the app's primary package IS the target package and is editable | `create-app-section` into that app |
+| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | `create-app` FIRST — the platform gives the new app its own editable primary package — then register the section there. **The app must exist BEFORE the build starts:** `--units` republishes `sectionHost` so the executor can see the decision, but no build unit creates the app for you |
+| `pages-only-no-menu` | the user accepts pages reachable by URL / page bindings only | no registration; the checklist row is rendered as a deliberate drop, not a gated deliverable |
+
+**Never repair an app's package composition on your own.** Linking a package to an app or flipping
+its primary flag changes which package owns the app's identity and where the Section Wizard writes
+every future schema. Surface it as a decision with these three modes; the user picks.
+
 ### 4. Reconstruct The Effective Classic Page (engine)
 
 `get-client-unit-schema` returns only the top replacing schema's own body — for base-product pages often a thin override with empty `diff`/`details`/`businessRules`. **An empty block in one schema is NOT evidence the page has none** — never report "no rules / no layout / no details" from a single schema. Reconstruct the *effective* page by merging the whole chain. Prefer the bundled engine over hand-merging; do not eyeball-merge.
 
 **4.0 — Fastest path: assemble the whole manifest in one clio call (`get-classic-page-sources`).**
-`clio-run { "command": "get-classic-page-sources", "args": { "schema-name": "<PageSchema>", "output-file": "<scratch>/manifest.json" } }` does 4.1–4.2 server-side: it enumerates the same-named schema chain (base→top), loads every body, walks the parent-template seed, and gathers `entity`/`entityColumns`/`columnTitles`/`resources`/`detailSchemas`/`section`/`childPageSchemas` — then writes `manifest.json` to disk. The bodies live in that file, **never in the response** (you get back only the path + counts), so multi-KB schema bodies never pass through you and there is no transcription slip to corrupt the fold. Point `--output-file` at your scratch dir, never the repo (4.2's temp policy). **It does NOT gather the agent-supplied fields** — after the file is written, add `template`, `targetPackage`, and `planMeta` (4.2 / step 6) before you run the engine (4.3). Resolve the arg shape with `get-tool-contract` first. This is the ONLY manifest-assembly command and there is no granular per-layer fetch tool — if the bundle cannot run (older clio, or it errors on an edge-case page), fall back to reconstructing the bodies by hand (4.1) from the surviving reads.
+`clio-run { "command": "get-classic-page-sources", "args": { "schema-name": "<PageSchema>", "output-file": "<scratch>/manifest.json" } }` does 4.1–4.2 server-side: it enumerates the same-named schema chain (base→top), loads every body, walks the parent-template seed, and gathers `entity`/`entityColumns`/`columnTitles`/`resources`/`detailSchemas`/`section`/`childPageSchemas` — then writes `manifest.json` to disk. The bodies live in that file, **never in the response** (you get back only the path + counts), so multi-KB schema bodies never pass through you and there is no transcription slip to corrupt the fold. Point `--output-file` at your scratch dir, never the repo (4.2's temp policy). **It does NOT gather the agent-supplied fields** — after the file is written, add `template`, `targetPackage`, `placement` (step 3.1) and `planMeta` (4.2 / step 6) before you run the engine (4.3). Resolve the arg shape with `get-tool-contract` first. This is the ONLY manifest-assembly command and there is no granular per-layer fetch tool — if the bundle cannot run (older clio, or it errors on an edge-case page), fall back to reconstructing the bodies by hand (4.1) from the surviving reads.
 
 **4.1 — Acquire the schema bodies, base→top, INCLUDING the parent-template chain (the F2 seed is mandatory).**
 *(4.0 does all of this in one call — do 4.1 by hand only when the bundle cannot run.)* Read each layer body from the surviving reads — `get-client-unit-schema` (the top replacing schema's own body) plus `download-configuration-by-environment` / the designer for the rest of the chain (per `./references/classic-to-freedom-mapping.md`). Then follow the page's `parentName` up the platform template chain (e.g. `Applicant1Page` → `BaseModulePageV2` → `BasePageV2` → `BaseEntityPage`) and fetch those base-template schemas too. The base template defines the base containers (`LeftModulesContainer`, `Tabs`, `ProfileContainer`), the base actions (the `ProcessButton` = Run process), and the ESN/Feed tab. **The seed MUST be the real fetched bodies pasted verbatim — NOT a hand-authored skeleton.** A skeleton listing only container names clears the parent check yet silently drops base actions and the true container nesting (the engine detects this as `seedQuality.looksSkeletal` and blocks — see 4.3). If you truly cannot fetch a base body, say so and stop; do not fabricate one. (Tools unavailable → enumerate + read each body via `get-client-unit-schema` / `download-configuration-by-environment` / the designer, per `./references/classic-to-freedom-mapping.md`.)
 
 **4.2 — Build the manifest and supply the resolution inputs.**
-*(Ran 4.0? The bundle already wrote every field below except the agent-supplied ones — you only ADD `template` / `targetPackage` / `planMeta`. Building the whole manifest by hand instead:)* Write `{ "entity", "entityColumns", "schemas":[{pkg,body}], "seed":[{pkg,body}], "resources":{…}, "columnTitles":{…}, "detailSchemas":{…}, "section":[…], "childPageSchemas":{…}, "template", "targetPackage", "planMeta":{…} }` — paste each fetched layer body inline. (`planMeta` = the plan's Overview/Main-scope values; see step 6.) **Write the manifest and the fetched Classic bodies to a temporary directory OUTSIDE the migration repository's working tree** (your agent's scratch/temp area, or the OS temp dir — never inside the repo), and pass that path to `migrate.mjs`. They carry stand-sourced customer captions/values, so keeping them outside the repo means there is nothing to `.gitignore` and nothing that can be accidentally committed. **Delete that temp directory once the migration is complete** (step 8) — the raw inputs have no further use. (Only the OUTPUT is versioned in the project's migration folder: the `--out plan.md` file plus the doc set `plan.md`/`worklog.md`/….) Supply these so the spec shows real names, not codes, and both gates can clear:
+*(Ran 4.0? The bundle already wrote every field below except the agent-supplied ones — you only ADD `template` / `targetPackage` / `placement` / `planMeta`. Building the whole manifest by hand instead:)* Write `{ "entity", "entityColumns", "schemas":[{pkg,body}], "seed":[{pkg,body}], "resources":{…}, "columnTitles":{…}, "detailSchemas":{…}, "section":[…], "childPageSchemas":{…}, "template", "targetPackage", "placement":{…}, "planMeta":{…} }` — paste each fetched layer body inline. (`planMeta` = the plan's Overview/Main-scope values; see step 6.) **Write the manifest and the fetched Classic bodies to a temporary directory OUTSIDE the migration repository's working tree** (your agent's scratch/temp area, or the OS temp dir — never inside the repo), and pass that path to `migrate.mjs`. They carry stand-sourced customer captions/values, so keeping them outside the repo means there is nothing to `.gitignore` and nothing that can be accidentally committed. **Delete that temp directory once the migration is complete** (step 8) — the raw inputs have no further use. (Only the OUTPUT is versioned in the project's migration folder: the `--out plan.md` file plus the doc set `plan.md`/`worklog.md`/….) Supply these so the spec shows real names, not codes, and both gates can clear:
 
 - **`seed` (required)** — the fetched parent-template bodies (step 4.1). The gate BLOCKS a run with no `seed` (a Classic page always extends a base template; skipping it drops inherited base actions + container layout). The only escape is `"noParentTemplate": true` — set it ONLY when you have VERIFIED on-stand that the page genuinely has no parent template; it is not a shortcut around fetching the seed.
 - **`template` / `targetPackage`** — the chosen Freedom form template and target package; they fill the design-spec header.

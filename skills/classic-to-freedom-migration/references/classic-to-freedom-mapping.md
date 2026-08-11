@@ -31,6 +31,31 @@ Evidence to collect:
 - existing replacing schemas or Freedom pages for the same entity
 - explicit user package strategy, if provided
 
+## Section Host Mapping
+
+A writable package answers *where pages go*. It does not answer *whether the section can be
+registered in the menu* — those are two different questions, and conflating them is how a run builds
+every page and only then finds that `create-app-section` cannot run.
+
+**`create-app-section` takes no package parameter.** It writes to the application's **primary**
+package. Everything below follows from that one fact.
+
+| Application situation | Section host | Notes |
+| --- | --- | --- |
+| App's primary package IS the target package, and it is editable | `existing-app` | The only situation where the section lands where the plan says it will. |
+| App has a primary package, but it is NOT the target package | `new-app`, or fix composition on-stand first | Registering anyway writes the section into a package the migration does not own. |
+| App's primary package is locked (vendor/installed) | `new-app` | Design-time writes into it are refused; unlocking a vendor package is not a migration decision. |
+| App has **no** primary package at all | `new-app` | Typical of an app created by *installing* a package: the wrapper carries a primary package only when the package shipped an app descriptor. `get-app-info` fails with *"Primary package not found in response."* — that error IS the evidence, not a tool defect. |
+| No app owns the entity's package | `new-app` | `create-app` gives the new app its own editable primary package. |
+| User accepts URL/page-binding reachability only | `pages-only-no-menu` | Legitimate, but it must be an approved decision recorded in `decisions.md` — never a silent fallback after a failed registration. |
+
+Record the answers in `manifest.placement` (see SKILL.md step 3.1); `migrate.mjs --plan` refuses to
+present a plan until they are resolved.
+
+**Never repair an app's package composition unasked.** Linking a package to an application or
+flipping its primary flag changes which package owns the app's identity and where the Section Wizard
+writes every future schema. Surface it as a decision; the user picks the host mode.
+
 ## Layout Mapping
 
 Start with the page template, then map child controls. Do not choose a Freedom form template only from the entity name or section caption.

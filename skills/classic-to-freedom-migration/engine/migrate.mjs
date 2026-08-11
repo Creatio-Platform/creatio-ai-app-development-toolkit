@@ -19,6 +19,8 @@
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
+//     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
+
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Confirm rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
 //   }
 // CLI: `--plan`/`--spec`/`--checklist` print the artifact; add `--out <file>` to WRITE it (the agent presents the
@@ -525,6 +527,67 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
 // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
 const SIGNAL_KEYS = ["dcm", "processes", "printables"];
+// PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
+// built five pages, and only then discovered that `create-app-section` cannot run at all: the owning app was an
+// install-time wrapper with NO primary package, its one package was locked, and the editable target package was
+// not in the app's composition. None of the three is derivable from the page bodies, and `targetPackage` alone
+// proves only that SOME package is writable — not that the APP can register a menu section into it.
+// `create-app-section` takes NO package parameter: it writes to the app's PRIMARY package. So a menu-registered
+// Freedom section is possible only when the app's primary package IS the target package AND that package is
+// writable. Everything else is a decision, not a fallback — recorded here so it is made at plan time.
+//   "placement": {
+//     "targetPackageEditable":     { "resolved": true, "value": true,  "evidence": "InstallType 0; every layer isClientEditable:true" },
+//     "application":               { "resolved": true, "code": "UsrTasksApp" | null },
+//     "primaryPackage":            { "resolved": true, "name": "UsrTasks" | null, "editable": true },
+//     "targetPackageInApplication":{ "resolved": true, "value": true },
+//     "sectionHost":               { "resolved": true, "mode": "existing-app" | "new-app" | "pages-only-no-menu" } }
+const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage", "targetPackageInApplication", "sectionHost"];
+// `existing-app` — register into the app that already owns the entity (the only mode that needs the primary ==
+// target match). `new-app` — the build creates its own Freedom app first (the answer when the owning app is a
+// vendor/install wrapper). `pages-only-no-menu` — pages ship, the section is deliberately NOT registered; a
+// legitimate outcome, but an APPROVED one, never a silent fallback: the whole point of this gate is that the
+// missing menu entry is a plan decision, not a surprise found two hours into a build.
+const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu"];
+// The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
+// CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
+// and stop there, because a rule evaluated over a missing fact would just invent a verdict.
+export function placementIssues(manifest) {
+  const p = manifest.placement && typeof manifest.placement === "object" ? manifest.placement : {};
+  const has = (k) => p[k] && typeof p[k] === "object" && p[k].resolved === true;
+  const unresolved = PLACEMENT_KEYS.filter((k) => !has(k));
+  if (unresolved.length) {
+    return unresolved.map((k) => `placement.${k} not resolved — record it in manifest.placement as { "resolved": true, … } (a verified "no"/null is a valid answer; "never checked" is not)`);
+  }
+  const issues = [];
+  const target = typeof manifest.targetPackage === "string" ? manifest.targetPackage.trim() : "";
+  // (1) Nothing can be built into a locked package — this one holds in EVERY mode, so it is checked first and
+  // independently of the section-host decision.
+  if (p.targetPackageEditable.value !== true) {
+    issues.push(`placement.targetPackageEditable is not true — target package '${target || "(unset)"}' cannot receive design-time writes, so NO page can be built there. Pick an editable package (or create one) before this plan is approvable.`);
+  }
+  const mode = p.sectionHost.mode;
+  if (!SECTION_HOST_MODES.includes(mode)) {
+    issues.push(`placement.sectionHost.mode '${mode}' is not one of ${SECTION_HOST_MODES.join(" / ")}`);
+    return issues;
+  }
+  // (2) The `existing-app` contract, stated as the three things `create-app-section` actually needs. Each failure
+  // names the alternative modes, because "this app cannot host it" is not a dead end — it is the fork.
+  if (mode === "existing-app") {
+    const alt = "Either switch placement.sectionHost.mode to 'new-app' (the build creates its own Freedom app), or to 'pages-only-no-menu' (ship the pages without a menu entry) — or fix the app's package composition on-stand FIRST and re-record these facts.";
+    if (!p.application.code) {
+      issues.push(`placement.sectionHost.mode is 'existing-app' but placement.application.code is null — there is no app to register the section into. ${alt}`);
+    }
+    if (!p.primaryPackage.name) {
+      issues.push(`placement.sectionHost.mode is 'existing-app' but app '${p.application.code || "(none)"}' has NO primary package — create-app-section writes to the app's primary package, so it cannot run at all. ${alt}`);
+    } else if (target && p.primaryPackage.name !== target) {
+      issues.push(`placement.sectionHost.mode is 'existing-app' but the app's primary package is '${p.primaryPackage.name}', not the target package '${target}' — create-app-section takes no package parameter, so the section would land in the WRONG package. ${alt}`);
+    }
+    if (p.primaryPackage.name && p.primaryPackage.editable !== true) {
+      issues.push(`placement.sectionHost.mode is 'existing-app' but the app's primary package '${p.primaryPackage.name}' is not editable — the section cannot be written into it. ${alt}`);
+    }
+  }
+  return issues;
+}
 // ONE opts object for every row-rendering entry point (`--checklist`, `--verify`, the plan/spec renderers) and
 // for the sub-page folds. `--checklist` and `--verify` used to build their own, and the verify one was thinner
 // (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agreed only for as long
@@ -541,6 +604,11 @@ export function checklistOpts(manifest, opts = {}) {
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => !signals[k] || typeof signals[k] !== "object" || signals[k].resolved !== true),
+    placementBlockers: placementIssues(manifest),
+    // The DECIDED host mode, or null when placement was never recorded. Read by the renderer so the
+    // `Navigable section registered` deliverable is emitted only when a menu entry is actually planned — an
+    // approved `pages-only-no-menu` run must not carry a row it deliberately will never satisfy.
+    sectionHostMode: manifest.placement?.sectionHost?.mode ?? null,
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
   };
@@ -1459,6 +1527,10 @@ export function runMigration(manifest, opts = {}) {
   out.planMetaMissing = specOpts.planMetaMissing;
   out.signals = specOpts.signals;
   out.signalsMissing = specOpts.signalsMissing;
+  // PLACEMENT completeness — the app-hosting facts. Mirrored here for the same reason as the two above: the CLI
+  // gate reads the result, not the manifest.
+  out.placement = manifest.placement || null;
+  out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan`/`pageUnits` can read it — both take it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
   out.designSpec = renderDesignSpec(out, specOpts);
@@ -1736,7 +1808,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const structBad = result.structure && !result.structure.complete;
   // finding 8 — an unfilled `--plan` (required planMeta still `<FILL: …>`) is not approvable. Only in --plan
   // mode: `--spec`/default runs legitimately need no planMeta.
-  const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0));
+  const planIncomplete = planMode && ((result.planMetaMissing?.length > 0) || (result.signalsMissing?.length > 0) || (result.placementBlockers?.length > 0));
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
@@ -1779,6 +1851,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the DCM/process/printable checks and add manifest.signals (each { resolved:true, present:<bool> }), then re-run.\n");
+  if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   if (notReady) process.exit(2);
