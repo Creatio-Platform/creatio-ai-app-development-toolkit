@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Classic &rarr; Freedom Migration &mdash; the flow as built</title>
+<!-- Drawn from the code on branch ENG-94529-migration-stage-2-poc. Companion to flow-and-engine.html,
+     which predates the freedom-build-executor phases (Reconcile / Refs / Preflight / Close), the `app`
+     unit and the watch modes — see the delta list at the foot of this page. -->
+</head>
+<body>
+<style>
+  :root {
+    --ink: #12171c;
+    --ink-2: #47535f;
+    --ink-3: #6d7a86;
+    --paper: #f6f7f8;
+    --card: #ffffff;
+    --rule: #dde3e8;
+    --stop: #a4321d;
+    --ok: #1c6b47;
+    --lane-user: #fbe4e7;
+    --lane-mig: #fcf1d4;
+    --lane-exp: #d9f0e3;
+    --lane-exe: #dbe5f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8edf2; --ink-2: #a7b4c0; --ink-3: #7d8b98;
+      --paper: #10151a; --card: #171e25; --rule: #2a343d;
+      --stop: #e08a76; --ok: #6fc79c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8edf2; --ink-2: #a7b4c0; --ink-3: #7d8b98;
+    --paper: #10151a; --card: #171e25; --rule: #2a343d;
+    --stop: #e08a76; --ok: #6fc79c;
+  }
+  :root[data-theme="light"] {
+    --ink: #12171c; --ink-2: #47535f; --ink-3: #6d7a86;
+    --paper: #f6f7f8; --card: #ffffff; --rule: #dde3e8;
+    --stop: #a4321d; --ok: #1c6b47;
+  }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 48px 24px 72px; display: flex; flex-direction: column; gap: 36px; }
+
+  header { display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--rule); padding-bottom: 22px; }
+  .eyebrow { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  h1 { margin: 0; font-size: clamp(26px, 3.4vw, 38px); line-height: 1.15; text-wrap: balance; font-weight: 650; letter-spacing: -.015em; }
+  .sub { margin: 0; color: var(--ink-2); max-width: 68ch; }
+
+  .frame { background: #ffffff; border: 1px solid var(--rule); border-radius: 6px; padding: 18px; overflow-x: auto; }
+  .frame svg { display: block; min-width: 1180px; width: 100%; height: auto; }
+  .frame text { font-family: ui-sans-serif, system-ui, sans-serif; }
+  .frame .t { font-size: 14px; font-weight: 600; fill: #12171c; text-anchor: middle; }
+  .frame .t .s { font-size: 12.5px; font-weight: 450; fill: #45525e; }
+  .frame .dt { fill: #ffffff; font-size: 13px; }
+  .frame .n { fill: #ffffff; stroke: #9aa7b3; stroke-width: 1; }
+  .frame .hot { fill: #ffffff; stroke: #a4321d; stroke-width: 2; }
+  .frame .d { fill: #12171c; stroke: #12171c; }
+  .frame .a { fill: none; stroke: #2b3640; stroke-width: 1.6; marker-end: url(#ar); }
+  .frame .dash { fill: none; stroke: #a4321d; stroke-width: 1.6; stroke-dasharray: 6 4; marker-end: url(#ar); }
+  .frame .l { font-size: 12px; fill: #45525e; }
+  .frame .lane { font-size: 13px; font-weight: 700; fill: #2b3640; text-anchor: middle; letter-spacing: .02em; }
+
+  h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
+  .lede { margin: 0 0 14px; color: var(--ink-2); max-width: 70ch; }
+
+  .lanes { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(238px, 1fr)); }
+  .lane { border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; background: var(--card); border-top: 3px solid var(--sw); }
+  .lane h3 { margin: 0 0 4px; font-size: 14px; font-weight: 650; }
+  .lane p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+
+  ul.delta { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  ul.delta li { display: grid; grid-template-columns: 13ch 1fr; gap: 14px; align-items: baseline; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+  ul.delta li:last-child { border-bottom: 0; }
+  ul.delta b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 600; color: var(--stop); }
+  ul.delta span { color: var(--ink-2); font-size: 14.5px; }
+
+  code, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .89em; }
+  footer { color: var(--ink-3); font-size: 13.5px; border-top: 1px solid var(--rule); padding-top: 18px; }
+  footer b { color: var(--ink-2); font-weight: 600; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">ENG-94529 · ENG-94975 · branch ENG-94529-migration-stage-2-poc</div>
+    <h1>Classic&rarr;Freedom migration: the flow as it is actually built</h1>
+    <p class="sub">Drawn from the code, not from the design. Four lanes, two workflows, seven executor phases — including the three the earlier diagram left out, one of which is where most of a run's time goes.</p>
+  </header>
+
+  <div class="frame">
+<svg viewBox="0 0 1900 1150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Swimlane diagram of the Classic to Freedom migration flow"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2b3640"/></marker></defs><rect x="0" y="0" width="1900" height="200" fill="#fbe4e7"/><rect x="0" y="0" width="120" height="200" fill="#f0cdd2" opacity=".55"/><line x1="0" y1="200" x2="1900" y2="200" stroke="#ffffff" stroke-width="2"/><text class="lane" transform="translate(62,100.0) rotate(-90)">① User</text><rect x="0" y="200" width="1900" height="280" fill="#fcf1d4"/><rect x="0" y="200" width="120" height="280" fill="#ecdcab" opacity=".55"/><line x1="0" y1="480" x2="1900" y2="480" stroke="#ffffff" stroke-width="2"/><text class="lane" transform="translate(62,340.0) rotate(-90)">② skill: classic-to-freedom-migration</text><rect x="0" y="480" width="1900" height="220" fill="#d9f0e3"/><rect x="0" y="480" width="120" height="220" fill="#b3d9c5" opacity=".55"/><line x1="0" y1="700" x2="1900" y2="700" stroke="#ffffff" stroke-width="2"/><text class="lane" transform="translate(62,590.0) rotate(-90)">③ workflow: classic-ui-expert</text><rect x="0" y="700" width="1900" height="450" fill="#dbe5f7"/><rect x="0" y="700" width="120" height="450" fill="#b6c9e6" opacity=".55"/><line x1="0" y1="1150" x2="1900" y2="1150" stroke="#ffffff" stroke-width="2"/><text class="lane" transform="translate(62,925.0) rotate(-90)">④ workflow: freedom-build-executor</text><line x1="120" y1="0" x2="120" y2="1150" stroke="#ffffff" stroke-width="2"/><rect class="n" x="150" y="58" width="200" height="84" rx="3"/><text class="t" x="250.0" y="91.5"><tspan x="250.0" dy="0">asks to migrate</tspan><tspan x="250.0" dy="17">a section</tspan></text><rect class="n" x="900" y="48" width="260" height="104" rx="3"/><text class="t" x="1030.0" y="83.0"><tspan x="1030.0" dy="0">approves the plan</tspan><tspan x="1030.0" dy="17" class="s">records the VERSION in decisions.md</tspan><tspan x="1030.0" dy="17" class="s">picks the watch mode</tspan></text><rect class="n" x="1250" y="58" width="210" height="84" rx="3"/><text class="t" x="1355.0" y="91.5"><tspan x="1355.0" dy="0">opens the built page</tspan><tspan x="1355.0" dy="17" class="s">works through checkFirst</tspan></text><rect class="n" x="1620" y="58" width="210" height="84" rx="3"/><text class="t" x="1725.0" y="91.5"><tspan x="1725.0" dy="0">tests the</tspan><tspan x="1725.0" dy="17">migrated section</tspan></text><rect class="n" x="140" y="248" width="200" height="104" rx="3"/><text class="t" x="240.0" y="283.0"><tspan x="240.0" dy="0">0–3 · scope, target,</tspan><tspan x="240.0" dy="17" class="s">read Classic pages,</tspan><tspan x="240.0" dy="17" class="s">decide package placement</tspan></text><rect class="n" x="370" y="248" width="180" height="104" rx="3"/><text class="t" x="460.0" y="283.0"><tspan x="460.0" dy="0">4–5 · effective page</tspan><tspan x="460.0" dy="17">+ map to Freedom</tspan><tspan x="460.0" dy="17" class="s">--plan / --spec</tspan></text><path class="d" d="M555,300 L645,246 L735,300 L645,354 Z"/><text class="t dt" x="645" y="292"><tspan x="645" dy="0">three gates</tspan><tspan x="645" dy="16">green?</tspan></text><path class="d" d="M760,300 L855,246 L950,300 L855,354 Z"/><text class="t dt" x="855" y="284"><tspan x="855" dy="0">everything</tspan><tspan x="855" dy="16">explained?</tspan><tspan x="855" dy="16">--stubs</tspan></text><rect class="n" x="970" y="248" width="170" height="104" rx="3"/><text class="t" x="1055.0" y="283.0"><tspan x="1055.0" dy="0">6 · present the</tspan><tspan x="1055.0" dy="17">engine-written</tspan><tspan x="1055.0" dy="17">plan verbatim</tspan></text><rect class="n" x="1250" y="248" width="200" height="104" rx="3"/><text class="t" x="1350.0" y="291.5"><tspan x="1350.0" dy="0">7 · hand over PATHS</tspan><tspan x="1350.0" dy="17" class="s">+ mode + findings</tspan></text><rect class="n" x="1600" y="248" width="230" height="104" rx="3"/><text class="t" x="1715.0" y="291.5"><tspan x="1715.0" dy="0">8 · relay verify table,</tspan><tspan x="1715.0" dy="17" class="s">parks, proposals, plan gaps</tspan></text><rect class="n" x="220" y="538" width="200" height="92" rx="3"/><text class="t" x="320.0" y="575.5"><tspan x="320.0" dy="0">Context</tspan><tspan x="320.0" dy="17" class="s">census + shared core</tspan></text><rect class="n" x="470" y="538" width="220" height="92" rx="3"/><text class="t" x="580.0" y="575.5"><tspan x="580.0" dy="0">Describe</tspan><tspan x="580.0" dy="17" class="s">N agents by scope → cards</tspan></text><rect class="n" x="740" y="538" width="200" height="92" rx="3"/><text class="t" x="840.0" y="575.5"><tspan x="840.0" dy="0">Critique</tspan><tspan x="840.0" dy="17" class="s">what no card covers</tspan></text><rect class="n" x="990" y="538" width="200" height="92" rx="3"/><text class="t" x="1090.0" y="575.5"><tspan x="1090.0" dy="0">Merge</tspan><tspan x="1090.0" dy="17" class="s">cards + behaviour-index</tspan></text><rect class="hot" x="140" y="730" width="250" height="104" rx="3"/><text class="t" x="265.0" y="765.0"><tspan x="265.0" dy="0">Reconcile — head of EVERY round</tspan><tspan x="265.0" dy="17" class="s">queue + --units + --verify-digest</tspan><tspan x="265.0" dy="17" class="s">parks a unit after 3 rounds</tspan></text><path class="d" d="M410,782 L490,732 L570,782 L490,832 Z"/><text class="t dt" x="490" y="774"><tspan x="490" dy="0">hard</tspan><tspan x="490" dy="16">stops</tspan></text><rect class="n" x="600" y="730" width="180" height="104" rx="3"/><text class="t" x="690.0" y="765.0"><tspan x="690.0" dy="0">Refs · once per run</tspan><tspan x="690.0" dy="17" class="s">docs cache</tspan><tspan x="690.0" dy="17" class="s">+ spec-key.md slices</tspan></text><rect class="n" x="820" y="730" width="200" height="104" rx="3"/><text class="t" x="920.0" y="765.0"><tspan x="920.0" dy="0">Preflight</tspan><tspan x="920.0" dy="17" class="s">parallel, read-only</tspan><tspan x="920.0" dy="17" class="s">⚠ Confirm worklist</tspan></text><rect class="n" x="1060" y="730" width="220" height="104" rx="3"/><text class="t" x="1170.0" y="765.0"><tspan x="1170.0" dy="0">Judge + Reconcile</tspan><tspan x="1170.0" dy="17">BEFORE any build</tspan><tspan x="1170.0" dy="17" class="s">evidence alone can close</tspan></text><path class="d" d="M1320,782 L1400,734 L1480,782 L1400,830 Z"/><text class="t dt" x="1400" y="774"><tspan x="1400" dy="0">any unit</tspan><tspan x="1400" dy="16">open?</tspan></text><rect class="hot" x="300" y="920" width="260" height="110" rx="3"/><text class="t" x="430.0" y="949.5"><tspan x="430.0" dy="0">app unit · runs first</tspan><tspan x="430.0" dy="17" class="s">create-app → create-app-section</tspan><tspan x="430.0" dy="17" class="s">on the EXISTING entity</tspan><tspan x="430.0" dy="17" class="s">→ delete the stub</tspan></text><rect class="n" x="600" y="920" width="200" height="110" rx="3"/><text class="t" x="700.0" y="958.0"><tspan x="700.0" dy="0">Build</tspan><tspan x="700.0" dy="17" class="s">ONE page, fresh context</tspan><tspan x="700.0" dy="17" class="s">leaf-first</tspan></text><rect class="n" x="840" y="920" width="200" height="110" rx="3"/><text class="t" x="940.0" y="958.0"><tspan x="940.0" dy="0">Verify</tspan><tspan x="940.0" dy="17" class="s">separate read-only agent</tspan><tspan x="940.0" dy="17" class="s">writes --built</tspan></text><rect class="n" x="1080" y="920" width="180" height="110" rx="3"/><text class="t" x="1170.0" y="966.5"><tspan x="1170.0" dy="0">Judge</tspan><tspan x="1170.0" dy="17" class="s">a third agent</tspan></text><rect class="n" x="1600" y="920" width="230" height="110" rx="3"/><text class="t" x="1715.0" y="958.0"><tspan x="1715.0" dy="0">Close</tspan><tspan x="1715.0" dy="17" class="s">verify table</tspan><tspan x="1715.0" dy="17" class="s">+ worklog rollup</tspan></text><path class="a" d="M250,142 V200 H240 V244"/><path class="a" d="M340,300 H364"/><path class="a" d="M550,300 H549"/><path class="a" d="M645,246 V220 H240 V244"/><text class="l" x="392" y="214">no · fix the inputs</text><path class="a" d="M735,300 H752"/><path class="a" d="M950,300 H964"/><path class="a" d="M855,354 V500 H320 V534"/><text class="l" x="548" y="494">rows the engine cannot explain</text><path class="a" d="M420,584 H464"/><path class="a" d="M690,584 H734"/><path class="a" d="M940,584 H984"/><path class="a" d="M740,538 V512 H580 V534"/><text class="l" x="624" y="506">repeat</text><path class="a" d="M1090,630 V666 H460 V356"/><text class="l" x="620" y="660">cards + index → re-generate the plan</text><path class="a" d="M1055,248 V156"/><path class="a" d="M1160,100 H1350 V244"/><path class="a" d="M1350,352 V420 H265 V726"/><path class="a" d="M390,782 H406"/><path class="a" d="M570,782 H594"/><path class="a" d="M490,732 V676 H1690 V356"/><text class="l" x="508" y="712">stop</text><path class="a" d="M780,782 H814"/><path class="a" d="M1020,782 H1054"/><path class="a" d="M1280,782 H1316"/><path class="a" d="M1400,830 V876 H430 V916"/><text class="l" x="1414" y="858">yes</text><path class="a" d="M560,975 H594"/><path class="a" d="M800,975 H834"/><path class="a" d="M1040,975 H1074"/><path class="a" d="M1170,1030 V1090 H210 V830"/><text class="l" x="600" y="1082">repeat the round</text><path class="a" d="M1480,782 H1715 V916"/><text class="l" x="1496" y="772">no</text><path class="a" d="M1750,920 V356"/><path class="a" d="M1725,248 V146"/><path class="dash" d="M700,920 V712 H1215 V100 H1244"/><text class="l" x="742" y="706">checkpoint · the run RETURNS</text><path class="dash" d="M1355,142 V180 H1490 V694 H310 V726"/><text class="l" x="1120" y="688">findings re-open the unit</text></svg>
+  </div>
+
+  <section>
+    <h2>The four lanes</h2>
+    <p class="lede">Two of them are Workflow scripts: deterministic control flow around agents, where every verdict is arithmetic over the engine's own numbers rather than an agent's assertion.</p>
+    <div class="lanes">
+      <div class="lane" style="--sw:#e3b6bc"><h3>User</h3><p>Asks, approves with a recorded plan version, picks how closely to watch, checks pages at a checkpoint, tests the result.</p></div>
+      <div class="lane" style="--sw:#ddc98a"><h3>Migrator skill</h3><p>Nine steps. Owns discovery, the engine-written plan, the three gates and the hand-over. Never improvises a build.</p></div>
+      <div class="lane" style="--sw:#a5cfba"><h3>classic-ui-expert</h3><p>Runs only when <code>--stubs</code> reports imperative rows. Produces behaviour cards with acceptance criteria, which re-enter the plan.</p></div>
+      <div class="lane" style="--sw:#a8bcdd"><h3>Build executor</h3><p>One page per unit, three separate roles per unit, repair rounds, parking, and a machine verdict at every round.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the earlier diagram did not show</h2>
+    <p class="lede">Each of these changes how the flow is understood — where it spends time, where it can stop, and what it refuses to do.</p>
+    <ul class="delta">
+      <li><b>Reconcile</b><span>The head of <em>every</em> round, not a step before the first one. It runs the CLI and refreshes the verdict — and it is the single most expensive agent in a run: <strong>41 minutes of a measured 4h 22m</strong>. A diagram that starts the build lane at “build page” hides where the time goes.</span></li>
+      <li><b>Preflight</b><span>A whole phase: the ⚠ Confirm worklist resolved in parallel, read-only. Its evidence is now judged and re-verified <em>before</em> any build, so a page whose only open row was evidence closes with no write to the stand at all.</span></li>
+      <li><b>Refs</b><span>Fetches the guidance, tool contracts and component docs once per run and cuts a per-page spec slice. Measured: 40% of everything build agents consumed was documentation re-fetched by every fresh-context unit.</span></li>
+      <li><b>app unit</b><span>Runs before any page when the target package is missing. It owns <code>create-app</code>, the section on the <em>existing</em> object, and removing the stub — because a Freedom page on a new object migrates none of the customer's data.</span></li>
+      <li><b>Stops</b><span>The approval must name the plan version; an inconclusive package state, a plan gap or an unknown key each refuse the run. Re-checked on every refreshed state, not only at the head.</span></li>
+      <li><b>Return path</b><span>In <code>checkpoints</code> and <code>guided</code> the run hands the page back mid-build with the acceptance criteria to exercise, and the operator's findings re-open that unit — the only signal that exists for a ported handler, which carries no verification key.</span></li>
+    </ul>
+  </section>
+
+  <footer>
+    <b>Read this as the current state, not the target.</b> The parent branch has no PR to <code>main</code> yet, so none of it has shipped. Two known gaps: a surfaced lifecycle method still reads as <code>unresolved</code> trigger, and the flow has not yet completed a full live run end to end.
+  </footer>
+</div>
+</body>
+</html>
