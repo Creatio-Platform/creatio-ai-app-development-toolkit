@@ -612,7 +612,7 @@ const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
   cbaFrom >= 0 && cbaTo > cbaFrom, () => `BEGIN at ${cbaFrom}, END at ${cbaTo}`);
-const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys"];
+const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete"];
 let cba = {};
 let tmpCba;
 try {
@@ -652,20 +652,58 @@ check("wiringOnlyMixinKeys: the same key flagged twice collapses to one, and mal
     && cba.wiringOnlyMixinKeys([], allMixinKeys).length === 0
     && cba.wiringOnlyMixinKeys(undefined, allMixinKeys).length === 0
     && cba.wiringOnlyMixinKeys([{}, null], allMixinKeys).length === 0));
+// `INDEX_ENTRY` sets no `minLength`, so `bodyCard: ""` is schema-valid and reachable. Pinned on BOTH legs (the
+// engine's `cardRef` in run-mapper) — one row read differently by each is how blocking and advisory disagree.
+check("wiringOnlyMixinKeys: a BLANK bodyCard does not clear the flag — an empty placeholder is not a body card",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:LeadMixin", card: "main/C28", bodyCard: "" }], allMixinKeys)
+    .join(",") === "mixin:LeadMixin"));
+check("wiringOnlyMixinKeys: a WHITESPACE-ONLY bodyCard does not clear it either — this is the leg that read `\"\"` as present",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:LeadMixin", card: "main/C28", bodyCard: "   " }], allMixinKeys)
+    .join(",") === "mixin:LeadMixin"));
+check("wiringOnlyMixinKeys: a blank `card` is not a wiring card — that row is UNCOVERED, and saying 'add a bodyCard' would be the wrong instruction",
+  () => (cba.wiringOnlyMixinKeys([{ key: "mixin:LeadMixin", card: "  " }], allMixinKeys).length === 0));
 
-// The helper being right is not the run USING it (the lesson pinned for `preflightToRun` above). These two are
+// --- repairKeys / isComplete: the run's own arithmetic, extracted so the verdict is TESTED and not merely
+// pattern-matched in the source. The call-site pins below then only have to say WHERE they are called.
+check("repairKeys: all three lists are dispatched — a row the critique alone names, and a row only the filter names, both come back",
+  () => (cba.repairKeys(["a"], ["b"], ["c"]).sort().join(",") === "a,b,c"));
+check("repairKeys: a row named by two of the three is dispatched ONCE — a scope is not asked to describe it twice",
+  () => (cba.repairKeys(["a", "b"], ["b"], ["a"]).sort().join(",") === "a,b"));
+check("repairKeys: nothing to repair is an empty set, and missing lists are empty rather than a throw",
+  () => (cba.repairKeys([], [], []).length === 0 && cba.repairKeys(undefined, undefined, undefined).length === 0));
+check("isComplete: every row covered and no wiring-only row left ⇒ complete",
+  () => (cba.isComplete(3, [], []) === true));
+check("isComplete: an uncovered row blocks it",
+  () => (cba.isComplete(3, ["a"], []) === false));
+check("isComplete: a wiring-only row blocks it too — that is the whole point of counting them",
+  () => (cba.isComplete(3, [], ["mixin:LeadMixin"]) === false));
+check("isComplete: ZERO keys is NOT complete — an empty digest returns through the skip path, so reaching the verdict with no keys means the count never ran",
+  () => (cba.isComplete(0, [], []) === false));
+check("isComplete: missing lists do not throw and do not silently pass",
+  () => (cba.isComplete(2, undefined, undefined) === true && cba.isComplete(0, undefined, undefined) === false));
+
+// The helper being right is not the run USING it (the lesson pinned for `preflightToRun` above). These are
 // source-level on purpose: the call sites close over run state, so deleting the filter — or dropping it out of the
 // completeness verdict — leaves every unit test above passing while the run goes back to asserted coverage.
 check("cba workflow: the run FEEDS the filter and RE-COMPUTES it after the repair round",
   (cbaSrc.match(/wiringOnly\s*=\s*wiringOnlyMixinKeys\(entriesOf\(described\), allKeys\)/g) || []).length === 2,
   () => cbaSrc.split("\n").filter((l) => /wiringOnlyMixinKeys/.test(l)).join("\n"));
-check("cba workflow: a still-wiring-only row makes the run INCOMPLETE — the verdict is arithmetic, not the merge agent's word",
-  /const complete = allKeys\.size > 0 && uncoveredKeys\.length === 0 && wiringOnly\.length === 0/.test(cbaSrc));
+check("cba workflow: the verdict is `isComplete` over the run's counts — not a hand-inlined boolean that can drift from the tested one",
+  /const complete = isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc));
+check("cba workflow: the repair set is built by `repairKeys` off all three lists, so the flagged rows are re-described rather than only reported",
+  /const toRepair = repairKeys\(uncoveredKeys, critiqueUncovered, wiringOnly\)/.test(cbaSrc));
 check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
   /MIXIN ROWS NAMING ONLY A WIRING CARD/.test(cbaSrc) && /MIXIN ROWS STILL NAMING ONLY A WIRING CARD/.test(cbaSrc)
     && /uncovered: uncoveredKeys, wiringOnly/.test(cbaSrc));
-check("cba workflow: the repair round is fed the flagged rows, so they are actually re-described rather than only reported",
-  /\.\.\.uncoveredKeys, \.\.\.critiqueUncovered, \.\.\.wiringOnly/.test(cbaSrc));
+// ORDER, not just presence. Every pin above matches anywhere in the file, so hoisting the verdict above the repair
+// block — a pure move, no text changed — would leave all of them green while `complete` ruled on the ROUND-1
+// counts and reported a run finished that the repair round had not finished. That is the one mutation source-level
+// pinning cannot see unless position is asserted outright.
+const cbaRepairAt = cbaSrc.indexOf("if (toRepair.length) {");
+const cbaVerdictAt = cbaSrc.indexOf("const complete = isComplete(");
+check("cba workflow: the verdict is computed AFTER the repair round — hoisting it above would read the stale round-1 counts and pass every pin above",
+  cbaRepairAt > 0 && cbaVerdictAt > cbaRepairAt,
+  () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

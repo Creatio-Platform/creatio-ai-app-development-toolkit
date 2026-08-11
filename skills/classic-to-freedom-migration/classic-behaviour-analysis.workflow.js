@@ -337,10 +337,33 @@ function packBatches(list, target, cap) {
 // many bodies, and `externalRef` is not marked in the inventory at all (the engine flags THAT leg from the digest
 // instead, as an advisory `wiringOnly` plan banner). Keys outside `allKeys` are ignored — an entry for a row this
 // run does not own is the unmatched-key problem, reported elsewhere.
+//
+// This is the BLOCKING leg — it counts against `coverage.complete` and feeds the repair round. The engine's
+// `wiringOnlyKeys` (engine/migrate.mjs) is the ADVISORY leg: wider membership (`mixin:` + `externalRef`), banner
+// only. Separate functions because this file may not `import` anything; edit one, look at the other.
 function wiringOnlyMixinKeys(entries, allKeys) {
+  // A card NAMES something or it is absent. `""` is schema-valid (`INDEX_ENTRY` sets no `minLength`) and is what
+  // a merge agent emits for "nowhere to put one"; read the same way by the engine's `cardRef`, so one entry
+  // cannot clear the blocking leg while the advisory leg still counts it (or the reverse).
+  const named = (v) => typeof v === 'string' && v.trim().length > 0
   const mixinEntries = (entries || []).filter((e) => e?.key?.startsWith('mixin:') && allKeys.has(e.key))
-  const hasBody = new Set(mixinEntries.filter((e) => e.bodyCard).map((e) => e.key))
-  return [...new Set(mixinEntries.filter((e) => e.card && !hasBody.has(e.key)).map((e) => e.key))]
+  const hasBody = new Set(mixinEntries.filter((e) => named(e.bodyCard)).map((e) => e.key))
+  return [...new Set(mixinEntries.filter((e) => named(e.card) && !hasBody.has(e.key)).map((e) => e.key))]
+}
+
+// The repair round's target set: every row the arithmetic says is not described YET — uncovered by this run's own
+// count, called uncovered by the critique, or naming only a wiring card. Deduplicated, so a row that two of the
+// three name is described once rather than dispatched twice to the same scope.
+function repairKeys(uncovered, critiqueUncovered, wiringOnly) {
+  return [...new Set([...(uncovered || []), ...(critiqueUncovered || []), ...(wiringOnly || [])])]
+}
+
+// The run's verdict, as arithmetic rather than an agent's closing sentence. A mixin row naming only its wiring
+// card counts AGAINST completeness: the row looks covered while the criteria that gate it sit in a card never
+// named. Zero keys is NOT complete — an empty digest returns through the skip path far above, so reaching the
+// verdict with no keys means the count never ran, and that must not read as a clean run.
+function isComplete(totalKeys, uncovered, wiringOnly) {
+  return totalKeys > 0 && (uncovered || []).length === 0 && (wiringOnly || []).length === 0
 }
 // ---8<--- END PURE DECISION HELPERS ---8<---
 
@@ -446,7 +469,7 @@ Do not rewrite the cards. Report.`,
 // Scoped to the SCOPES that own the uncovered rows — never to a bare row list,
 // which is the per-row split the analysis contract forbids.
 const critiqueUncovered = (critique?.uncovered || []).map((u) => u.key).filter((k) => allKeys.has(k))
-const toRepair = [...new Set([...uncoveredKeys, ...critiqueUncovered, ...wiringOnly])]
+const toRepair = repairKeys(uncoveredKeys, critiqueUncovered, wiringOnly)
 if (toRepair.length) {
   const owners = worked.filter((s) => [...s.methodKeys, ...s.memberKeys].some((k) => toRepair.includes(k)))
   log(`repair round: ${toRepair.length} uncovered row(s) across ${owners.length} scope(s)`)
@@ -499,14 +522,15 @@ MIXIN ROWS STILL NAMING ONLY A WIRING CARD (no \`bodyCard\`): ${wiringOnly.join(
 PRODUCE:
 1. \`${input.outDir}/customizations.md\` — one report: a provenance header (surface, environment, how the scope list was proven: ${ctx?.censusNote || 'see Context phase'}), then the shared-core cards, then each scope's cards in surface order, then the appendices the card contract requires (member ledger per scope, counted zeros, refusals). Resolve every \`conflicts\` entry the critique raised: keep ONE card per subject, note in it that a duplicate was merged, and list the dropped ids in \`droppedDuplicates\`. Keep every card's namespaced id — the migration plan points at them.
 2. \`${input.outDir}/behaviour-index.json\` — a flat JSON object, one entry per described row: \`{ "<key>": { "card": "<scope>/C03", "ac": ["AC-1"], "trigger": "internal", "from": "save" } }\` (\`trigger\`/\`from\` only where this run resolved one the engine could not). Keys EXACTLY as the digest keys them — this file is merged into the manifest as \`behaviourIndex\` and a reformatted key silently matches nothing. Where two entries claim the same key, keep the surviving card's.
-   **A row whose behaviour is defined outside the scope that owns it carries BOTH cards** — \`card\`/\`ac\` for how the surface uses it, \`bodyCard\`/\`bodyAc\` for the body's own card (usually shared-core; the report's attribution tables write it as \`body <scope>/C09\`). Whenever an attribution table names a body card, the entry MUST carry it — the criteria that gate the behaviour live there, not in the wiring card. Resolve every key in the MIXIN ROWS list above this way.
+   **A row whose behaviour is defined outside the scope that owns it carries BOTH cards** — \`card\`/\`ac\` for how the surface uses it, \`bodyCard\`/\`bodyAc\` for the body's own card (usually shared-core; the report's attribution tables write it as \`body <scope>/C09\`). Whenever an attribution table names a body card, the entry MUST carry it — the criteria that gate the behaviour live there, not in the wiring card. Resolve every key in the MIXIN ROWS list above this way. Where there is genuinely no body card, leave the \`bodyCard\` FIELD out of the entry — keep the entry itself, which describes the row. An empty \`bodyCard\` string is not a placeholder, it is a claim that a body card exists.
 3. A **Coverage** section at the end of the report stating the computed numbers above, every still-uncovered row, and every refusal the critique found settled elsewhere (with what settles it). Do NOT write that the analysis is complete while any row is uncovered — the count is the statement.`,
   { agentType: 'general-purpose', schema: MERGE_SCHEMA, phase: 'Merge', label: 'merge:report+index' },
 )
 
-// The workflow's verdict is arithmetic, not an agent's closing sentence. A mixin row naming only its wiring card
-// counts against completeness: the row LOOKS covered while the criteria that gate it sit in a card never named.
-const complete = allKeys.size > 0 && uncoveredKeys.length === 0 && wiringOnly.length === 0
+// The workflow's verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after
+// the repair round, so it reads the repaired counts: hoisted above that block it would rule on the round-1
+// numbers and report a run complete that the repair round had not finished.
+const complete = isComplete(allKeys.size, uncoveredKeys, wiringOnly)
 const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
 log(complete
   ? `complete: ${covered.size}/${allKeys.size} rows described`

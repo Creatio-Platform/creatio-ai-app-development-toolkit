@@ -4087,7 +4087,7 @@ check("wiringOnly: carrying the body card clears the flag — with or without a 
 const hoWireMini = runMigration({ ...wireManifest,
   addRecordMiniPage: { schema: "DealMini" },
   miniPageSchemas: { DealMini: { entity: "Deal", schemas: [{ pkg: "P",
-    body: WIRE_BODY.replace(/WirePage/g, "DealMini").replace(/LeadMixin/g, "MiniMixin") }] } },
+    body: WIRE_BODY.replaceAll(/WirePage/g, "DealMini").replaceAll(/LeadMixin/g, "MiniMixin") }] } },
   behaviourIndex: { "mixin:MiniMixin": { card: "mini/C1", ac: ["AC-9"] } } });
 check("wiringOnly: a wiring-only mixin on a FOLDED scope (mini page) is flagged from the root run",
   hoWireMini.behaviourIndex.wiringOnly.includes("mixin:MiniMixin") &&
@@ -4097,6 +4097,31 @@ check("wiringOnly: a wiring-only mixin on a FOLDED scope (mini page) is flagged 
 check("wiringOnly: a FOLDED sub-run reports nothing itself — the root owns the verdict, so no wall of per-scope noise",
   runMigration({ ...wireManifest, behaviourIndex: { "mixin:LeadMixin": { card: "main/C28" } } },
     { scopeSchema: "WirePage" }).behaviourIndex.wiringOnly.length === 0);
+
+// `INDEX_ENTRY` sets no `minLength`, so `bodyCard: ""` is schema-valid. Read by `typeof`, it made the plan
+// byte-identical to the omitted case on both legs — which is why the hole was invisible rather than merely wrong.
+// Pinned on the render, the flag and the banner together: it was their AGREEMENT that made it unreadable.
+for (const [label, blank] of [["empty string", ""], ["whitespace only", "   "]]) {
+  const hoBlank = runMigration({ ...wireManifest, behaviourIndex: {
+    "mixin:LeadMixin": { card: "main/C28", ac: ["AC-200"], bodyCard: blank },
+    wired: { card: "main/C28", ac: ["AC-201"], bodyCard: blank },
+  } });
+  const blankPlan = renderPlan(hoBlank, {});
+  check(`wiringOnly: a ${label} bodyCard is ABSENT, not present — both legs stay flagged and the ⚠ banner still fires`,
+    hoBlank.behaviourIndex.wiringOnly.includes("mixin:LeadMixin") &&
+    hoBlank.behaviourIndex.wiringOnly.includes("wired") &&
+    /only a wiring card/.test(blankPlan),
+    () => hoBlank.behaviourIndex.wiringOnly);
+  // Asserted on THAT row, ending where it ends: a plan-wide match would be satisfied by any other clean row.
+  const blankRow = (blankPlan.split("\n").find((l) => /\bLeadMixin\b/.test(l) && /described in/.test(l)) || "").trim();
+  check(`wiringOnly: a ${label} bodyCard renders NOTHING — never a dangling \` · body\` with no card behind it`,
+    blankRow.endsWith("**described in** main/C28 AC-200"), () => blankRow || "(no described-in row found)");
+}
+check("wiringOnly: a blank `card` is not a wiring card either — the row is UNDESCRIBED, and telling the reader to add a bodyCard would name the wrong gap",
+  (() => {
+    const r = runMigration({ ...wireManifest, behaviourIndex: { "mixin:LeadMixin": { card: "   " } } });
+    return r.behaviourIndex.wiringOnly.length === 0 && /⚠ not described/.test(renderPlan(r, {}));
+  })());
 
 // A folded scope (mini page / child page) sees the SAME index: one report covers the whole surface.
 const hoMini = runMigration({ ...handoffManifest, addRecordMiniPage: { schema: "DealMiniPage" },
