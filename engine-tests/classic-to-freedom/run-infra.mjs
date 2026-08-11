@@ -426,7 +426,7 @@ check("workflow: the slice carries the plan's Adjustments IN FULL — they are t
   /APPEND THE PLAN'S \\`Adjustments\\` LIST to EVERY slice file, verbatim and whole/.test(wfSrc)
     && /Do not filter it per page/.test(wfSrc));
 check("workflow: Reconcile transcribes the DIGEST, not the full verdict, and the full one is still written for audit",
-  /--verify-digest \$\{VERIFY_DIGEST\}/.test(wfSrc) && /the DIGEST, not \$\{VERIFY_JSON\}/.test(wfSrc));
+  /--verify-digest \$\{q\(VERIFY_DIGEST\)\}/.test(wfSrc) && /the DIGEST, not \$\{VERIFY_JSON\}/.test(wfSrc));
 check("workflow: the parent edge is COPIED from `--units`, and reconstructing it from the plan's prose is forbidden",
   /now PUBLISHED by \\`--units\\` as \\`parents\\`/.test(wfSrc) && /Do NOT reconstruct it by reading the plan/.test(wfSrc));
 check("workflow: each unit writes its OWN worklog file and is told not to read the shared log; Close assembles worklog.md by APPENDING",
@@ -703,6 +703,26 @@ try {
 check("cba workflow: every helper this suite covers is inside the markers (a move-out cannot silently empty it)",
   CBA_HELPERS.every((h) => typeof cba[h] === "function"),
   () => CBA_HELPERS.filter((h) => typeof cba[h] !== "function").join(", "));
+
+// --- round 4 of the branch review. All three are things a run does WRONG while reporting fine.
+check("workflow: the round budget is charged per DISPATCH, not per open unit — Reconcile charged every unit a checkpoint deferred and every unit on a run that hard-stopped and built nothing, so three such invocations parked a tree nobody had touched",
+  /const dispatched = new Set\(\)/.test(wfSrc)
+    && /dispatched\.add\(unit\.key\)/.test(wfSrc)
+    && /ROUND COUNTERS — INCREMENT/.test(wfSrc)
+    && /PRESERVE the \\`rounds\\` counter each unit already has/.test(wfSrc)
+    && !/INCREMENT \\`rounds\\` by 1 for every unit whose/.test(wfSrc));
+check("workflow: the dispatched set rides in the carry, so it is written by the persistence step that runs right after the build — a kill still cannot come back with the budget reset",
+  /dispatched: \[\.\.\.dispatched\]/.test(wfSrc)
+    && /carryFingerprint = \(\) => JSON\.stringify\(\[proposals, blockedItems, discrepancies, pageSchemas, \[\.\.\.dispatched\]\]\)/.test(wfSrc));
+check("workflow: preflight evidence is JUDGED and the gate re-run BEFORE the build schedule is used — a page whose only open row was evidence was dispatched for a live-stand build that had nothing to do, and dryRun reported it as needing work",
+  /reconcile:after-preflight/.test(wfSrc)
+    && wfSrc.indexOf("reconcile:after-preflight") < wfSrc.indexOf("const DRY_RUN = input.dryRun === true")
+    && wfSrc.indexOf("reconcile:after-preflight") < wfSrc.indexOf("while (true) {"));
+check("workflow: every path in a generated engine command is SHELL-QUOTED — a migration folder with a space split into two arguments and every phase then read or wrote the wrong path, with no error",
+  /const q = \(v\) =>/.test(wfSrc)
+    && /const cli = \(flags\) => `node \$\{q\(ENGINE\)\} \$\{q\(input\.manifest\)\}/.test(wfSrc)
+    && /--built \$\{q\(BUILT_FILE\)\}/.test(wfSrc) && /--verify-digest \$\{q\(VERIFY_DIGEST\)\}/.test(wfSrc)
+    && /--page \$\{q\(key\)\} --out \$\{q\(specFile\(key\)\)\}/.test(wfSrc));
 
 // --- the four branch-review findings. Each mutation below passed EVERY test in this suite before these pins existed,
 // which is the point: the cases above check that the mechanisms do what they were built to do, not that the intent

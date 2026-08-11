@@ -213,13 +213,19 @@ const specFile = (key) => `${REFS_DIR}/spec-${key.replace(/[^A-Za-z0-9_.:@-]+/g,
 // read 37 times in one run for one reason: to append to it you first read it. `worklog.md` is still the human
 // artifact the documentation standard requires — the Close phase assembles it from these.
 const worklogFile = (key) => `${input.outDir}/worklog/${key.replace(/[^A-Za-z0-9_.:@-]+/g, '_')}.md`
+// SHELL-QUOTE every path that goes into a command line. These strings are handed to an agent to run in a shell, so
+// an unquoted `/tmp/My Migration/manifest.json` splits into two arguments and every engine phase then reads or
+// writes the wrong path — with no error, because the engine is simply given a path that is not the one intended.
+// A shell metacharacter in a folder name could do worse than mis-split. POSIX single-quoting, with the one escape
+// that needs handling; the surrounding prose keeps its backticks and is not a command, so it is left alone.
+const q = (v) => `'${String(v).replaceAll("'", `'\\''`)}'`
 // One place builds every engine command line, so the resolved path and the manifest are never retyped.
-const cli = (flags) => `node ${ENGINE} ${input.manifest} ${flags}`
+const cli = (flags) => `node ${q(ENGINE)} ${q(input.manifest)} ${flags}`
 const CLI_UNITS = cli('--units')
 const CLI_CHECKLIST = cli('--checklist')
-const CLI_VERIFY = cli(`--verify --built ${BUILT_FILE} --out ${VERIFY_TABLE} --verify-json ${VERIFY_JSON} --verify-digest ${VERIFY_DIGEST}`)
-const cliSpec = (key) => cli(`--spec --page ${key} --out ${specFile(key)}`)
-const cliChecklistPage = (key) => cli(`--checklist --page ${key}`)
+const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)}`)
+const cliSpec = (key) => cli(`--spec --page ${q(key)} --out ${q(specFile(key))}`)
+const cliChecklistPage = (key) => cli(`--checklist --page ${q(key)}`)
 
 // ---------------------------------------------------------------------------
 // Schemas. Structured output everywhere a later phase or this script COMPUTES on
@@ -993,6 +999,9 @@ function carryBlock(carry) {
     const schemaLines = Object.entries(carry.pageSchemas).map(([k, s]) => `- \`${k}\` → \`${s}\``).join('\n')
     out.push(`\nFREEDOM SCHEMAS LEARNED SO FAR — persist each as \`units["<key>"].schemaName\` (this is the only record of them; \`--units\` cannot publish it):\n${schemaLines}`)
   }
+  if ((carry.dispatched || []).length) {
+    out.push(`\nROUND COUNTERS — INCREMENT \`rounds\` by 1 for EXACTLY these unit keys and for NO others. They are the units a build was dispatched for; every other unit was not attempted this round and must keep the counter it has:\n${carry.dispatched.map((k) => `- \`${k}\``).join('\n')}\nCharging a unit nobody built is how an untouched page gets parked before its first attempt.`)
+  }
   if (carry.proposals.length || carry.blocked.length || carry.discrepancies.length) {
     out.push(`\nALSO PERSIST these lists, verbatim — each already INCLUDES whatever the file held when this run read it, so write them as given:\n- \`proposals\`: ${j(carry.proposals)}\n- \`blocked\`: ${j(carry.blocked)}\n- \`discrepancies\`: ${j(carry.discrepancies)}\nA plan deviation, a blocker or a builder-vs-stand disagreement that lives only in a process is lost to the first usage limit; these are the run's answer to the caller.`)
   }
@@ -1037,7 +1046,7 @@ DO SIX THINGS, in order:
 5. CLASSIFY EXIT 2 (this is the decision the whole run turns on) and WRITE THE QUEUE FILE.
    - \`planGaps\`: start from \`planGaps\` in ${VERIFY_JSON} — the engine's own classification — and add any PLAN-level stderr line it does not already cover (\`GATE BLOCKED\`, \`STRUCTURE INCOMPLETE\`, \`COVERAGE INCOMPLETE\`, the \`ℹ this run ALSO has PLAN-level gaps (…)\` line), quoted. These are NOT buildable-out-of. A run can be \`complete: true\` AND carry plan gaps: there is nothing left to BUILD, and the gap still stops the run.
    - \`⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete\` is NOT a plan gap. It is the repairable one. Do not put it in \`planGaps\`.
-   - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and INCREMENT \`rounds\` by 1 for every unit whose \`--verify\` page entry is not complete, and for every reachability key whose \`reachabilityState\` (step 4) is NOT \`'true'\`. Increment BEFORE this round's build runs — a process killed mid-build must not come back with the budget reset. Return \`roundOf\` = the counter you wrote for every key.${carryBlock(carry)}
+   - Then write ${QUEUE_FILE}: keep/create \`{ schemaVersion: 1, manifest, builtFile, planVersion, approval, buildOrder, units, nonPageUnits, proposals, blocked, discrepancies, history }\`, and PRESERVE the \`rounds\` counter each unit already has. **Do NOT increment it here.** A round is charged per ATTEMPT, and this phase runs before anything is attempted: incrementing for every open unit charged the units a checkpoint deferred and every unit on a run that hard-stopped and built nothing, which parked untouched pages after three such invocations. The counters move in the persistence step that runs immediately after a build round, for exactly the units dispatched — see the ROUND COUNTERS block below when one is present. Return \`roundOf\` = the counter now on file for every key.${carryBlock(carry)}
 
 6. REPORT QUEUE DRIFT. \`staleQueueKeys\` = keys in the queue file that \`--units\` no longer publishes (the plan was regenerated — they gate nothing now). \`newKeys\` = keys \`--units\` publishes that the queue did not have. Report both; never silently trust either.
 
@@ -1058,7 +1067,17 @@ let parkedSet = new Set()
 // scheduled after it must see the new state without waiting for the next Reconcile, which is the whole reason
 // they were unbuildable before.
 let packageState = null
-const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas })
+// THE UNITS THIS RUN ACTUALLY DISPATCHED FOR A BUILD. The round budget is spent per ATTEMPT, so only an attempt may
+// charge it. Reconcile used to increment the counter for every OPEN unit before the round ran, which charged every
+// unit a checkpoint deferred (so the more carefully an operator checked, the sooner their untouched pages parked)
+// and every unit on a run that hard-stopped on the approval / package / plan gate and built nothing at all — three
+// such invocations parked a tree nobody had touched. Persisted immediately after dispatch, since `persistPending`
+// runs right after `buildRound`, so a kill still cannot come back with the budget reset.
+// DECLARED HERE, with the rest of the run state: `carryNow()` reads it and the BASELINE Reconcile calls that before
+// any of the later declarations exist — putting it beside `carryFingerprint` further down was a temporal-dead-zone
+// throw on the first agent call, which is the same class of defect the prologue-execution test was added for.
+const dispatched = new Set()
+const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancies, pageSchemas, dispatched: [...dispatched] })
 
 let state = await agent(reconcilePrompt(round, carryNow()), {
   agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: 'reconcile:baseline',
@@ -1260,7 +1279,7 @@ const markParksPersisted = () => { for (const p of parked) parksPersisted.add(p.
 // inside the round and left to a LATER phase to write, so a kill during Build took the whole round's answer
 // with it. This fingerprint is what makes "is there anything unwritten?" a question with an answer, so the
 // round-close write below can run when there is something to write and be skipped when there is not.
-const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas])
+const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched]])
 let carryPersisted = carryFingerprint()
 async function persistPending(why) {
   const unpersistedParks = parked.filter((p) => !parksPersisted.has(p.key))
@@ -1549,6 +1568,7 @@ async function buildRound(open) {
     if (pausedAfter) { deferred.push(unit.key); continue }
     const st = unit.kind === 'page' ? pageStateOf(state.verify, unit.key) : null
     localRounds[unit.key] = (localRounds[unit.key] ?? 0) + 1
+    dispatched.add(unit.key)
     const nth = Math.max(state.roundOf?.[unit.key] ?? 0, localRounds[unit.key])
     const res = await agent(buildPrompt(unit, st, nth), {
       agentType: 'general-purpose', phase: 'Build', label: `build:${unit.key.slice(0, 40)}`,
@@ -1726,6 +1746,38 @@ Return every verdict you wrote.`,
 // The boundary is deliberately "before the first stand write" rather than "before any side effect at all":
 // Preflight is read-only against Creatio and its evidence records land in the migration folder, which is the
 // preview's whole value. What a dry run never does is create, edit, re-bind or wire anything on the stand.
+// ---------------------------------------------------------------------------
+// JUDGE + RECONCILE THE PREFLIGHT EVIDENCE, BEFORE ANYTHING IS BUILT.
+// Preflight files evidence records and queues their ids; `state.verify` stays the PRE-preflight verdict until the
+// first Reconcile, which used to run only at the TAIL of a build round. So a page whose only open requirement was an
+// evidence row was dispatched for a live-stand BUILD that had nothing to do — and `dryRun` reported that page as
+// needing work for the same reason. Judging and re-running the gate here can close it with no write at all.
+// Two agents, and only when Preflight actually filed something.
+// ---------------------------------------------------------------------------
+if (pendingJudgeIds.size) {
+  const preIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
+  log(`${preIds.length} preflight evidence record(s) filed — judging and re-running the gate BEFORE any build, in case that is all a page was waiting on`)
+  await judgeRound(preIds)
+  pendingJudgeIds.clear()
+  phase('Reconcile')
+  const refreshed = await agent(reconcilePrompt(round, carryNow()), {
+    agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: 'reconcile:after-preflight',
+  })
+  if (refreshed) {
+    markParksPersisted()
+    state = refreshed
+    pageSchemas = { ...state.pageSchemas, ...pageSchemas }
+    carryPersisted = carryFingerprint()
+    packageState = state.packageState || packageState
+    schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState))
+    log(`after preflight: ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${openNow().length} unit(s) open`)
+  } else {
+    // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
+    // have closed. Said out loud rather than retried — the round loop reconciles at its own tail either way.
+    log('the post-preflight Reconcile returned nothing — continuing on the PRE-preflight verdict, so a page the new evidence could have closed may still be built')
+  }
+}
+
 const DRY_RUN = input.dryRun === true
 if (DRY_RUN) {
   const openNowUnits = openNow()
