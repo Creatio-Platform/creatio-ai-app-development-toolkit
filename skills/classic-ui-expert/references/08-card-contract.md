@@ -137,6 +137,13 @@ Format — one numbered item per line, business-logic statement only, no citatio
 - **AC-1** — <a single checkable statement in behaviour terms>
 ```
 
+Numbering is per card, so a bare `AC-n` is valid only inside the card that defines it. Everywhere
+else in prose — another card, a plan, a worklog, code comments in a port — a criterion is cited
+card-qualified: `<card id>·AC-n` (e.g. `shared/C04·AC-16`). Two cards in different report files can
+both own an `AC-16`; an unqualified citation outside its card is ambiguous and therefore wrong.
+(The behaviour index's JSON entries keep bare `AC-n` in their `ac` arrays — each entry's sibling
+`card` field already scopes them.)
+
 Derivation rules:
 
 - **One assertion per item, never two.** Each item must be answerable *built / not built* on its
