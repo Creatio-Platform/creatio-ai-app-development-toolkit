@@ -150,10 +150,9 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
        a whole non-converting web container comes through as neither `drop` nor `merge`/`insert` — see the next
        item, which is a separate channel, not a fifth `elementMap` operation.)
    - **Whole non-converting web containers are excluded via a SEPARATE channel, NOT `elementMap`.** A web
-     template can declare a container whose entire subtree is excluded from conversion. For
-     `PageWithTabsFreedomTemplate` that container is `MainHeader` — the WHOLE header (page title, back button,
-     AND the action bar with its Order/print buttons), not just an action bar. Its named descendants never reach
-     `elementMap`: they are removed up front (step 0a, *before* inherited-chrome subtraction) because the mobile
+     template can declare a container whose entire subtree is excluded from conversion — the WHOLE container,
+     not just a sub-piece like an action bar. Its named descendants never reach `elementMap`: they are removed
+     up front (step 0a, *before* inherited-chrome subtraction) because the mobile
      template already provides the equivalent header/scaffold chrome, and each is listed in
      `guide.excludedComponents` with `name`, `type`, `container`, and `isContainer`. clio also names the declared
      container(s) in a `guide.constraints` note — read it as a backstop when a declared container has no listable
@@ -334,12 +333,11 @@ After `validate-page`, deliver a report:
   those removed action components for the developer.
 - **Excluded web-template chrome:** from `guide.excludedComponents` — present ONLY when the matched template
   declares non-converting containers; the field is omitted entirely otherwise, so if it is absent, say nothing.
-  When present, these components live inside a non-converting web-template container (for
-  `PageWithTabsFreedomTemplate`, the whole `MainHeader`) and were dropped up front because the mobile template
-  supplies the equivalent chrome. Use `isContainer` / `container` to separate inherited chrome the mobile
-  template replaces (page title, back button — report as *replaced by the mobile template*) from page-added
-  action components (Order/print — the entries worth the developer's attention). Excluded BY DESIGN: this is
-  NOT a remaining manual step, and do NOT re-add any of it.
+  When present, these components live inside a non-converting web-template container and were dropped up front
+  because the mobile template supplies the equivalent chrome. Use `isContainer` / `container` to separate
+  inherited chrome the mobile template replaces (page title, back button — report as *replaced by the mobile
+  template*) from page-added action components (Order/print — the entries worth the developer's attention).
+  Excluded BY DESIGN: this is NOT a remaining manual step, and do NOT re-add any of it.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet), whether the developer adjusted or declined it, and that the child placement
   was applied via `mobileValues` and the container columns via each `adaptiveLayout[].adaptiveDiff`.
@@ -364,13 +362,12 @@ After `validate-page`, deliver a report:
   component with a dead action is not shipped. `guide.requestConversions` is the advisory summary of the kept
   ones. Page `handlers` (web-only AMD) are NEVER transferred.
 - **Non-converting web containers are excluded**, reported in `guide.excludedComponents` (present only when the
-  matched template declares such a container — omitted entirely otherwise). Their named descendants — for
-  `PageWithTabsFreedomTemplate`, the whole `MainHeader` — are dropped up front (step 0a) because the mobile
-  template provides the equivalent chrome, so they never reach `elementMap`; do NOT re-add them. Report
-  inherited chrome (page title, back button — use `isContainer` / `container`) as *replaced by the mobile
-  template* and only page-added action components as items to confirm. Excluded BY DESIGN — never a remaining
-  manual step. Carve-out is name-keyed (a twin in `guide.containerMap` or a mapped component name), not
-  type-level.
+  matched template declares such a container — omitted entirely otherwise). Their named descendants are
+  dropped up front (step 0a) because the mobile template provides the equivalent chrome, so they never reach
+  `elementMap`; do NOT re-add them. Report inherited chrome (page title, back button — use `isContainer` /
+  `container`) as *replaced by the mobile template* and only page-added action components as items to confirm.
+  Excluded BY DESIGN — never a remaining manual step. Carve-out is name-keyed (a twin in `guide.containerMap`
+  or a mapped component name), not type-level.
 - **Adaptive layout is a PROPOSAL and two-sided.** When `guide.adaptiveLayout` is present, the per-screen
   field placement is already baked into `elementMap[].mobileValues.layoutConfig.adaptive` (child side); apply
   each `guide.adaptiveLayout[].adaptiveDiff` for the container columns (container side) — both are needed. The
