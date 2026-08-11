@@ -333,6 +333,17 @@ which applies here in full and is stricter for a build than for an analysis.
 > and zero units built (~45 min); after the user granted `Workflow` in one turn, the same build ran
 > to a green gate. A build is many units in sequence — route 3 is a dead end here unless the user
 > chose it with that stated.
+>
+> **While the gate is open, do NOTHING this workflow's phases already own** — `Reconcile` ·
+> `Refs` · `Preflight` · `Build` · `Verify` · `Judge` · `Close`. That list IS the catalog of
+> forbidden inline work: every phase runs in its own fresh context, once per run, and re-does its
+> own reads by design, so hand-doing one spends the context the gate exists to protect and is
+> discarded minutes later. Measured: asked to continue, a run spent the last of its context reading
+> the `create-page` contract, `page-modification`, the field contract, invoking
+> `creatio-ui-guidelines` and writing a `refs/index.md` cache — that is `Refs`, verbatim, and the
+> `Refs` agent did it again from scratch when the workflow finally started. "Preparing while
+> blocked" is not progress; it is the same context spend with a different label. Ask the one
+> question and stop.
 
 1. **The `Workflow` tool (preferred on Claude Code).** Invoking this skill is the user's opt-in
    to the orchestration its own steps call for, so the workflow needs no separate permission —
