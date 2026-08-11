@@ -903,6 +903,9 @@ function parseDetailSchemas(manifest, bodyOf) {
 const MEMBER_KINDS = ["diff-op", "method", "attribute", "message", "mixin", "module-dep", "resource", "detail"];
 // modules that carry no page behaviour of their own (framework root / pure styling) — mirrors the mapper's own
 // list; a module wrongly called inert is a silently dropped member, so it stays deliberately short.
+// The only dispositions `manifest.memberDispositions` may carry — the same four the gate's remediation line tells an
+// agent to use. Kept beside the ledger that reads them so the message and the check cannot drift apart.
+const MEMBER_DISPOSITIONS = new Set(["ported", "dropped", "blocked", "n/a"]);
 const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
 // what a method contributes to its ledger row — kept out of the source table so the table stays scannable
 const methodLedgerDetail = (m) =>
@@ -998,7 +1001,10 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
   const add = (kind, name, opts) => {
     const id = `${kind}:${name}`;
     const dec = plainObject(declared[id] ?? declared[name]);
-    const agentResolved = dec.resolved === true && typeof dec.disposition === "string";
+    // The disposition must be one the CONTRACT names. Any string counted as resolved, so a typo — `"droppped"` —
+    // cleared an otherwise unaccounted member and could carry `coverage.complete` to green with no valid answer
+    // behind it. The gate's own remediation text emits exactly these four, so this is the same set, not a new rule.
+    const agentResolved = dec.resolved === true && MEMBER_DISPOSITIONS.has(dec.disposition);
     let disp = agentResolved ? "resolved" : disposition(name, opts);
     // Only a LAYOUT member can inherit its attribution — a method/attribute/message has no parent chain.
     let via = null;

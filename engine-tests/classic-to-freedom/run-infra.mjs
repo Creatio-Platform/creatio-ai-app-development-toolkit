@@ -704,6 +704,30 @@ check("cba workflow: every helper this suite covers is inside the markers (a mov
   CBA_HELPERS.every((h) => typeof cba[h] === "function"),
   () => CBA_HELPERS.filter((h) => typeof cba[h] !== "function").join(", "));
 
+// --- round 6. Four of the five were in code added earlier in this same branch, and three shared one shape: a
+// guarantee established at the head of the run and not re-applied when a LATER Reconcile replaced the state.
+check("workflow: EVERY refreshed state goes through one acceptance path that re-checks the approval, the package state and the entity — three guarantees were first-pass only, so a mid-run re-plan could build a version nobody approved",
+  /function acceptReconciled\(next, whereFrom\)/.test(wfSrc)
+    && /approvalStop\(state\.approval \|\| approval, state\.planVersion/.test(wfSrc)
+    && /packagePreconditionStop\(state\.targetPackage, state\.packageState\)/.test(wfSrc)
+    && /appUnitFor\(state\.targetPackage, packageState, state\.mainEntity\)/.test(wfSrc));
+// The negative is scoped to the OLD assignment the two call sites used. `acceptReconciled` itself contains
+// `state = next` by construction — that is the one place allowed to move it.
+check("workflow: both refresh sites USE it — the post-preflight rebuild and the round tail — and neither assigns `state` itself any more",
+  (wfSrc.match(/acceptReconciled\(/g) || []).length >= 3
+    && /acceptReconciled\(refreshed, 'the post-preflight Reconcile'\)/.test(wfSrc)
+    && /acceptReconciled\(next, `round \$\{round\}'s Reconcile`\)/.test(wfSrc)
+    && !/state = refreshed/.test(wfSrc));
+check("workflow: the post-preflight rebuild passes `mainEntity`, so the app unit cannot end up with `entity: null` and build a package with no section on the migrated object",
+  !/appUnitFor\(state\.targetPackage, packageState\)\)/.test(wfSrc));
+check("workflow: the app unit closes only on its FULL deliverable — the planned package AND a section page for `main` AND no blockers; closing on `create-app` alone left the run with no section on the migrated entity or an orphan stub",
+  /const sectionPage = \(res\.starterFormPage \|\| ''\)\.trim\(\)/.test(wfSrc)
+    && /if \(got && got === unit\.package && sectionPage && !unitBlocked\)/.test(wfSrc)
+    && /the app unit did not finish/.test(wfSrc));
+check("engine: `memberDispositions` accepts only the four dispositions the gate's own remediation text names — any string counted as resolved, so a typo cleared a member",
+  /const MEMBER_DISPOSITIONS = new Set\(\["ported", "dropped", "blocked", "n\/a"\]\)/.test(mgSrc)
+    && /MEMBER_DISPOSITIONS\.has\(dec\.disposition\)/.test(mgSrc));
+
 // --- round 4 of the branch review. All three are things a run does WRONG while reporting fine.
 check("workflow: the round budget is charged per DISPATCH, not per open unit — Reconcile charged every unit a checkpoint deferred and every unit on a run that hard-stopped and built nothing, so three such invocations parked a tree nobody had touched",
   /const dispatched = new Set\(\)/.test(wfSrc)

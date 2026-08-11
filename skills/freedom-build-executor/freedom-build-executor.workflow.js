@@ -1613,9 +1613,18 @@ async function buildRound(open) {
     // round budget keeps counting, and the run parks it and stops instead of building a tree into the wrong place.
     if (unit.kind === 'app') {
       const got = (res.packageName || '').trim()
-      if (got && got === unit.package) {
+      // THE WHOLE DELIVERABLE, not just the package. This unit's openness is judged on `packageState` alone, so
+      // setting it to 'exists' CLOSES the unit permanently — and `create-app` succeeding is only the first third of
+      // its job. If `create-app-section` on the migrated entity failed, or the stub section could not be removed,
+      // the builder returns the right package name AND a blocker; accepting that as done let the run finish with no
+      // section on the migrated object, or with the orphan stub still there. That is precisely the failure this unit
+      // was added to prevent, so the bar is the full deliverable: the planned package, a section page to hand `main`,
+      // and nothing blocked.
+      const sectionPage = (res.starterFormPage || '').trim()
+      const unitBlocked = (res.blocked || []).length
+      if (got && got === unit.package && sectionPage && !unitBlocked) {
         packageState = 'exists'
-        log(`app unit: package \`${got}\` now exists on the stand`)
+        log(`app unit: package \`${got}\` exists and its section page \`${sectionPage}\` is ready`)
         // The starter pages `create-app` minted ARE `main`'s deliverable. Recording the form page here is what
         // turns `main` from "create a page" into "edit the page that is already there" — the resolve path the
         // per-page recipe documents — instead of a second creation attempt that would collide.
@@ -1623,6 +1632,14 @@ async function buildRound(open) {
           pageSchemas.main = res.starterFormPage
           log(`main resolves to the starter page \`${res.starterFormPage}\` created with the app`)
         }
+      } else if (got && got === unit.package) {
+        // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named, rather than closed on
+        // the one third that worked: `main` has no section to edit, and a stub section left behind is an orphan
+        // object in the customer's app.
+        blockedItems = [...blockedItems, { unit: unit.key,
+          what: `package \`${got}\` was created but the app unit did not finish: ${sectionPage ? '' : 'no section page was reported for `main` to edit'}${!sectionPage && unitBlocked ? '; ' : ''}${unitBlocked ? `${unitBlocked} blocker(s) of its own` : ''}`,
+          why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
+        log(`app unit: package \`${got}\` exists but the unit is INCOMPLETE (section page: ${sectionPage || 'none'}, blockers: ${unitBlocked}) — it stays open`)
       } else {
         blockedItems = [...blockedItems, { unit: unit.key, what: `the application was created but its package is \`${got || '(none reported)'}\`, not the \`${unit.package}\` the plan targets`, why: 'clio applies the environment SchemaNamePrefix to the code, so the package that comes out need not be the one the plan names; every page unit\'s placement row gates on the plan\'s package, so building into this one would fail the whole tree later' }]
         log(`app unit: package MISMATCH — got \`${got || '(none)'}\`, plan targets \`${unit.package}\`; the unit stays open`)
@@ -1774,12 +1791,13 @@ if (pendingJudgeIds.size) {
     agentType: 'general-purpose', schema: RECONCILE_SCHEMA, phase: 'Reconcile', label: 'reconcile:after-preflight',
   })
   if (refreshed) {
-    markParksPersisted()
-    state = refreshed
-    pageSchemas = { ...state.pageSchemas, ...pageSchemas }
-    carryPersisted = carryFingerprint()
-    packageState = state.packageState || packageState
-    schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState))
+    const stop = acceptReconciled(refreshed, 'the post-preflight Reconcile')
+    if (stop) {
+      await persistPending('stopping after the post-preflight reconcile')
+      return runReturn({ ...stop, rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet],
+        independence, planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
+        pageSchemas, staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [] })
+    }
     log(`after preflight: ${state.verify?.missing ?? '?'} MISSING + ${state.verify?.unverified ?? '?'} unconfirmed · ${openNow().length} unit(s) open`)
   } else {
     // Degraded, not wrong: the pre-preflight verdict still stands, so the run may build a page the evidence would
@@ -1889,6 +1907,38 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
 }
 await refsStep()
 
+// ACCEPTING A REFRESHED STATE. Three guarantees were established once, at the head of the run — the recorded
+// approval matches the engine's plan version, the target package is in a state the run may act on, and the app unit
+// carries the object its section must be bound to. Every later Reconcile REPLACED the state without re-checking any
+// of them, so a manifest regenerated mid-run (a repair touched it, or another session re-planned) could hand this
+// script a new `planVersion` and build order that the recorded approval never authorised; a transient failure of
+// `list-packages` could turn `packageState` into `'unknown'` and schedule `create-app` over a live application; and
+// the post-preflight rebuild dropped `mainEntity`, leaving the app unit with `entity: null`.
+//
+// One place, so a fourth refresh site cannot invent a fourth set of rules. Returns a STOP when a guarantee is now
+// broken; the caller returns it, because none of them can be built out of.
+function acceptReconciled(next, whereFrom) {
+  markParksPersisted()
+  state = next
+  pageSchemas = { ...state.pageSchemas, ...pageSchemas }   // this process is authoritative for what it learned
+  // Taken AFTER the merge: the merge can reorder keys without changing content, and a fingerprint captured before it
+  // would read as "something new to write" and buy an extra agent call every round.
+  carryPersisted = carryFingerprint()
+  const stopApproval = approvalStop(state.approval || approval, state.planVersion, { planFile: input.planFile, unitsCmd: CLI_UNITS })
+  if (stopApproval) {
+    log(`STOP after ${whereFrom} — the approval no longer authorises this plan (${stopApproval.stopped}): approved=${(state.approval || approval)?.version || '(none)'} plan=${state.planVersion || '(unversioned)'}`)
+    return { ...stopApproval, approval: state.approval || approval, planVersion: state.planVersion || null }
+  }
+  const stopPkg = packagePreconditionStop(state.targetPackage, state.packageState)
+  if (stopPkg) {
+    log(`STOP after ${whereFrom} — the target package state is no longer actionable (${stopPkg.stopped}): state=${state.packageState || '(not reported)'}`)
+    return { ...stopPkg, targetPackage: state.targetPackage || null, packageState: state.packageState || null }
+  }
+  packageState = state.packageState || packageState
+  schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity))
+  return null
+}
+
 let lastVerifier = null
 
 while (true) {
@@ -1972,15 +2022,14 @@ while (true) {
       next: 're-run to refresh the queue state; the built file and the verdict from this round are on disk',
     })
   }
-  markParksPersisted()
-  state = next
-  pageSchemas = { ...state.pageSchemas, ...pageSchemas }   // this process is authoritative for what it learned
-  // Reconcile was handed the same carry block and wrote it, so both fingerprints are current again. Taken AFTER
-  // the merge above: the merge can reorder the keys without changing the content, and a fingerprint captured
-  // before it would read as "something new to write" and buy an extra agent call every single round.
-  carryPersisted = carryFingerprint()
-  packageState = state.packageState || packageState
-  schedule = scheduleUnits(state.buildOrder || [], state.reachability || [], appUnitFor(state.targetPackage, packageState, state.mainEntity))
+  const stopAfterRound = acceptReconciled(next, `round ${round}'s Reconcile`)
+  if (stopAfterRound) {
+    await persistPending('stopping on a guarantee that no longer holds')
+    return runReturn({ ...stopAfterRound, rounds: round, verdict: verdictOf(state.verify),
+      parked, blockedByParked: [...blockedSet], independence, planGaps: state.planGaps || [], proposals,
+      unresolvedPreflight, blocked: blockedItems, discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
+      staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [] })
+  }
 
   // A plan gap can APPEAR mid-run (a repair that touched the manifest, a re-plan in another
   // session). It stops the run for the same reason it stops it at the head: nothing built closes it.
