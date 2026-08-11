@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Classic → Freedom UI — Sprint Demo</title>
+<style>
+  :root {
+    --bg: #081019;
+    --surface: #101b27;
+    --surface-2: #152333;
+    --ink: #f5f7fb;
+    --muted: #aab8c8;
+    --line: rgba(255,255,255,.12);
+    --lime: #b7f34b;
+    --cyan: #5de4d4;
+    --pink: #ff91a4;
+    --amber: #ffd166;
+    --blue: #82aaff;
+    --red: #ff6b6b;
+    --scale: 1;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #02070d; }
+  body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  button, a { font: inherit; }
+
+  .viewport { position: fixed; inset: 0; display: grid; place-items: center; background:
+    radial-gradient(circle at 18% 18%, rgba(93,228,212,.10), transparent 31%),
+    radial-gradient(circle at 85% 82%, rgba(130,170,255,.10), transparent 28%), #02070d; }
+  .deck { width: 1280px; height: 720px; position: relative; transform: scale(var(--scale)); transform-origin: center; overflow: hidden; border-radius: 18px; box-shadow: 0 30px 90px rgba(0,0,0,.55); background: var(--bg); }
+  .slide { position: absolute; inset: 0; padding: 58px 68px 54px; display: grid; grid-template-rows: auto 1fr auto; gap: 28px; opacity: 0; pointer-events: none; transform: translateX(42px); transition: opacity .28s ease, transform .34s ease; overflow: hidden; }
+  .slide.active { opacity: 1; pointer-events: auto; transform: translateX(0); }
+  .slide::after { content: ""; position: absolute; width: 380px; height: 380px; border-radius: 50%; right: -180px; top: -220px; border: 1px solid rgba(183,243,75,.12); box-shadow: 0 0 0 54px rgba(183,243,75,.025), 0 0 0 108px rgba(183,243,75,.018); }
+
+  .kicker { display: flex; align-items: center; gap: 11px; color: var(--cyan); font-size: 13px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+  .kicker::before { content: ""; width: 30px; height: 3px; border-radius: 2px; background: var(--lime); }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 67px; line-height: .98; letter-spacing: -.045em; max-width: 980px; }
+  h2 { font-size: 45px; line-height: 1.04; letter-spacing: -.035em; max-width: 960px; }
+  .accent { color: var(--lime); }
+  .lead { color: var(--muted); font-size: 23px; line-height: 1.38; max-width: 820px; }
+  .small { color: var(--muted); font-size: 16px; line-height: 1.4; }
+  .strong { color: var(--ink); font-weight: 760; }
+  .content { min-height: 0; display: grid; align-content: center; }
+
+  .hero { align-content: center; gap: 22px; }
+  .hero-line { display: flex; align-items: center; gap: 24px; margin-top: 15px; }
+  .hero-pill { border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; color: var(--muted); font-size: 14px; background: rgba(255,255,255,.035); }
+  .hero-mark { position: absolute; right: 75px; bottom: 84px; width: 315px; height: 315px; }
+  .orbit { position: absolute; inset: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; animation: spin 24s linear infinite; }
+  .orbit:nth-child(2) { inset: 40px; border-color: rgba(93,228,212,.28); animation-direction: reverse; animation-duration: 17s; }
+  .orbit:nth-child(3) { inset: 82px; border-color: rgba(183,243,75,.48); }
+  .orbit::before { content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: var(--lime); top: 25px; left: 36px; box-shadow: 0 0 28px rgba(183,243,75,.65); }
+  .orbit:nth-child(2)::before { background: var(--cyan); top: auto; left: auto; right: 4px; bottom: 48px; }
+  .orbit:nth-child(3)::before { background: var(--pink); top: 8px; left: auto; right: 22px; }
+  .hero-mark .core { position: absolute; inset: 119px; border-radius: 18px; background: linear-gradient(135deg, var(--cyan), var(--lime)); color: #071017; display: grid; place-items: center; font-size: 32px; font-weight: 900; transform: rotate(45deg); }
+  .hero-mark .core span { transform: rotate(-45deg); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .risk { padding: 22px 20px; min-height: 235px; border-radius: 18px; border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025)); display: flex; flex-direction: column; gap: 17px; }
+  .risk .num { width: 43px; height: 43px; border-radius: 13px; display: grid; place-items: center; color: #081019; background: var(--c); font-weight: 900; font-size: 18px; }
+  .risk h3 { margin: 0; font-size: 21px; line-height: 1.1; }
+  .risk p { color: var(--muted); font-size: 16px; line-height: 1.38; }
+  .statement { margin-top: 22px; padding: 15px 19px; border-left: 4px solid var(--lime); color: var(--ink); background: rgba(183,243,75,.06); border-radius: 0 12px 12px 0; font-size: 20px; }
+
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; align-items: stretch; position: relative; }
+  .flow::before { content: ""; position: absolute; left: 12%; right: 12%; top: 55px; height: 2px; background: linear-gradient(90deg, var(--pink), var(--amber), var(--cyan), var(--blue)); opacity: .55; }
+  .step { position: relative; z-index: 1; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); padding: 21px 19px 19px; min-height: 248px; }
+  .step .icon { width: 68px; height: 68px; border-radius: 50%; display: grid; place-items: center; color: #081019; font-size: 28px; font-weight: 900; background: var(--c); box-shadow: 0 0 0 9px var(--bg); }
+  .step .label { margin: 26px 0 9px; font-size: 23px; font-weight: 820; letter-spacing: -.02em; }
+  .step p { color: var(--muted); font-size: 16px; line-height: 1.38; }
+  .step .who { margin-top: 17px; color: var(--c); font-size: 12px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+
+  .loop-layout { grid-template-columns: .9fr 1.55fr; gap: 42px; align-items: center; }
+  .loop-copy { display: grid; gap: 18px; }
+  .loop-copy .fact { display: flex; gap: 12px; align-items: flex-start; color: var(--muted); font-size: 18px; line-height: 1.35; }
+  .loop-copy .fact::before { content: "✓"; color: #071017; background: var(--lime); width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 900; flex: 0 0 auto; }
+  .cycle { height: 360px; position: relative; display: grid; place-items: center; }
+  .cycle-ring { position: absolute; width: 300px; height: 300px; border-radius: 50%; border: 3px dashed rgba(93,228,212,.42); }
+  .cycle-center { width: 142px; height: 142px; border-radius: 50%; background: linear-gradient(135deg, rgba(93,228,212,.20), rgba(130,170,255,.18)); border: 1px solid rgba(93,228,212,.45); display: grid; place-items: center; text-align: center; font-size: 19px; font-weight: 820; line-height: 1.15; }
+  .cycle-node { position: absolute; width: 146px; min-height: 78px; padding: 13px 15px; border-radius: 15px; background: var(--surface-2); border: 1px solid var(--line); display: grid; align-content: center; text-align: center; font-size: 17px; font-weight: 780; }
+  .cycle-node small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; font-weight: 550; }
+  .cycle-node.n1 { top: 0; left: calc(50% - 73px); border-top: 4px solid var(--amber); }
+  .cycle-node.n2 { right: 18px; top: 140px; border-top: 4px solid var(--cyan); }
+  .cycle-node.n3 { bottom: 0; left: calc(50% - 73px); border-top: 4px solid var(--blue); }
+  .cycle-node.n4 { left: 18px; top: 140px; border-top: 4px solid var(--pink); }
+
+  .watch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .watch { border-radius: 18px; padding: 23px; background: var(--surface); border: 1px solid var(--line); min-height: 245px; position: relative; overflow: hidden; }
+  .watch.recommended { border-color: rgba(93,228,212,.55); box-shadow: inset 0 0 0 1px rgba(93,228,212,.16); }
+  .watch .tag { display: inline-flex; padding: 6px 10px; border-radius: 999px; background: rgba(93,228,212,.12); color: var(--cyan); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; font-weight: 800; }
+  .watch h3 { margin: 18px 0 9px; font-size: 26px; }
+  .watch p { color: var(--muted); line-height: 1.4; font-size: 16px; }
+  .watch .meter { position: absolute; left: 23px; right: 23px; bottom: 23px; height: 8px; display: flex; gap: 5px; }
+  .watch .meter i { height: 100%; flex: 1; border-radius: 4px; background: rgba(255,255,255,.10); }
+  .watch .meter i.on { background: var(--c); }
+  .feedback { margin-top: 21px; display: flex; align-items: center; justify-content: center; gap: 14px; color: var(--ink); font-size: 18px; }
+  .feedback b { color: var(--pink); }
+
+  .final-layout { grid-template-columns: 1.12fr .88fr; gap: 36px; align-items: stretch; }
+  .verdict { border: 1px solid rgba(183,243,75,.42); background: linear-gradient(145deg, rgba(183,243,75,.10), rgba(93,228,212,.06)); border-radius: 20px; padding: 27px; display: grid; align-content: center; gap: 18px; }
+  .verdict .check { width: 68px; height: 68px; border-radius: 50%; background: var(--lime); color: #071017; display: grid; place-items: center; font-size: 35px; font-weight: 900; }
+  .verdict h3 { font-size: 31px; line-height: 1.05; margin: 0; }
+  .verdict p { color: var(--muted); font-size: 17px; line-height: 1.4; }
+  .demo-card { border: 1px solid var(--line); border-radius: 20px; background: var(--surface); padding: 25px; }
+  .demo-card h3 { margin: 0 0 17px; font-size: 24px; }
+  .demo-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 15px; counter-reset: demo; }
+  .demo-list li { display: grid; grid-template-columns: 34px 1fr; gap: 11px; align-items: center; color: var(--muted); font-size: 16px; }
+  .demo-list li::before { counter-increment: demo; content: counter(demo); width: 31px; height: 31px; border-radius: 9px; display: grid; place-items: center; background: var(--surface-2); color: var(--cyan); font-weight: 850; }
+  .full-link { display: inline-flex; align-items: center; gap: 9px; margin-top: 20px; color: var(--lime); text-decoration: none; font-weight: 760; border-bottom: 1px solid rgba(183,243,75,.35); padding-bottom: 3px; }
+
+  .lanes { display: grid; gap: 9px; }
+  .lane { display: grid; grid-template-columns: 120px 1fr; min-height: 72px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+  .lane-name { padding: 15px; display: grid; place-items: center; text-align: center; color: #071017; font-size: 14px; font-weight: 850; background: var(--c); }
+  .lane-track { display: flex; align-items: center; padding: 10px 16px; gap: 11px; color: var(--muted); font-size: 15px; }
+  .lane-track b { color: var(--ink); }
+  .pill { padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); white-space: nowrap; }
+  .arrow { color: var(--c); font-weight: 900; }
+
+  .footer { display: flex; align-items: center; justify-content: space-between; color: #77879a; font-size: 12px; letter-spacing: .03em; position: relative; z-index: 3; }
+  .status { display: flex; align-items: center; gap: 8px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+  .notes { display: none; position: absolute; left: 68px; right: 68px; bottom: 44px; z-index: 12; background: rgba(4,9,15,.96); border: 1px solid rgba(93,228,212,.35); border-radius: 14px; padding: 18px 20px; color: #dce5ee; font-size: 16px; line-height: 1.45; box-shadow: 0 20px 50px rgba(0,0,0,.45); }
+  .show-notes .active .notes { display: block; }
+  .notes b { color: var(--cyan); }
+
+  .controls { position: fixed; z-index: 20; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(5,11,17,.88); border: 1px solid rgba(255,255,255,.13); border-radius: 999px; backdrop-filter: blur(14px); }
+  .controls button { border: 0; width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,.07); color: var(--ink); cursor: pointer; }
+  .controls button:hover { background: rgba(255,255,255,.14); }
+  .dots { display: flex; gap: 7px; }
+  .dot { width: 7px !important; height: 7px !important; padding: 0; background: rgba(255,255,255,.22) !important; }
+  .dot.active { width: 21px !important; border-radius: 5px !important; background: var(--lime) !important; }
+  .progress { position: absolute; left: 0; right: 0; top: 0; height: 4px; background: rgba(255,255,255,.06); z-index: 20; }
+  .progress > i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--lime)); transition: width .3s ease; }
+  .hint { position: fixed; right: 18px; bottom: 19px; color: rgba(255,255,255,.42); font-size: 12px; }
+
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="viewport">
+  <main class="deck" id="deck">
+    <div class="progress"><i id="progress"></i></div>
+
+    <section class="slide active" aria-label="Титульний слайд">
+      <div class="kicker">Sprint Demo · ENG-94529 / ENG-94975</div>
+      <div class="content hero">
+        <h1>Classic <span class="accent">→</span> Freedom UI</h1>
+        <p class="lead">Від складної Classic-сторінки до <span class="strong">перевіреного результату</span> — через зрозумілий план і контрольовану міграцію.</p>
+        <div class="hero-line">
+          <span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span>
+          <span class="hero-pill">7 слайдів · ~4–5 хвилин</span>
+        </div>
+        <div class="hero-mark" aria-hidden="true"><div class="orbit"></div><div class="orbit"></div><div class="orbit"></div><div class="core"><span>UI</span></div></div>
+      </div>
+      <div class="footer"><span>Creatio AI App Development Toolkit</span><span class="status">PoC у поточній гілці</span></div>
+      <aside class="notes"><b>Що сказати:</b> Сьогодні покажу не окрему команду, яка копіює сторінку, а повний контрольований процес міграції — від аналізу Classic UI до перевіреного Freedom UI.</aside>
+    </section>
+
+    <section class="slide" aria-label="Чому це складніше за копіювання сторінки">
+      <div><div class="kicker">Проблема</div><h2>Міграція — це більше, ніж перенести поля</h2></div>
+      <div class="content">
+        <div class="grid-4">
+          <article class="risk" style="--c:var(--pink)"><div class="num">1</div><h3>Повна структура</h3><p>Вкладки, деталі, дочірні сторінки й різні типи карток.</p></article>
+          <article class="risk" style="--c:var(--amber)"><div class="num">2</div><h3>Прихована логіка</h3><p>Правила та поведінка можуть жити в інших Classic-схемах.</p></article>
+          <article class="risk" style="--c:var(--cyan)"><div class="num">3</div><h3>Правильний запуск</h3><p>Створена сторінка ще має відкриватися для потрібного запису.</p></article>
+          <article class="risk" style="--c:var(--blue)"><div class="num">4</div><h3>Доказ готовності</h3><p>Успішне збереження не означає, що користувацький сценарій працює.</p></article>
+        </div>
+        <div class="statement"><b>Тому наш результат — не «сторінка створена», а «весь погоджений сценарій перенесено й перевірено».</b></div>
+      </div>
+      <div class="footer"><span>01 · Чому потрібен повний процес</span><span>Classic → Freedom UI</span></div>
+      <aside class="notes"><b>Що сказати:</b> На реальній сторінці важливі не лише видимі поля. Є успадкована логіка, дочірні форми, маршрути відкриття та поведінка, яку звичайна перевірка схеми не бачить.</aside>
+    </section>
+
+    <section class="slide" aria-label="Шлях користувача">
+      <div><div class="kicker">Головна історія</div><h2>Чотири зрозумілі кроки для користувача</h2></div>
+      <div class="content">
+        <div class="flow">
+          <article class="step" style="--c:var(--pink)"><div class="icon">1</div><div class="label">Запит</div><p>Користувач називає розділ або сторінку для міграції.</p><div class="who">Користувач</div></article>
+          <article class="step" style="--c:var(--amber)"><div class="icon">2</div><div class="label">План</div><p>Skill аналізує Classic UI та показує повний план без побудови.</p><div class="who">Аналізатор</div></article>
+          <article class="step" style="--c:var(--cyan)"><div class="icon">3</div><div class="label">Міграція</div><p>Після погодження сторінки створюються й перевіряються по черзі.</p><div class="who">Виконавець</div></article>
+          <article class="step" style="--c:var(--blue)"><div class="icon">4</div><div class="label">Тест</div><p>Користувач відкриває готовий розділ і перевіряє свій сценарій.</p><div class="who">Користувач</div></article>
+        </div>
+      </div>
+      <div class="footer"><span>02 · Від запиту до тестування</span><span>Побудова починається тільки після погодження</span></div>
+      <aside class="notes"><b>Що сказати:</b> На верхньому рівні вся велика діаграма зводиться до цих чотирьох кроків. Критична межа — між планом і побудовою: до погодження нічого на стенді не створюється.</aside>
+    </section>
+
+    <section class="slide" aria-label="Що відбувається всередині">
+      <div><div class="kicker">Що змінилось у спринті</div><h2>Кожна частина проходить окремий цикл якості</h2></div>
+      <div class="content loop-layout">
+        <div class="loop-copy">
+          <div class="fact"><span><span class="strong">Одна сторінка за раз</span> — менший контекст і зрозуміліший результат.</span></div>
+          <div class="fact"><span><span class="strong">Окремі ролі</span> будують, перевіряють і оцінюють доказ.</span></div>
+          <div class="fact"><span>Знайдена проблема <span class="strong">повертає саме цю частину</span> на виправлення.</span></div>
+          <div class="fact"><span>Незрозуміла Classic-логіка спочатку отримує <span class="strong">опис поведінки й критерії перевірки</span>.</span></div>
+        </div>
+        <div class="cycle" aria-label="Цикл побудови та перевірки">
+          <div class="cycle-ring"></div>
+          <div class="cycle-center">До<br>підтвердженого<br>результату</div>
+          <div class="cycle-node n1">Підготовка<small>що саме робимо</small></div>
+          <div class="cycle-node n2">Побудова<small>одна частина</small></div>
+          <div class="cycle-node n3">Перевірка<small>фактичний стан</small></div>
+          <div class="cycle-node n4">Оцінка<small>достатньо доказів?</small></div>
+        </div>
+      </div>
+      <div class="footer"><span>03 · Build → Verify → Judge</span><span>Проблеми не ховаються у фінальному звіті</span></div>
+      <aside class="notes"><b>Що сказати:</b> Головна інженерна зміна — побудова більше не є одним великим кроком. Кожна сторінка має власний цикл, а перевірку й оцінку виконує не той самий учасник, який її створював.</aside>
+    </section>
+
+    <section class="slide" aria-label="Контроль користувача">
+      <div><div class="kicker">Контроль користувача</div><h2>Можна обрати, наскільки уважно стежити за міграцією</h2></div>
+      <div class="content">
+        <div class="watch-grid">
+          <article class="watch" style="--c:var(--lime)"><span class="tag">Найшвидше</span><h3>Автоматично</h3><p>Skill проходить усі частини сам і повертається з фінальним результатом.</p><div class="meter"><i class="on"></i><i></i><i></i></div></article>
+          <article class="watch recommended" style="--c:var(--cyan)"><span class="tag">Для демо</span><h3>Контрольні точки</h3><p>Після важливих сторінок користувач може відкрити їх і перевірити сценарій.</p><div class="meter"><i class="on"></i><i class="on"></i><i></i></div></article>
+          <article class="watch" style="--c:var(--pink)"><span class="tag">Максимальний контроль</span><h3>Покроково</h3><p>Skill зупиняється після кожної частини й чекає перевірки користувача.</p><div class="meter"><i class="on"></i><i class="on"></i><i class="on"></i></div></article>
+        </div>
+        <div class="feedback"><span>Якщо користувач знаходить проблему</span><b>→ відповідна частина відкривається повторно</b></div>
+      </div>
+      <div class="footer"><span>04 · Watch modes</span><span>Рівень контролю обирає користувач</span></div>
+      <aside class="notes"><b>Що сказати:</b> Це не прихований фоновий процес. Для спринт-демо я б обрав контрольні точки: ми бачимо прогрес, відкриваємо ключову сторінку і можемо повернути конкретне зауваження в той самий цикл.</aside>
+    </section>
+
+    <section class="slide" aria-label="Фінальний результат і сценарій демо">
+      <div><div class="kicker">Фінал</div><h2>Готовність визначає перевірка, а не заява агента</h2></div>
+      <div class="content final-layout">
+        <article class="verdict"><div class="check">✓</div><h3>Plan vs Done</h3><p>Наприкінці engine порівнює погоджений план із фактично створеними сторінками та зв'язками. Якщо щось відсутнє або не підтверджене, міграція не вважається завершеною.</p><a class="full-link" href="flow-as-built.html" target="_blank">Відкрити повну технічну діаграму ↗</a></article>
+        <article class="demo-card"><h3>Що показати наживо</h3><ol class="demo-list"><li>Погоджений план міграції</li><li>Одну сторінку на контрольній точці</li><li>Приклад знайденої та виправленої проблеми</li><li>Фінальну таблицю перевірки</li><li>Готовий розділ очима користувача</li></ol></article>
+      </div>
+      <div class="footer"><span>05 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
+      <aside class="notes"><b>Завершальна фраза:</b> Головна зміна цього спринту — тепер міграція є контрольованим процесом від повного аналізу до машинно перевіреного результату, а користувач зберігає контроль у ключових точках.</aside>
+    </section>
+
+    <section class="slide" aria-label="Як читати повну діаграму">
+      <div><div class="kicker">Як читати детальну схему</div><h2>Чотири доріжки — одна спільна відповідальність</h2></div>
+      <div class="content">
+        <div class="lanes">
+          <div class="lane" style="--c:#f1bec7"><div class="lane-name">Користувач</div><div class="lane-track"><span class="pill">Просить</span><span class="arrow">→</span><span class="pill">Погоджує</span><span class="arrow">→</span><span class="pill">Перевіряє</span><span class="arrow">→</span><span class="pill">Тестує</span></div></div>
+          <div class="lane" style="--c:#f0d98e"><div class="lane-name">Skill міграції</div><div class="lane-track"><b>Збирає повну картину, створює план і передає роботу на побудову.</b></div></div>
+          <div class="lane" style="--c:#a8ddc2"><div class="lane-name">Classic expert</div><div class="lane-track"><b>Пояснює складну Classic-логіку, яку не можна надійно зрозуміти автоматично.</b></div></div>
+          <div class="lane" style="--c:#acc5ed"><div class="lane-name">Build executor</div><div class="lane-track"><b>Будує по частинах, перевіряє, виправляє та формує фінальний доказ.</b></div></div>
+        </div>
+        <div class="statement"><b>Під час показу повної діаграми веди погляд аудиторії зверху вниз: користувач → план → аналіз складної логіки → побудова та перевірка.</b></div>
+      </div>
+      <div class="footer"><span>06 · Повернення до вихідної діаграми</span><span>Не пояснюй кожну стрілку</span></div>
+      <aside class="notes"><b>Що сказати:</b> Тепер можна повернутися до великої діаграми. Рожевий ряд — дії користувача, жовтий — основний skill, зелений — пояснення складної логіки, синій — побудова й перевірка. Решта стрілок показують повтори та повернення на виправлення.</aside>
+    </section>
+  </main>
+</div>
+
+<nav class="controls" aria-label="Навігація слайдами">
+  <button id="prev" aria-label="Попередній слайд">←</button>
+  <div class="dots" id="dots"></div>
+  <button id="next" aria-label="Наступний слайд">→</button>
+  <button id="notesButton" aria-label="Показати нотатки">N</button>
+  <button id="full" aria-label="На весь екран">⛶</button>
+</nav>
+<div class="hint">← → навігація · N нотатки · F повний екран</div>
+
+<script>
+  const deck = document.getElementById('deck');
+  const slides = [...document.querySelectorAll('.slide')];
+  const dots = document.getElementById('dots');
+  const progress = document.getElementById('progress');
+  let current = 0;
+
+  slides.forEach((_, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'dot';
+    dot.setAttribute('aria-label', `Слайд ${i + 1}`);
+    dot.addEventListener('click', () => show(i));
+    dots.appendChild(dot);
+  });
+
+  function show(index) {
+    current = Math.max(0, Math.min(slides.length - 1, index));
+    slides.forEach((s, i) => s.classList.toggle('active', i === current));
+    [...dots.children].forEach((d, i) => d.classList.toggle('active', i === current));
+    progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+    history.replaceState(null, '', `#${current + 1}`);
+  }
+
+  function fit() {
+    const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    document.documentElement.style.setProperty('--scale', Math.max(.1, scale).toFixed(4));
+  }
+
+  function toggleNotes() { document.body.classList.toggle('show-notes'); }
+  async function toggleFull() {
+    if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
+    else await document.exitFullscreen?.();
+  }
+
+  document.getElementById('prev').addEventListener('click', () => show(current - 1));
+  document.getElementById('next').addEventListener('click', () => show(current + 1));
+  document.getElementById('notesButton').addEventListener('click', toggleNotes);
+  document.getElementById('full').addEventListener('click', toggleFull);
+  document.addEventListener('keydown', event => {
+    if (['ArrowRight', 'PageDown', ' '].includes(event.key)) show(current + 1);
+    if (['ArrowLeft', 'PageUp'].includes(event.key)) show(current - 1);
+    if (event.key.toLowerCase() === 'n') toggleNotes();
+    if (event.key.toLowerCase() === 'f') toggleFull();
+    if (event.key === 'Home') show(0);
+    if (event.key === 'End') show(slides.length - 1);
+  });
+  window.addEventListener('resize', fit);
+  fit();
+  const hashSlide = Number(location.hash.slice(1));
+  show(Number.isInteger(hashSlide) && hashSlide > 0 ? hashSlide - 1 : 0);
+</script>
+</body>
+</html>
