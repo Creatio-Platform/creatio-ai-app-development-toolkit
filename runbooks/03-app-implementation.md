@@ -3,16 +3,16 @@
 ## Role
 
 Apply the approved Business Plan on the resolved Creatio environment through clio MCP: create the
-application, scaffold its sections, and model entities, pages, and data. This runbook covers the
-post-Gate-R execution stage where scaffolding tools such as `create-app` and `create-app-section`
-run.
+application, scaffold its sections, model entities, pages, and data, and build the analytics
+(dashboards) from the plan's `## 7. Analytics` section. This runbook covers the post-Gate-R
+execution stage where scaffolding tools such as `create-app` and `create-app-section` run.
 
 ## Input/Output
 
 - **Input:** Approved Business Plan + Technical Implementation Handoff, and the `<env_name>` resolved
   by Agent 1.
-- **Output:** The application and its sections created and verified on the environment, with
-  execution evidence reported inline in the conversation.
+- **Output:** The application, its sections, and its analytics dashboards created and verified on
+  the environment, with execution evidence reported inline in the conversation.
 
 ## Context
 
@@ -83,10 +83,83 @@ ask the developer (see `../context/business-checklist.md`, "Users, access and ow
 Tell the developer that navigation is cached, so they must log out and back in to see the app — a
 browser refresh is not enough.
 
-### 5. Verify and report
+### 5. Build analytics dashboards
 
-Verify each created section against `list-app-sections` and report operation, page, and acceptance
-evidence inline in the conversation.
+Build the analytics from the plan's `## 7. Analytics` section. **Run this only after step 3 has
+produced the section list pages** — a section dashboard is hosted on its section's list page, so
+that page must already exist. Read `get-guidance name=dashboards` first; it routes to the specific
+guides (`dashboard-creation`, `dashboard-and-home-page-layout`, `dashboard-design`,
+`indicator-widget`, `chart-widget`, `dashboard-rights`, `home-page`). Resolve all tool names and
+payload shapes through `get-tool-contract`; do not hardcode them here.
+
+For each dashboard in the plan:
+
+- **Section analytics (`### 7.1`)** — host the dashboard on the section's **list page**
+  (`<Entity>_ListPage`, which carries the `crt.Dashboards` element). Create the dashboard page on
+  `BaseDashboardTemplate`, resolving the three link-back `optional-properties`
+  (`DashboardsEntitySchemaName` = the section entity, `DashboardsElementName`,
+  `DashboardsClientUnitSchemaUId` = the ROOT host-page schema UId) from that list page per
+  `dashboard-creation`. Lay out and size the widgets per `dashboard-and-home-page-layout`, and bind
+  every data-bound widget to the hidden `DashboardDS` source per `dashboard-design`.
+- **Workplace analytics (`### 7.2`)** — host app-level analytics on the app's **own home page**, per
+  `home-page`. A home page holds its **widgets (metrics and charts) directly** — it is NOT a
+  `crt.Dashboards` host, so there is no `DashboardDS` page-data filter to bind. Steps:
+  1. Create a `BaseHomePage` page and capture its `schemaUId`. Add the `### 7.2` charts/metrics and
+     lay them out per `dashboard-and-home-page-layout`.
+  2. **Find the app's workplace and bind the home page to it.** A newly created app always registers
+     its sections into a workplace — for a composable/Studio app that is normally **"My applications"**
+     (or "Studio"), which already exists. Resolve it by reading `SysModuleInWorkplace` for the app's
+     section modules (join to `SysWorkplace` for the `Id`/`Name`).
+     **Pre-write clobber check — HARD STOP (MANDATORY, before writing).** Read the target workplace's
+     current `SysWorkplace.HomePageUId` first and **record the prior value in the implementation
+     report** (so an accidental overwrite is detectable and recoverable) — do this even when it is
+     unset. If it is already set to a non-empty, non-zero (`00000000-0000-0000-0000-000000000000`)
+     value — another app already bound a home page to this shared workplace — then **STOP: do NOT call
+     the write tool (`odata-update` / `create-data-binding-db`) until the developer has echoed back the
+     exact prior `HomePageUId` value being replaced and explicitly approved the overwrite.** General
+     "please confirm" is not enough — require the developer to repeat the exact prior UId, because
+     binding is last-writer-wins and a silent overwrite breaks the other app's home page with no signal.
+     Surface the existing `HomePageUId` and, if resolvable, which page/app owns it. Only when it is
+     unset, or the developer has echoed the prior value and approved, proceed to write.
+     Then set `SysWorkplace.HomePageUId` to the home page's `schemaUId` via `odata-update`, ship it as
+     a package data binding with `create-data-binding-db` (schema `SysWorkplace`) so it survives a
+     transfer, and read `SysWorkplace.HomePageUId` back to confirm — do not trust the install log.
+  3. **Edge case only** — if no workplace hosts the app's sections at all, a workplace must be
+     created. clio cannot create one today (`SysWorkplace` + `SysModuleInWorkplace` +
+     `SysAdminUnitInWorkplace` span tables set up in the Creatio UI); a create-workplace tool is
+     tracked under ENG-88474 — resolve it through `get-tool-contract` so it is used automatically once
+     it lands. Until then, in this rare case, stop and ask the developer to create the workplace in the
+     UI, then bind. Do not treat this as the normal path: normally the workplace already exists (step 2).
+
+  **Do NOT** place app-level analytics on the shared platform page `FreedomDashboards` (schema in the
+  core `CrtNUI` package). It is a generic, OOTB dashboards page that is not scoped to this app's
+  workplace, so the app's analytics would land there instead of on the app's own home page.
+
+  **Known limitation (shared workplace).** When the target workplace is a shared one such as
+  "My applications", `SysWorkplace.HomePageUId` is a single per-workplace value, so it is
+  last-writer-wins across every composable app that shares that workplace, and the home page is visible
+  to everyone with access to it — a wider audience than just this app's users. The pre-write clobber
+  check above makes an overwrite explicit (surfaced and confirmed) instead of silent, but it does not
+  remove the limitation: a truly app-scoped workplace (each app owning its own home page and audience)
+  depends on the create-workplace capability tracked under ENG-88474.
+- **Access** — this applies to **§7.1 dashboards only**. Section-dashboard access is a **static
+  default: `All Employees`**: every §7.1 dashboard is created visible to everyone (the plan states
+  `access rights: All Employees` per dashboard for transparency). Ship the grant with the package per
+  `dashboard-rights` so it survives a package transfer (grants are data, not schema, and are otherwise
+  lost on transfer). The **§7.2 home page has no per-page access grant** — its audience is the
+  workplace it is bound to (`SysAdminUnitInWorkplace`), so do not create `dashboard-rights` for it.
+  Role-scoped (least-privilege) access is out of scope for now and belongs to the future roles work —
+  do not attempt to derive per-role grants here.
+
+Widgets may draw on any site object named in the plan — the app's own entities and standard platform
+entities alike.
+
+### 6. Verify and report
+
+Verify each created section against `list-app-sections`, confirm the app's navigation placement (and
+home-page binding) took effect by reading the workplace rows back, confirm the planned dashboards
+exist on their host pages, and report operation, page, dashboard, navigation, and acceptance evidence
+inline in the conversation.
 
 ## Error Handling
 
@@ -157,6 +230,11 @@ diagnostic — no change is required here when the clio-side wording lands.
 ✅ Every navigation change was mirrored into a package data binding, so the placement survives a
    transfer to another environment
 ✅ The developer was told a re-login is required for navigation changes to appear
+✅ Every section dashboard (`### 7.1`) exists on its section list page's `crt.Dashboards` element with
+   its widgets laid out and bound to `DashboardDS`; every workplace chart/metric (`### 7.2`) lives on
+   the app's `BaseHomePage`, which is bound to the app's workplace (normally "My applications") via
+   `SysWorkplace.HomePageUId` (confirmed by reading it back) — never placed on the shared
+   `FreedomDashboards` page
 ✅ No section was created by varying its caption, and no `compile-creatio` was run speculatively
 ✅ Execution, page, and acceptance evidence is reported inline in the conversation
 ✅ When support mode is on and the run returns a final response, include the canonical final support
