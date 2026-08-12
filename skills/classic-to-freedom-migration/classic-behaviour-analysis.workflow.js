@@ -436,19 +436,25 @@ const RETRY_ATTEMPTS = 2
 // `onFailure(attempt, error, willRetry)` carries the CAUSE. Two different failures end an attempt — a null return
 // (terminal death, per the contract) and a rejection (host refused, schema threw, prompt malformed) — and folding
 // them into one generic line left a dead pass reporting THAT it died and never WHY.
+//
+// Returns `{ result, ran }`, not the bare value. `ran` is what this loop KNOWS — an attempt handed back something.
+// The caller used to re-derive it as `!!result`, which reads any falsy-but-PRESENT value as "the phase never ran"
+// and marks a real answer UNCHECKED downstream; the collapse was here, in the old `|| null`, so moving the caller
+// to an explicit flag without fixing this line would have changed nothing (PR#88 review). Death is a NULLISH
+// return — that is the `agent()` contract — or a rejection. `0`, `''` and `false` are results.
 async function retryOnDeath(attemptFn, onFailure) {
-  let result = null
-  for (let attempt = 1; attempt <= RETRY_ATTEMPTS && !result; attempt++) {
+  let outcome = { result: null, ran: false }
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS && !outcome.ran; attempt++) {
     let error = null
     try {
-      result = (await attemptFn(attempt)) || null
+      const value = await attemptFn(attempt)
+      if (value !== null && value !== undefined) outcome = { result: value, ran: true }
     } catch (e) {
-      result = null
       error = e || new Error('rejected with no reason given')
     }
-    if (!result && onFailure) onFailure(attempt, error, attempt < RETRY_ATTEMPTS)
+    if (!outcome.ran && onFailure) onFailure(attempt, error, attempt < RETRY_ATTEMPTS)
   }
-  return result
+  return outcome
 }
 
 // The line a dead attempt logs. It lives HERE rather than inline at the call site for the same reason the loop
@@ -461,6 +467,22 @@ function critiqueDeathLine(attempt, error, willRetry) {
     ? `${error.name || 'Error'}: ${error.message || String(error)}`
     : 'returned nothing (terminal death per the agent() contract)'
   return `critique agent died on attempt ${attempt} — ${cause}${willRetry ? ' — retrying once' : ''}`
+}
+
+// `retryOnDeath`'s `ran` answers "an attempt handed something back" — the right RETRY signal, and deliberately
+// generous: anything non-nullish stops the loop rather than spending a second agent. What the caller is told is
+// STRONGER. `critiqueRan: true` sells `conflicts`/`settledElsewhere` as verified-empty, so a non-nullish value
+// that is not a critique satisfies the first question and not the second, and would report "no conflicts found"
+// for a pass that checked nothing — while the loud log stayed silent. The old `!!critique` was over-cautious
+// (a wasted agent, a row re-flagged UNCHECKED); that is the safe direction to be wrong in, and separating the
+// two questions keeps it without reintroducing the truthiness inference (PR#88 review).
+//
+// The three fields are exactly the ones the return object reads. A PARTIAL object is dead by this test: the
+// repair round still uses `critique?.uncovered` either way, so the only thing lost is a claim that the missing
+// field was verified — which is the claim there is no evidence for.
+function isCritiqueShape(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && ['uncovered', 'conflicts', 'settledElsewhere'].every((k) => Array.isArray(value[k]))
 }
 // ---8<--- END PURE DECISION HELPERS ---8<---
 
@@ -574,7 +596,10 @@ Do not rewrite the cards. Report.`
 // The loop itself is `retryOnDeath` in the pure block above — a thunk, so the suite executes the retry instead of
 // regex-matching its shape here. Both failure shapes (a null return, a REJECTING host) end an attempt and reach
 // the notifier, so neither can throw past the loud log below.
-const critique = await retryOnDeath(
+// `ran` comes from the helper, which knows whether an attempt returned; it is NOT re-derived from `critique`'s
+// truthiness here. The REPORTED flag is that answer narrowed by `isCritiqueShape` — see there for why the two
+// questions are not the same one.
+const { result: critique, ran: critiqueReturned } = await retryOnDeath(
   (attempt) =>
     agent(critiquePrompt, {
       agentType: 'general-purpose',
@@ -584,7 +609,15 @@ const critique = await retryOnDeath(
     }),
   (attempt, error, willRetry) => log(critiqueDeathLine(attempt, error, willRetry)),
 )
-if (!critique) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
+const critiqueRan = critiqueReturned && isCritiqueShape(critique)
+// Distinct from the contract line below, and both fire together on this path: "returned something unusable" is a
+// different repair than "the host never answered", and folding them left the first indistinguishable from a
+// clean pass in the log.
+if (critiqueReturned && !critiqueRan) {
+  const returned = Array.isArray(critique) ? 'an array' : `a ${typeof critique}`
+  log(`⚠ the Critique agent returned ${returned} without the uncovered/conflicts/settledElsewhere arrays its schema requires — treating the pass as dead`)
+}
+if (!critiqueRan) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
 
 // --- One repair round, and only when there is something to repair ----------
 // Scoped to the SCOPES that own the uncovered rows — never to a bare row list,
@@ -674,7 +707,7 @@ return {
   // false = the adversarial pass died even after the retry: conflicts and settledElsewhere below are
   // unchecked (not verified-empty), and coverage.complete is arithmetic-only — no pass verified that
   // cited cards actually describe their rows.
-  critiqueRan: !!critique,
+  critiqueRan,
   conflicts: critique?.conflicts || [],
   settledElsewhere: critique?.settledElsewhere || [],
   gaps: described.flatMap((r) => r.gaps || []),
