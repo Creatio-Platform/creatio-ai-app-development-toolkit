@@ -911,11 +911,12 @@ function sectionInput(section, manifest) {
   if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null };
   if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null };
   const hasResolvedListColumns = Object.prototype.hasOwnProperty.call(section, "listColumns");
+  if (!hasResolvedListColumns) {
+    throw new Error("object-shaped section requires listColumns evidence; use a bare array only for the legacy manifest shape");
+  }
   return {
     schemas: Array.isArray(section.schemas) ? section.schemas : [],
-    resolvedListColumns: hasResolvedListColumns
-      ? normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema)
-      : null,
+    resolvedListColumns: normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema),
   };
 }
 
@@ -926,6 +927,7 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
     if (f?.name && !seen.has(f.name)) { seen.add(f.name); quickFilters.push(f); }
   }
   return {
+    schemaGathered: sectionSchemas.length > 0,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
     listColumns: resolvedListColumns?.columns

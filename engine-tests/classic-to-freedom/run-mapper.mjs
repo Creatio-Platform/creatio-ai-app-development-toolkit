@@ -895,6 +895,26 @@ check("ENG-95229: explicit failed list-column evidence is rejected instead of si
       section: { schemas: [], listColumns: { success: false, error: "read failed" } } }, { baseDir: FIX });
     return false;
   } catch (e) { return /not a successful/.test(String(e)); } })());
+check("ENG-95229: object-shaped section without listColumns fails loudly instead of downgrading to legacy parsing",
+  (() => { try {
+    runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+      section: { schemas: [] } }, { baseDir: FIX });
+    return false;
+  } catch (e) { return /object-shaped section requires listColumns evidence/.test(String(e)); } })());
+check("ENG-95229: bare section array remains the accepted legacy manifest shape",
+  secRun.section?.listColumnSource === "schema-default"
+  && (secRun.section?.listColumns || []).join(",") === "Name,Stage");
+check("ENG-95229: resolved columns do not mask a missing section schema chain",
+  (() => {
+    const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+      section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+        source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
+    return r.section?.schemaGathered === false
+      && /Section schema not gathered/.test(r.designSpec)
+      && /\*\*List columns:\*\* Name/.test(r.designSpec);
+  })());
 check("ENG-95229: resolved list columns from another section or entity are rejected",
   (() => { try {
     runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
