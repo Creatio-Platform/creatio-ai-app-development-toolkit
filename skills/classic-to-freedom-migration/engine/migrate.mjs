@@ -844,8 +844,43 @@ function reportDynamicMappingProps(schemas, changeSet) {
 // Union the *Section chain's list-page signals (add-record mini page, section actions, list columns, quick
 // filters, process launch) into one section object, or null when no section schema was supplied. Extracted to
 // keep runMigration under CC 15.
-function analyzeSectionChain(sectionSchemas) {
-  if (!sectionSchemas.length) return null;
+function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSchema) {
+  if (!value || value.success !== true || !["schema-default", "entity-default", "none"].includes(value.source)
+    || !Array.isArray(value.columns)) throw new Error("section.listColumns is present but is not a successful get-classic-list-columns response");
+  if (typeof expectedEntity !== "string" || !expectedEntity
+    || typeof expectedSectionSchema !== "string" || !expectedSectionSchema) {
+    throw new Error("section.listColumns requires manifest.entity and planMeta.sectionSchema to verify its provenance");
+  }
+  if (value.entity !== expectedEntity || value.sectionSchema !== expectedSectionSchema) {
+    throw new Error(`section.listColumns provenance mismatch: expected ${expectedSectionSchema}/${expectedEntity}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}`);
+  }
+  const columns = value.columns.map((column) => typeof column === "string" ? column : column?.name)
+    .filter((name) => typeof name === "string" && /^[A-Za-z][\w.]*$/.test(name));
+  if (columns.length !== value.columns.length || (value.source !== "none" && !columns.length)
+    || (value.source === "none" && columns.length)) {
+    throw new Error("section.listColumns contains columns inconsistent with its declared source");
+  }
+  return {
+    source: value.source,
+    columns: [...new Set(columns)],
+    notes: Array.isArray(value.notes) ? value.notes.filter((note) => typeof note === "string") : [],
+  };
+}
+
+function sectionInput(section, manifest) {
+  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null };
+  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null };
+  const hasResolvedListColumns = Object.prototype.hasOwnProperty.call(section, "listColumns");
+  return {
+    schemas: Array.isArray(section.schemas) ? section.schemas : [],
+    resolvedListColumns: hasResolvedListColumns
+      ? normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema)
+      : null,
+  };
+}
+
+function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
+  if (!sectionSchemas.length && !resolvedListColumns) return null;
   const seen = new Set(), quickFilters = [];
   for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
     if (f?.name && !seen.has(f.name)) { seen.add(f.name); quickFilters.push(f); }
@@ -853,7 +888,12 @@ function analyzeSectionChain(sectionSchemas) {
   return {
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
-    listColumns: [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
+    listColumns: resolvedListColumns?.columns
+      ?? [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
+    listColumnSource: resolvedListColumns?.source ?? (sectionSchemas.some((l) => (l.listColumns || []).length)
+      ? "schema-default"
+      : null),
+    listColumnNotes: resolvedListColumns?.notes ?? [],
     quickFilters,
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
@@ -1308,7 +1348,8 @@ export function runMigration(manifest, opts = {}) {
   const seedTemplate = parse(manifest.seed);
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
-  const sectionSchemas = parse(manifest.section);
+  const sectionData = sectionInput(manifest.section, manifest);
+  const sectionSchemas = parse(sectionData.schemas);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
@@ -1369,7 +1410,7 @@ export function runMigration(manifest, opts = {}) {
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
   reportDynamicMappingProps(schemas, changeSet);
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
-  const section = analyzeSectionChain(sectionSchemas);
+  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns);
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them

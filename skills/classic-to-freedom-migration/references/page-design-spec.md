@@ -78,7 +78,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 
 ### List page
 - **Add record:** via mini page `ApplicantMiniPage` — migrate as a Freedom mini page / quick-add
-- **List columns:** ⚠ not part of the page — Classic remembers the visible columns as a per-user list setting, so confirm which columns the Freedom list should show
+- **List columns:** Name · Stage · Created on
 - **Section actions:** `runBulkAssign` — migrate as Freedom list-page actions
 
 ### Applicant form page

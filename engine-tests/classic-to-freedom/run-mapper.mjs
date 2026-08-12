@@ -862,17 +862,58 @@ const secRun = runMigration({ entity: "Applicant",
 check("section: add-record mini page detected (name)", secRun.section?.addRecordMiniPage === "ApplicantMiniPage");
 check("section: getSectionActions hint captured (#8b)", secRun.section?.sectionActions.includes("runBulkAssign"));
 check("section: list columns from getGridDataColumns (#2)", (secRun.section?.listColumns || []).join(",") === "Name,Stage");
+const resolvedColumnsRun = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "entity-default",
+      columns: [{ name: "Name", caption: "Name" }], notes: ["entity fallback"] },
+  },
+}, { baseDir: FIX });
+check("ENG-95229: enriched section manifest consumes resolved entity-default columns",
+  resolvedColumnsRun.section?.listColumnSource === "entity-default"
+  && (resolvedColumnsRun.section?.listColumns || []).join(",") === "Name"
+  && /\*\*List columns:\*\* Name/.test(resolvedColumnsRun.designSpec));
+const resolvedNoneRun = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "none",
+      columns: [], notes: ["no default"] },
+  },
+}, { baseDir: FIX });
+check("ENG-95229: source=none remains a successful section analysis but keeps the user-visible column question",
+  resolvedNoneRun.section?.listColumnSource === "none"
+  && resolvedNoneRun.section?.listColumns.length === 0
+  && /no default column set was resolved/.test(resolvedNoneRun.designSpec));
+check("ENG-95229: explicit failed list-column evidence is rejected instead of silently using legacy parsing",
+  (() => { try {
+    runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+      section: { schemas: [], listColumns: { success: false, error: "read failed" } } }, { baseDir: FIX });
+    return false;
+  } catch (e) { return /not a successful/.test(String(e)); } })());
+check("ENG-95229: resolved list columns from another section or entity are rejected",
+  (() => { try {
+    runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+      section: { schemas: [], listColumns: { success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
+        source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
+    return false;
+  } catch (e) { return /provenance mismatch/.test(String(e)); } })());
 check("section: design spec has a List page block (before the form page) naming the mini page",
   /### List page/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec)
   && secRun.designSpec.indexOf("### List page") < secRun.designSpec.indexOf(" form page"));
 const noSec = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("section: absent when no section input (block omitted)", noSec.section === null && !/### List page/.test(noSec.designSpec));
-check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + list columns flagged as a per-user setting",
+check("section: VERIFIED no add-record mini page (addRecordMiniPage:false) → 'full edit page' + unresolved list columns remain explicit",
   (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: false,
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
-    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /per-user list setting/.test(r.designSpec) && r.structure.complete === true; })());
+    return r.section?.addRecordMiniPage === null && /full edit page/.test(r.designSpec) && /no default column set was resolved/.test(r.designSpec) && r.structure.complete === true; })());
 // A section with NO mini-page answer supplied → the engine must NOT assume "none"; it FLAGS it (structure incomplete).
 check("section: UNVERIFIED add-record mini page → structure INCOMPLETE + 'NOT verified' (no false 'none')",
   (() => { const r = runMigration({ entity: "Applicant",

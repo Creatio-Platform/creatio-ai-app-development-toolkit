@@ -350,9 +350,8 @@ function renderListPageBlock(result, section) {
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
     // The ⚠ text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
-    // product — the Classic list and its columns. The mechanism (Classic stores the visible set as per-user profile
-    // data, not in the page schema) stays in this comment and in `engine.mjs`; it must not reach the rendered cell.
-    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ not part of the page — Classic remembers the visible columns as a per-user list setting, so confirm which columns the Freedom list should show";
+    // product. Tool/storage details stay in the discovery instructions and must not reach the rendered plan.
+    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ no default column set was resolved — confirm which columns the Freedom list should show";
     L.push(`- **List columns:** ${listCols}`);
     if ((section.quickFilters || []).length) {
       const f = section.quickFilters.map((q) => {
