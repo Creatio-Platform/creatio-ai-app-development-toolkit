@@ -162,6 +162,8 @@
   .evidence-stage { display: grid; grid-template-columns: 440px 1fr; gap: 34px; align-items: stretch; }
   .shot-frame { position: relative; min-width: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: #111; box-shadow: 0 18px 42px rgba(0,0,0,.32); }
   .shot-frame img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .slide img.zoomable { cursor: zoom-in; }
+  .slide img.zoomable:focus-visible { outline: 3px solid var(--lime); outline-offset: -3px; }
   .workflow-shot { height: 412px; }
   .workflow-shot img { object-fit: contain; object-position: center; }
   .evidence-points { display: grid; align-content: center; gap: 22px; }
@@ -187,6 +189,7 @@
   .approval-stage { display: grid; grid-template-columns: 540px 1fr; gap: 34px; height: 402px; align-items: stretch; }
   .approval-shot { height: 402px; }
   .approval-shot img { object-fit: cover; object-position: center 30%; }
+  .repair-placement-shot img { object-fit: contain; object-position: center; }
   .approval-copy { display: grid; align-content: center; gap: 23px; }
   .approval-copy .approval-lead { color: var(--ink); font-size: 25px; line-height: 1.25; font-weight: 790; }
   .approval-step { display: grid; grid-template-columns: 39px 1fr; gap: 13px; align-items: start; }
@@ -195,6 +198,16 @@
   .approval-step span { color: var(--muted); font-size: 15px; line-height: 1.35; }
 
   .build-live-stage { display: grid; grid-template-columns: 640px 1fr; gap: 34px; height: 402px; align-items: stretch; }
+  .context-stage { display: grid; grid-template-columns: 520px 1fr; gap: 44px; height: 410px; align-items: center; }
+  .context-shot { height: 410px; padding: 24px; background: radial-gradient(circle at 50% 40%, rgba(102,216,203,.10), transparent 58%), #050b12; }
+  .context-shot img { object-fit: contain; image-rendering: auto; }
+  .context-copy { display: grid; align-content: center; gap: 18px; }
+  .context-metric { display: flex; align-items: baseline; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,.12); }
+  .context-metric strong { color: var(--lime); font-size: 58px; line-height: .95; letter-spacing: -.045em; }
+  .context-metric span { max-width: 250px; color: var(--muted); font-size: 19px; line-height: 1.25; }
+  .context-point { padding-left: 18px; border-left: 4px solid var(--c); }
+  .context-point b { display: block; margin-bottom: 4px; color: var(--ink); font-size: 23px; }
+  .context-point span { color: var(--muted); font-size: 17px; line-height: 1.35; }
   .build-live-shot { height: 402px; }
   .build-live-shot img { object-fit: contain; object-position: center; }
   .build-live-copy { display: grid; align-content: center; gap: 22px; }
@@ -253,6 +266,20 @@
   .progress > i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--lime)); transition: width .3s ease; }
   .hint { position: fixed; right: 18px; bottom: 19px; color: rgba(255,255,255,.42); font-size: 12px; }
 
+  .image-lightbox { position: fixed; inset: 0; z-index: 100; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 14px; background: rgba(2,7,13,.97); backdrop-filter: blur(18px); }
+  .image-lightbox[hidden] { display: none; }
+  .lightbox-toolbar { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; }
+  .lightbox-toolbar button { min-width: 42px; height: 38px; padding: 0 13px; border: 1px solid rgba(255,255,255,.18); border-radius: 11px; background: rgba(255,255,255,.07); color: var(--ink); cursor: pointer; }
+  .lightbox-toolbar button:hover, .lightbox-toolbar button:focus-visible { background: rgba(255,255,255,.15); outline: 2px solid var(--lime); outline-offset: 2px; }
+  .lightbox-toolbar button:disabled { opacity: .35; cursor: default; }
+  .lightbox-toolbar .zoom-value { min-width: 62px; color: var(--ink); font-size: 14px; font-weight: 780; text-align: center; }
+  .lightbox-stage { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid rgba(255,255,255,.10); border-radius: 14px; background: #02070d; scrollbar-color: rgba(183,243,75,.55) rgba(255,255,255,.06); }
+  .lightbox-canvas { min-width: 100%; min-height: 100%; width: 100%; display: flex; padding: 24px; }
+  .image-lightbox img { flex: 0 0 auto; width: auto; height: auto; max-width: 100%; max-height: none; margin: auto; border-radius: 10px; box-shadow: 0 24px 80px rgba(0,0,0,.7); cursor: zoom-out; }
+  .image-lightbox .caption { color: var(--muted); font-size: 14px; text-align: center; }
+  .lightbox-toolbar .close-lightbox { position: absolute; top: 14px; right: 14px; width: 42px; min-width: 42px; padding: 0; border-radius: 50%; font-size: 27px; line-height: 1; }
+  .image-open .controls, .image-open .hint { visibility: hidden; }
+
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -266,7 +293,7 @@
       <div class="content hero">
         <h1>Classic <span class="accent">→</span> Freedom UI</h1>
         <p class="lead">Хто за що відповідає, які workflow запускаються і як система доходить до <span class="strong">перевіреного результату</span>.</p>
-        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">20 слайдів · ~14 хвилин</span></div>
+        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">28 слайдів · ~21 хвилина</span></div>
         <div class="hero-mark" aria-hidden="true"><div class="orbit"></div><div class="orbit"></div><div class="orbit"></div><div class="core"><span>UI</span></div></div>
       </div>
       <div class="footer"><span>Creatio AI App Development Toolkit</span><span class="status">PoC у поточній гілці</span></div>
@@ -531,30 +558,170 @@
       <aside class="notes"><b>Що сказати:</b> Через годину Build уже закрив три з чотирьох одиниць: застосунок і дві сторінки. Остання сторінка ще активна, тому Verify чесно залишається в очікуванні. Видно не абстрактні відсотки, а конкретний стан кожної одиниці черги.</aside>
     </section>
 
-    <section class="slide" aria-label="Фінальний результат">
-      <div><div class="kicker">Фінал</div><h2>Готовність визначає engine, а не впевненість агента</h2></div>
-      <div class="content final-layout">
-        <article class="verdict"><div class="check">✓</div><h3>Plan vs Done</h3><p>Engine порівнює погоджений план із фактично створеними сторінками, компонентами та зв'язками. Відсутній або непідтверджений пункт блокує завершення.</p><a class="full-link" href="flow-as-built.html" target="_blank">Відкрити повну технічну діаграму ↗</a></article>
-        <article class="demo-card"><h3>Що показати наживо</h3><ol class="demo-list"><li>Engine-written план</li><li>Картку складної Classic-поведінки</li><li>Сторінку на контрольній точці</li><li>Приклад повторного циклу виправлення</li><li>Фінальну таблицю Plan vs Done</li></ol></article>
-      </div>
-      <div class="footer"><span>18 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
-      <aside class="notes"><b>Завершальна фраза:</b> Результат цього спринту — керована система ролей і перевірок. Skill знає правила, workflow організовує роботу, а engine не дозволяє назвати міграцію завершеною без фактичного доказу.</aside>
-    </section>
-
-    <section class="slide" aria-label="Як читати повну діаграму">
-      <div><div class="kicker">Повертаємося до повної схеми</div><h2>Тепер кожна доріжка має простий зміст</h2></div>
-      <div class="content">
-        <div class="lanes">
-          <div class="lane" style="--c:#f1bec7"><div class="lane-name">Користувач</div><div class="lane-track"><span class="pill">Просить</span><span class="arrow">→</span><span class="pill">Погоджує</span><span class="arrow">→</span><span class="pill">Перевіряє</span><span class="arrow">→</span><span class="pill">Тестує</span></div></div>
-          <div class="lane" style="--c:#f0d98e"><div class="lane-name">Migration skill</div><div class="lane-track"><b>Збирає повну картину, запускає потрібний workflow і тримає межу погодження.</b></div></div>
-          <div class="lane" style="--c:#a8ddc2"><div class="lane-name">Analysis workflow</div><div class="lane-track"><b>Через Classic UI Expert пояснює складну логіку й повертає її в план.</b></div></div>
-          <div class="lane" style="--c:#acc5ed"><div class="lane-name">Build workflow</div><div class="lane-track"><b>Будує по сторінці, застосовує UI Guidelines, перевіряє та виправляє.</b></div></div>
+    <section class="slide" aria-label="Остання одиниця перед Verify">
+      <div><div class="kicker">Build у роботі · 1 година 22 хвилини</div><h2>Перед Verify залишається завершити головну сторінку</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-last-unit.png" alt="Freedom-build-executor workflow зі станом Build 5 із 6 та активною головною сторінкою"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Складні сторінки розкладені на окремі керовані одиниці — остання не ховається за загальним статусом.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:83%"><b>Build · 5/6</b><div><span>Застосунок, три форми та міністорінка готові; головна сторінка ще активна.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Judge · 1/1</b><div><span>Попередній контрольний раунд закритий арифметичним вердиктом engine.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · очікує</b><div><span>Окремий verifier отримає повний результат лише після шостої одиниці.</span><div class="phase-state"><i></i></div></div></div>
         </div>
       </div>
-      <div class="footer"><span>19 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
-      <aside class="notes"><b>Що сказати:</b> Червоні пунктирні стрілки — це повернення користувача з перевірки. Звичайні зворотні стрілки — автоматичні цикли виправлення. Головне — не маршрут кожної стрілки, а розподіл відповідальності між доріжками.</aside>
+      <div class="footer"><span>18 · Last Build unit</span><span>5 completed · Main page active · Verify next</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через годину двадцять дві хвилини готові вже п'ять із шести одиниць, включно з міністорінкою. Головна сторінка будується останньою. Verify не запускається завчасно — він отримає тільки цілісний результат.</aside>
     </section>
+
+    <section class="slide" aria-label="Фінальна Build-перевірка форм">
+      <div><div class="kicker">Build у роботі · 3 години 07 хвилин</div><h2>Основна побудова готова — engine звіряє типізовані форми</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-forms-check.png" alt="Freedom-build-executor workflow зі станом Build 6 із 7 та активною перевіркою typedFormsBuilt"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Головна сторінка вже завершена, але Build не закривається без окремого доказу, що всі типізовані форми створені.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:86%"><b>Build · 6/7</b><div><span>Застосунок, форми, міністорінка та main завершені; працює typedFormsBuilt.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:100%"><b>Main · готова</b><div><span>Найдовша одиниця закрита за 1 годину 25 хвилин і зафіксована в черзі.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · очікує</b><div><span>Незалежний verifier стартує після останнього build-доказу.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>19 · Build evidence check</span><span>Main complete · Forms proof active · Verify next</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через три години основні сторінки вже створені, включно з main. Але workflow не переходить до Verify лише тому, що агент заявив про готовність. Окрема build-одиниця звіряє факт побудови всіх типізованих форм.</aside>
+    </section>
+
+    <section class="slide" aria-label="Незалежний Verify після Build">
+      <div><div class="kicker">Verify у роботі · 4 години 45 хвилин</div><h2>Усі Build-одиниці закриті — результат перевіряє інший агент</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-verifying.png" alt="Freedom-build-executor workflow із завершеним Build 10 із 10 та активним Verify round-1"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Побудова завершена повністю, але workflow ще не оголошує успіх: окремий read-only verifier збирає фактичні докази.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Build · 10/10</b><div><span>Усі сторінки, маршрутизація, wiring секції та контрольні одиниці закриті.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:18%"><b>Verify · round-1</b><div><span>Fresh-context verifier читає реальний stand і звіряє його з погодженим планом.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Close · 1/1</b><div><span>Проміжний стан надійно збережено; workflow може продовжити цикл доказів.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>20 · Independent Verify</span><span>Build complete · Evidence collection active</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через чотири години сорок п'ять хвилин усі десять Build-одиниць закриті. Але це ще не фінал: окремий verifier, який нічого не будував, читає фактичний стан середовища. Саме так твердження агента замінюється незалежним доказом.</aside>
+    </section>
+
+    <section class="slide" aria-label="Workflow завершено з доказами">
+      <div><div class="kicker">Перший прогін · 5 годин 14 хвилин</div><h2>Workflow завершився після закриття всіх фаз</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/build-workflow-completed.png" alt="Завершений freedom-build-executor workflow з усіма закритими фазами"></div>
+        <div class="build-live-copy">
+          <p class="headline">Статус <span class="accent">Completed</span> з'явився після повного циклу Build → Verify → Judge → Close.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>Build · 10/10</b><span>Увесь погоджений обсяг створено та закрито по окремих одиницях.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Verify · 1/1 · Judge · 2/2</b><span>Фактичний результат перевірено, а достатність доказів оцінено окремо.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Close · 2/2</b><span>Фінальний стан збережено; незакритих фаз або прихованих одиниць немає.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>21 · Completed workflow</span><span>21 agents · 7 phases closed · Engine gate green</span></div>
+      <aside class="notes"><b>Що сказати:</b> Ось фінал реального прогона. Через п'ять годин чотирнадцять хвилин workflow завершився: усі сім фаз мають закриті лічильники. Completed — це не повідомлення будівельника, а стан після незалежного Verify, двох Judge-кроків і фінального Close.</aside>
+    </section>
+
+    <section class="slide" aria-label="Виявлено прогалину та погоджено ремонт">
+      <div><div class="kicker">Зворотний зв'язок після першого прогона</div><h2>Одна прогалина відкриває новий контрольований цикл</h2></div>
+      <div class="content decision-grid">
+        <figure class="decision-shot">
+          <div class="image-wrap"><img src="assets/real-run/repair-gap-decision.png" alt="Запит на перепланування через незакриту міністорінку без PDS"></div>
+          <figcaption><b>Прогалина:</b> міністорінка має поля, що не резолвляться в runtime без PDS.</figcaption>
+        </figure>
+        <figure class="decision-shot">
+          <div class="image-wrap"><img src="assets/real-run/repair-plan-approval.png" alt="Погодження ремонтного плану без створення нового застосунку"></div>
+          <figcaption><b>Рішення:</b> оновити план і ремонтувати наявну міністорінку без нового app/package.</figcaption>
+        </figure>
+      </div>
+      <div class="footer"><span>22 · Repair decision</span><span>Gap found → Replan → Explicit approval</span></div>
+      <aside class="notes"><b>Що сказати:</b> Completed не означає, що зворотний зв'язок користувача ігнорується. Після першого прогона виявлено конкретну runtime-прогалину. Engine пропонує або перепланувати, або чесно зафіксувати missing; користувач обирає ремонт і окремо погоджує нову версію плану.</aside>
+    </section>
+
+    <section class="slide" aria-label="Уточнення placement перед ремонтом">
+      <div><div class="kicker">Продуктове рішення перед змінами</div><h2>Repair-run не вгадує, де секцію мають бачити користувачі</h2></div>
+      <div class="content approval-stage">
+        <div class="shot-frame approval-shot repair-placement-shot"><img src="assets/real-run/repair-placement-decision.png" alt="Питання про робоче місце і ролі для Freedom-секції під час ремонту"></div>
+        <div class="approval-copy">
+          <p class="approval-lead">Технічний ремонт виявив продуктове питання: секція в `My applications` доступна лише адміністраторам.</p>
+          <div class="approval-step" style="--c:var(--cyan)"><div class="n">1</div><div><b>Залишити як є</b><span>Для тестового стенда доступу адміністратора достатньо.</span></div></div>
+          <div class="approval-step" style="--c:var(--amber)"><div class="n">2</div><div><b>Зберегти Classic placement</b><span>Freedom-секція лишається поруч із Classic-секцією.</span></div></div>
+          <div class="approval-step" style="--c:var(--lime)"><div class="n">3</div><div><b>Інше workplace + ролі</b><span>Користувач явно визначає видимість для потрібної аудиторії.</span></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>23 · Repair clarification</span><span>Technical fix · Product ownership preserved</span></div>
+      <aside class="notes"><b>Що сказати:</b> Навіть ремонт не дає агенту права самостійно змінити навігацію й доступ. Коли виявляється, що My applications бачать лише адміністратори, workflow повертає продуктове рішення користувачу.</aside>
+    </section>
+
+    <section class="slide" aria-label="Repair workflow стартував">
+      <div><div class="kicker">Repair-run · 2 хвилини</div><h2>Новий цикл починається зі звірки фактичного стану</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/repair-workflow-start.png" alt="Старт repair-run із активною фазою Reconcile"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Ремонт не продовжує старий контекст навмання — fresh-context агент знову читає stand і чергу.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:35%"><b>Reconcile · 0/1</b><div><span>Фактичний стан і нова версія плану звіряються перед змінами.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:0%"><b>Build · 0</b><div><span>Ремонт ще не почався — спочатку формується точна одиниця роботи.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · 0</b><div><span>Перевірка буде незалежною і стартує після виправлення.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>24 · Repair reconcile</span><span>New plan version · Fresh context · No blind continuation</span></div>
+      <aside class="notes"><b>Що сказати:</b> Repair-run — це не ручне продовження попереднього агента. Він стартує заново з Reconcile, читає фактичний стан і тільки після цього дозволяє одну точну Build-одиницю.</aside>
+    </section>
+
+    <section class="slide" aria-label="Repair build у роботі">
+      <div><div class="kicker">Repair-run · 23 хвилини</div><h2>Виправляється лише проблемна міністорінка</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/repair-workflow-building.png" alt="Repair-run із активним Build міністорінки після Reconcile і Refs"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Черга звузилася до одного deliverable: застосунок і решта сторінок не перебудовуються.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Reconcile · 1/1</b><div><span>Нова версія плану узгоджена з наявним застосунком.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:55%"><b>Build · mini</b><div><span>Один агент ремонтує PDS і bindings конкретної міністорінки.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · очікує</b><div><span>Новий результат ще має пройти незалежну перевірку.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>25 · Targeted repair</span><span>One gap · One Build unit · No collateral rebuild</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через двадцять три хвилини Reconcile і Refs уже закриті, а Build працює лише з міністорінкою. Це важлива властивість repair loop: повторюється проблемна одиниця, а не вся міграція.</aside>
+    </section>
+
+    <section class="slide" aria-label="Repair workflow завершено">
+      <div><div class="kicker">Фінал repair-run · 1 година 55 хвилин</div><h2>Виправлення пройшло власні Verify, Judge та Close</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/repair-workflow-completed.png" alt="Завершений repair-run з Build 1 із 1, Verify 1 із 1, Judge 1 із 1 та Close 2 із 2"></div>
+        <div class="build-live-copy">
+          <p class="headline">Ремонт вважається готовим не після зміни PDS, а після повного циклу незалежних доказів.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>Build · 1/1</b><span>Проблемну міністорінку виправлено без перебудови застосунку.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Verify · 1/1 · Judge · 1/1</b><span>Runtime-результат прочитано окремим агентом і прийнято judge.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Close · 2/2</b><span>Worklog і фінальний стан repair-run закриті без залишкових gaps.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>26 · Repair completed</span><span>Targeted fix · Independent proof · Closed loop</span></div>
+      <aside class="notes"><b>Що сказати:</b> Ремонтний прогін завершився за годину п'ятдесят п'ять хвилин. Одна Build-одиниця пройшла власні Verify та Judge, а Close зафіксував результат і worklog. Це повний цикл виправлення, а не патч «на віру».</aside>
+    </section>
+
+    <section class="slide" aria-label="Контекстне вікно збережено після кількох workflow">
+      <div><div class="kicker">Ключовий архітектурний здобуток</div><h2>Один агент тримає контекст і оркеструє різні workflow</h2></div>
+      <div class="content context-stage">
+        <div class="shot-frame context-shot"><img src="assets/real-run/context-window-after-repair.png" alt="Контекстне вікно після основного та repair-прогонів: використано 28,8 відсотка, вільно 71,2 відсотка"></div>
+        <div class="context-copy">
+          <div class="context-metric"><strong>71,2%</strong><span>контекстного вікна залишається вільним після довгого наскрізного прогона</span></div>
+          <div class="context-point" style="--c:var(--cyan)"><b>Головний діалог не обривається</b><span>Рішення, погодження, результати перевірок і repair-loop залишаються в одному контексті користувача.</span></div>
+          <div class="context-point" style="--c:var(--amber)"><b>Агент працює як оркестратор</b><span>Він передає спеціалізовану роботу окремим analysis, build, verify та repair workflow — і збирає їхні результати.</span></div>
+          <div class="context-point" style="--c:var(--lime)"><b>Можна продовжувати ітерації</b><span>Після першого завершення контексту вистачає на новий цикл уточнення, виправлення та незалежного доказу.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>27 · Context preserved</span><span>Long-lived dialog · Specialized workflows · 71,2% free</span></div>
+      <aside class="notes"><b>Що сказати:</b> Це один із найважливіших результатів PoC. Після аналізу, повного Build і окремого repair-loop головний агент не втратив контекст: використано лише 28,8 відсотка мільйонного вікна. По факту він працює як оркестратор — тримає розмову та рішення користувача, запускає спеціалізовані workflow і збирає назад перевірені результати.</aside>
+    </section>
+
   </main>
+</div>
+
+<div class="image-lightbox" id="imageLightbox" role="dialog" aria-modal="true" aria-label="Збільшений скріншот" hidden>
+  <div class="lightbox-toolbar" aria-label="Керування масштабом">
+    <button id="zoomOut" type="button" aria-label="Зменшити">−</button>
+    <span class="zoom-value" id="zoomValue" aria-live="polite">100%</span>
+    <button id="zoomIn" type="button" aria-label="Збільшити">+</button>
+    <button id="zoomFit" type="button">Вписати</button>
+    <button class="close-lightbox" id="closeLightbox" type="button" aria-label="Закрити збільшений скріншот">×</button>
+  </div>
+  <div class="lightbox-stage" id="lightboxStage"><div class="lightbox-canvas"><img id="lightboxImage" alt=""></div></div>
+  <div class="caption" id="lightboxCaption"></div>
 </div>
 
 <nav class="controls" aria-label="Навігація слайдами">
@@ -564,14 +731,25 @@
   <button id="notesButton" aria-label="Показати нотатки">N</button>
   <button id="full" aria-label="На весь екран">⛶</button>
 </nav>
-<div class="hint">← → навігація · N нотатки · F повний екран</div>
+<div class="hint">← → навігація · клік по скріншоту — збільшити · N нотатки · F повний екран</div>
 
 <script>
   const deck = document.getElementById('deck');
   const slides = [...document.querySelectorAll('.slide')];
   const dots = document.getElementById('dots');
   const progress = document.getElementById('progress');
+  const imageLightbox = document.getElementById('imageLightbox');
+  const lightboxImage = document.getElementById('lightboxImage');
+  const lightboxStage = document.getElementById('lightboxStage');
+  const lightboxCaption = document.getElementById('lightboxCaption');
+  const closeLightboxButton = document.getElementById('closeLightbox');
+  const zoomOutButton = document.getElementById('zoomOut');
+  const zoomInButton = document.getElementById('zoomIn');
+  const zoomFitButton = document.getElementById('zoomFit');
+  const zoomValue = document.getElementById('zoomValue');
   let current = 0;
+  let lightboxTrigger = null;
+  let lightboxZoom = 1;
 
   slides.forEach((_, i) => {
     const dot = document.createElement('button');
@@ -595,6 +773,59 @@
   }
 
   function toggleNotes() { document.body.classList.toggle('show-notes'); }
+  function fitZoom() {
+    const horizontalSpace = Math.max(1, lightboxStage.clientWidth - 48);
+    const verticalSpace = Math.max(1, lightboxStage.clientHeight - 48);
+    return Math.min(horizontalSpace / lightboxImage.naturalWidth, verticalSpace / lightboxImage.naturalHeight);
+  }
+  function widthZoom() {
+    const horizontalSpace = Math.max(1, lightboxStage.clientWidth - 48);
+    return horizontalSpace / lightboxImage.naturalWidth;
+  }
+  function setLightboxZoom(nextZoom, keepCenter = true) {
+    const previousWidth = lightboxImage.offsetWidth || lightboxImage.naturalWidth;
+    const centerX = lightboxStage.scrollLeft + lightboxStage.clientWidth / 2;
+    const centerY = lightboxStage.scrollTop + lightboxStage.clientHeight / 2;
+    const maximumZoom = widthZoom();
+    lightboxZoom = Math.max(Math.min(.25, maximumZoom), Math.min(maximumZoom, nextZoom));
+    lightboxImage.style.width = `${Math.round(lightboxImage.naturalWidth * lightboxZoom)}px`;
+    zoomValue.textContent = `${Math.round(lightboxZoom * 100)}%`;
+    zoomInButton.disabled = lightboxZoom >= maximumZoom - .001;
+    if (keepCenter && previousWidth) {
+      const ratio = lightboxImage.offsetWidth / previousWidth;
+      requestAnimationFrame(() => {
+        lightboxStage.scrollLeft = centerX * ratio - lightboxStage.clientWidth / 2;
+        lightboxStage.scrollTop = centerY * ratio - lightboxStage.clientHeight / 2;
+      });
+    }
+  }
+  function initializeLightboxZoom() {
+    setLightboxZoom(widthZoom(), false);
+    requestAnimationFrame(() => {
+      lightboxStage.scrollLeft = Math.max(0, (lightboxStage.scrollWidth - lightboxStage.clientWidth) / 2);
+      lightboxStage.scrollTop = 0;
+    });
+  }
+  function openLightbox(image) {
+    lightboxTrigger = image;
+    lightboxImage.src = image.currentSrc || image.src;
+    lightboxImage.alt = image.alt;
+    lightboxCaption.textContent = image.alt;
+    imageLightbox.hidden = false;
+    document.body.classList.add('image-open');
+    if (lightboxImage.complete) initializeLightboxZoom();
+    else lightboxImage.addEventListener('load', initializeLightboxZoom, { once: true });
+    closeLightboxButton.focus();
+  }
+  function closeLightbox() {
+    if (imageLightbox.hidden) return;
+    imageLightbox.hidden = true;
+    document.body.classList.remove('image-open');
+    lightboxImage.removeAttribute('src');
+    lightboxImage.style.removeProperty('width');
+    lightboxTrigger?.focus();
+    lightboxTrigger = null;
+  }
   async function toggleFull() {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
     else await document.exitFullscreen?.();
@@ -604,7 +835,35 @@
   document.getElementById('next').addEventListener('click', () => show(current + 1));
   document.getElementById('notesButton').addEventListener('click', toggleNotes);
   document.getElementById('full').addEventListener('click', toggleFull);
+  document.querySelectorAll('.slide img').forEach(image => {
+    image.classList.add('zoomable');
+    image.tabIndex = 0;
+    image.setAttribute('role', 'button');
+    image.setAttribute('aria-label', `Збільшити скріншот: ${image.alt}`);
+    image.addEventListener('click', () => openLightbox(image));
+    image.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openLightbox(image);
+      }
+    });
+  });
+  closeLightboxButton.addEventListener('click', closeLightbox);
+  lightboxImage.addEventListener('click', closeLightbox);
+  zoomOutButton.addEventListener('click', () => setLightboxZoom(lightboxZoom - .25));
+  zoomInButton.addEventListener('click', () => setLightboxZoom(lightboxZoom + .25));
+  zoomFitButton.addEventListener('click', () => setLightboxZoom(fitZoom(), false));
+  imageLightbox.addEventListener('click', event => {
+    if (event.target === imageLightbox) closeLightbox();
+  });
   document.addEventListener('keydown', event => {
+    if (!imageLightbox.hidden) {
+      if (event.key === 'Escape') closeLightbox();
+      if (event.key === '+' || event.key === '=') setLightboxZoom(lightboxZoom + .25);
+      if (event.key === '-') setLightboxZoom(lightboxZoom - .25);
+      if (event.key === '0') setLightboxZoom(fitZoom(), false);
+      return;
+    }
     if (['ArrowRight', 'PageDown', ' '].includes(event.key)) show(current + 1);
     if (['ArrowLeft', 'PageUp'].includes(event.key)) show(current - 1);
     if (event.key.toLowerCase() === 'n') toggleNotes();
