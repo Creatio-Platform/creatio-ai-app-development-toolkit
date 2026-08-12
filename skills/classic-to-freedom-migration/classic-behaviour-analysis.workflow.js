@@ -329,10 +329,12 @@ if (!worked.length) {
 }
 
 // ---8<--- PURE DECISION HELPERS ---8<---
-// Everything between these markers is a pure function of its arguments: no `agent`, no `log`, no closure over
-// run state. `engine-tests/classic-to-freedom/run-infra.mjs` slices this block out of THIS file and unit-tests
-// it, so nothing here may capture anything else and the block must stay self-contained — a helper moved out of
-// the markers silently shrinks that suite.
+// Everything between these markers is SELF-CONTAINED: it closes over no run state and reaches for no host global
+// (`agent`, `log`, `phase`, `args`, `parallel`). A helper that needs one of those effects takes it as an EXPLICIT
+// PARAMETER instead — that is what lets control flow live here and still be executed by the suite, rather than
+// being stranded in the imperative body where only a source regex can reach it.
+// `engine-tests/classic-to-freedom/run-infra.mjs` slices this block out of THIS file and unit-tests it, so the
+// block must stay importable on its own — a helper moved out of the markers silently shrinks that suite.
 
 // Greedy packing, largest scope first. A scope is never SPLIT: the analysis
 // contract's completeness proof is a per-scope member ledger, so half a scope
@@ -405,6 +407,82 @@ function repairKeys(uncovered, critiqueUncovered, wiringOnly) {
 // verdict with no keys means the count never ran, and that must not read as a clean run.
 function isComplete(totalKeys, uncovered, wiringOnly) {
   return totalKeys > 0 && (uncovered || []).length === 0 && (wiringOnly || []).length === 0
+}
+
+// A phase agent that DIED, retried — and living HERE, as a function taking the attempt as a thunk, precisely so
+// the suite can EXECUTE it. This loop used to sit inline at the Critique call site, where the only reachable test
+// was a regex over this file's own source: it proved the loop's SHAPE was present and nothing about whether a
+// second attempt ever fires. A condition that silently never allowed one would have passed every check while the
+// retry was a no-op in production — on the one path whose whole purpose is that a dead pass stops being silent.
+//
+// NO DELAY BETWEEN ATTEMPTS — and not by choice: no delay is POSSIBLE here. The host injects exactly `args`,
+// `log`, `phase`, `agent` and `parallel` into a workflow script and no timer, so there is nothing to await
+// between attempts (run-infra.mjs pins that signature when it syntax-checks these files, and no shipped
+// `*.workflow.js` uses a timer). Jittered backoff is doubly out: the sandbox throws on `Math.random()` so a
+// resumed run replays identically.
+//
+// WHAT THE RETRY IS WORTH, and where it is thin — stated because the honest answer is "it depends on the failure
+// shape". When `agent()` RESOLVES null the host has already exhausted its own retries per the Workflow contract,
+// so attempt 2 is a fresh subagent spawn against a host that has finished backing off: a real second chance.
+// When it REJECTS, that premise does NOT hold — a rejection can arrive immediately, and the motivating HTTP 529
+// is exactly that shape, so attempt 2 can fire against a host that just said it was overloaded and buy nothing.
+// Accepted, because the alternative is no retry at all: this guards a Critique that dies SILENTLY, and a second
+// attempt that sometimes works beats one that never happens.
+//
+// ONE retry, fixed. There is a single caller, and the retry label plus `critiqueDeathLine`'s "retrying once" both
+// describe exactly two attempts; a configurable count would let those drift apart on its first use.
+const RETRY_ATTEMPTS = 2
+
+// `onFailure(attempt, error, willRetry)` carries the CAUSE. Two different failures end an attempt — a null return
+// (terminal death, per the contract) and a rejection (host refused, schema threw, prompt malformed) — and folding
+// them into one generic line left a dead pass reporting THAT it died and never WHY.
+//
+// Returns `{ result, ran }`, not the bare value. `ran` is what this loop KNOWS — an attempt handed back something.
+// The caller used to re-derive it as `!!result`, which reads any falsy-but-PRESENT value as "the phase never ran"
+// and marks a real answer UNCHECKED downstream; the collapse was here, in the old `|| null`, so moving the caller
+// to an explicit flag without fixing this line would have changed nothing (PR#88 review). Death is a NULLISH
+// return — that is the `agent()` contract — or a rejection. `0`, `''` and `false` are results.
+async function retryOnDeath(attemptFn, onFailure) {
+  let outcome = { result: null, ran: false }
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS && !outcome.ran; attempt++) {
+    let error = null
+    try {
+      const value = await attemptFn(attempt)
+      if (value !== null && value !== undefined) outcome = { result: value, ran: true }
+    } catch (e) {
+      error = e || new Error('rejected with no reason given')
+    }
+    if (!outcome.ran && onFailure) onFailure(attempt, error, attempt < RETRY_ATTEMPTS)
+  }
+  return outcome
+}
+
+// The line a dead attempt logs. It lives HERE rather than inline at the call site for the same reason the loop
+// does: as a lambda argument it was pinned by nothing. The call-site check requires only that `retryOnDeath` is
+// called, and the helper treats a missing notifier as valid (correctly — see the tests), so the entire
+// cause-reporting deliverable could be deleted with a fully green suite. Measured, not theorised: removing the
+// notifier left the infra suite at 218/218.
+function critiqueDeathLine(attempt, error, willRetry) {
+  const cause = error
+    ? `${error.name || 'Error'}: ${error.message || String(error)}`
+    : 'returned nothing (terminal death per the agent() contract)'
+  return `critique agent died on attempt ${attempt} — ${cause}${willRetry ? ' — retrying once' : ''}`
+}
+
+// `retryOnDeath`'s `ran` answers "an attempt handed something back" — the right RETRY signal, and deliberately
+// generous: anything non-nullish stops the loop rather than spending a second agent. What the caller is told is
+// STRONGER. `critiqueRan: true` sells `conflicts`/`settledElsewhere` as verified-empty, so a non-nullish value
+// that is not a critique satisfies the first question and not the second, and would report "no conflicts found"
+// for a pass that checked nothing — while the loud log stayed silent. The old `!!critique` was over-cautious
+// (a wasted agent, a row re-flagged UNCHECKED); that is the safe direction to be wrong in, and separating the
+// two questions keeps it without reintroducing the truthiness inference (PR#88 review).
+//
+// The three fields are exactly the ones the return object reads. A PARTIAL object is dead by this test: the
+// repair round still uses `critique?.uncovered` either way, so the only thing lost is a claim that the missing
+// field was verified — which is the claim there is no evidence for.
+function isCritiqueShape(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && ['uncovered', 'conflicts', 'settledElsewhere'].every((k) => Array.isArray(value[k]))
 }
 // ---8<--- END PURE DECISION HELPERS ---8<---
 
@@ -490,8 +568,7 @@ log(`coverage after round 1: ${covered.size}/${allKeys.size} row(s) carry a card
 
 phase('Critique')
 
-const critique = await agent(
-  `You are the CRITIQUE phase of a Classic-behaviour analysis run (migration step 5.1). Your job is COMPLETENESS, not plausibility: in this run the expensive failure is a row nobody described, not a card that overreaches.
+const critiquePrompt = `You are the CRITIQUE phase of a Classic-behaviour analysis run (migration step 5.1). Your job is COMPLETENESS, not plausibility: in this run the expensive failure is a row nobody described, not a card that overreaches.
 
 ${RULES}
 
@@ -512,9 +589,35 @@ ANSWER THREE QUESTIONS, each grounded in the report parts (read them — do not 
 2. \`conflicts\` — which key is described by TWO different cards, or which subject (a mixin, a base-layer method) got a card in a part AND in the shared core. This is the failure a per-scope split introduces; a whole-surface run cannot have it.
 3. \`settledElsewhere\` — which refusal or gap recorded by one scope is actually ANSWERED by another scope's findings or by the message register. Name the refusal, the scope that settles it, and how.
 
-Do not rewrite the cards. Report.`,
-  { agentType: 'general-purpose', schema: CRITIQUE_SCHEMA, phase: 'Critique', label: 'critique:coverage' },
+Do not rewrite the cards. Report.`
+
+// Retried like a describe scope: a dead Critique otherwise ends the run with no
+// contradiction check and nothing machine-readable saying so.
+// The loop itself is `retryOnDeath` in the pure block above — a thunk, so the suite executes the retry instead of
+// regex-matching its shape here. Both failure shapes (a null return, a REJECTING host) end an attempt and reach
+// the notifier, so neither can throw past the loud log below.
+// `ran` comes from the helper, which knows whether an attempt returned; it is NOT re-derived from `critique`'s
+// truthiness here. The REPORTED flag is that answer narrowed by `isCritiqueShape` — see there for why the two
+// questions are not the same one.
+const { result: critique, ran: critiqueReturned } = await retryOnDeath(
+  (attempt) =>
+    agent(critiquePrompt, {
+      agentType: 'general-purpose',
+      schema: CRITIQUE_SCHEMA,
+      phase: 'Critique',
+      label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
+    }),
+  (attempt, error, willRetry) => log(critiqueDeathLine(attempt, error, willRetry)),
 )
+const critiqueRan = critiqueReturned && isCritiqueShape(critique)
+// Distinct from the contract line below, and both fire together on this path: "returned something unusable" is a
+// different repair than "the host never answered", and folding them left the first indistinguishable from a
+// clean pass in the log.
+if (critiqueReturned && !critiqueRan) {
+  const returned = Array.isArray(critique) ? 'an array' : `a ${typeof critique}`
+  log(`⚠ the Critique agent returned ${returned} without the uncovered/conflicts/settledElsewhere arrays its schema requires — treating the pass as dead`)
+}
+if (!critiqueRan) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
 
 // --- One repair round, and only when there is something to repair ----------
 // Scoped to the SCOPES that own the uncovered rows — never to a bare row list,
@@ -601,6 +704,10 @@ return {
   describeAgents: batches.length,
   cardCount: merged?.cardCount ?? null,
   droppedDuplicates: merged?.droppedDuplicates || [],
+  // false = the adversarial pass died even after the retry: conflicts and settledElsewhere below are
+  // unchecked (not verified-empty), and coverage.complete is arithmetic-only — no pass verified that
+  // cited cards actually describe their rows.
+  critiqueRan,
   conflicts: critique?.conflicts || [],
   settledElsewhere: critique?.settledElsewhere || [],
   gaps: described.flatMap((r) => r.gaps || []),

@@ -902,6 +902,36 @@ function renderMemberLedger(coverage) {
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
 // The top-of-plan ⛔ banners (correctness gate, structure completeness, planMeta / on-stand-signals gaps). Own fn
 // so renderPlan stays under Sonar CC 15. Returns the lines to push.
+// The three ADVISORY `behaviourIndex` banners (unmatched · wiringOnly · sectionOnly). Own fn for the same reason
+// `renderPlanBanners` itself is one — Sonar CC 15. Two branches independently grew this function past the limit
+// (the sectionOnly banner and the placement blockers below), and neither crossed it alone; splitting the three
+// related advisories out is the natural seam. Returns the lines to push — empty when the index reports nothing.
+function renderBehaviourIndexBanners(result) {
+  const P = [];
+  // A step-5.1 answer whose method matches NO worklist row. Advisory, not a block — but never silent: it means the
+  // report and this manifest describe different surfaces (a renamed method, a stale report, a wrong scope), and a
+  // dropped key would let the plan look fully described while a row it named was never covered.
+  const rt = result.behaviourIndex || { unmatched: [] };
+  if ((rt.unmatched || []).length) P.push(
+    `> ⚠ **${rt.unmatched.length} \`manifest.behaviourIndex\` key(s) matched no imperative row:** ` +
+    rt.unmatched.map((k) => "`" + esc(k) + "`").join(", ") +
+    ". The behaviour report and this manifest disagree about the surface — check for a renamed method, a stale report, or a report run against a different scope.", "");
+  // A row whose body PROVABLY lives in another schema (a `mixin:` member, an `externalRef` method) described by a
+  // wiring card alone. Advisory like `unmatched`, never silent: the criteria that gate the behaviour live in the
+  // body's own card, and a plan that never names that card reads as fully described while the guards are missing.
+  if ((rt.wiringOnly || []).length) P.push(
+    `> ⚠ **${rt.wiringOnly.length} \`manifest.behaviourIndex\` key(s) name only a wiring card for a row whose body lives in another schema:** ` +
+    rt.wiringOnly.map((k) => "`" + esc(k) + "`").join(", ") +
+    ". Add the body's own card as `bodyCard`/`bodyAc` — the behaviour report's attribution table names it (`body <scope>/Cnn`, usually a shared-core card).", "");
+  // A step-5.1 answer addressing ONLY the section scope. Matched in the digest, but applyBehaviourIndex folds
+  // cards into PAGE rows only, so no worklist row cites it — advisory like its siblings, never silent: without
+  // the banner the merge-index → re-run --plan loop reads as complete while the section answer rendered nowhere.
+  if ((rt.sectionOnly || []).length) P.push(
+    `> ⚠ **${rt.sectionOnly.length} \`manifest.behaviourIndex\` key(s) address only the SECTION scope:** ` +
+    rt.sectionOnly.map((k) => "`" + esc(k) + "`").join(", ") +
+    ". The plan's worklist carries page rows only, so these answers render in no table — carry each behaviour (and its card) into the List-page part of the plan by hand, and verify it at the list-page checkpoint.", "");
+  return P;
+}
 function renderPlanBanners(result, opts) {
   const P = [];
   const gate = result.gate || { blocked: false, reasons: [] };
@@ -924,21 +954,7 @@ function renderPlanBanners(result, opts) {
     for (const it of coverage.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
-  // A step-5.1 answer whose method matches NO worklist row. Advisory, not a block — but never silent: it means the
-  // report and this manifest describe different surfaces (a renamed method, a stale report, a wrong scope), and a
-  // dropped key would let the plan look fully described while a row it named was never covered.
-  const rt = result.behaviourIndex || { unmatched: [] };
-  if ((rt.unmatched || []).length) P.push(
-    `> ⚠ **${rt.unmatched.length} \`manifest.behaviourIndex\` key(s) matched no imperative row:** ` +
-    rt.unmatched.map((k) => "`" + esc(k) + "`").join(", ") +
-    ". The behaviour report and this manifest disagree about the surface — check for a renamed method, a stale report, or a report run against a different scope.", "");
-  // A row whose body PROVABLY lives in another schema (a `mixin:` member, an `externalRef` method) described by a
-  // wiring card alone. Advisory like `unmatched`, never silent: the criteria that gate the behaviour live in the
-  // body's own card, and a plan that never names that card reads as fully described while the guards are missing.
-  if ((rt.wiringOnly || []).length) P.push(
-    `> ⚠ **${rt.wiringOnly.length} \`manifest.behaviourIndex\` key(s) name only a wiring card for a row whose body lives in another schema:** ` +
-    rt.wiringOnly.map((k) => "`" + esc(k) + "`").join(", ") +
-    ". Add the body's own card as `bodyCard`/`bodyAc` — the behaviour report's attribution table names it (`body <scope>/Cnn`, usually a shared-core card).", "");
+  P.push(...renderBehaviourIndexBanners(result));
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];

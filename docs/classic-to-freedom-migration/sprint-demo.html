@@ -194,6 +194,26 @@
   .approval-step b { display: block; color: var(--c); font-size: 18px; margin-bottom: 4px; }
   .approval-step span { color: var(--muted); font-size: 15px; line-height: 1.35; }
 
+  .build-live-stage { display: grid; grid-template-columns: 640px 1fr; gap: 34px; height: 402px; align-items: stretch; }
+  .build-live-shot { height: 402px; }
+  .build-live-shot img { object-fit: contain; object-position: center; }
+  .build-live-copy { display: grid; align-content: center; gap: 22px; }
+  .build-live-copy .headline { color: var(--ink); font-size: 25px; line-height: 1.23; font-weight: 800; }
+  .build-live-fact { padding-left: 16px; border-left: 3px solid var(--c); }
+  .build-live-fact b { display: block; color: var(--c); font-size: 21px; margin-bottom: 5px; }
+  .build-live-fact span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+
+  .build-progress-stage { display: grid; grid-template-columns: 390px 1fr; gap: 42px; height: 402px; align-items: stretch; }
+  .build-progress-shot { height: 402px; }
+  .build-progress-shot img { object-fit: contain; object-position: center; }
+  .build-progress-copy { display: grid; align-content: center; gap: 23px; }
+  .build-progress-copy .headline { color: var(--ink); font-size: 26px; line-height: 1.25; font-weight: 800; max-width: 620px; }
+  .progress-row { display: grid; grid-template-columns: 150px 1fr; gap: 17px; align-items: center; }
+  .progress-row b { color: var(--c); font-size: 21px; }
+  .progress-row span { color: var(--muted); font-size: 16px; line-height: 1.35; }
+  .progress-row .phase-state { height: 8px; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,.09); margin-top: 8px; }
+  .progress-row .phase-state i { display: block; width: var(--p); height: 100%; border-radius: inherit; background: var(--c); }
+
   .phases-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 9px; align-items: stretch; }
   .phase-mini { min-height: 232px; padding: 16px 13px; border-radius: 15px; background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; position: relative; }
   .phase-mini .n { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--c); color: #071017; font-size: 13px; font-weight: 900; }
@@ -246,7 +266,7 @@
       <div class="content hero">
         <h1>Classic <span class="accent">→</span> Freedom UI</h1>
         <p class="lead">Хто за що відповідає, які workflow запускаються і як система доходить до <span class="strong">перевіреного результату</span>.</p>
-        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">15 слайдів · ~10 хвилин</span></div>
+        <div class="hero-line"><span class="hero-pill">Поточна гілка: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">20 слайдів · ~14 хвилин</span></div>
         <div class="hero-mark" aria-hidden="true"><div class="orbit"></div><div class="orbit"></div><div class="orbit"></div><div class="core"><span>UI</span></div></div>
       </div>
       <div class="footer"><span>Creatio AI App Development Toolkit</span><span class="status">PoC у поточній гілці</span></div>
@@ -436,13 +456,88 @@
       <aside class="notes"><b>Що сказати:</b> Після серії продуктових рішень система збирає їх в один план і ще раз показує реальний обсяг змін. Лише відповідь «Затверджую — будуй» запускає workflow побудови.</aside>
     </section>
 
+    <section class="slide" aria-label="Реальний запуск workflow побудови">
+      <div><div class="kicker">План погоджено · Build стартував</div><h2>Після approval роботу підхоплює окремий workflow побудови</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/build-workflow-running.png" alt="Реальний запуск freedom-build-executor workflow після погодження плану"></div>
+        <div class="build-live-copy">
+          <p class="headline">Погоджені рішення стають незмінним контрактом для build-команди.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>7 контрольованих фаз</b><span>Reconcile, Refs, Preflight, Build, Verify, Judge та Close.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Окремий фоновий workflow</b><span>Побудова має власний стан, агентів і журнал виконання.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Обсяг не губиться</b><span>Застосунок, список, форми, міністорінка та поведінка перенесені з approval.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>13 · Build workflow у роботі</span><span>Approved plan → controlled execution</span></div>
+      <aside class="notes"><b>Що сказати:</b> Після погодження головний skill не починає імпровізувати. Він запускає окремий build workflow, передає йому версію плану та повний обсяг. На скріншоті видно реальний запуск і першу фазу Reconcile.</aside>
+    </section>
+
+    <section class="slide" aria-label="Проміжний стан workflow побудови">
+      <div><div class="kicker">Проміжний стан · 19 хвилин</div><h2>Перед Build система закриває контекст і ризики окремими перевірками</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-intermediate.png" alt="Проміжний стан freedom-build-executor workflow із завершеними Reconcile та Preflight"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Будівельний агент ще не стартував: спочатку workflow доводить, що план і середовище узгоджені.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Reconcile · 2/2</b><div><span>Черга та фактичний стан звірені двома агентами.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:100%"><b>Preflight · 2/2</b><div><span>Питання до побудови закриті окремою перевіркою та merge.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Build · 0</b><div><span>Зміни ще не почалися — доказова підготовка йде першою.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>14 · Preflight before changes</span><span>Evidence first · Build second</span></div>
+      <aside class="notes"><b>Що сказати:</b> Це проміжний знімок через 19 хвилин. Reconcile і Preflight уже виконані, але Build та Verify ще не стартували. Тобто workflow витрачає час на докази до змін, а не ремонтує наслідки після них.</aside>
+    </section>
+
+    <section class="slide" aria-label="Build-агент створює застосунок">
+      <div><div class="kicker">Build у роботі · 34 хвилини</div><h2>Після preflight один агент послідовно будує застосунок</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-building.png" alt="Проміжний стан freedom-build-executor workflow з активним Build-агентом"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Контекст зафіксовано — тепер Build-агент виконує погоджений план, не змінюючи його на ходу.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Refs · 1/1</b><div><span>Потрібні інструкції підготовлені один раз і доступні будівельнику.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:58%"><b>Build · app</b><div><span>Один fresh-context агент створює застосунок послідовно.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · 0</b><div><span>Незалежна перевірка стартує лише після фактичної побудови.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>15 · Sequential Build</span><span>One builder · Independent verifier next</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через 34 хвилини підготовчі фази вже закриті, а Build-агент працює над застосунком. Verify ще не стартував: той, хто будує, не перевіряє сам себе. Це наступний крок після завершення фактичних змін.</aside>
+    </section>
+
+    <section class="slide" aria-label="Поетапний Build і Judge">
+      <div><div class="kicker">Build у роботі · 49 хвилин</div><h2>Workflow закриває готові одиниці, поки наступні ще будуються</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-unit-loop.png" alt="Freedom-build-executor workflow із завершеним Build app, активним Build typed і завершеним Judge"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Великий Build не є чорною скринькою: прогрес і рішення фіксуються для кожної одиниці роботи.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:50%"><b>Build · 1/2</b><div><span>Застосунок готовий; окрема сторінка ще створюється fresh-context агентом.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Judge · 1/1</b><div><span>Завершений раунд уже має незалежний арифметичний вердикт.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · очікує</b><div><span>Повна перевірка стартує, коли Build закриє весь погоджений обсяг.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>16 · Unit-level control</span><span>Close completed work · Continue the queue</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через 49 хвилин застосунок уже створений, але окрема сторінка ще будується. При цьому Judge уже закрив завершений раунд. Workflow бачить не лише загальний статус, а кожну одиницю роботи та її вердикт.</aside>
+    </section>
+
+    <section class="slide" aria-label="Build наближається до завершення">
+      <div><div class="kicker">Build у роботі · 1 година 03 хвилини</div><h2>Три одиниці готові — остання сторінка ще будується</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-nearly-complete.png" alt="Freedom-build-executor workflow зі станом Build 3 із 4 та активною останньою сторінкою"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Черга виконується послідовно: готовий застосунок і сторінки вже зафіксовані, незавершена одиниця видима окремо.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:75%"><b>Build · 3/4</b><div><span>Застосунок і дві сторінки завершені; четвертий агент працює над останньою.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Judge · 1/1</b><div><span>Перший контрольний раунд має незалежний вердикт і не потребує повтору.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · очікує</b><div><span>Незалежна перевірка всього результату почнеться після останнього Build.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>17 · Build queue progress</span><span>3 completed · 1 active · Verify next</span></div>
+      <aside class="notes"><b>Що сказати:</b> Через годину Build уже закрив три з чотирьох одиниць: застосунок і дві сторінки. Остання сторінка ще активна, тому Verify чесно залишається в очікуванні. Видно не абстрактні відсотки, а конкретний стан кожної одиниці черги.</aside>
+    </section>
+
     <section class="slide" aria-label="Фінальний результат">
       <div><div class="kicker">Фінал</div><h2>Готовність визначає engine, а не впевненість агента</h2></div>
       <div class="content final-layout">
         <article class="verdict"><div class="check">✓</div><h3>Plan vs Done</h3><p>Engine порівнює погоджений план із фактично створеними сторінками, компонентами та зв'язками. Відсутній або непідтверджений пункт блокує завершення.</p><a class="full-link" href="flow-as-built.html" target="_blank">Відкрити повну технічну діаграму ↗</a></article>
         <article class="demo-card"><h3>Що показати наживо</h3><ol class="demo-list"><li>Engine-written план</li><li>Картку складної Classic-поведінки</li><li>Сторінку на контрольній точці</li><li>Приклад повторного циклу виправлення</li><li>Фінальну таблицю Plan vs Done</li></ol></article>
       </div>
-      <div class="footer"><span>13 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
+      <div class="footer"><span>18 · Від плану до доказу</span><span class="status">PoC: ще не означає production-ready</span></div>
       <aside class="notes"><b>Завершальна фраза:</b> Результат цього спринту — керована система ролей і перевірок. Skill знає правила, workflow організовує роботу, а engine не дозволяє назвати міграцію завершеною без фактичного доказу.</aside>
     </section>
 
@@ -456,7 +551,7 @@
           <div class="lane" style="--c:#acc5ed"><div class="lane-name">Build workflow</div><div class="lane-track"><b>Будує по сторінці, застосовує UI Guidelines, перевіряє та виправляє.</b></div></div>
         </div>
       </div>
-      <div class="footer"><span>14 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
+      <div class="footer"><span>19 · Повна діаграма</span><span>Не потрібно пояснювати кожну стрілку</span></div>
       <aside class="notes"><b>Що сказати:</b> Червоні пунктирні стрілки — це повернення користувача з перевірки. Звичайні зворотні стрілки — автоматичні цикли виправлення. Головне — не маршрут кожної стрілки, а розподіл відповідальності між доріжками.</aside>
     </section>
   </main>

@@ -4192,6 +4192,117 @@ check("handoff BACK: an undescribed row reads ⚠, not a blank",
 check("handoff BACK: unmatched keys surface as a plan banner",
   /matched no imperative row/.test(hoPlan));
 
+// SECTION scope: the *Section chain's imperative rows (methods, mixins) travel in the digest too — without
+// this scope, list-page behaviour structurally never reaches the step-5.1 analysis.
+const SECTION_BODY = `define("DealSection", [], function() { return {
+  mixins: { orderUtil: "Terrasoft.OrderUtil" },
+  methods: {
+    setOwner: function() { this.set("Owner", 1); },
+    getSectionActions: function() { return this.callParent(arguments); }
+  },
+  diff: []
+}; });`;
+const sectionScopeRun = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }] });
+const secScope = sectionScopeRun.stubIndex.at(-1);
+check("handoff OUT: `manifest.section` yields a section scope, placed LAST (stubIndex[0] stays the record page; nested folds slice(1))",
+  sectionScopeRun.stubIndex[0].role === "main page" && secScope.role === "section"
+    && sectionScopeRun.stubIndex.filter((s) => s.role === "section").length === 1);
+check("handoff OUT: the section scope carries the section's own imperative rows and member rows",
+  secScope.stubs.some((s) => s.method === "setOwner")
+    && secScope.members.some((m) => m.key === "DealSection::mixin:orderUtil"));
+check("handoff OUT: no `manifest.section` → no section scope",
+  !ho.stubIndex.some((s) => s.role === "section"));
+// ROOT-ONLY, asserted by RUNNING a nested fold rather than by matching the guard's source. A child/typed/mini
+// fold is handed the raw child bundle as its manifest, so a bundle carrying `section` would inject a mid-array
+// entry into the parent's `childStubScopes` (`slice(1)`) and silently break the section-is-LAST contract.
+const secNested = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }] },
+  { scopeSchema: "SomeChildPage" });
+check("handoff OUT: a NESTED fold (`opts.scopeSchema` set) emits NO section scope even when the bundle carries `section` — the parent's `slice(1)` child-scope contract depends on it",
+  !secNested.stubIndex.some((s) => s.role === "section"),
+  () => JSON.stringify(secNested.stubIndex.map((s) => s.role)));
+const secNoMeta = runMigration({ ...handoffManifest, section: [{ pkg: "DealPkg", body: SECTION_BODY }] });
+const secNoMetaScope = secNoMeta.stubIndex.at(-1);
+check("handoff OUT: a section scope NEVER has a null schema — without `planMeta.sectionSchema` the deterministic `Section` label keeps its digest keys distinct from the main page's bare keys",
+  secNoMetaScope.role === "section" && secNoMetaScope.schema === "Section"
+    && secNoMetaScope.members.some((m) => m.key === "Section::mixin:orderUtil"));
+// BACK: a section-only answer is matched (not `unmatched`) but folds into no plan row — it must surface under
+// its own advisory key so "matched" cannot read as "rendered in the plan".
+const secBack = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }],
+  behaviourIndex: { setOwner: { card: "C05", ac: ["AC-1"] } } });
+check("handoff BACK: a section-only behaviourIndex key is NOT `unmatched` and IS reported as `sectionOnly`",
+  !secBack.behaviourIndex.unmatched.includes("setOwner")
+    && secBack.behaviourIndex.sectionOnly.includes("setOwner"));
+check("handoff BACK: a section-only key renders a ⚠ plan banner — matched must not read as rendered",
+  /address only the SECTION scope/.test(renderPlan(secBack, {})));
+// All THREE key kinds in ONE run. `sectionOnly` and `unmatched` are computed by calling the same scope-digest
+// helper over different subsets, so the split is only as good as its subset boundary: a key satisfying both
+// filters would be double-bannered, and one satisfying neither would silently drop the pre-existing `unmatched`
+// coverage signal. Each case alone (above) cannot catch that — the classification is a property OF the run, so
+// it takes one run holding all three (PR#88 review).
+const secSplit = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }],
+  behaviourIndex: {
+    onStageChanged: { card: "C01", ac: ["AC-1"] }, // a PAGE scope owns it
+    setOwner: { card: "C05", ac: ["AC-2"] },       // the SECTION scope owns it
+    ghostMethod: { card: "C99", ac: ["AC-3"] },    // no scope owns it
+  } });
+const secBanners = (k) => [
+  secSplit.behaviourIndex.unmatched.includes(k) && "unmatched",
+  secSplit.behaviourIndex.sectionOnly.includes(k) && "sectionOnly",
+].filter(Boolean);
+check("handoff BACK: page-only / section-only / owned-by-nobody each land in EXACTLY ONE bucket — never both banners, never neither",
+  secBanners("onStageChanged").length === 0
+    && secBanners("setOwner").join() === "sectionOnly"
+    && secBanners("ghostMethod").join() === "unmatched",
+  () => JSON.stringify({ onStageChanged: secBanners("onStageChanged"), setOwner: secBanners("setOwner"), ghostMethod: secBanners("ghostMethod") }));
+check("handoff BACK: the two banners are DISJOINT — `unmatched` is computed over every scope, so a `sectionOnly` key is matched by construction and can never appear in both",
+  secSplit.behaviourIndex.unmatched.every((k) => !secSplit.behaviourIndex.sectionOnly.includes(k)),
+  () => JSON.stringify({ unmatched: secSplit.behaviourIndex.unmatched, sectionOnly: secSplit.behaviourIndex.sectionOnly }));
+
+// `wiringOnly` is the THIRD consumer of `stubIndex`. Its key set is already pinned further down (`wiringOnly: a
+// `mixin:` row and an `externalRef` method … and ONLY they`) — but on a single-scope fixture, which is what this
+// branch left uncovered: `wiringOnlyKeys` walks EVERY scope, so adding a scope type widens its candidate set, and
+// a pin that only ever sees one scope cannot see that widening. The widening is correct — a section mixin carried
+// by a wiring card alone needs the banner as much as a page one — but it was silent, and the next scope type could
+// move keys with nothing failing. Pinned on BOTH sides of the section scope so the pin proves the DELTA rather
+// than today's output (PR#88 review, Major). `coverage.complete` is deliberately
+// asserted UNCHANGED here: it comes from `buildCoverage(eff/changeSet/manifest)`, which never reads `stubIndex`,
+// and the review that asked for this pin assumed the opposite — pinning it is what keeps that answer honest.
+const wiringIdx = { "DealSection::mixin:orderUtil": { card: "C10", ac: ["AC-9"] }, "mixin:someMixin": { card: "C11", ac: ["AC-8"] } };
+const wiringNoSec = runMigration({ ...handoffManifest, behaviourIndex: wiringIdx });
+const wiringWithSec = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" },
+  section: [{ pkg: "DealPkg", body: SECTION_BODY }], behaviourIndex: wiringIdx });
+check("handoff BACK: WITHOUT a section scope `wiringOnly` is exactly the page's own wiring-only row — the section-keyed entry belongs to no scope and is `unmatched` instead",
+  wiringNoSec.behaviourIndex.wiringOnly.join("|") === "mixin:someMixin"
+    && wiringNoSec.behaviourIndex.unmatched.includes("DealSection::mixin:orderUtil"),
+  () => JSON.stringify({ wiringOnly: wiringNoSec.behaviourIndex.wiringOnly, unmatched: wiringNoSec.behaviourIndex.unmatched }));
+check("handoff BACK: WITH the section scope `wiringOnly` gains the section's wiring-only row and loses none — a scope addition may only widen this list, never silently drop a row that was already flagged",
+  wiringWithSec.behaviourIndex.wiringOnly.join("|") === "mixin:someMixin|DealSection::mixin:orderUtil"
+    && wiringNoSec.behaviourIndex.wiringOnly.every((k) => wiringWithSec.behaviourIndex.wiringOnly.includes(k)),
+  () => JSON.stringify({ without: wiringNoSec.behaviourIndex.wiringOnly, with: wiringWithSec.behaviourIndex.wiringOnly }));
+check("handoff BACK: adding the section scope leaves `coverage.complete` and the member ledger UNTOUCHED — the member gate reads the ChangeSet, not `stubIndex`, so a new scope type cannot move it",
+  wiringNoSec.coverage.complete === wiringWithSec.coverage.complete
+    && wiringNoSec.coverage.rows.length === wiringWithSec.coverage.rows.length
+    && wiringNoSec.coverage.issues.length === wiringWithSec.coverage.issues.length,
+  () => JSON.stringify({ without: { complete: wiringNoSec.coverage.complete, rows: wiringNoSec.coverage.rows.length, issues: wiringNoSec.coverage.issues.length },
+    with: { complete: wiringWithSec.coverage.complete, rows: wiringWithSec.coverage.rows.length, issues: wiringWithSec.coverage.issues.length } }));
+// The banner is already asserted further down, on the same single-scope fixture, and that assertion survived
+// `renderBehaviourIndexBanners` being extracted out of `renderPlanBanners` — so the extraction demonstrably lost
+// nothing. What it cannot cover is the TWO-BANNER case, and that is the one where the usual plan-wide form stops
+// working: `DealSection::mixin:orderUtil` is BOTH wiring-only and section-only here, so the sibling sectionOnly
+// banner names it too and would satisfy a plan-wide regex even if this banner dropped its key list entirely
+// (`mixin:someMixin` also appears in the member table). So render ONCE, slice the banner's own line — it is pushed
+// as a single concatenated template string — and assert the keys inside that slice. Verified by mutation: blanking
+// the banner's key list turns this check red (PR#88 review, Minor).
+const wiringPlanLines = renderPlan(wiringWithSec, {}).split("\n");
+const wiringBannerLine = wiringPlanLines.find((l) => /name only a wiring card/.test(l)) || "";
+check("handoff BACK: a wiring-only row renders its ⚠ plan banner naming EVERY wiring-only key ON THAT LINE — the advisory is the ONLY signal for an `externalRef` row, which never blocks on coverage",
+  !!wiringBannerLine && /`mixin:someMixin`/.test(wiringBannerLine) && /`DealSection::mixin:orderUtil`/.test(wiringBannerLine),
+  () => JSON.stringify({ wiringBannerLine, wiringOnly: wiringWithSec.behaviourIndex.wiringOnly }));
+check("handoff BACK: the wiring-only banner is DISTINCT from the sectionOnly one — both name the same key here, so a test that cannot tell them apart is the one way this pin silently stops proving anything",
+  wiringPlanLines.filter((l) => /name only a wiring card/.test(l)).length === 1
+    && !/address only the SECTION scope/.test(wiringBannerLine),
+  () => JSON.stringify(wiringPlanLines.filter((l) => /⚠ \*\*/.test(l)).map((l) => l.slice(0, 90))));
+
 // TWO cards per row. A member whose behaviour lives in another scope — a `mixin:`, or a method that only wires one
 // in — is described by the owning scope's card (the wiring) AND the body's own card (shared core). Carrying only
 // the first leaves the row citing criteria that say the behaviour MAY happen, while the conditions that gate it
