@@ -364,6 +364,32 @@ function memberDigestOf(changeSet, scopeSchema) {
       key: scopeSchema ? `${scopeSchema}::${n.kind}:${n.item}` : `${n.kind}:${n.item}` }));
 }
 
+// The *Section chain as its OWN stub scope — 0 or 1 of them, so the caller spreads the result with no branch of
+// its own. Extracted from `runMigration` rather than written inline there because the two ternaries and their
+// `||` fallbacks pushed that function to cognitive complexity 16; the repo pins Sonar's 15, which is the same
+// reason `feedSchemaArray` below is its own function.
+//
+// The section chain is mapped only to digest its imperative rows (methods / mixins / messages) into a step-5.1
+// scope — `analyzeSectionChain`'s fixed-field extraction stays the source for the plan's List-page block. Local
+// to the stub digest: gates, coverage and the member ledger are unaffected.
+//
+// ROOT-ONLY (`opts.scopeSchema` unset): a nested child/typed/mini fold gets the raw child bundle as its manifest,
+// so a child bundle carrying `section` would otherwise inject a mid-array section entry into the parent's
+// `childStubScopes` (`slice(1)`) and break the section-is-LAST position contract at the call site.
+//
+// Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` / `kind:item`),
+// so a second null-schema scope would collapse both scopes' digest keys into one coverage row. When
+// `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
+function sectionStubScopes(manifest, opts, sectionSchemas) {
+  if (opts.scopeSchema || !sectionSchemas.length) return [];
+  const changeSet = mapToFreedom(mergeHierarchy(sectionSchemas), {
+    entityColumns: manifest.entityColumns || {},
+    resources: manifest.resources || {},
+  });
+  const schema = manifest.planMeta?.sectionSchema || "Section";
+  return [stubScope("section", schema, changeSet, changeSet.standardMethodsFiltered)];
+}
+
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
 // than one merged array so a caller can hand over (or stage) a single page — the staged-processing direction of
 // ENG-94859 — without re-deriving which method belongs to which schema.
@@ -1323,15 +1349,9 @@ export function runMigration(manifest, opts = {}) {
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionSchemas = parse(manifest.section);
-  // The section chain mapped as its OWN unit, only to digest its imperative rows (methods / mixins / messages)
-  // into a step-5.1 scope below — analyzeSectionChain's fixed-field extraction stays the source for the plan's
-  // List-page block. Local to the stub digest: gates, coverage and the ledger are unaffected.
-  // ROOT-ONLY (`!opts.scopeSchema`): a nested child/typed/mini fold gets the raw child bundle as its manifest,
-  // so a child bundle carrying `section` would otherwise inject a mid-array section entry into the parent's
-  // childStubScopes (`slice(1)`) and break the section-is-LAST position contract below.
-  const sectionChangeSet = !opts.scopeSchema && sectionSchemas.length
-    ? mapToFreedom(mergeHierarchy(sectionSchemas), { entityColumns: manifest.entityColumns || {}, resources: manifest.resources || {} })
-    : null;
+  // The section chain digested as its own step-5.1 scope (0 or 1) — see `sectionStubScopes` for the root-only
+  // guard, the never-null schema label, and why it is a function rather than inline here.
+  const sectionScopes = sectionStubScopes(manifest, opts, sectionSchemas);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
@@ -1467,12 +1487,7 @@ export function runMigration(manifest, opts = {}) {
     // action names / columns), so without this scope those rows never reach the step-5.1 handoff and the
     // behaviour analysis structurally cannot see list-page behaviour. Placed LAST: consumers take stubIndex[0]
     // as the record page and nested runs slice(1) for child scopes — a section entry must not shift those.
-    // Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` /
-    // `kind:item`), so a second null-schema scope would collapse both scopes' digest keys into one coverage
-    // row. When `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
-    ...(sectionChangeSet
-      ? [stubScope("section", manifest.planMeta?.sectionSchema || "Section", sectionChangeSet, sectionChangeSet.standardMethodsFiltered)]
-      : []),
+    ...sectionScopes,
   ];
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.

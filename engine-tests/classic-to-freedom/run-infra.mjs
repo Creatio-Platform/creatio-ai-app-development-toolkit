@@ -418,8 +418,13 @@ check("findings: a key naming no published unit REFUSES the run — nothing sche
 check("--stubs totals carry `members`, and the shortcut needs BOTH counts explicitly zero — `!totals.members` was true for a digest that never had the field, so a surface with message/mixin members skipped its analysis",
   /members: result\.stubIndex\.reduce/.test(mgSrc)
     && /zeroCount\(declaredTotals\.stubs\) && zeroCount\(declaredTotals\.members\)/.test(bhSrc));
-check("--stubs section scope is ROOT-ONLY — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
-  /const sectionChangeSet = !opts\.scopeSchema && sectionSchemas\.length/.test(mgSrc));
+// The root-only GUARD itself is asserted behaviourally in run-mapper.mjs (a nested fold given a `section` bundle
+// emits no section scope). This pin only keeps the construction in its own function: inlined back into
+// `runMigration` it pushed that function past the repo's pinned Sonar cognitive complexity 15.
+check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or 1 scope and owns the root-only guard — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
+  /function sectionStubScopes\(manifest, opts, sectionSchemas\)/.test(mgSrc)
+    && /if \(opts\.scopeSchema \|\| !sectionSchemas\.length\) return \[\];/.test(mgSrc)
+    && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
@@ -710,7 +715,7 @@ const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
   cbaFrom >= 0 && cbaTo > cbaFrom, () => `BEGIN at ${cbaFrom}, END at ${cbaTo}`);
-const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete", "digestKeyOf"];
+const CBA_HELPERS = ["packBatches", "wiringOnlyMixinKeys", "repairKeys", "isComplete", "digestKeyOf", "retryOnDeath", "critiqueDeathLine"];
 let cba = {};
 let tmpCba;
 try {
@@ -882,13 +887,103 @@ check("cba workflow: the verdict is `isComplete` over the run's counts — not a
   /const complete = mergeOk && isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc));
 check("cba workflow: the repair set is built by `repairKeys` off all three lists, so the flagged rows are re-described rather than only reported",
   /const toRepair = repairKeys\(uncoveredKeys, critiqueUncovered, wiringOnly\)/.test(cbaSrc));
-check("cba workflow: a dead Critique is retried once, and a REJECTING host lands in `critique = null` too — either failure path must reach the loud log, not throw past it",
-  /for \(let attempt = 1; attempt <= 2 && !critique; attempt\+\+\)/.test(cbaSrc)
-    && /critique = await agent\(critiquePrompt/.test(cbaSrc)
-    && /catch \{[\s\S]{0,400}?critique = null/.test(cbaSrc));
+// The retry BEHAVIOUR is asserted executably against `retryOnDeath` further down — this pin only keeps the call
+// site WIRED to that helper. Source-matching alone was the whole defect: it proved the loop's shape was in the
+// file and nothing about whether a second attempt ever fires (PR#88 review, Major).
+check("cba workflow: the Critique call site goes through the executable `retryOnDeath` helper, handing it the `agent()` attempt as a thunk AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
+  /const critique = await retryOnDeath\(/.test(cbaSrc)
+    && /agent\(critiquePrompt/.test(cbaSrc)
+    && /log\(critiqueDeathLine\(attempt, error, willRetry\)\)/.test(cbaSrc));
 check("cba workflow: a Critique that never ran is LOUD and machine-readable — the log says coverage.complete is arithmetic-only, and the result carries `critiqueRan` so the caller sees it without reading logs",
   /if \(!critique\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
     && /critiqueRan: !!critique,/.test(cbaSrc));
+/* ---- the Critique retry, EXECUTED ------------------------------------------------------------------------
+   This is new error-handling control flow on a path that was previously a silent failure, and control flow that
+   is only regex-matched can be a no-op in production while every test stays green. These run the loop for real
+   against a stubbed attempt: the counted calls are the evidence that a second attempt actually fires.
+
+   AWAITED EAGERLY, NOT PASSED TO `check` AS A THUNK. `check` evaluates a function condition synchronously and
+   tests it for truthiness — an `async` thunk returns a Promise, which is ALWAYS truthy, so the house idiom used
+   everywhere else in this file would make every assertion below pass unconditionally. Await first, then assert
+   the value. The whole block is wrapped because eager awaits give up check's throw-capture: without this, a
+   helper that vanished from the markers would throw at module top level and kill the runner BEFORE the
+   `INFRA GOLDEN: N passed` summary printed, turning a one-line red into a silent abort. */
+try {
+  const calls = [];
+  const fails = [];
+  const note = (attempt, error, willRetry) => fails.push({ attempt, msg: error ? (error.message || String(error)) : null, willRetry });
+  const reset = () => { calls.length = 0; fails.length = 0; };
+
+  reset();
+  const rSecond = await cba.retryOnDeath((n) => { calls.push(n); return n === 1 ? null : { ok: true }; }, note);
+  check("retryOnDeath: an attempt that dies FIRES a real second attempt, and the second attempt's success is the result — the retry the source regex could never prove",
+    calls.length === 2 && calls[0] === 1 && calls[1] === 2 && rSecond?.ok === true
+      && fails.length === 1 && fails[0].attempt === 1 && fails[0].willRetry === true,
+    () => JSON.stringify({ calls, rSecond, fails }));
+
+  reset();
+  const rDead = await cba.retryOnDeath((n) => { calls.push(n); return null; }, note);
+  check("retryOnDeath: both attempts dead ⇒ null (which is what makes the caller's `critiqueRan:false` and its loud log fire), exactly TWO attempts, and the last failure does not advertise a retry that will not happen",
+    rDead === null && calls.length === 2 && fails.length === 2 && fails[1].willRetry === false,
+    () => JSON.stringify({ calls, rDead, fails }));
+
+  reset();
+  let threw = false, rReject = "unset";
+  try { rReject = await cba.retryOnDeath((n) => { calls.push(n); throw new Error(`529 overloaded #${n}`); }, note); } catch { threw = true; }
+  check("retryOnDeath: a REJECTING host collapses into the SAME null outcome and never throws past the caller — the motivating 529 failure, which used to end the run with no contradiction check at all",
+    !threw && rReject === null && calls.length === 2,
+    () => JSON.stringify({ threw, rReject, calls }));
+  check("retryOnDeath: the caught error's message reaches the notifier per attempt, so a dead pass reports the CAUSE and not merely the fact",
+    fails.length === 2 && /529 overloaded #1/.test(fails[0].msg || "") && /529 overloaded #2/.test(fails[1].msg || ""),
+    () => JSON.stringify(fails));
+
+  reset();
+  // Rejects on a LATER TICK (after the await), which is the shape a real `agent()` failure has — and distinct from
+  // the synchronous throw above. `throw` inside an `async` function rejects the returned promise; it does not
+  // propagate synchronously, so this stays the async case without a `Promise.reject` (sonar S7746).
+  const rAsync = await cba.retryOnDeath(async (n) => { calls.push(n); await Promise.resolve(); throw new Error("host refused"); }, note);
+  check("retryOnDeath: an ASYNC rejection is caught too — `agent()` hands back a promise, so a guard that only caught synchronous throws would miss the real failure shape entirely",
+    rAsync === null && calls.length === 2 && /host refused/.test(fails[0].msg || ""),
+    () => JSON.stringify({ calls, fails }));
+
+  reset();
+  const rFirst = await cba.retryOnDeath((n) => { calls.push(n); return { ok: true }; }, note);
+  check("retryOnDeath: a first-attempt success spends exactly ONE agent and reports no failure — the retry must not cost a second agent on the happy path",
+    calls.length === 1 && rFirst?.ok === true && fails.length === 0,
+    () => JSON.stringify({ calls, fails }));
+
+  reset();
+  const rNoNotifier = await cba.retryOnDeath((n) => { calls.push(n); return null; }, undefined);
+  check("retryOnDeath: a missing notifier does not throw — the helper degrades to a plain retry rather than turning a dead phase into a crashed run",
+    rNoNotifier === null && calls.length === 2,
+    () => JSON.stringify({ calls }));
+
+  /* The MESSAGE a dead attempt logs — the actual deliverable of the cause-reporting fix, and the thing that had
+     no test of any kind while it was an inline lambda. Asserted on the produced string, not on its source. */
+  const lineRejected = cba.critiqueDeathLine(1, new TypeError("529 overloaded"), true);
+  check("critiqueDeathLine: a REJECTION names the attempt, the error TYPE and its message, and announces the retry — a `critiqueRan:false` run must carry the reason, not only the fact",
+    /attempt 1/.test(lineRejected) && /TypeError/.test(lineRejected) && /529 overloaded/.test(lineRejected)
+      && / — retrying once$/.test(lineRejected),
+    () => lineRejected);
+
+  const lineNull = cba.critiqueDeathLine(2, null, false);
+  check("critiqueDeathLine: a NULL return says so explicitly and cites the contract — 'returned nothing' must not read as an unknown error",
+    /attempt 2/.test(lineNull) && /returned nothing \(terminal death/.test(lineNull) && !/Error/.test(lineNull),
+    () => lineNull);
+
+  check("critiqueDeathLine: only a NON-FINAL attempt advertises the retry — the last failure promising a retry that never comes is exactly the misreport this log exists to prevent",
+    / — retrying once$/.test(cba.critiqueDeathLine(1, null, true)) && !/retrying/.test(lineNull),
+    () => JSON.stringify({ willRetry: cba.critiqueDeathLine(1, null, true), final: lineNull }));
+
+  check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a bare Error must not render as `undefined`",
+    !/undefined/.test(cba.critiqueDeathLine(1, new Error(""), false))
+      && !/undefined/.test(cba.critiqueDeathLine(1, "boom", false)),
+    () => JSON.stringify([cba.critiqueDeathLine(1, new Error(""), false), cba.critiqueDeathLine(1, "boom", false)]));
+} catch (e) {
+  check("cba workflow: the executable retry/message block ran to completion — a helper missing from the PURE DECISION HELPERS markers must be ONE red check, not an aborted runner with no summary",
+    false, () => `${e?.name || "Error"}: ${e?.message || String(e)}`);
+}
+
 check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prompts and into the returned coverage, so a caller sees them too",
   /MIXIN ROWS NAMING ONLY A WIRING CARD/.test(cbaSrc) && /MIXIN ROWS STILL NAMING ONLY A WIRING CARD/.test(cbaSrc)
     && /uncovered: uncoveredKeys, wiringOnly/.test(cbaSrc));

@@ -329,10 +329,12 @@ if (!worked.length) {
 }
 
 // ---8<--- PURE DECISION HELPERS ---8<---
-// Everything between these markers is a pure function of its arguments: no `agent`, no `log`, no closure over
-// run state. `engine-tests/classic-to-freedom/run-infra.mjs` slices this block out of THIS file and unit-tests
-// it, so nothing here may capture anything else and the block must stay self-contained — a helper moved out of
-// the markers silently shrinks that suite.
+// Everything between these markers is SELF-CONTAINED: it closes over no run state and reaches for no host global
+// (`agent`, `log`, `phase`, `args`, `parallel`). A helper that needs one of those effects takes it as an EXPLICIT
+// PARAMETER instead — that is what lets control flow live here and still be executed by the suite, rather than
+// being stranded in the imperative body where only a source regex can reach it.
+// `engine-tests/classic-to-freedom/run-infra.mjs` slices this block out of THIS file and unit-tests it, so the
+// block must stay importable on its own — a helper moved out of the markers silently shrinks that suite.
 
 // Greedy packing, largest scope first. A scope is never SPLIT: the analysis
 // contract's completeness proof is a per-scope member ledger, so half a scope
@@ -405,6 +407,60 @@ function repairKeys(uncovered, critiqueUncovered, wiringOnly) {
 // verdict with no keys means the count never ran, and that must not read as a clean run.
 function isComplete(totalKeys, uncovered, wiringOnly) {
   return totalKeys > 0 && (uncovered || []).length === 0 && (wiringOnly || []).length === 0
+}
+
+// A phase agent that DIED, retried — and living HERE, as a function taking the attempt as a thunk, precisely so
+// the suite can EXECUTE it. This loop used to sit inline at the Critique call site, where the only reachable test
+// was a regex over this file's own source: it proved the loop's SHAPE was present and nothing about whether a
+// second attempt ever fires. A condition that silently never allowed one would have passed every check while the
+// retry was a no-op in production — on the one path whose whole purpose is that a dead pass stops being silent.
+//
+// NO DELAY BETWEEN ATTEMPTS — and not by choice: no delay is POSSIBLE here. The host injects exactly `args`,
+// `log`, `phase`, `agent` and `parallel` into a workflow script and no timer, so there is nothing to await
+// between attempts (run-infra.mjs pins that signature when it syntax-checks these files, and no shipped
+// `*.workflow.js` uses a timer). Jittered backoff is doubly out: the sandbox throws on `Math.random()` so a
+// resumed run replays identically.
+//
+// WHAT THE RETRY IS WORTH, and where it is thin — stated because the honest answer is "it depends on the failure
+// shape". When `agent()` RESOLVES null the host has already exhausted its own retries per the Workflow contract,
+// so attempt 2 is a fresh subagent spawn against a host that has finished backing off: a real second chance.
+// When it REJECTS, that premise does NOT hold — a rejection can arrive immediately, and the motivating HTTP 529
+// is exactly that shape, so attempt 2 can fire against a host that just said it was overloaded and buy nothing.
+// Accepted, because the alternative is no retry at all: this guards a Critique that dies SILENTLY, and a second
+// attempt that sometimes works beats one that never happens.
+//
+// ONE retry, fixed. There is a single caller, and the retry label plus `critiqueDeathLine`'s "retrying once" both
+// describe exactly two attempts; a configurable count would let those drift apart on its first use.
+const RETRY_ATTEMPTS = 2
+
+// `onFailure(attempt, error, willRetry)` carries the CAUSE. Two different failures end an attempt — a null return
+// (terminal death, per the contract) and a rejection (host refused, schema threw, prompt malformed) — and folding
+// them into one generic line left a dead pass reporting THAT it died and never WHY.
+async function retryOnDeath(attemptFn, onFailure) {
+  let result = null
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS && !result; attempt++) {
+    let error = null
+    try {
+      result = (await attemptFn(attempt)) || null
+    } catch (e) {
+      result = null
+      error = e || new Error('rejected with no reason given')
+    }
+    if (!result && onFailure) onFailure(attempt, error, attempt < RETRY_ATTEMPTS)
+  }
+  return result
+}
+
+// The line a dead attempt logs. It lives HERE rather than inline at the call site for the same reason the loop
+// does: as a lambda argument it was pinned by nothing. The call-site check requires only that `retryOnDeath` is
+// called, and the helper treats a missing notifier as valid (correctly — see the tests), so the entire
+// cause-reporting deliverable could be deleted with a fully green suite. Measured, not theorised: removing the
+// notifier left the infra suite at 218/218.
+function critiqueDeathLine(attempt, error, willRetry) {
+  const cause = error
+    ? `${error.name || 'Error'}: ${error.message || String(error)}`
+    : 'returned nothing (terminal death per the agent() contract)'
+  return `critique agent died on attempt ${attempt} — ${cause}${willRetry ? ' — retrying once' : ''}`
 }
 // ---8<--- END PURE DECISION HELPERS ---8<---
 
@@ -515,22 +571,19 @@ Do not rewrite the cards. Report.`
 
 // Retried like a describe scope: a dead Critique otherwise ends the run with no
 // contradiction check and nothing machine-readable saying so.
-let critique = null
-for (let attempt = 1; attempt <= 2 && !critique; attempt++) {
-  if (attempt > 1) log('critique agent died — retrying once')
-  try {
-    critique = await agent(critiquePrompt, {
+// The loop itself is `retryOnDeath` in the pure block above — a thunk, so the suite executes the retry instead of
+// regex-matching its shape here. Both failure shapes (a null return, a REJECTING host) end an attempt and reach
+// the notifier, so neither can throw past the loud log below.
+const critique = await retryOnDeath(
+  (attempt) =>
+    agent(critiquePrompt, {
       agentType: 'general-purpose',
       schema: CRITIQUE_SCHEMA,
       phase: 'Critique',
       label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
-    })
-  } catch {
-    // agent() resolves null on a terminal death per the Workflow contract; the catch covers a host
-    // that REJECTS instead — either way a dead Critique must reach the loud log below, not throw past it.
-    critique = null
-  }
-}
+    }),
+  (attempt, error, willRetry) => log(critiqueDeathLine(attempt, error, willRetry)),
+)
 if (!critique) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
 
 // --- One repair round, and only when there is something to repair ----------

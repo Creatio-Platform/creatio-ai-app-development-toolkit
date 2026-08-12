@@ -4162,7 +4162,7 @@ const SECTION_BODY = `define("DealSection", [], function() { return {
   diff: []
 }; });`;
 const sectionScopeRun = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }] });
-const secScope = sectionScopeRun.stubIndex[sectionScopeRun.stubIndex.length - 1];
+const secScope = sectionScopeRun.stubIndex.at(-1);
 check("handoff OUT: `manifest.section` yields a section scope, placed LAST (stubIndex[0] stays the record page; nested folds slice(1))",
   sectionScopeRun.stubIndex[0].role === "main page" && secScope.role === "section"
     && sectionScopeRun.stubIndex.filter((s) => s.role === "section").length === 1);
@@ -4171,8 +4171,16 @@ check("handoff OUT: the section scope carries the section's own imperative rows 
     && secScope.members.some((m) => m.key === "DealSection::mixin:orderUtil"));
 check("handoff OUT: no `manifest.section` → no section scope",
   !ho.stubIndex.some((s) => s.role === "section"));
+// ROOT-ONLY, asserted by RUNNING a nested fold rather than by matching the guard's source. A child/typed/mini
+// fold is handed the raw child bundle as its manifest, so a bundle carrying `section` would inject a mid-array
+// entry into the parent's `childStubScopes` (`slice(1)`) and silently break the section-is-LAST contract.
+const secNested = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }] },
+  { scopeSchema: "SomeChildPage" });
+check("handoff OUT: a NESTED fold (`opts.scopeSchema` set) emits NO section scope even when the bundle carries `section` — the parent's `slice(1)` child-scope contract depends on it",
+  !secNested.stubIndex.some((s) => s.role === "section"),
+  () => JSON.stringify(secNested.stubIndex.map((s) => s.role)));
 const secNoMeta = runMigration({ ...handoffManifest, section: [{ pkg: "DealPkg", body: SECTION_BODY }] });
-const secNoMetaScope = secNoMeta.stubIndex[secNoMeta.stubIndex.length - 1];
+const secNoMetaScope = secNoMeta.stubIndex.at(-1);
 check("handoff OUT: a section scope NEVER has a null schema — without `planMeta.sectionSchema` the deterministic `Section` label keeps its digest keys distinct from the main page's bare keys",
   secNoMetaScope.role === "section" && secNoMetaScope.schema === "Section"
     && secNoMetaScope.members.some((m) => m.key === "Section::mixin:orderUtil"));
@@ -4185,6 +4193,29 @@ check("handoff BACK: a section-only behaviourIndex key is NOT `unmatched` and IS
     && secBack.behaviourIndex.sectionOnly.includes("setOwner"));
 check("handoff BACK: a section-only key renders a ⚠ plan banner — matched must not read as rendered",
   /address only the SECTION scope/.test(renderPlan(secBack, {})));
+// All THREE key kinds in ONE run. `sectionOnly` and `unmatched` are computed by calling the same scope-digest
+// helper over different subsets, so the split is only as good as its subset boundary: a key satisfying both
+// filters would be double-bannered, and one satisfying neither would silently drop the pre-existing `unmatched`
+// coverage signal. Each case alone (above) cannot catch that — the classification is a property OF the run, so
+// it takes one run holding all three (PR#88 review).
+const secSplit = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }],
+  behaviourIndex: {
+    onStageChanged: { card: "C01", ac: ["AC-1"] }, // a PAGE scope owns it
+    setOwner: { card: "C05", ac: ["AC-2"] },       // the SECTION scope owns it
+    ghostMethod: { card: "C99", ac: ["AC-3"] },    // no scope owns it
+  } });
+const secBanners = (k) => [
+  secSplit.behaviourIndex.unmatched.includes(k) && "unmatched",
+  secSplit.behaviourIndex.sectionOnly.includes(k) && "sectionOnly",
+].filter(Boolean);
+check("handoff BACK: page-only / section-only / owned-by-nobody each land in EXACTLY ONE bucket — never both banners, never neither",
+  secBanners("onStageChanged").length === 0
+    && secBanners("setOwner").join() === "sectionOnly"
+    && secBanners("ghostMethod").join() === "unmatched",
+  () => JSON.stringify({ onStageChanged: secBanners("onStageChanged"), setOwner: secBanners("setOwner"), ghostMethod: secBanners("ghostMethod") }));
+check("handoff BACK: the two banners are DISJOINT — `unmatched` is computed over every scope, so a `sectionOnly` key is matched by construction and can never appear in both",
+  secSplit.behaviourIndex.unmatched.every((k) => !secSplit.behaviourIndex.sectionOnly.includes(k)),
+  () => JSON.stringify({ unmatched: secSplit.behaviourIndex.unmatched, sectionOnly: secSplit.behaviourIndex.sectionOnly }));
 
 // TWO cards per row. A member whose behaviour lives in another scope — a `mixin:`, or a method that only wires one
 // in — is described by the owning scope's card (the wiring) AND the body's own card (shared core). Carrying only
