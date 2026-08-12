@@ -56,6 +56,28 @@ def run_hook(payload: dict, *, telemetry_home: str, clio: str = "caadt-no-such-c
     )
 
 
+def write_transcript() -> str:
+    """A minimal stand-in for the host's session transcript.
+
+    Two assistant turns, so the test proves the counters are SUMMED across the session and
+    the model is taken from the latest turn rather than the first. A trailing partial line
+    mimics a live session mid-flush, which the hook must skip instead of failing on.
+    """
+    lines = [
+        json.dumps({"message": {"model": "claude-opus-5", "usage": {
+            "input_tokens": 10, "output_tokens": 3,
+            "cache_read_input_tokens": 500, "cache_creation_input_tokens": 100}}}),
+        json.dumps({"type": "user", "message": {"content": "no usage on user turns"}}),
+        json.dumps({"message": {"model": "claude-opus-5", "usage": {
+            "input_tokens": 20, "output_tokens": 4,
+            "cache_read_input_tokens": 600, "cache_creation_input_tokens": 0}}}),
+        '{"message": {"model": "claude-opus-5", "usage": {"input_tok',
+    ]
+    path = Path(tempfile.mkdtemp(prefix="caadt-hook-transcript-", dir=_TMP), "session.jsonl")
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return str(path)
+
+
 def telemetry_home(consent: str | None) -> str:
     """A throwaway clio telemetry home, optionally with a stored consent decision."""
     home = tempfile.mkdtemp(prefix="caadt-hook-home-", dir=_TMP)
@@ -236,7 +258,11 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
         home = telemetry_home("granted")
 
         result = run_hook(
-            {"session_id": session, "tool_name": "mcp__clio__clio-run"},
+            {
+                "session_id": session,
+                "tool_name": "mcp__clio__clio-run",
+                "transcript_path": write_transcript(),
+            },
             telemetry_home=home,
             clio=CLIO,
         )
@@ -250,6 +276,14 @@ class TelemetryRoutingHookFloorEmissionTests(unittest.TestCase):
         }
         self.assertEqual(stored["event_name"], "workflow_started")
         self.assertEqual(attributes["session_id"], session)
+        # Model and the running token counters come from the host's own session transcript,
+        # which the payload points at. They are a snapshot: this hook fires on the first clio
+        # call, so the numbers are small by construction — the value is the series, not this
+        # one reading.
+        self.assertEqual(attributes["model"], "claude-opus-5")
+        self.assertEqual(int(attributes["input_tokens"]), 30)
+        self.assertEqual(int(attributes["output_tokens"]), 7)
+        self.assertEqual(int(attributes["cached_input_tokens"]), 1200)
         # `unattributed` is reserved for exactly this: a hook sees a tool name, not a
         # workflow, so a real-looking value would be a guess presented as data — and an
         # omitted one would break the contract's own "always send workflow" rule.

@@ -55,6 +55,9 @@ const reminder = sessionId => [
 	'    corrupt every elapsed-time measurement in the session;',
 	'  - send your real `workflow` on each stage you emit from now on:',
 	'    app-creation | classic-to-freedom-migration | mobile-page-conversion | branding | app-maintenance',
+	'  - send `model` with your own model id, lowercased, on every stage;',
+	'  - send `input_tokens` / `output_tokens` / `cached_input_tokens` as running session totals when',
+	'    you can see them, and omit them when you cannot rather than guessing a number.',
 	'',
 	'Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.',
 	'Do not spell a stage from memory and do not invent a per-flow name such as migration_plan_approved:',
@@ -73,6 +76,60 @@ function readStdin() {
 	} catch {
 		return null;
 	}
+}
+
+// Which model ran, and what the session had consumed by this point. The host does not pass either in
+// the hook payload, but it keeps a JSONL transcript whose assistant messages carry `model` and
+// `usage` — and the file is named for the session id, so it is reachable even when the payload omits
+// `transcript_path`.
+//
+// The counters are a SNAPSHOT, not a total: this hook fires on the first clio call, so its numbers
+// are necessarily small. That is intended — every event carries the running totals at the moment its
+// stage was reached, which makes the series monotonic (a session's real consumption is the maximum)
+// and shows which stage of which flow actually cost the tokens. A single end-of-session total would
+// need a session-end signal that not every host provides.
+function readSessionUsage(payload) {
+	const transcript = payload?.transcript_path
+		|| path.join(os.homedir(), '.claude', 'projects', slugForCwd(payload?.cwd), `${payload?.session_id}.jsonl`);
+	const usage = { model: null, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 };
+	let raw;
+	try {
+		raw = fs.readFileSync(transcript, 'utf8');
+	} catch {
+		return usage; // No transcript reachable: send the event without these fields.
+	}
+	for (const line of raw.split('\n')) {
+		if (!line.startsWith('{')) {
+			continue;
+		}
+		let message;
+		try {
+			message = JSON.parse(line)?.message;
+		} catch {
+			continue; // A partially flushed final line is normal while a session is live.
+		}
+		if (!message) {
+			continue;
+		}
+		if (typeof message.model === 'string' && message.model) {
+			usage.model = message.model.toLowerCase();
+		}
+		const consumed = message.usage;
+		if (!consumed) {
+			continue;
+		}
+		usage.input_tokens += consumed.input_tokens || 0;
+		usage.output_tokens += consumed.output_tokens || 0;
+		usage.cached_input_tokens +=
+			(consumed.cache_read_input_tokens || 0) + (consumed.cache_creation_input_tokens || 0);
+	}
+	return usage;
+}
+
+// The host derives a project directory name from the working directory by replacing every path
+// separator and drive colon with a dash.
+function slugForCwd(cwd) {
+	return String(cwd || process.cwd()).replace(/[\\/:]/g, '-');
 }
 
 // Mirrors clio's TelemetryStoragePaths so consent can be read without starting clio: spawning a
@@ -117,7 +174,7 @@ function claimSessionOnce(sessionId) {
 // One batched stdio MCP conversation: initialize, initialized, tools/call. The server is
 // line-oriented and processes the messages in order, so the whole exchange fits in a single
 // spawnSync without an async client.
-function emitFloorEvent(sessionId) {
+function emitFloorEvent(sessionId, usage) {
 	const request = [
 		{
 			jsonrpc: '2.0',
@@ -146,7 +203,13 @@ function emitFloorEvent(sessionId) {
 							event_name: 'workflow_started',
 							workflow: FLOOR_WORKFLOW,
 							coding_agent: CODING_AGENT,
-							plugin_version: PLUGIN_VERSION
+							plugin_version: PLUGIN_VERSION,
+							// Omitted rather than sent empty when the transcript was unreadable: a zero
+							// would be indistinguishable from a session that genuinely spent nothing.
+							...(usage.model ? { model: usage.model } : {}),
+							input_tokens: usage.input_tokens,
+							output_tokens: usage.output_tokens,
+							cached_input_tokens: usage.cached_input_tokens
 						}
 					}
 				}
@@ -187,7 +250,7 @@ function main() {
 	}
 	// The reminder is emitted whether or not the floor call succeeded: if clio rejected it (an older
 	// clio, a broken install), the agent's own stages are then the only telemetry there is.
-	emitFloorEvent(sessionId);
+	emitFloorEvent(sessionId, readSessionUsage(payload));
 	process.stdout.write(JSON.stringify({
 		hookSpecificOutput: {
 			hookEventName: 'PostToolUse',
