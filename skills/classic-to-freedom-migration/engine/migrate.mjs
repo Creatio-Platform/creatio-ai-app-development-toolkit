@@ -290,9 +290,12 @@ function detailSchemaIssues(changeSet, suppliedDetailKeys) {
   return out;
 }
 
-function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited }) {
+function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited, listColumnIssue }) {
   const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
   const issues = [...detailSchemaIssues(changeSet, suppliedDetailKeys), ...profileSchemaIssues(manifest, changeSet)];
+  // A recoverable list-column read failure (see `normalizeResolvedListColumns`) is INPUT incompleteness, not a
+  // crash: the plan still renders, with the cause and the remedy named here instead of on stderr.
+  if (listColumnIssue) issues.push(listColumnIssue);
   const hollow = hollowFormIssue(changeSet, typedPages, manifest, visited);
   if (hollow) issues.push(hollow);
   for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
@@ -881,61 +884,101 @@ function reportDynamicMappingProps(schemas, changeSet) {
   }
 }
 
-// Union the *Section chain's list-page signals (add-record mini page, section actions, list columns, quick
-// filters, process launch) into one section object, or null when no section schema was supplied. Extracted to
-// keep runMigration under CC 15.
+// A column path as clio's `IsSchemaPath` accepts it: a LETTER, then letters/digits/`_`/`.`. clio validates with
+// `char.IsLetter`/`char.IsLetterOrDigit`, which are Unicode-aware — an ASCII-only `[A-Za-z][\w.]*` rejects output
+// clio legitimately returns, so the class is spelled with Unicode properties to match the producing contract.
+const RESOLVED_COLUMN_PATH = /^\p{L}[\p{L}\p{N}_.]*$/u;
+const RESOLVED_COLUMN_SOURCES = ["schema-default", "entity-default", "none"];
+
+// Validate + normalize a `get-classic-list-columns` response supplied as `manifest.section.listColumns`.
+// RECOVERABLE failures return `{ error }` — the caller routes them into the STRUCTURE gate so the run still
+// produces a `plan.md` that names the cause and the remedy. This is deliberate: clio's resolver returns
+// `success:false` for schema-not-found, incomplete metadata, an empty hierarchy, and any application-client
+// exception (network / auth / unreachable stand), i.e. environment and staleness conditions — exactly what a gate
+// is for. Throwing here would abort before any gate is computed and yield no plan at all. Only a manifest
+// AUTHORING error (a missing provenance anchor here; a missing `listColumns` key in `sectionInput`) stays loud.
 function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSchema) {
-  if (!value || value.success !== true || !["schema-default", "entity-default", "none"].includes(value.source)
-    || !Array.isArray(value.columns)) throw new Error("section.listColumns is present but is not a successful get-classic-list-columns response");
+  if (value?.success !== true) {
+    return { error: `list-column read failed: ${value?.error || "get-classic-list-columns did not return success:true"} — fix the cause and re-run \`get-classic-list-columns\`, or drop \`section.listColumns\` to fall back to the section-chain parse` };
+  }
   if (typeof expectedEntity !== "string" || !expectedEntity
     || typeof expectedSectionSchema !== "string" || !expectedSectionSchema) {
     throw new Error("section.listColumns requires manifest.entity and planMeta.sectionSchema to verify its provenance");
   }
-  if (value.entity !== expectedEntity || value.sectionSchema !== expectedSectionSchema) {
-    throw new Error(`section.listColumns provenance mismatch: expected ${expectedSectionSchema}/${expectedEntity}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}`);
+  if (!RESOLVED_COLUMN_SOURCES.includes(value.source) || !Array.isArray(value.columns)) {
+    return { error: `list-column evidence is malformed: source ${JSON.stringify(value.source ?? null)} (expected one of ${RESOLVED_COLUMN_SOURCES.join(" | ")}) with ${Array.isArray(value.columns) ? `${value.columns.length} column(s)` : "a non-array \`columns\` field"} — re-run \`get-classic-list-columns\`` };
   }
-  const columns = value.columns.map((column) => typeof column === "string" ? column : column?.name)
-    .filter((name) => typeof name === "string" && /^[A-Za-z][\w.]*$/.test(name));
-  if (columns.length !== value.columns.length || (value.source !== "none" && !columns.length)
-    || (value.source === "none" && columns.length)) {
-    throw new Error("section.listColumns contains columns inconsistent with its declared source");
+  // clio echoes `sectionSchema` back as the CALLER's own spelling (`sectionSchemaName.Trim()`) while resolving the
+  // hierarchy case-insensitively (`OrdinalIgnoreCase`), so `--schema-name applicant1section` legitimately returns
+  // lowercase. Compare the way the producer resolves, or a casing difference reads as evidence for another section.
+  const sameName = (a, b) => typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+  if (!sameName(value.entity, expectedEntity) || !sameName(value.sectionSchema, expectedSectionSchema)) {
+    return { error: `list-column evidence belongs to another section — expected ${expectedSectionSchema}/${expectedEntity}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}; re-run \`get-classic-list-columns\` for ${expectedSectionSchema}` };
+  }
+  const names = value.columns.map((column) => typeof column === "string" ? column : column?.name);
+  const bad = names.findIndex((name) => typeof name !== "string" || !RESOLVED_COLUMN_PATH.test(name));
+  if (bad !== -1) {
+    return { error: `list-column evidence carries an unusable column path at index ${bad}: ${JSON.stringify(names[bad] ?? null)} — re-run \`get-classic-list-columns\`` };
+  }
+  const columns = [...new Set(names)];   // dedupe BEFORE any count check, so repeats don't read as rejected entries
+  if (value.source !== "none" && !columns.length) {
+    return { error: `list-column evidence declares source '${value.source}' but carries no columns — re-run \`get-classic-list-columns\`` };
+  }
+  if (value.source === "none" && columns.length) {
+    return { error: `list-column evidence declares source 'none' but carries ${columns.length} column(s): ${columns.join(", ")} — re-run \`get-classic-list-columns\`` };
   }
   return {
     source: value.source,
-    columns: [...new Set(columns)],
+    columns,
     notes: Array.isArray(value.notes) ? value.notes.filter((note) => typeof note === "string") : [],
   };
 }
 
+// Split `manifest.section` into the *Section replacing chain and the resolved list-column evidence.
+// A bare array is the LEGACY shape (chain only). On the object shape a missing `listColumns` key is a manifest
+// AUTHORING error → fail loud (same precedent as the manifest guards at 1377/1385): the author chose the enriched
+// shape, so the evidence must be there or absent by design, never forgotten. A non-array `schemas` is coerced
+// instead, because "no section chain" is already a first-class STRUCTURE issue that designspec renders with its
+// own cause + remedy — a gate reason, not an abort.
 function sectionInput(section, manifest) {
-  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null };
-  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null };
-  const hasResolvedListColumns = Object.prototype.hasOwnProperty.call(section, "listColumns");
-  if (!hasResolvedListColumns) {
+  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null, listColumnIssue: null };
+  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null, listColumnIssue: null };
+  if (!Object.hasOwn(section, "listColumns")) {
     throw new Error("object-shaped section requires listColumns evidence; use a bare array only for the legacy manifest shape");
   }
-  return {
-    schemas: Array.isArray(section.schemas) ? section.schemas : [],
-    resolvedListColumns: normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema),
-  };
+  const schemas = Array.isArray(section.schemas) ? section.schemas : [];
+  const resolved = normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema);
+  if (resolved.error) return { schemas, resolvedListColumns: null, listColumnIssue: resolved.error };
+  return { schemas, resolvedListColumns: resolved, listColumnIssue: null };
 }
 
+// Union the *Section chain's list-page signals (add-record mini page, section actions, list columns, quick
+// filters, process launch) into one section object — null only when NEITHER section schemas nor resolved list
+// columns were supplied. Extracted to keep runMigration under CC 15.
 function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
   if (!sectionSchemas.length && !resolvedListColumns) return null;
   const seen = new Set(), quickFilters = [];
   for (const l of sectionSchemas) for (const f of (l.quickFilters || [])) {
     if (f?.name && !seen.has(f.name)) { seen.add(f.name); quickFilters.push(f); }
   }
+  const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
+  // `[]` is not nullish, so `??` would let an EMPTY resolved set silently discard a chain parse that did find
+  // columns. Prefer the resolved set only when it actually carries columns; when the two DISAGREE (clio resolved
+  // `none` while the chain declares columns) keep the parsed set and say so, rather than dropping either side.
+  const useResolved = (resolvedListColumns?.columns || []).length > 0;
+  const notes = [...(resolvedListColumns?.notes || [])];
+  if (resolvedListColumns && !useResolved && chainColumns.length) {
+    notes.push(`the on-stand read resolved no default column set (source: ${resolvedListColumns.source}) while the section schema chain declares ${chainColumns.join(", ")} — the parsed set is shown; confirm on-stand which columns the list really shows`);
+  }
   return {
     schemaGathered: sectionSchemas.length > 0,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
-    listColumns: resolvedListColumns?.columns
-      ?? [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))],
-    listColumnSource: resolvedListColumns?.source ?? (sectionSchemas.some((l) => (l.listColumns || []).length)
-      ? "schema-default"
-      : null),
-    listColumnNotes: resolvedListColumns?.notes ?? [],
+    listColumns: useResolved ? resolvedListColumns.columns : chainColumns,
+    listColumnSource: useResolved
+      ? resolvedListColumns.source
+      : (chainColumns.length ? "schema-default" : resolvedListColumns?.source ?? null),
+    listColumnNotes: notes,
     quickFilters,
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
@@ -1549,7 +1592,7 @@ export function runMigration(manifest, opts = {}) {
   // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
   // exit, and the renderer prints it into the plan — the agent literally can't present a clean plan without
   // supplying the schemas. This is INPUT completeness (distinct from the correctness `gate` above).
-  const structure = validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited });
+  const structure = validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited, listColumnIssue: sectionData.listColumnIssue });
   // ⛔ COVERAGE — the MEMBER LEDGER and its gate. Every other category in this engine is gated (seed,
   // detailSchemas, childPageSchemas, typedPages, addRecordMiniPage, signals, planMeta); imperative logic was the
   // one category with neither a gate nor a worklist entry, so a page could ship with its methods, its

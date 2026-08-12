@@ -874,7 +874,30 @@ const resolvedColumnsRun = runMigration({ entity: "Applicant",
 check("ENG-95229: enriched section manifest consumes resolved entity-default columns",
   resolvedColumnsRun.section?.listColumnSource === "entity-default"
   && (resolvedColumnsRun.section?.listColumns || []).join(",") === "Name"
-  && /\*\*List columns:\*\* Name/.test(resolvedColumnsRun.designSpec));
+  && /\*\*List columns:\*\* ⚠ Name/.test(resolvedColumnsRun.designSpec));
+check("ENG-95229: an entity-default plan qualifies the fallback, carries the resolver's note and keeps the question",
+  () => /\*\*List columns:\*\* ⚠ Name — the Classic section declares NO list columns/.test(resolvedColumnsRun.designSpec)
+    && /\(entity fallback\)/.test(resolvedColumnsRun.designSpec)
+    && /confirm which columns the Freedom list should show/.test(resolvedColumnsRun.designSpec),
+  () => resolvedColumnsRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+const resolvedSchemaDefaultRun = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: {
+    schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
+    listColumns: { success: true, sectionSchema: "applicant1section", entity: "Applicant", source: "schema-default",
+      columns: [{ name: "Name" }, { name: "Stage.Name" }, { name: "Name" }], notes: [] },
+  },
+}, { baseDir: FIX });
+check("ENG-95229: enriched schema-default columns are consumed, deduped and rendered with the NARROWED question",
+  () => resolvedSchemaDefaultRun.section?.listColumnSource === "schema-default"
+    && (resolvedSchemaDefaultRun.section?.listColumns || []).join(",") === "Name,Stage.Name"
+    && /\*\*List columns:\*\* Name · Stage\.Name — the Classic list shows these columns; confirm this set is kept in Freedom/.test(resolvedSchemaDefaultRun.designSpec)
+    && !/\*\*List columns:\*\* ⚠/.test(resolvedSchemaDefaultRun.designSpec),
+  () => resolvedSchemaDefaultRun.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
+check("ENG-95229: provenance is compared the way clio resolves it (trim + case-insensitive), not byte-for-byte",
+  () => !(resolvedSchemaDefaultRun.structure?.issues || []).some((i) => /list-column/.test(i)),
+  () => resolvedSchemaDefaultRun.structure?.issues);
 const resolvedNoneRun = runMigration({ entity: "Applicant",
   planMeta: { sectionSchema: "Applicant1Section" },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
@@ -888,13 +911,46 @@ check("ENG-95229: source=none remains a successful section analysis but keeps th
   resolvedNoneRun.section?.listColumnSource === "none"
   && resolvedNoneRun.section?.listColumns.length === 0
   && /no default column set was resolved/.test(resolvedNoneRun.designSpec));
-check("ENG-95229: explicit failed list-column evidence is rejected instead of silently using legacy parsing",
-  (() => { try {
-    runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
-      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
-      section: { schemas: [], listColumns: { success: false, error: "read failed" } } }, { baseDir: FIX });
-    return false;
-  } catch (e) { return /not a successful/.test(String(e)); } })());
+// A recoverable list-column failure must DEGRADE (structure gate + a plan that names the cause), never abort the
+// run: clio returns `success:false` for network / auth / stale-metadata conditions, and an environment hiccup that
+// yields no `plan.md` at all is strictly worse than one that yields a plan saying why the read failed.
+const listColumnGateRun = (listColumns, section = {}) => runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "Applicant1Section" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: { schemas: [], ...section, listColumns },
+}, { baseDir: FIX });
+const gatedOn = (run, re) => run.structure?.complete === false && (run.structure?.issues || []).some((i) => re.test(i));
+check("ENG-95229: a failed list-column read degrades into the structure gate (plan still renders) instead of aborting",
+  () => { const r = listColumnGateRun({ success: false, error: "stand unreachable" });
+    return gatedOn(r, /list-column read failed: stand unreachable/) && /list-column read failed: stand unreachable/.test(r.designSpec); },
+  () => listColumnGateRun({ success: false, error: "stand unreachable" }).structure?.issues);
+check("ENG-95229: list-column evidence from another section is gated, not thrown",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
+    source: "entity-default", columns: [{ name: "Name" }] }), /belongs to another section/),
+  () => listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
+    source: "entity-default", columns: [{ name: "Name" }] }).structure?.issues);
+check("ENG-95229: an unknown source is gated with the received value named",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "profile", columns: [{ name: "Name" }] }), /malformed: source "profile"/),
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "profile", columns: [{ name: "Name" }] }).structure?.issues);
+check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
+check("ENG-95229: source=none carrying columns is gated by its own named check",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "none", columns: [{ name: "Name" }] }), /declares source 'none' but carries 1 column\(s\): Name/));
+check("ENG-95229: an unusable column path is gated with its index and value, not a bare 'inconsistent' abort",
+  () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ name: "Name" }, { name: "1Bad Path" }] }),
+  /unusable column path at index 1: "1Bad Path"/));
+check("ENG-95229: a non-ASCII column path clio legitimately returns is accepted (clio validates Unicode letters)",
+  () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ name: "Прізвище" }] });
+    return !(r.structure?.issues || []).some((i) => /list-column/.test(i))
+      && (r.section?.listColumns || []).join(",") === "Прізвище"; },
+  () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "schema-default", columns: [{ name: "Прізвище" }] }).structure?.issues);
 check("ENG-95229: object-shaped section without listColumns fails loudly instead of downgrading to legacy parsing",
   (() => { try {
     runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
@@ -902,27 +958,40 @@ check("ENG-95229: object-shaped section without listColumns fails loudly instead
       section: { schemas: [] } }, { baseDir: FIX });
     return false;
   } catch (e) { return /object-shaped section requires listColumns evidence/.test(String(e)); } })());
+check("ENG-95229: a missing provenance anchor stays a loud manifest-authoring error",
+  () => { try {
+    runMigration({ entity: "Applicant",
+      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
+      section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+        source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
+    return false;
+  } catch (e) { return /requires manifest.entity and planMeta.sectionSchema/.test(String(e)); } });
+check("ENG-95229: a non-array section.schemas is coerced (the structure gate reports it) rather than thrown",
+  () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+    source: "entity-default", columns: [{ name: "Name" }] }, { schemas: { pkg: "HRApplicant" } });
+    return r.section?.schemaGathered === false && /Section schema not gathered/.test(r.designSpec); });
+check("ENG-95229: a resolved 'none' does not discard a chain parse that found columns — both sides are reported",
+  () => { const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){return {Name:{path:"Name"}};}},diff:[]};});` }],
+      listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant", source: "none", columns: [] } },
+  }, { baseDir: FIX });
+    return (r.section?.listColumns || []).join(",") === "Name"
+      && (r.section?.listColumnNotes || []).some((n) => /resolved no default column set/.test(n))
+      && /resolved no default column set/.test(r.designSpec); });
 check("ENG-95229: bare section array remains the accepted legacy manifest shape",
   secRun.section?.listColumnSource === "schema-default"
   && (secRun.section?.listColumns || []).join(",") === "Name,Stage");
 check("ENG-95229: resolved columns do not mask a missing section schema chain",
-  (() => {
-    const r = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
-      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
-      section: { schemas: [], listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
-        source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
+  () => {
+    const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
+      source: "entity-default", columns: [{ name: "Name" }] });
     return r.section?.schemaGathered === false
+      && r.structure?.complete === false          // the load-bearing half: a missing chain BLOCKS, it isn't cosmetic
+      && r.gate?.blocked === true
       && /Section schema not gathered/.test(r.designSpec)
-      && /\*\*List columns:\*\* Name/.test(r.designSpec);
-  })());
-check("ENG-95229: resolved list columns from another section or entity are rejected",
-  (() => { try {
-    runMigration({ entity: "Applicant", planMeta: { sectionSchema: "Applicant1Section" },
-      schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[]};});` }],
-      section: { schemas: [], listColumns: { success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
-        source: "entity-default", columns: [{ name: "Name" }] } } }, { baseDir: FIX });
-    return false;
-  } catch (e) { return /provenance mismatch/.test(String(e)); } })());
+      && /\*\*List columns:\*\* ⚠ Name/.test(r.designSpec);
+  });
 check("section: design spec has a List page block (before the form page) naming the mini page",
   /### List page/.test(secRun.designSpec) && /ApplicantMiniPage/.test(secRun.designSpec)
   && secRun.designSpec.indexOf("### List page") < secRun.designSpec.indexOf(" form page"));

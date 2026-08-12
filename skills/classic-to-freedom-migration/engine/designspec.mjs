@@ -342,6 +342,24 @@ function addRecordDescription(result) {
   if (!result.miniPageVerified) return "⚠ NOT verified — check `list-entity-client-schemas` (`miniPageSchema` with `miniPageModes` = add) and record `manifest.addRecordMiniPage` ({schema} or false); do NOT assume there is none";
   return "full edit page (no add-record mini page)";
 }
+// The `- **List columns:**` line. PROVENANCE decides the wording, and it is load-bearing: `schema-default` is what
+// the Classic list actually declares, so the open question NARROWS to "keep this set in Freedom?"; `entity-default`
+// is a single-column fallback (the entity's primary display column) that the Classic section never declared, so
+// rendering it bare would present a fallback as the analyzed Classic list; `none` keeps the question open. The
+// explanation itself comes from `listColumnNotes` (the resolver's own wording) rather than being re-invented here.
+// The text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
+// product. Tool/storage details stay in the discovery instructions and must not reach the rendered plan.
+function listColumnLine(section) {
+  const notes = (section.listColumnNotes || []).filter((n) => typeof n === "string" && n);
+  const why = notes.length ? ` (${notes.map(esc).join("; ")})` : "";
+  const cols = section.listColumns || [];
+  if (!cols.length) return `- **List columns:** ⚠ no default column set was resolved${why} — confirm which columns the Freedom list should show`;
+  const rendered = cols.map(esc).join(" · ");
+  if (section.listColumnSource === "entity-default") {
+    return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
+  }
+  return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
+}
 // The `### List page` block (section concerns: add-record, columns, quick filters, section actions, process).
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderListPageBlock(result, section) {
@@ -349,10 +367,7 @@ function renderListPageBlock(result, section) {
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-    // The ⚠ text is USER-FACING (`plan.md` is presented verbatim), so it names only what the user can see in the
-    // product. Tool/storage details stay in the discovery instructions and must not reach the rendered plan.
-    const listCols = (section.listColumns || []).length ? section.listColumns.map(esc).join(" · ") : "⚠ no default column set was resolved — confirm which columns the Freedom list should show";
-    L.push(`- **List columns:** ${listCols}`);
+    L.push(listColumnLine(section));
     if ((section.quickFilters || []).length) {
       const f = section.quickFilters.map((q) => {
         let s = `\`${esc(q.name)}\``;
