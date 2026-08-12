@@ -676,17 +676,32 @@ class ShippedWorkflowScriptTests(unittest.TestCase):
                     f"{script.name} declares meta.name {name!r}, which is not namespaced",
                 )
 
-    def test_skills_call_their_workflow_by_name(self):
+    def test_skills_call_their_workflow_by_script_path_first(self):
+        """`scriptPath` is the PRIMARY documented call form; `name:` is the exception.
+
+        A name resolves only from `~/.claude/workflows/`, and on Claude Code
+        nothing provisions that mirror: the plugin declares no hook, so neither
+        `install.py` nor `update.py` runs on a marketplace install/update. A real
+        run therefore spent a guaranteed-failing `name:` call before falling back.
+        The bundled script is always present and version-matched, so it goes
+        first — and a stale mirror (the normal state after a plugin-branch switch)
+        resolves the right name to the wrong script, which is worse than a
+        resolution error. `name:` stays documented for the installer-based
+        targets, but it must not lead.
+        """
         installer = load_installer()
         for script in installer.discover_workflow_scripts(ROOT):
             with self.subTest(script=script.name):
                 name = installer.workflow_meta_name(script)
                 skill_doc = (script.parent / "SKILL.md").read_text(encoding="utf-8")
-                self.assertIn(f'name: "{name}"', skill_doc)
-                # The scriptPath form stays documented alongside it: user-scope
-                # workflows are discovered at session start, so the session right
-                # after an install cannot resolve the name yet.
                 self.assertIn("scriptPath", skill_doc)
+                self.assertIn(f'name: "{name}"', skill_doc)
+                self.assertLess(
+                    skill_doc.index("scriptPath"),
+                    skill_doc.index(f'name: "{name}"'),
+                    f"{script.parent.name}/SKILL.md documents name: before scriptPath — "
+                    "the named form does not resolve on a marketplace-installed Claude Code",
+                )
 
 
 class RemoveTomlTableBlockTests(unittest.TestCase):
