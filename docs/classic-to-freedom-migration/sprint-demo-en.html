@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Classic → Freedom UI — Sprint Demo</title>
+<style>
+  :root {
+    --bg: #081019;
+    --surface: #101b27;
+    --surface-2: #152333;
+    --ink: #f5f7fb;
+    --muted: #aab8c8;
+    --line: rgba(255,255,255,.12);
+    --lime: #b7f34b;
+    --cyan: #5de4d4;
+    --pink: #ff91a4;
+    --amber: #ffd166;
+    --blue: #82aaff;
+    --red: #ff6b6b;
+    --scale: 1;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #02070d; }
+  body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  button, a { font: inherit; }
+
+  .viewport { position: fixed; inset: 0; display: grid; place-items: center; background:
+    radial-gradient(circle at 18% 18%, rgba(93,228,212,.10), transparent 31%),
+    radial-gradient(circle at 85% 82%, rgba(130,170,255,.10), transparent 28%), #02070d; }
+  .deck { width: 1280px; height: 720px; position: relative; transform: scale(var(--scale)); transform-origin: center; overflow: hidden; border-radius: 18px; box-shadow: 0 30px 90px rgba(0,0,0,.55); background: var(--bg); }
+  .slide { position: absolute; inset: 0; padding: 58px 68px 54px; display: grid; grid-template-rows: auto 1fr auto; gap: 28px; opacity: 0; pointer-events: none; transform: translateX(42px); transition: opacity .28s ease, transform .34s ease; overflow: hidden; }
+  .slide.active { opacity: 1; pointer-events: auto; transform: translateX(0); }
+  .slide::after { content: ""; position: absolute; width: 380px; height: 380px; border-radius: 50%; right: -180px; top: -220px; border: 1px solid rgba(183,243,75,.12); box-shadow: 0 0 0 54px rgba(183,243,75,.025), 0 0 0 108px rgba(183,243,75,.018); }
+
+  .kicker { display: flex; align-items: center; gap: 11px; color: var(--cyan); font-size: 13px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+  .kicker::before { content: ""; width: 30px; height: 3px; border-radius: 2px; background: var(--lime); }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 67px; line-height: .98; letter-spacing: -.045em; max-width: 980px; }
+  h2 { font-size: 45px; line-height: 1.04; letter-spacing: -.035em; max-width: 960px; }
+  .accent { color: var(--lime); }
+  .lead { color: var(--muted); font-size: 23px; line-height: 1.38; max-width: 820px; }
+  .small { color: var(--muted); font-size: 16px; line-height: 1.4; }
+  .strong { color: var(--ink); font-weight: 760; }
+  .content { min-height: 0; display: grid; align-content: center; }
+
+  .hero { align-content: center; gap: 22px; }
+  .hero-line { display: flex; align-items: center; gap: 24px; margin-top: 15px; }
+  .hero-pill { border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; color: var(--muted); font-size: 14px; background: rgba(255,255,255,.035); }
+  .hero-mark { position: absolute; right: 75px; bottom: 84px; width: 315px; height: 315px; }
+  .orbit { position: absolute; inset: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; animation: spin 24s linear infinite; }
+  .orbit:nth-child(2) { inset: 40px; border-color: rgba(93,228,212,.28); animation-direction: reverse; animation-duration: 17s; }
+  .orbit:nth-child(3) { inset: 82px; border-color: rgba(183,243,75,.48); }
+  .orbit::before { content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: var(--lime); top: 25px; left: 36px; box-shadow: 0 0 28px rgba(183,243,75,.65); }
+  .orbit:nth-child(2)::before { background: var(--cyan); top: auto; left: auto; right: 4px; bottom: 48px; }
+  .orbit:nth-child(3)::before { background: var(--pink); top: 8px; left: auto; right: 22px; }
+  .hero-mark .core { position: absolute; inset: 119px; border-radius: 18px; background: linear-gradient(135deg, var(--cyan), var(--lime)); color: #071017; display: grid; place-items: center; font-size: 32px; font-weight: 900; transform: rotate(45deg); }
+  .hero-mark .core span { transform: rotate(-45deg); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .risk { padding: 22px 20px; min-height: 235px; border-radius: 18px; border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025)); display: flex; flex-direction: column; gap: 17px; }
+  .risk .num { width: 43px; height: 43px; border-radius: 13px; display: grid; place-items: center; color: #081019; background: var(--c); font-weight: 900; font-size: 18px; }
+  .risk h3 { margin: 0; font-size: 21px; line-height: 1.1; }
+  .risk p { color: var(--muted); font-size: 16px; line-height: 1.38; }
+  .statement { margin-top: 22px; padding: 15px 19px; border-left: 4px solid var(--lime); color: var(--ink); background: rgba(183,243,75,.06); border-radius: 0 12px 12px 0; font-size: 20px; }
+
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; align-items: stretch; position: relative; }
+  .flow::before { content: ""; position: absolute; left: 12%; right: 12%; top: 55px; height: 2px; background: linear-gradient(90deg, var(--pink), var(--amber), var(--cyan), var(--blue)); opacity: .55; }
+  .step { position: relative; z-index: 1; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); padding: 21px 19px 19px; min-height: 248px; }
+  .step .icon { width: 68px; height: 68px; border-radius: 50%; display: grid; place-items: center; color: #081019; font-size: 28px; font-weight: 900; background: var(--c); box-shadow: 0 0 0 9px var(--bg); }
+  .step .label { margin: 26px 0 9px; font-size: 23px; font-weight: 820; letter-spacing: -.02em; }
+  .step p { color: var(--muted); font-size: 16px; line-height: 1.38; }
+  .step .who { margin-top: 17px; color: var(--c); font-size: 12px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+
+  .loop-layout { grid-template-columns: .9fr 1.55fr; gap: 42px; align-items: center; }
+  .loop-copy { display: grid; gap: 18px; }
+  .loop-copy .fact { display: flex; gap: 12px; align-items: flex-start; color: var(--muted); font-size: 18px; line-height: 1.35; }
+  .loop-copy .fact::before { content: "✓"; color: #071017; background: var(--lime); width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 900; flex: 0 0 auto; }
+  .cycle { height: 360px; position: relative; display: grid; place-items: center; }
+  .cycle-ring { position: absolute; width: 300px; height: 300px; border-radius: 50%; border: 3px dashed rgba(93,228,212,.42); }
+  .cycle-center { width: 142px; height: 142px; border-radius: 50%; background: linear-gradient(135deg, rgba(93,228,212,.20), rgba(130,170,255,.18)); border: 1px solid rgba(93,228,212,.45); display: grid; place-items: center; text-align: center; font-size: 19px; font-weight: 820; line-height: 1.15; }
+  .cycle-node { position: absolute; width: 146px; min-height: 78px; padding: 13px 15px; border-radius: 15px; background: var(--surface-2); border: 1px solid var(--line); display: grid; align-content: center; text-align: center; font-size: 17px; font-weight: 780; }
+  .cycle-node small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; font-weight: 550; }
+  .cycle-node.n1 { top: 0; left: calc(50% - 73px); border-top: 4px solid var(--amber); }
+  .cycle-node.n2 { right: 18px; top: 140px; border-top: 4px solid var(--cyan); }
+  .cycle-node.n3 { bottom: 0; left: calc(50% - 73px); border-top: 4px solid var(--blue); }
+  .cycle-node.n4 { left: 18px; top: 140px; border-top: 4px solid var(--pink); }
+
+  .watch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .watch { border-radius: 18px; padding: 23px; background: var(--surface); border: 1px solid var(--line); min-height: 245px; position: relative; overflow: hidden; }
+  .watch.recommended { border-color: rgba(93,228,212,.55); box-shadow: inset 0 0 0 1px rgba(93,228,212,.16); }
+  .watch .tag { display: inline-flex; padding: 6px 10px; border-radius: 999px; background: rgba(93,228,212,.12); color: var(--cyan); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; font-weight: 800; }
+  .watch h3 { margin: 18px 0 9px; font-size: 26px; }
+  .watch p { color: var(--muted); line-height: 1.4; font-size: 16px; }
+  .watch .meter { position: absolute; left: 23px; right: 23px; bottom: 23px; height: 8px; display: flex; gap: 5px; }
+  .watch .meter i { height: 100%; flex: 1; border-radius: 4px; background: rgba(255,255,255,.10); }
+  .watch .meter i.on { background: var(--c); }
+  .feedback { margin-top: 21px; display: flex; align-items: center; justify-content: center; gap: 14px; color: var(--ink); font-size: 18px; }
+  .feedback b { color: var(--pink); }
+
+  .final-layout { grid-template-columns: 1.12fr .88fr; gap: 36px; align-items: stretch; }
+  .verdict { border: 1px solid rgba(183,243,75,.42); background: linear-gradient(145deg, rgba(183,243,75,.10), rgba(93,228,212,.06)); border-radius: 20px; padding: 27px; display: grid; align-content: center; gap: 18px; }
+  .verdict .check { width: 68px; height: 68px; border-radius: 50%; background: var(--lime); color: #071017; display: grid; place-items: center; font-size: 35px; font-weight: 900; }
+  .verdict h3 { font-size: 31px; line-height: 1.05; margin: 0; }
+  .verdict p { color: var(--muted); font-size: 17px; line-height: 1.4; }
+  .demo-card { border: 1px solid var(--line); border-radius: 20px; background: var(--surface); padding: 25px; }
+  .demo-card h3 { margin: 0 0 17px; font-size: 24px; }
+  .demo-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 15px; counter-reset: demo; }
+  .demo-list li { display: grid; grid-template-columns: 34px 1fr; gap: 11px; align-items: center; color: var(--muted); font-size: 16px; }
+  .demo-list li::before { counter-increment: demo; content: counter(demo); width: 31px; height: 31px; border-radius: 9px; display: grid; place-items: center; background: var(--surface-2); color: var(--cyan); font-weight: 850; }
+  .full-link { display: inline-flex; align-items: center; gap: 9px; margin-top: 20px; color: var(--lime); text-decoration: none; font-weight: 760; border-bottom: 1px solid rgba(183,243,75,.35); padding-bottom: 3px; }
+
+  .concept-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .concept { min-height: 285px; padding: 25px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; gap: 15px; }
+  .concept .symbol { width: 58px; height: 58px; border-radius: 17px; display: grid; place-items: center; background: var(--c); color: #071017; font-size: 29px; font-weight: 900; }
+  .concept h3 { margin: 2px 0 0; font-size: 27px; }
+  .concept p { color: var(--muted); font-size: 17px; line-height: 1.4; }
+  .concept .analogy { margin-top: auto; color: var(--c); font-weight: 760; font-size: 15px; }
+
+  .system-map { display: grid; grid-template-columns: 1.1fr .85fr 1.1fr; gap: 18px; align-items: stretch; }
+  .system-node { min-height: 285px; border-radius: 19px; border: 1px solid var(--line); padding: 22px; background: var(--surface); display: flex; flex-direction: column; gap: 13px; position: relative; }
+  .system-node.main { border-color: rgba(255,209,102,.48); }
+  .system-node h3 { margin: 0; font-size: 23px; line-height: 1.12; }
+  .code-name { color: var(--c); font: 700 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+  .system-node p { color: var(--muted); font-size: 15px; line-height: 1.38; }
+  .mini-flow { margin-top: auto; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .mini-flow span { padding: 7px 9px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font-size: 12px; }
+  .mini-flow b { color: var(--c); }
+  .system-arrow { display: grid; align-content: center; justify-items: center; color: var(--muted); font-size: 13px; text-align: center; gap: 9px; }
+  .system-arrow strong { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%; color: #071017; background: var(--lime); font-size: 26px; }
+
+  .skill-layout { grid-template-columns: .78fr 1.22fr; gap: 28px; align-items: stretch; }
+  .skill-card { border-radius: 20px; border: 1px solid var(--line); background: linear-gradient(155deg, rgba(255,209,102,.11), rgba(255,255,255,.025)); padding: 26px; display: flex; flex-direction: column; gap: 16px; }
+  .skill-card .big-icon { width: 68px; height: 68px; border-radius: 19px; background: var(--amber); color: #071017; display: grid; place-items: center; font-size: 32px; font-weight: 900; }
+  .skill-card h3 { margin: 0; font-size: 28px; line-height: 1.1; }
+  .skill-card p { color: var(--muted); font-size: 17px; line-height: 1.42; }
+  .launches { display: grid; gap: 13px; }
+  .launch { border: 1px solid var(--line); background: var(--surface); border-radius: 17px; padding: 19px 21px; display: grid; grid-template-columns: 44px 1fr; gap: 14px; align-items: center; }
+  .launch .when { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: #071017; background: var(--c); font-weight: 900; }
+  .launch h4 { margin: 0 0 4px; font-size: 19px; }
+  .launch p { color: var(--muted); font-size: 14px; line-height: 1.35; }
+  .launch code, .workflow-title code { color: var(--c); font-size: 12px; }
+
+  .workflow-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 17px; }
+  .workflow-title .plain { color: var(--muted); font-size: 15px; }
+  .phases-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
+  .phase-card { min-height: 220px; border-radius: 17px; border: 1px solid var(--line); background: var(--surface); padding: 19px; position: relative; }
+  .phase-card .phase-num { color: var(--c); font-size: 13px; font-weight: 900; letter-spacing: .09em; }
+  .phase-card h3 { margin: 13px 0 9px; font-size: 22px; }
+  .phase-card p { color: var(--muted); font-size: 15px; line-height: 1.38; }
+  .phase-card:not(:last-child)::after { content: "→"; position: absolute; right: -14px; top: 47%; z-index: 2; color: var(--lime); font-size: 22px; font-weight: 900; }
+
+  .expert-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .expert-step { min-height: 250px; padding: 23px; border-radius: 19px; border: 1px solid var(--line); background: var(--surface); }
+  .expert-step .range { color: var(--c); font-weight: 900; font-size: 13px; letter-spacing: .08em; }
+  .expert-step h3 { margin: 16px 0 10px; font-size: 25px; }
+  .expert-step p { color: var(--muted); font-size: 16px; line-height: 1.4; }
+  .no-workflow { margin-top: 18px; padding: 13px 17px; border-radius: 12px; background: rgba(93,228,212,.08); border: 1px solid rgba(93,228,212,.25); color: var(--cyan); font-size: 15px; font-weight: 720; }
+
+  .evidence-stage { display: grid; grid-template-columns: 440px 1fr; gap: 34px; align-items: stretch; }
+  .shot-frame { position: relative; min-width: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: #111; box-shadow: 0 18px 42px rgba(0,0,0,.32); }
+  .shot-frame img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .slide img.zoomable { cursor: zoom-in; }
+  .slide img.zoomable:focus-visible { outline: 3px solid var(--lime); outline-offset: -3px; }
+  .workflow-shot { height: 412px; }
+  .workflow-shot img { object-fit: contain; object-position: center; }
+  .evidence-points { display: grid; align-content: center; gap: 22px; }
+  .evidence-point { padding-left: 16px; border-left: 3px solid var(--c); }
+  .evidence-point b { display: block; color: var(--c); font-size: 23px; margin-bottom: 5px; }
+  .evidence-point span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+  .shot-source { color: #77879a; font-size: 12px; }
+
+  .run-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; height: 404px; }
+  .run-card { display: grid; grid-template-columns: 250px 1fr; gap: 20px; min-width: 0; align-items: center; padding: 14px 20px 14px 14px; border: 1px solid var(--line); border-radius: 19px; background: rgba(255,255,255,.025); }
+  .run-card .shot-frame { height: 374px; }
+  .run-card h3 { margin: 0 0 10px; font-size: 25px; line-height: 1.08; }
+  .run-card p { color: var(--muted); font-size: 15px; line-height: 1.38; }
+  .run-card .run-fact { display: block; margin-top: 18px; color: var(--lime); font-size: 16px; font-weight: 820; }
+
+  .decision-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; height: 394px; }
+  .decision-shot { display: grid; grid-template-rows: 1fr auto; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 19px; background: rgba(255,255,255,.025); }
+  .decision-shot .image-wrap { min-height: 0; background: #111; }
+  .decision-shot img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .decision-shot figcaption { padding: 13px 17px 14px; color: var(--muted); font-size: 14px; line-height: 1.3; border-top: 1px solid var(--line); }
+  .decision-shot figcaption b { color: var(--cyan); }
+
+  .approval-stage { display: grid; grid-template-columns: 540px 1fr; gap: 34px; height: 402px; align-items: stretch; }
+  .approval-shot { height: 402px; }
+  .approval-shot img { object-fit: cover; object-position: center 30%; }
+  .repair-placement-shot img { object-fit: contain; object-position: center; }
+  .approval-copy { display: grid; align-content: center; gap: 23px; }
+  .approval-copy .approval-lead { color: var(--ink); font-size: 25px; line-height: 1.25; font-weight: 790; }
+  .approval-step { display: grid; grid-template-columns: 39px 1fr; gap: 13px; align-items: start; }
+  .approval-step .n { width: 39px; height: 39px; border-radius: 12px; display: grid; place-items: center; background: var(--c); color: #071017; font-weight: 900; }
+  .approval-step b { display: block; color: var(--c); font-size: 18px; margin-bottom: 4px; }
+  .approval-step span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+
+  .build-live-stage { display: grid; grid-template-columns: 640px 1fr; gap: 34px; height: 402px; align-items: stretch; }
+  .context-stage { display: grid; grid-template-columns: 520px 1fr; gap: 44px; height: 410px; align-items: center; }
+  .context-shot { height: 410px; padding: 24px; background: radial-gradient(circle at 50% 40%, rgba(102,216,203,.10), transparent 58%), #050b12; }
+  .context-shot img { object-fit: contain; image-rendering: auto; }
+  .context-copy { display: grid; align-content: center; gap: 18px; }
+  .context-metric { display: flex; align-items: baseline; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,.12); }
+  .context-metric strong { color: var(--lime); font-size: 58px; line-height: .95; letter-spacing: -.045em; }
+  .context-metric span { max-width: 250px; color: var(--muted); font-size: 19px; line-height: 1.25; }
+  .context-point { padding-left: 18px; border-left: 4px solid var(--c); }
+  .context-point b { display: block; margin-bottom: 4px; color: var(--ink); font-size: 23px; }
+  .context-point span { color: var(--muted); font-size: 17px; line-height: 1.35; }
+  .build-live-shot { height: 402px; }
+  .build-live-shot img { object-fit: contain; object-position: center; }
+  .build-live-copy { display: grid; align-content: center; gap: 22px; }
+  .build-live-copy .headline { color: var(--ink); font-size: 25px; line-height: 1.23; font-weight: 800; }
+  .build-live-fact { padding-left: 16px; border-left: 3px solid var(--c); }
+  .build-live-fact b { display: block; color: var(--c); font-size: 21px; margin-bottom: 5px; }
+  .build-live-fact span { color: var(--muted); font-size: 15px; line-height: 1.35; }
+
+  .build-progress-stage { display: grid; grid-template-columns: 390px 1fr; gap: 42px; height: 402px; align-items: stretch; }
+  .build-progress-shot { height: 402px; }
+  .build-progress-shot img { object-fit: contain; object-position: center; }
+  .build-progress-copy { display: grid; align-content: center; gap: 23px; }
+  .build-progress-copy .headline { color: var(--ink); font-size: 26px; line-height: 1.25; font-weight: 800; max-width: 620px; }
+  .progress-row { display: grid; grid-template-columns: 150px 1fr; gap: 17px; align-items: center; }
+  .progress-row b { color: var(--c); font-size: 21px; }
+  .progress-row span { color: var(--muted); font-size: 16px; line-height: 1.35; }
+  .progress-row .phase-state { height: 8px; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,.09); margin-top: 8px; }
+  .progress-row .phase-state i { display: block; width: var(--p); height: 100%; border-radius: inherit; background: var(--c); }
+
+  .phases-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 9px; align-items: stretch; }
+  .phase-mini { min-height: 232px; padding: 16px 13px; border-radius: 15px; background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; position: relative; }
+  .phase-mini .n { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--c); color: #071017; font-size: 13px; font-weight: 900; }
+  .phase-mini h3 { margin: 0; font-size: 17px; line-height: 1.08; }
+  .phase-mini p { color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+  .phase-mini:not(:last-child)::after { content: "›"; position: absolute; right: -8px; top: 45%; color: var(--lime); font-size: 22px; z-index: 2; }
+
+  .double-check { display: grid; grid-template-columns: 1fr 90px 1fr; gap: 20px; align-items: center; }
+  .check-card { min-height: 285px; border-radius: 20px; padding: 25px; border: 1px solid var(--line); background: var(--surface); }
+  .check-card .moment { display: inline-flex; padding: 6px 10px; border-radius: 999px; color: #071017; background: var(--c); font-size: 12px; font-weight: 900; }
+  .check-card h3 { margin: 19px 0 11px; font-size: 27px; }
+  .check-card p { color: var(--muted); font-size: 17px; line-height: 1.42; }
+  .check-arrow { text-align: center; color: var(--lime); font-size: 52px; font-weight: 900; }
+
+  .lanes { display: grid; gap: 9px; }
+  .lane { display: grid; grid-template-columns: 120px 1fr; min-height: 72px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+  .lane-name { padding: 15px; display: grid; place-items: center; text-align: center; color: #071017; font-size: 14px; font-weight: 850; background: var(--c); }
+  .lane-track { display: flex; align-items: center; padding: 10px 16px; gap: 11px; color: var(--muted); font-size: 15px; }
+  .lane-track b { color: var(--ink); }
+  .pill { padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); white-space: nowrap; }
+  .arrow { color: var(--c); font-weight: 900; }
+
+  .footer { display: flex; align-items: center; justify-content: space-between; color: #77879a; font-size: 12px; letter-spacing: .03em; position: relative; z-index: 3; }
+  .status { display: flex; align-items: center; gap: 8px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+  .notes { display: none; position: absolute; left: 68px; right: 68px; bottom: 44px; z-index: 12; background: rgba(4,9,15,.96); border: 1px solid rgba(93,228,212,.35); border-radius: 14px; padding: 18px 20px; color: #dce5ee; font-size: 16px; line-height: 1.45; box-shadow: 0 20px 50px rgba(0,0,0,.45); }
+  .show-notes .active .notes { display: block; }
+  .notes b { color: var(--cyan); }
+
+  .controls { position: fixed; z-index: 20; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(5,11,17,.88); border: 1px solid rgba(255,255,255,.13); border-radius: 999px; backdrop-filter: blur(14px); }
+  .controls button { border: 0; width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,.07); color: var(--ink); cursor: pointer; }
+  .controls button:hover { background: rgba(255,255,255,.14); }
+  .dots { display: flex; gap: 7px; }
+  .dot { width: 7px !important; height: 7px !important; padding: 0; background: rgba(255,255,255,.22) !important; }
+  .dot.active { width: 21px !important; border-radius: 5px !important; background: var(--lime) !important; }
+  .progress { position: absolute; left: 0; right: 0; top: 0; height: 4px; background: rgba(255,255,255,.06); z-index: 20; }
+  .progress > i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--lime)); transition: width .3s ease; }
+  .hint { position: fixed; right: 18px; bottom: 19px; color: rgba(255,255,255,.42); font-size: 12px; }
+
+  .image-lightbox { position: fixed; inset: 0; z-index: 100; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 14px; background: rgba(2,7,13,.97); backdrop-filter: blur(18px); }
+  .image-lightbox[hidden] { display: none; }
+  .lightbox-toolbar { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; }
+  .lightbox-toolbar button { min-width: 42px; height: 38px; padding: 0 13px; border: 1px solid rgba(255,255,255,.18); border-radius: 11px; background: rgba(255,255,255,.07); color: var(--ink); cursor: pointer; }
+  .lightbox-toolbar button:hover, .lightbox-toolbar button:focus-visible { background: rgba(255,255,255,.15); outline: 2px solid var(--lime); outline-offset: 2px; }
+  .lightbox-toolbar button:disabled { opacity: .35; cursor: default; }
+  .lightbox-toolbar .zoom-value { min-width: 62px; color: var(--ink); font-size: 14px; font-weight: 780; text-align: center; }
+  .lightbox-stage { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid rgba(255,255,255,.10); border-radius: 14px; background: #02070d; scrollbar-color: rgba(183,243,75,.55) rgba(255,255,255,.06); }
+  .lightbox-canvas { min-width: 100%; min-height: 100%; width: 100%; display: flex; padding: 24px; }
+  .image-lightbox img { flex: 0 0 auto; width: auto; height: auto; max-width: 100%; max-height: none; margin: auto; border-radius: 10px; box-shadow: 0 24px 80px rgba(0,0,0,.7); cursor: zoom-out; }
+  .image-lightbox .caption { color: var(--muted); font-size: 14px; text-align: center; }
+  .lightbox-toolbar .close-lightbox { position: absolute; top: 14px; right: 14px; width: 42px; min-width: 42px; padding: 0; border-radius: 50%; font-size: 27px; line-height: 1; }
+  .image-open .controls, .image-open .hint { visibility: hidden; }
+
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="viewport">
+  <main class="deck" id="deck">
+    <div class="progress"><i id="progress"></i></div>
+
+    <section class="slide active" aria-label="Title slide">
+      <div class="kicker">Sprint Demo · ENG-94529 / ENG-94975</div>
+      <div class="content hero">
+        <h1>Classic <span class="accent">→</span> Freedom UI</h1>
+        <p class="lead">Who is responsible for what, which workflows are launched and how the system reaches <span class="strong">verified result</span>.</p>
+        <div class="hero-line"><span class="hero-pill">Current branch: ENG-94529-migration-stage-2-poc</span><span class="hero-pill">28 slides · ~21 minutes</span></div>
+        <div class="hero-mark" aria-hidden="true"><div class="orbit"></div><div class="orbit"></div><div class="orbit"></div><div class="core"><span>UI</span></div></div>
+      </div>
+      <div class="footer"><span>Creatio AI App Development Toolkit</span><span class="status">PoC in the current branch</span></div>
+      <aside class="notes"><b>What to say:</b> I will show migration as a team effort. There are skills — specialists with their own rules, workflows — scripts that organize their work, and engine — an independent controller of the result.</aside>
+    </section>
+
+    <section class="slide" aria-label="Simple definitions">
+      <div><div class="kicker">First, three concepts</div><h2>Skill, workflow and engine are very simple</h2></div>
+      <div class="content"><div class="concept-grid">
+        <article class="concept" style="--c:var(--amber)"><div class="symbol">S</div><h3>Skill</h3><p>A set of knowledge and rules for a specific role: what to read, what to do and what not to miss.</p><div class="analogy">As a profession: analyst or designer</div></article>
+        <article class="concept" style="--c:var(--cyan)"><div class="symbol">W</div><h3>Workflow</h3><p>Sequence of stages. He decides who to call, in what order and when to repeat the step.</p><div class="analogy">As a pipeline or work script</div></article>
+        <article class="concept" style="--c:var(--lime)"><div class="symbol">✓</div><h3>Engine</h3><p>Calculates whether everything is taken into account, generates a plan and compares it with the actual result.</p><div class="analogy">As an independent quality controller</div></article>
+      </div></div>
+      <div class="footer"><span>01 · Common language</span><span>Skill knows · Workflow organizes · Engine checks</span></div>
+      <aside class="notes"><b>What to say:</b> Skill is not a separate bot, but an instruction for a role. Workflow is not knowledge, but the order of work. Engine does not reason for them: it calculates completeness and forms an objective verdict.</aside>
+    </section>
+
+    <section class="slide" aria-label="General map">
+      <div><div class="kicker">General map</div><h2>One coordinator runs two main workflows</h2></div>
+      <div class="content"><div class="system-map">
+        <article class="system-node main" style="--c:var(--amber)"><div class="code-name">skill: classic-to-freedom-migration</div><h3>Migration coordinator</h3><p>Collects the Classic page, prepares a plan and decides which workflow is needed next.</p><div class="mini-flow"><span>analysis</span><b>→</b><span>plan</span><b>→</b><span>coordination</span></div></article>
+        <div class="system-arrow"><strong>→</strong><span>analyzes logic as needed,<br>after approval - builds</span></div>
+        <div style="display:grid;gap:12px">
+          <article class="system-node" style="--c:var(--cyan);min-height:136px"><div class="code-name">classic-behaviour-analysis.workflow.js</div><h3>Explain Classic logic</h3><p>Internally uses skill <b>classic-ui-expert</b>.</p></article>
+          <article class="system-node" style="--c:var(--blue);min-height:136px"><div class="code-name">freedom-build-executor.workflow.js</div><h3>Build and test</h3><p>It is used internally <b>freedom-build-executor</b> and <b>creatio-ui-guidelines</b>.</p></article>
+        </div>
+      </div></div>
+      <div class="footer"><span>02 · Who launches whom</span><span>Two workflows, four skills, one engine</span></div>
+      <aside class="notes"><b>Speaker note:</b> The primary skill is the dispatcher. If the engine finds complex logic, it launches the analysis workflow. Once the user approves the plan, a separate build workflow starts.</aside>
+    </section>
+
+    <section class="slide" aria-label="The main migration skill">
+      <div><div class="kicker">Skill 1</div><h2>classic-to-freedom-migration is the coordinator of the entire journey</h2></div>
+      <div class="content skill-layout">
+        <article class="skill-card"><div class="big-icon">1</div><h3>What he does himself</h3><p>Finds all Classic pages, collects their full structure, selects Freedom templates, runs three completeness checks, and displays the plan to the user.</p></article>
+        <div class="launches">
+          <article class="launch" style="--c:var(--cyan)"><div class="when">?</div><div><h4>If complex logic cannot be explained automatically</h4><p>Launches <code>classic-behaviour-analysis.workflow.js</code>.</p></div></article>
+          <article class="launch" style="--c:var(--amber)"><div class="when">✓</div><div><h4>When all three checks are green</h4><p>Generates an accurate plan. Nothing is built before his approval.</p></div></article>
+          <article class="launch" style="--c:var(--blue)"><div class="when">▶</div><div><h4>After the plan is approved</h4><p>Transfers files and runs <code>freedom-build-executor.workflow.js</code>.</p></div></article>
+        </div>
+      </div>
+      <div class="footer"><span>03 · Chief coordinator</span><span>Does not build the page itself</span></div>
+      <aside class="notes"><b>What to say:</b> This skill manages the migration, but does not try to do everything by itself. His key job is to collect a complete plan, check it and correctly transfer it to the specialized workflow.</aside>
+    </section>
+
+    <section class="slide" aria-label="Workflow analysis of Classic logic">
+      <div><div class="kicker">Workflow 1</div><h2>How complex Classic code is translated into understandable behavior</h2></div>
+      <div class="content">
+        <div class="workflow-title"><code>classic-behaviour-analysis.workflow.js</code><span class="plain">Runs only when there is something to explain</span></div>
+        <div class="phases-4">
+          <article class="phase-card" style="--c:var(--pink)"><div class="phase-num">01 · CONTEXT</div><h3>Collect the map</h3><p>Finds all pages and shared pieces of logic so you don't lose anything.</p></article>
+          <article class="phase-card" style="--c:var(--amber)"><div class="phase-num">02 · DESCRIBE</div><h3>Explain</h3><p>Multiple agents describe the behavior of individual pages in parallel via classic-ui-expert.</p></article>
+          <article class="phase-card" style="--c:var(--cyan)"><div class="phase-num">03 · CRITIQUE</div><h3>Find the gaps</h3><p>A separate agent looks for unexplained lines and conflicting descriptions.</p></article>
+          <article class="phase-card" style="--c:var(--lime)"><div class="phase-num">04 · MERGE</div><h3>Collect the result</h3><p>Combines behavior cards and an index that is returned to the plan.</p></article>
+        </div>
+      </div>
+      <div class="footer"><span>04 · Context → Describe → Critique → Merge</span><span>Completeness is counted, not declared</span></div>
+      <aside class="notes"><b>What to say:</b> Imagine the group work of students: first the teacher divides the topic, then the groups describe their parts, the reviewer finds gaps, and the editor puts together a single coherent document.</aside>
+    </section>
+
+    <section class="slide" aria-label="Real launch of workflow analysis">
+      <div><div class="kicker">Real run · August 12</div><h2>Workflow works in the background, and the main dialog is not blocked</h2></div>
+      <div class="content evidence-stage">
+        <div class="shot-frame workflow-shot">
+          <img src="assets/real-run/workflow-running.png" alt="Real running classic-behaviour-analysis workflow in Codex background tasks">
+        </div>
+        <div class="evidence-points">
+          <div class="evidence-point" style="--c:var(--cyan)"><b>4 phases</b><span>Context, Describe, Critique, and Merge are visible at runtime.</span></div>
+          <div class="evidence-point" style="--c:var(--amber)"><b>Parallel work</b><span>Agents start only when a context is ready for them.</span></div>
+          <div class="evidence-point" style="--c:var(--lime)"><b>Transparent state</b><span>The user sees the active workflow and its progress.</span></div>
+          <span class="shot-source">Source: Real PoC run</span>
+        </div>
+      </div>
+      <div class="footer"><span>05 · Workflow at work</span><span>Background performance without a "black box"</span></div>
+      <aside class="notes"><b>What to say:</b> This is not a scheme, but a real launch. Workflow works as a background task, shows the current phases and does not take away the main dialogue from the user. Only the safe area of ​​the workflow panel is left for the presentation.</aside>
+    </section>
+
+    <section class="slide" aria-label="Two completed workflow analysis runs">
+      <div><div class="kicker">Proof of execution</div><h2>Two different objects have undergone the same controlled cycle</h2></div>
+      <div class="content">
+        <div class="run-pair">
+          <article class="run-card">
+            <div class="shot-frame"><img src="assets/real-run/analysis-complete-section.png" alt="Completed analysis workflow for the Classic section"></div>
+            <div><h3>Classic section</h3><p>Context, Describe, Critique and Merge are completed by individual agents.</p><span class="run-fact">4 agents · 34 min</span></div>
+          </article>
+          <article class="run-card">
+            <div class="shot-frame"><img src="assets/real-run/analysis-complete-page.png" alt="Completed analysis workflow for the Classic page"></div>
+            <div><h3>Classic page</h3><p>The same phase contract is repeated for the other migration surface.</p><span class="run-fact">4 agents · 37 min</span></div>
+          </article>
+        </div>
+      </div>
+      <div class="footer"><span>06 · Repeatable process</span><span>The workflow structure does not depend on a specific page</span></div>
+      <aside class="notes"><b>What to say:</b> Here are two separate completed runs. The timing and number of tokens vary, but the contract is the same: four phases, four independent roles, and one collected result.</aside>
+    </section>
+
+    <section class="slide" aria-label="Classic UI Expert skill">
+      <div><div class="kicker">Skill 2</div><h2>classic-ui-expert is a translator from code to business behavior</h2></div>
+      <div class="content">
+        <div class="expert-grid">
+          <article class="expert-step" style="--c:var(--pink)"><div class="range">PHASES 1–2</div><h3>Find everything</h3><p>Detects all pages and reads the full chain of their Classic extensions.</p></article>
+          <article class="expert-step" style="--c:var(--amber)"><div class="range">PHASES 3–5</div><h3>Understand</h3><p>Lists each piece of code, groups them into behaviors, and finds external dependencies.</p></article>
+          <article class="expert-step" style="--c:var(--cyan)"><div class="range">PHASE 6</div><h3>to describe</h3><p>Creates cards: when a behavior is triggered, what it does, why it is needed, and how to test it.</p></article>
+        </div>
+        <div class="no-workflow">Important: this skill does not start a separate workflow. It is called by agents within the analysis workflow.</div>
+      </div>
+      <div class="footer"><span>07 · Code → understandable behavior</span><span>If there is no proof, he honestly records the unknown</span></div>
+      <aside class="notes"><b>What to say:</b> Classic UI Expert is like an analyst who reads the program and writes instructions for the future developer. It does not invent an answer: it captures the unknown behavior as a gap with an explanation that needs to be checked.</aside>
+    </section>
+
+    <section class="slide" aria-label="Build workflow">
+      <div><div class="kicker">Skill 3 + Workflow 2</div><h2>freedom-build-executor is a build and independent verification pipeline</h2></div>
+      <div class="content">
+        <div class="workflow-title"><code>freedom-build-executor.workflow.js</code><span class="plain">Launched only after approval of the plan</span></div>
+        <div class="phases-7">
+          <article class="phase-mini" style="--c:var(--pink)"><div class="n">1</div><h3>Reconcile</h3><p>Check the plan, the queue and what has already been done.</p></article>
+          <article class="phase-mini" style="--c:var(--amber)"><div class="n">2</div><h3>Refs</h3><p>Prepare the necessary instructions once.</p></article>
+          <article class="phase-mini" style="--c:var(--cyan)"><div class="n">3</div><h3>Preflight</h3><p>Close the issue with evidence before changes.</p></article>
+          <article class="phase-mini" style="--c:var(--blue)"><div class="n">4</div><h3>Build</h3><p>Build one page.</p></article>
+          <article class="phase-mini" style="--c:var(--cyan)"><div class="n">5</div><h3>Verify</h3><p>Another agent reads the actual result.</p></article>
+          <article class="phase-mini" style="--c:var(--amber)"><div class="n">6</div><h3>Judge</h3><p>A third agent assesses the sufficiency of the evidence.</p></article>
+          <article class="phase-mini" style="--c:var(--lime)"><div class="n">7</div><h3>Close</h3><p>Final table or exact gaps.</p></article>
+        </div>
+        <div class="statement"><b>If the page does not pass the check, the cycle is repeated for that page. After three unsuccessful attempts, she is not buried - she is "parked" for a clear reason.</b></div>
+      </div>
+      <div class="footer"><span>08 · One page at a time</span><span>Builder ≠ Verifier ≠ Judge</span></div>
+      <aside class="notes"><b>What to say:</b> It is like a production line with independent control. The one who collected the detail does not rate himself. Another checks the fact, the third checks whether the evidence is sufficient. An unsuccessful result is returned for repair.</aside>
+    </section>
+
+    <section class="slide" aria-label="UI guidelines skill">
+      <div><div class="kicker">Skill 4</div><h2>creatio-ui-guidelines — control of usability and native appearance</h2></div>
+      <div class="content">
+        <div class="double-check">
+          <article class="check-card" style="--c:var(--amber)"><span class="moment">BEFORE CONSTRUCTION</span><h3>First, design correctly</h3><p>Choose native components, logical order of fields, correct containers, tooltips, and accessibility.</p></article>
+          <div class="check-arrow">→</div>
+          <article class="check-card" style="--c:var(--cyan)"><span class="moment">AFTER SAVING</span><h3>Then check the result</h3><p>Compare the page with the finished Creatio page on the same template and correct the differences.</p></article>
+        </div>
+        <div class="no-workflow">This skill also does not run its own workflow. It is called twice by each Build agent within the build workflow.</div>
+      </div>
+      <div class="footer"><span>09 · Design → Build → Review</span><span>The page should not only work, but also be convenient</span></div>
+      <aside class="notes"><b>What to say:</b> UI Guidelines is a designer and a reviewer in one role. The first call helps to get it right right away, the second one checks the already saved page against the native Creatio example.</aside>
+    </section>
+
+    <section class="slide" aria-label="User control">
+      <div><div class="kicker">User control</div><h2>The user chooses how closely to supervise the build</h2></div>
+      <div class="content">
+        <div class="watch-grid">
+          <article class="watch" style="--c:var(--lime)"><span class="tag">The fastest</span><h3>Automatically</h3><p>Workflow goes through all the pages and returns with the final result.</p><div class="meter"><i class="on"></i><i></i><i></i></div></article>
+          <article class="watch recommended" style="--c:var(--cyan)"><span class="tag">For demo</span><h3>Control points</h3><p>After the important pages, the user opens them and checks the script.</p><div class="meter"><i class="on"></i><i class="on"></i><i></i></div></article>
+          <article class="watch" style="--c:var(--pink)"><span class="tag">Maximum control</span><h3>Step by step</h3><p>Workflow stops after each page and waits for validation.</p><div class="meter"><i class="on"></i><i class="on"></i><i class="on"></i></div></article>
+        </div>
+        <div class="feedback"><span>User comments</span><b>→ reopens this page</b></div>
+      </div>
+      <div class="footer"><span>10 · Auto · Checkpoints · Guided</span><span>Checkpoints are recommended for the sprint demo</span></div>
+      <aside class="notes"><b>What to say:</b> Workflow can run on its own, but that's the user's choice. For demonstration purposes, it is best to stop after the key page, go through specific criteria, and return comments to the next cycle.</aside>
+    </section>
+
+    <section class="slide" aria-label="Real user decisions during migration">
+      <div><div class="kicker">Human in the loop</div><h2>The workflow pauses only when a product decision is required</h2></div>
+      <div class="content">
+        <div class="decision-grid">
+          <figure class="decision-shot">
+            <div class="image-wrap"><img src="assets/real-run/decision-app-placement.png" alt="Question to the user about the place of registration of the Freedom section"></div>
+            <figcaption><b>Placement of the section:</b> create an application or leave pages without a menu item.</figcaption>
+          </figure>
+          <figure class="decision-shot">
+            <div class="image-wrap"><img src="assets/real-run/decision-new-record-behavior.png" alt="Question to the user about the behavior of the button to create a new record"></div>
+            <figcaption><b>"+ New" behavior:</b> native routing, exact Classic reproduction, or deliberate change.</figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="footer"><span>11 · Product decisions</span><span>Technical details are solved automatically</span></div>
+      <aside class="notes"><b>What to say:</b> The system does not translate every technical detail to the user. It asks questions only when there are several valid product options with different behavior or navigation.</aside>
+    </section>
+
+    <section class="slide" aria-label="Plan approval before build">
+      <div><div class="kicker">Responsibility boundary</div><h2>All decisions are captured in the plan — the build starts only after approval</h2></div>
+      <div class="content approval-stage">
+        <div class="shot-frame approval-shot"><img src="assets/real-run/plan-approval.png" alt="A real request for approval of the migration plan before the start of construction"></div>
+        <div class="approval-copy">
+          <p class="approval-lead">The user sees the consequences of the decision before any changes in the environment.</p>
+          <div class="approval-step" style="--c:var(--cyan)"><div class="n">1</div><div><b>Decisions are recorded</b><span>The app, routing, speakers, and minor customizations are already written into the plan.</span></div></div>
+          <div class="approval-step" style="--c:var(--amber)"><div class="n">2</div><div><b>The scope is clearly stated</b><span>New app, list, four forms and minipages.</span></div></div>
+          <div class="approval-step" style="--c:var(--lime)"><div class="n">3</div><div><b>Build workflow is waiting</b><span>Consent is a clear line between analysis and changes in Creatio.</span></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>12 · Approval gate</span><span>Plan first · Build after approval</span></div>
+      <aside class="notes"><b>What to say:</b> After a series of product decisions, the system compiles them into one plan and once again shows the real volume of changes. Only the response "I approve - build" starts the construction workflow.</aside>
+    </section>
+
+    <section class="slide" aria-label="Real build workflow run">
+      <div><div class="kicker">Plan approved · Build started</div><h2>After approval, a separate build workflow takes over</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/build-workflow-running.png" alt="Actual launch of the freedom-build-executor workflow after approval of the plan"></div>
+        <div class="build-live-copy">
+          <p class="headline">Agreed decisions become an immutable contract for the build team.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>7 controlled phases</b><span>Reconcile, Refs, Preflight, Build, Verify, Judge and Close.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Separate background workflow</b><span>A build has its own state, agents, and execution log.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Volume is not lost</b><span>Application, list, forms, minipage, and behavior migrated from approval.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>13 · Build workflow at work</span><span>Approved plan → controlled execution</span></div>
+      <aside class="notes"><b>What to say:</b> After approval, the main skill does not start improvising. It starts a separate build workflow, passes it the plan version and the full scope. The screenshot shows the actual launch and the first phase of Reconcile.</aside>
+    </section>
+
+    <section class="slide" aria-label="Intermediate build workflow state">
+      <div><div class="kicker">Intermediate state · 19 minutes</div><h2>Before Build, the system closes the context and risks with separate checks</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-intermediate.png" alt="An intermediate state of the freedom-build-executor workflow with Reconcile and Preflight completed"></div>
+        <div class="build-progress-copy">
+          <p class="headline">The construction agent has not yet started: first, the workflow proves that the plan and the environment are consistent.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Reconcile · 2/2</b><div><span>The queue and the actual status are verified by two agents.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:100%"><b>Preflight · 2/2</b><div><span>Questions before construction are covered by a separate check and merge.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Build · 0</b><div><span>The changes haven't started yet — evidence preparation is the first.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>14 · Preflight before changes</span><span>Evidence first · Build second</span></div>
+      <aside class="notes"><b>What to say:</b> This is an intermediate shot after 19 minutes. Reconcile and Preflight are already done, but Build and Verify haven't started yet. That is, the workflow spends time on evidence before the changes, and does not repair the consequences after them.</aside>
+    </section>
+
+    <section class="slide" aria-label="The Build agent builds the application">
+      <div><div class="kicker">Build in progress · 34 minutes</div><h2>After preflight, one agent builds the app sequentially</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-building.png" alt="An intermediate state of the freedom-build-executor workflow with an active Build-agent"></div>
+        <div class="build-progress-copy">
+          <p class="headline">The context is fixed - the Build agent now executes the agreed plan without changing it on the fly.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Refs · 1/1</b><div><span>The necessary instructions are prepared once and are available to the builder.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:58%"><b>Build · app</b><div><span>One fresh-context agent creates an application sequentially.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · 0</b><div><span>Independent verification starts only after the actual construction.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>15 · Sequential Build</span><span>One builder · Independent verifier next</span></div>
+      <aside class="notes"><b>What to say:</b> After 34 minutes, the preparatory phases are already closed and the Build agent is working on the application. Verify hasn't started yet: the builder doesn't verify himself. This is the next step after the actual changes are complete.</aside>
+    </section>
+
+    <section class="slide" aria-label="Staged Build and Judge">
+      <div><div class="kicker">Build in progress · 49 minutes</div><h2>Workflow closes finished units while the next ones are still being built</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-unit-loop.png" alt="Freedom-build-executor workflow with Build app completed, Build typed active and Judge completed"></div>
+        <div class="build-progress-copy">
+          <p class="headline">A large Build is not a black box: progress and decisions are recorded for each unit of work.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:50%"><b>Build · 1/2</b><div><span>The application is ready; a separate page is still created by the fresh-context agent.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Judge · 1/1</b><div><span>The completed round already has an independent arithmetic verdict.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · pending</b><div><span>Full validation starts when Build closes the entire agreed volume.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>16 · Unit-level control</span><span>Close completed work · Continue the queue</span></div>
+      <aside class="notes"><b>What to say:</b> After 49 minutes, the application is already created, but the individual page is still under construction. At the same time, Judge has already closed the completed round. Workflow sees not only the overall status, but each unit of work and its verdict.</aside>
+    </section>
+
+    <section class="slide" aria-label="Build is nearing completion">
+      <div><div class="kicker">Build in progress · 1 hour 03 minutes</div><h2>Three units are ready — the last page is still being built</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-nearly-complete.png" alt="Freedom-build-executor workflow with Build status 3 of 4 and last page active"></div>
+        <div class="build-progress-copy">
+          <p class="headline">The queue is executed sequentially: the finished application and pages are already fixed, the unfinished unit is visible separately.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:75%"><b>Build · 3/4</b><div><span>The application and two pages are complete; the fourth agent is working on the last one.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Judge · 1/1</b><div><span>The first control round has an independent verdict and does not need to be repeated.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · pending</b><div><span>Independent verification of the entire result will begin after the last Build.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>17 · Build queue progress</span><span>3 completed · 1 active · Verify next</span></div>
+      <aside class="notes"><b>What to say:</b> An hour later, Build had already closed three of the four units: the app and two pages. The last page is still active, so Verify is honestly pending. You can see not abstract percentages, but the concrete state of each queue unit.</aside>
+    </section>
+
+    <section class="slide" aria-label="The last unit before Verify">
+      <div><div class="kicker">Build in progress · 1 hour 22 minutes</div><h2>Before Verify, it remains to complete the main page</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-last-unit.png" alt="Freedom-build-executor workflow with Build status 5 of 6 and active home page"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Complex pages are divided into separate manageable units — the latter is not hidden behind the general status.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:83%"><b>Build · 5/6</b><div><span>The application, three forms and the mini page are ready; the main page is still active.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Judge · 1/1</b><div><span>The preliminary control round is closed by the arithmetic verdict engine.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · pending</b><div><span>A separate verifier will receive a full result only after the sixth unit.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>18 · Last Build unit</span><span>5 completed · Main page active · Verify next</span></div>
+      <aside class="notes"><b>What to say:</b> One hour and twenty-two minutes later, five out of six units are ready, including the mini page. The main page is built last. Verify does not run early - it will only receive a complete result.</aside>
+    </section>
+
+    <section class="slide" aria-label="Final Build check of forms">
+      <div><div class="kicker">Build in progress · 3 hours 07 minutes</div><h2>The basic structure is ready — the engine compares the typed forms</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-forms-check.png" alt="Freedom-build-executor workflow with Build status 6 of 7 and typedFormsBuilt validation active"></div>
+        <div class="build-progress-copy">
+          <p class="headline">The main page is now complete, but Build does not close without separate proof that all typed forms are built.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:86%"><b>Build · 6/7</b><div><span>The application, forms, minipage and main are complete; typedFormsBuilt works.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:100%"><b>Main · ready</b><div><span>Longest unit closed in 1 hour 25 minutes and locked in queue.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · pending</b><div><span>The independent verifier starts after the last build proof.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>19 · Build evidence check</span><span>Main complete · Forms proof active · Verify next</span></div>
+      <aside class="notes"><b>What to say:</b> Three hours later, the main pages are already created, including main. But the workflow does not go to Verify just because the agent has declared readiness. A separate build unit verifies the fact of building all typed forms.</aside>
+    </section>
+
+    <section class="slide" aria-label="Independent Verify after Build">
+      <div><div class="kicker">Verify in progress · 4 hours 45 minutes</div><h2>All Build units are closed — another agent verifies the result</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/build-workflow-verifying.png" alt="Freedom-build-executor workflow with Build 10 of 10 completed and Verify round-1 active"></div>
+        <div class="build-progress-copy">
+          <p class="headline">The build is completely completed, but the workflow does not declare success yet: a separate read-only verifier collects the actual evidence.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Build · 10/10</b><div><span>All pages, routing, wiring sections and control units are closed.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:18%"><b>Verify · round-1</b><div><span>Fresh-context verifier reads the real stand and compares it with the agreed plan.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:100%"><b>Close · 1/1</b><div><span>The intermediate state is reliably preserved; workflow can continue the evidence cycle.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>20 · Independent Verify</span><span>Build complete · Evidence collection active</span></div>
+      <aside class="notes"><b>What to say:</b> Four hours and forty-five minutes later, all ten Build units are closed. But this is not the end: a separate verifier, which did not build anything, reads the actual state of the environment. This is how the agent's statement is replaced by independent evidence.</aside>
+    </section>
+
+    <section class="slide" aria-label="Workflow completed with evidence">
+      <div><div class="kicker">First run · 5 hours 14 minutes</div><h2>Workflow ended after closing all phases</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/build-workflow-completed.png" alt="Completed freedom-build-executor workflow with all phases closed"></div>
+        <div class="build-live-copy">
+          <p class="headline">Status <span class="accent">Completed</span> appeared after a complete cycle of Build → Verify → Judge → Close.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>Build · 10/10</b><span>The entire agreed volume is created and closed by individual units.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Verify · 1/1 · Judge · 2/2</b><span>The actual result was checked and the sufficiency of the evidence was assessed separately.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Close · 2/2</b><span>The final state is saved; there are no open phases or hidden units.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>21 · Completed workflow</span><span>21 agents · 7 phases closed · Engine gate green</span></div>
+      <aside class="notes"><b>What to say:</b> Here is the finale of the real run. Five hours and fourteen minutes later, the workflow ended: all seven phases have closed counters. Completed is not a message from the builder, but a state after an independent Verify, two Judge steps and a final Close.</aside>
+    </section>
+
+    <section class="slide" aria-label="A gap was identified and the repair was approved">
+      <div><div class="kicker">Feedback after the first run</div><h2>One gap opens a new controlled cycle</h2></div>
+      <div class="content decision-grid">
+        <figure class="decision-shot">
+          <div class="image-wrap"><img src="assets/real-run/repair-gap-decision.png" alt="Request for rescheduling through an open ministry page without PDS"></div>
+          <figcaption><b>Gap:</b> the minipage has fields that cannot be resolved in runtime without PDS.</figcaption>
+        </figure>
+        <figure class="decision-shot">
+          <div class="image-wrap"><img src="assets/real-run/repair-plan-approval.png" alt="Approving a repair plan without creating a new application"></div>
+          <figcaption><b>Decision:</b> update the plan and repair the existing minipage without a new app/package.</figcaption>
+        </figure>
+      </div>
+      <div class="footer"><span>22 · Repair decision</span><span>Gap found → Replan → Explicit approval</span></div>
+      <aside class="notes"><b>What to say:</b> Completed does not mean that user feedback is ignored. After the first run, a specific runtime gap was detected. Engine offers to either reschedule or honestly record missing; the user selects a repair and separately agrees to a new version of the plan.</aside>
+    </section>
+
+    <section class="slide" aria-label="Clarification of placement before repair">
+      <div><div class="kicker">Product decision before changes</div><h2>The repair run does not guess where users should see the section</h2></div>
+      <div class="content approval-stage">
+        <div class="shot-frame approval-shot repair-placement-shot"><img src="assets/real-run/repair-placement-decision.png" alt="Questions about the workplace and roles for the Freedom section during the renovation"></div>
+        <div class="approval-copy">
+          <p class="approval-lead">Maintenance revealed a product issue: the ``My applications'' section is only available to administrators.</p>
+          <div class="approval-step" style="--c:var(--cyan)"><div class="n">1</div><div><b>Leave as is</b><span>Administrator access is sufficient for the test bench.</span></div></div>
+          <div class="approval-step" style="--c:var(--amber)"><div class="n">2</div><div><b>Save Classic placement</b><span>The Freedom section remains next to the Classic section.</span></div></div>
+          <div class="approval-step" style="--c:var(--lime)"><div class="n">3</div><div><b>Other workplace + roles</b><span>The user explicitly defines the visibility for the desired audience.</span></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>23 · Repair clarification</span><span>Technical fix · Product ownership preserved</span></div>
+      <aside class="notes"><b>What to say:</b> Even repairs do not give the agent the right to independently change navigation and access. When it turns out that My applications are only visible to administrators, the workflow returns the product solution to the user.</aside>
+    </section>
+
+    <section class="slide" aria-label="Repair workflow started">
+      <div><div class="kicker">Repair-run · 2 minutes</div><h2>A new cycle begins with a reconciliation of the actual state</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/repair-workflow-start.png" alt="Start repair-run with active Reconcile phase"></div>
+        <div class="build-progress-copy">
+          <p class="headline">Repair does not continue the old context at random — the fresh-context agent reads the stand and queue again.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:35%"><b>Reconcile · 0/1</b><div><span>The actual status and the new version of the plan are checked before changes.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--amber);--p:0%"><b>Build · 0</b><div><span>The repair has not yet begun - first the exact unit of work is being formed.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · 0</b><div><span>The check will be independent and will start after the correction.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>24 · Repair reconcile</span><span>New plan version · Fresh context · No blind continuation</span></div>
+      <aside class="notes"><b>What to say:</b> Repair-run is not a manual continuation of the previous agent. It restarts with Reconcile, reads the actual state, and only then allows one exact Build unit.</aside>
+    </section>
+
+    <section class="slide" aria-label="Repair build in progress">
+      <div><div class="kicker">Repair-run · 23 minutes</div><h2>Only the problematic mini page is fixed</h2></div>
+      <div class="content build-progress-stage">
+        <div class="shot-frame build-progress-shot"><img src="assets/real-run/repair-workflow-building.png" alt="Repair-run with active Build minipage after Reconcile and Refs"></div>
+        <div class="build-progress-copy">
+          <p class="headline">The queue narrowed to one deliverable: the application and the rest of the pages are not rebuilt.</p>
+          <div class="progress-row" style="--c:var(--cyan);--p:100%"><b>Reconcile · 1/1</b><div><span>The new version of the plan is aligned with the existing application.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--lime);--p:55%"><b>Build · mini</b><div><span>One agent repairs the PDS and bindings of a specific minipage.</span><div class="phase-state"><i></i></div></div></div>
+          <div class="progress-row" style="--c:var(--pink);--p:0%"><b>Verify · pending</b><div><span>The new result has yet to be independently verified.</span><div class="phase-state"><i></i></div></div></div>
+        </div>
+      </div>
+      <div class="footer"><span>25 · Targeted repair</span><span>One gap · One Build unit · No collateral rebuild</span></div>
+      <aside class="notes"><b>What to say:</b> Twenty-three minutes later, Reconcile and Refs are already closed, and Build is only working with the minipage. This is an important feature of the repair loop: the problem unit is repeated, not the entire migration.</aside>
+    </section>
+
+    <section class="slide" aria-label="Repair workflow is completed">
+      <div><div class="kicker">Repair run complete · 1 hour 55 minutes</div><h2>The repair passed its own Verify, Judge, and Close</h2></div>
+      <div class="content build-live-stage">
+        <div class="shot-frame build-live-shot"><img src="assets/real-run/repair-workflow-completed.png" alt="Completed repair-run with Build 1 of 1, Verify 1 of 1, Judge 1 of 1 and Close 2 of 2"></div>
+        <div class="build-live-copy">
+          <p class="headline">The repair is considered ready not after the change of the PDS, but after a full cycle of independent evidence.</p>
+          <div class="build-live-fact" style="--c:var(--cyan)"><b>Build · 1/1</b><span>The problematic minipage was fixed without rebuilding the application.</span></div>
+          <div class="build-live-fact" style="--c:var(--amber)"><b>Verify · 1/1 · Judge · 1/1</b><span>The runtime result is read by a separate agent and accepted by the judge.</span></div>
+          <div class="build-live-fact" style="--c:var(--lime)"><b>Close · 2/2</b><span>Worklog and the final state of repair-run are closed with no remaining gaps.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>26 · Repair completed</span><span>Targeted fix · Independent proof · Closed loop</span></div>
+      <aside class="notes"><b>What to say:</b> The repair run was completed in one hour and fifty-five minutes. One Build unit passed its own Verify and Judge, and Close recorded the result and worklog. This is a full patch cycle, not a patch "on faith".</aside>
+    </section>
+
+    <section class="slide" aria-label="The context window is saved after several workflows">
+      <div><div class="kicker">A key architectural achievement</div><h2>One agent holds the context and orchestrates different workflows</h2></div>
+      <div class="content context-stage">
+        <div class="shot-frame context-shot"><img src="assets/real-run/context-window-after-repair.png" alt="Context window after main and repair runs: 28.8 percent used, 71.2 percent free"></div>
+        <div class="context-copy">
+          <div class="context-metric"><strong>71,2%</strong><span>of the context window remains free after a long end-to-end run</span></div>
+          <div class="context-point" style="--c:var(--cyan)"><b>The main dialogue is not interrupted</b><span>Decisions, approvals, check results and repair-loop remain in the same user context.</span></div>
+          <div class="context-point" style="--c:var(--amber)"><b>The agent works as an orchestrator</b><span>It passes specialized work to separate analysis, build, verify, and repair workflows — and collects their results.</span></div>
+          <div class="context-point" style="--c:var(--lime)"><b>You can continue iterations</b><span>After the first completion of the context, there is enough time for a new cycle of clarification, correction and independent proof.</span></div>
+        </div>
+      </div>
+      <div class="footer"><span>27 · Context preserved</span><span>Long-lived dialog · Specialized workflows · 71,2% free</span></div>
+      <aside class="notes"><b>Speaker note:</b> This is one of the most important PoC results. After analysis, a full Build, and a separate repair loop, the primary agent retained its context: only 28.8 percent of the one-million-token window was used. In practice, it acts as an orchestrator — preserving the conversation and user decisions, launching specialized workflows, and collecting verified results.</aside>
+    </section>
+
+  </main>
+</div>
+
+<div class="image-lightbox" id="imageLightbox" role="dialog" aria-modal="true" aria-label="Enlarged screenshot" hidden>
+  <div class="lightbox-toolbar" aria-label="Scale control">
+    <button id="zoomOut" type="button" aria-label="Reduce">−</button>
+    <span class="zoom-value" id="zoomValue" aria-live="polite">100%</span>
+    <button id="zoomIn" type="button" aria-label="Increase">+</button>
+    <button id="zoomFit" type="button">Enter</button>
+    <button class="close-lightbox" id="closeLightbox" type="button" aria-label="Close enlarged screenshot">×</button>
+  </div>
+  <div class="lightbox-stage" id="lightboxStage"><div class="lightbox-canvas"><img id="lightboxImage" alt=""></div></div>
+  <div class="caption" id="lightboxCaption"></div>
+</div>
+
+<nav class="controls" aria-label="Slide navigation">
+  <button id="prev" aria-label="Previous slide">←</button>
+  <div class="dots" id="dots"></div>
+  <button id="next" aria-label="Next slide">→</button>
+  <button id="notesButton" aria-label="Show notes">N</button>
+  <button id="full" aria-label="Full screen">⛶</button>
+</nav>
+<div class="hint">← → navigation · click on the screenshot to enlarge · N notes · F full screen</div>
+
+<script>
+  const deck = document.getElementById('deck');
+  const slides = [...document.querySelectorAll('.slide')];
+  const dots = document.getElementById('dots');
+  const progress = document.getElementById('progress');
+  const imageLightbox = document.getElementById('imageLightbox');
+  const lightboxImage = document.getElementById('lightboxImage');
+  const lightboxStage = document.getElementById('lightboxStage');
+  const lightboxCaption = document.getElementById('lightboxCaption');
+  const closeLightboxButton = document.getElementById('closeLightbox');
+  const zoomOutButton = document.getElementById('zoomOut');
+  const zoomInButton = document.getElementById('zoomIn');
+  const zoomFitButton = document.getElementById('zoomFit');
+  const zoomValue = document.getElementById('zoomValue');
+  let current = 0;
+  let lightboxTrigger = null;
+  let lightboxZoom = 1;
+
+  slides.forEach((_, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'dot';
+    dot.setAttribute('aria-label', `Slide ${i + 1}`);
+    dot.addEventListener('click', () => show(i));
+    dots.appendChild(dot);
+  });
+
+  function show(index) {
+    current = Math.max(0, Math.min(slides.length - 1, index));
+    slides.forEach((s, i) => s.classList.toggle('active', i === current));
+    [...dots.children].forEach((d, i) => d.classList.toggle('active', i === current));
+    progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+    history.replaceState(null, '', `#${current + 1}`);
+  }
+
+  function fit() {
+    const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    document.documentElement.style.setProperty('--scale', Math.max(.1, scale).toFixed(4));
+  }
+
+  function toggleNotes() { document.body.classList.toggle('show-notes'); }
+  function fitZoom() {
+    const horizontalSpace = Math.max(1, lightboxStage.clientWidth - 48);
+    const verticalSpace = Math.max(1, lightboxStage.clientHeight - 48);
+    return Math.min(horizontalSpace / lightboxImage.naturalWidth, verticalSpace / lightboxImage.naturalHeight);
+  }
+  function widthZoom() {
+    const horizontalSpace = Math.max(1, lightboxStage.clientWidth - 48);
+    return horizontalSpace / lightboxImage.naturalWidth;
+  }
+  function setLightboxZoom(nextZoom, keepCenter = true) {
+    const previousWidth = lightboxImage.offsetWidth || lightboxImage.naturalWidth;
+    const centerX = lightboxStage.scrollLeft + lightboxStage.clientWidth / 2;
+    const centerY = lightboxStage.scrollTop + lightboxStage.clientHeight / 2;
+    const maximumZoom = widthZoom();
+    lightboxZoom = Math.max(Math.min(.25, maximumZoom), Math.min(maximumZoom, nextZoom));
+    lightboxImage.style.width = `${Math.round(lightboxImage.naturalWidth * lightboxZoom)}px`;
+    zoomValue.textContent = `${Math.round(lightboxZoom * 100)}%`;
+    zoomInButton.disabled = lightboxZoom >= maximumZoom - .001;
+    if (keepCenter && previousWidth) {
+      const ratio = lightboxImage.offsetWidth / previousWidth;
+      requestAnimationFrame(() => {
+        lightboxStage.scrollLeft = centerX * ratio - lightboxStage.clientWidth / 2;
+        lightboxStage.scrollTop = centerY * ratio - lightboxStage.clientHeight / 2;
+      });
+    }
+  }
+  function initializeLightboxZoom() {
+    setLightboxZoom(widthZoom(), false);
+    requestAnimationFrame(() => {
+      lightboxStage.scrollLeft = Math.max(0, (lightboxStage.scrollWidth - lightboxStage.clientWidth) / 2);
+      lightboxStage.scrollTop = 0;
+    });
+  }
+  function openLightbox(image) {
+    lightboxTrigger = image;
+    lightboxImage.src = image.currentSrc || image.src;
+    lightboxImage.alt = image.alt;
+    lightboxCaption.textContent = image.alt;
+    imageLightbox.hidden = false;
+    document.body.classList.add('image-open');
+    if (lightboxImage.complete) initializeLightboxZoom();
+    else lightboxImage.addEventListener('load', initializeLightboxZoom, { once: true });
+    closeLightboxButton.focus();
+  }
+  function closeLightbox() {
+    if (imageLightbox.hidden) return;
+    imageLightbox.hidden = true;
+    document.body.classList.remove('image-open');
+    lightboxImage.removeAttribute('src');
+    lightboxImage.style.removeProperty('width');
+    lightboxTrigger?.focus();
+    lightboxTrigger = null;
+  }
+  async function toggleFull() {
+    if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
+    else await document.exitFullscreen?.();
+  }
+
+  document.getElementById('prev').addEventListener('click', () => show(current - 1));
+  document.getElementById('next').addEventListener('click', () => show(current + 1));
+  document.getElementById('notesButton').addEventListener('click', toggleNotes);
+  document.getElementById('full').addEventListener('click', toggleFull);
+  document.querySelectorAll('.slide img').forEach(image => {
+    image.classList.add('zoomable');
+    image.tabIndex = 0;
+    image.setAttribute('role', 'button');
+    image.setAttribute('aria-label', `Enlarge screenshot: ${image.alt}`);
+    image.addEventListener('click', () => openLightbox(image));
+    image.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openLightbox(image);
+      }
+    });
+  });
+  closeLightboxButton.addEventListener('click', closeLightbox);
+  lightboxImage.addEventListener('click', closeLightbox);
+  zoomOutButton.addEventListener('click', () => setLightboxZoom(lightboxZoom - .25));
+  zoomInButton.addEventListener('click', () => setLightboxZoom(lightboxZoom + .25));
+  zoomFitButton.addEventListener('click', () => setLightboxZoom(fitZoom(), false));
+  imageLightbox.addEventListener('click', event => {
+    if (event.target === imageLightbox) closeLightbox();
+  });
+  document.addEventListener('keydown', event => {
+    if (!imageLightbox.hidden) {
+      if (event.key === 'Escape') closeLightbox();
+      if (event.key === '+' || event.key === '=') setLightboxZoom(lightboxZoom + .25);
+      if (event.key === '-') setLightboxZoom(lightboxZoom - .25);
+      if (event.key === '0') setLightboxZoom(fitZoom(), false);
+      return;
+    }
+    if (['ArrowRight', 'PageDown', ' '].includes(event.key)) show(current + 1);
+    if (['ArrowLeft', 'PageUp'].includes(event.key)) show(current - 1);
+    if (event.key.toLowerCase() === 'n') toggleNotes();
+    if (event.key.toLowerCase() === 'f') toggleFull();
+    if (event.key === 'Home') show(0);
+    if (event.key === 'End') show(slides.length - 1);
+  });
+  window.addEventListener('resize', fit);
+  fit();
+  const hashSlide = Number(location.hash.slice(1));
+  show(Number.isInteger(hashSlide) && hashSlide > 0 ? hashSlide - 1 : 0);
+</script>
+</body>
+</html>
