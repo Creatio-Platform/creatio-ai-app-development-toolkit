@@ -95,7 +95,9 @@ the verifier files that page's contents as this unit's evidence.
    imperative row against the **acceptance criteria on its card** in step 5.1's `customizations.md`
    (the `behaviourIndex` maps the row to its card); both are handed to the run as inputs. Never port
    from a method NAME — that is the trap the migration skill's list calls "imperative logic left as
-   review". A row whose card you cannot find is a `blocked[]` entry, not a guess.
+   review". A row whose card you cannot find is a `blocked[]` entry, not a guess. Cite criteria
+   card-qualified everywhere outside their own card — `shared/C04·AC-16`, never a bare `AC-16` —
+   numbering restarts per card, so a bare number in a code comment or worklog is ambiguous.
 7. **Localizable bindings** for every user-visible string. `$Resources.Strings.<key>` normally;
    a tab / card-toggle-panel caption needs `#ResourceString(<Key>)#` instead — a
    `$Resources.Strings.*` caption there does not render.

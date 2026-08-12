@@ -364,6 +364,32 @@ function memberDigestOf(changeSet, scopeSchema) {
       key: scopeSchema ? `${scopeSchema}::${n.kind}:${n.item}` : `${n.kind}:${n.item}` }));
 }
 
+// The *Section chain as its OWN stub scope — 0 or 1 of them, so the caller spreads the result with no branch of
+// its own. Extracted from `runMigration` rather than written inline there because the two ternaries and their
+// `||` fallbacks pushed that function to cognitive complexity 16; the repo pins Sonar's 15, which is the same
+// reason `feedSchemaArray` below is its own function.
+//
+// The section chain is mapped only to digest its imperative rows (methods / mixins / messages) into a step-5.1
+// scope — `analyzeSectionChain`'s fixed-field extraction stays the source for the plan's List-page block. Local
+// to the stub digest: gates, coverage and the member ledger are unaffected.
+//
+// ROOT-ONLY (`opts.scopeSchema` unset): a nested child/typed/mini fold gets the raw child bundle as its manifest,
+// so a child bundle carrying `section` would otherwise inject a mid-array section entry into the parent's
+// `childStubScopes` (`slice(1)`) and break the section-is-LAST position contract at the call site.
+//
+// Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` / `kind:item`),
+// so a second null-schema scope would collapse both scopes' digest keys into one coverage row. When
+// `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
+function sectionStubScopes(manifest, opts, sectionSchemas) {
+  if (opts.scopeSchema || !sectionSchemas.length) return [];
+  const changeSet = mapToFreedom(mergeHierarchy(sectionSchemas), {
+    entityColumns: manifest.entityColumns || {},
+    resources: manifest.resources || {},
+  });
+  const schema = manifest.planMeta?.sectionSchema || "Section";
+  return [stubScope("section", schema, changeSet, changeSet.standardMethodsFiltered)];
+}
+
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
 // than one merged array so a caller can hand over (or stage) a single page — the staged-processing direction of
 // ENG-94859 — without re-deriving which method belongs to which schema.
@@ -468,15 +494,29 @@ function applyBehaviourIndex(changeSet, index, scopeSchema) {
 
 // Which `behaviourIndex` keys reached no row, across EVERY scope of this run. Computed from the assembled index
 // (not per scope) because a key that misses the record page legitimately belongs to the mini page or a child.
-function unmatchedIndexKeys(index, stubIndex) {
-  const keys = Object.keys(plainObject(index));
-  if (!keys.length) return [];
+function scopeDigestKeys(scopes) {
   const seen = new Set();
-  for (const s of stubIndex) {
+  for (const s of scopes) {
     for (const st of s.stubs) { seen.add(st.method); if (s.schema) seen.add(`${s.schema}::${st.method}`); }
     for (const m of s.members) seen.add(m.key);
   }
+  return seen;
+}
+function unmatchedIndexKeys(index, stubIndex) {
+  const keys = Object.keys(plainObject(index));
+  if (!keys.length) return [];
+  const seen = scopeDigestKeys(stubIndex);
   return keys.filter((k) => !seen.has(k));
+}
+// Index keys addressing ONLY the section scope. They are matched (not `unmatched`) — but applyBehaviourIndex
+// folds cards into PAGE rows only, so a section-only answer produces no plan artifact: no worklist row cites
+// its card. Surfaced as a separate advisory list so "matched" cannot read as "rendered in the plan".
+function sectionOnlyIndexKeys(index, stubIndex) {
+  const keys = Object.keys(plainObject(index));
+  if (!keys.length) return [];
+  const pageKeys = scopeDigestKeys(stubIndex.filter((s) => s.role !== "section"));
+  const sectionKeys = scopeDigestKeys(stubIndex.filter((s) => s.role === "section"));
+  return keys.filter((k) => sectionKeys.has(k) && !pageKeys.has(k));
 }
 
 // Rows whose body PROVABLY lives in another schema, described by a wiring card alone (`card`, no `bodyCard`).
@@ -1309,6 +1349,9 @@ export function runMigration(manifest, opts = {}) {
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionSchemas = parse(manifest.section);
+  // The section chain digested as its own step-5.1 scope (0 or 1) — see `sectionStubScopes` for the root-only
+  // guard, the never-null schema label, and why it is a function rather than inline here.
+  const sectionScopes = sectionStubScopes(manifest, opts, sectionSchemas);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
@@ -1439,10 +1482,17 @@ export function runMigration(manifest, opts = {}) {
     ...(miniPage?.stubScope ? [miniPage.stubScope] : []),
     ...typedPages.flatMap((t) => [...(t.stubScope ? [t.stubScope] : []), ...(t.childStubScopes || [])]),
     ...childPages.flatMap((c) => [...(c.stubScope ? [c.stubScope] : []), ...(c.childStubScopes || [])]),
+    // SECTION SCOPE — the *Section chain can carry real custom code (a bulk section action's methods, a mixin
+    // added by an ExtendParent layer). analyzeSectionChain extracts only the fixed list-page facts (filters /
+    // action names / columns), so without this scope those rows never reach the step-5.1 handoff and the
+    // behaviour analysis structurally cannot see list-page behaviour. Placed LAST: consumers take stubIndex[0]
+    // as the record page and nested runs slice(1) for child scopes — a section entry must not shift those.
+    ...sectionScopes,
   ];
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
   behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
+  behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
   const decisionSummary = {};
   for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
