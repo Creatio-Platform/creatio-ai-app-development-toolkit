@@ -1,12 +1,21 @@
 # Freedom UI Web → Mobile Page Conversion (conversion playbook)
 
-The authoritative playbook for the `creatio-mobile-page-conversion` skill: converting an existing
+The authoritative **process** playbook for the `creatio-mobile-page-conversion` skill: converting an existing
 **Freedom UI web page** into a **Freedom UI mobile page** for the Creatio Mobile app. This is a targeted, implementation-ready
 change: it does **not** require a full BA-style Business Plan (Gate R). It DOES require a blocking
 approval gate — **Gate M** — between analysis and any write to Creatio: present a plain-language
 **conversion plan** (what will be transferred, what will be adapted, what is unsupported), after
 which the developer either **reviews/adjusts the details** or **approves**. Nothing is persisted
 until the developer approves *after* seeing the plan.
+
+**Layering — where each rule lives.** This playbook owns the PROCESS: the flow, the gates, environment
+resolution, the plan/report format, and section registration. The body-building MECHANICS — how to turn
+`guide.elementMap` and the guide's data-section diffs into a mobile page body (per-operation rules,
+`mobileValues` paste-verbatim, adaptive/tab/normalization behavior, the paste-don't-rebuild data-section
+rules) — are owned by the clio `freedom-page-web-to-mobile-conversion` guidance article (the ENGINE
+layer), which stays in lockstep with the converter. Load that article once (Load order step 2) and
+follow it for mechanics; this playbook does NOT restate them. If a mechanic and this playbook ever
+disagree, the guidance article wins.
 
 ## When to use
 
@@ -108,98 +117,26 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      when this split would happen — but pass `target-schema-uid` unconditionally so the body always lands in
      the one schema `create-page` made. (If the page already exists, get its UId via `list-pages`/`get-page`
      and pass it the same way.)
-   - Build the mobile body yourself (plain JSON: `viewConfigDiff` / `viewModelConfigDiff` /
-     `modelConfigDiff`) by iterating `guide.elementMap` — one entry per source element with an explicit
-     `operation`. Do NOT re-derive placement from `containerMap` + `componentSuggestions`:
-     - **Every entry — both `merge` and `insert` — starts from `elementMap[].mobileValues`: paste it as the
-       element's `values` verbatim.** It carries the `type`, every source property the mobile component
-       supports (never drop any), and the **converted event-binding requests** (a button's `clicked`, a
-       field's `valueChange`/`updated` — supported requests kept/remapped; a component whose request the
-       mobile app does NOT support was already `drop`ped and is not among the elements you build) — do NOT
-       hand-edit these bindings. It also carries every localized string as `#ResourceString(key)#` tokens,
-       top-level AND nested (e.g. `config.title`, `text.template`): register them ALL by passing
-       `guide.resourceStrings` (a `{ key: en-US text }` map covering the whole converted body) to
-       `update-page resources` in ONE call — never register a `#ResourceString(...)#` token as the value, do
-       not hand-pick keys, and a token whose key is not registered renders blank. Then add ONLY what
-       `mobileValues` deliberately leaves out: the value binding (`control`, or `value` for lookups —
-       type-specific). `validate-page` is the backstop — it rejects an entry that drops a required property
-       (a field's caption, a lookup-path attribute's `type`) and `update-page` refuses to save.
-     - `merge` → reuse the template element `mobileName`; do NOT insert it (the template already has it).
-       If the mobile list template already provides the `List`/`ListItem` elements, configure them by
-       merge-by-name (the row goes on the `ListItem` element: `title`/`body`) — NEVER insert a second
-       `crt.List` and NEVER put `itemLayout` inside a merge of the parent `List` (silent no-op; `ListItem`
-       is a separate named element).
-     - `insert` → add `mobileType` under `parentName`/`propertyName`. When the entry has an `index`, add it to
-       the insert op at that 0-based position (a positional element mapped above/below an anchor, e.g. above the
-       mobile `Tabs`); otherwise omit `index` and append. On a **tabbed record page** every web tab inserts as
-       its OWN new mobile tab (`parentName: Tabs`) — there is no general-tab collapse — while the web wrapper's
-       non-tab content merges into the mobile general tab's grid (e.g. `CardContentWrapper`→`GeneralTabContainer`).
-       The mobile template's **Feed and Attachments tabs must stay LAST**: insert each converted web tab BEFORE
-       them (index it after the general tab) so the order is general tab → converted web tabs → Feed → Attachments.
-       Beyond the shared `mobileValues` paste + value binding (above), the insert-specific extra is the row
-       layout for a structural mapping (grid → `crt.List` + `crt.ListItem`): add a `crt.ListItem` into the
-       `crt.List` `itemLayout` (title = first column, body = the rest), per the `componentSuggestions` note and
-       the `mobileContracts` example. Consult `mobileContracts` / `get-component-info` only for those
-       not-prebuilt parts.
-     - `relocate-children` → do not recreate this container; its children are placed in `parentName`
-       (each child entry already carries that `parentName`).
-     - `drop` → skip it entirely — it is NOT inserted. Tell the user what was dropped and why. Only leaf
-       components are ever `drop` entries (an unsupported type, or one bound to a non-primary data
-       source); a container is never a `drop`, so an empty container comes through as its own
-       `merge`/`insert` instead — the user can delete it in the designer if it is unwanted. (The ONE exception:
-       a whole non-converting web container comes through as neither `drop` nor `merge`/`insert` — see the next
-       item, which is a separate channel, not a fifth `elementMap` operation.)
-   - **Whole non-converting web containers are excluded via a SEPARATE channel, NOT `elementMap`.** A web
-     template can declare a container whose entire subtree is excluded from conversion. For
-     `PageWithTabsFreedomTemplate` that container is `MainHeader` — the WHOLE header (page title, back button,
-     AND the action bar with its Order/print buttons), not just an action bar. Its named descendants never reach
-     `elementMap`: they are removed up front (step 0a, *before* inherited-chrome subtraction) because the mobile
-     template already provides the equivalent header/scaffold chrome, and each is listed in
-     `guide.excludedComponents` with `name`, `type`, `container`, and `isContainer`. clio also names the declared
-     container(s) in a `guide.constraints` note — read it as a backstop when a declared container has no listable
-     descendants. Carve-out (kept, still converts) applies ONLY when a descendant's **name** is a template twin —
-     a container name in `guide.containerMap` or a mapped component name (e.g. `CardToggleTabPanel` → mobile
-     `Tabs`); a type-level mapping in `componentSuggestions` alone does NOT carve a component out. Do NOT re-add
-     anything in `excludedComponents`. Because the prune runs before 0b, the list mixes inherited chrome the
-     mobile template replaces (page title, back button) with page-added components — see the plan/report guidance
-     on how to present each.
-   - **Data sections — paste the prebuilt diffs, do NOT rebuild by hand.** Both metadata sections have
-     identical structural support on mobile, and the guide hands them to you ready to paste:
-     - Paste `guide.modelConfigDiff` VERBATIM as the page's `modelConfigDiff`, and `guide.viewModelConfigDiff`
-       as the page's `viewModelConfigDiff`. Each is a set of TARGETED diff operations diffed against the mobile
-       template's own base — a `merge` for a changed/new value and an `insert` for each new element of an array
-       the template already carries (e.g. a converted quick filter appended to the template's
-       `Items.modelConfig.filterAttributes`) — so the template's native array entries are preserved and the
-       page's converted entries are ADDED, not replaced. Every attribute keeps its `type` and `path`.
-       **Because these operations are computed against the template's base, paste them ONLY into a page created
-       from the SAME mobile template the guide was run against (the `recommendedMobileTemplate` used at
-       create-page); if the target page uses a different template, regenerate the guide first — otherwise the
-       merge/insert paths will not line up and can silently corrupt the config.** (Only when
-       the guide reports no template base was available — a `constraints` note — does it degrade to a single root
-       `merge`.) Do NOT rebuild these by hand and do NOT collapse the targeted operations into one root merge: a
-       root merge makes the mobile diff engine REPLACE arrays and silently drop entries (list columns,
-       `filterAttributes`), which renders an empty list and crashes Mobile Designer with `Cannot read properties
-       of undefined (reading 'attributes')`. `guide.modelConfig` / `guide.viewModelConfig` are the same data in
-       full-object form, for reference only.
-     - **HARD RULE:** NEVER source the data-source section (`modelConfigDiff`) from a pre-existing or
-       reference mobile body — that is exactly how an attribute's `type` (e.g. `ForwardReference` on a
-       related/lookup column) gets dropped, making the binding unresolvable in Mobile Designer (`Item with the
-       path … not found`). If the target page already exists, discard its data-source section and rebuild it
-       from `guide.modelConfigDiff`. Related/lookup columns keep their `type`; own columns resolve
-       automatically and are not declared. Reference only OOTB mobile converters (definitive list forthcoming —
-       flag any custom converter for manual review).
-     Apply with `update-page` (with `target-schema-uid=<create-page schemaUId>`, per the create-page step).
-   - Run `validate-page` and resolve findings before treating the page as done. Property fidelity is owned by
-     the prebuilt `elementMap[].mobileValues` (paste them verbatim and you keep every mobile-supported
-     property); `validate-page` is the backstop — it flags (as errors that `update-page` blocks) an insert
-     that dropped a required property: a lookup-path data-source attribute missing its `type`, or a field
-     missing its caption (`label`), in addition to undeclared-binding checks.
-   - **Adaptive layout** — when `guide.adaptiveLayout` is present, present the proposal to the user (see
-     "Conversion plan"). The child placement is already inside the pasted `mobileValues`
-     (`layoutConfig.adaptive`); once the user approves (they may adjust column counts / placement or
-     decline), apply each `guide.adaptiveLayout[].adaptiveDiff` (a `merge` by container name that sets the
-     container's per-breakpoint columns) via `update-page`. Apply BOTH sides — applying only one leaves
-     fields pinned to their old cells. The runtime reflows by `row`/`column` (one item per cell).
+   - **Build the mobile body by iterating `guide.elementMap`** (plain JSON: `viewConfigDiff` /
+     `viewModelConfigDiff` / `modelConfigDiff`) — one entry per source element with an explicit
+     `operation` (`merge` / `insert` / `drop` / `relocate-children`). Do NOT re-derive placement from
+     `containerMap` + `componentSuggestions`. **The MECHANICS of every operation are owned by the
+     `freedom-page-web-to-mobile-conversion` guidance article (Load order step 2) — follow it field-by-field
+     and do NOT restate those rules here.** In brief, so you know what to expect: paste
+     `elementMap[].mobileValues` VERBATIM and add only the value binding; register `guide.resourceStrings`
+     in one `update-page resources` call; and paste `guide.modelConfigDiff` / `guide.viewModelConfigDiff`
+     VERBATIM (paste, don't rebuild — never source data-section attributes from a pre-existing body). The
+     list-row, tabbed-page ordering, adaptive-layout, tab-body/Area, normalization, and data-section-diff
+     details all live in the article. Persist the body and data sections with `update-page` (always with
+     `target-schema-uid=<create-page schemaUId>`, per the create-page step).
+   - Run `validate-page` and resolve findings before treating the page as done (undeclared bindings, a
+     lookup-path attribute missing its `type`, a field missing its caption `label`). It is the backstop
+     that blocks the save when a required property was dropped — the article details what it enforces.
+   - **Adaptive layout** — when `guide.adaptiveLayout` is present, present it to the user as a PROPOSAL
+     (see "Conversion plan"); they may adjust column counts / placement or decline. Both the container
+     columns and each child's placement are ALREADY baked into the `mobileValues` you pasted — there is NO
+     separate diff to apply. `guide.adaptiveLayout` is advisory (for presenting the proposal); the article
+     owns the field's shape.
 7b. **Register the mobile page** — only after **Gate S** (see below). The bullets below are independently
    conditional, NOT all gated on one flag: the section + workplace bullets apply only when
    `sectionRegistration.sourcePageIsSection` is true (a form/edit page is NOT a section — skip those two
@@ -218,13 +155,9 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      `{ page-schema-name, is-default: true }`). It writes the `MobileRelatedPage` add-on into the package
      (must be editable) and REPLACES the object's mobile related-page configuration with that default page.
 7c. **Recreate page-level business rules** — only after Gate M, and only if
-   `guide.pageBusinessRules.convertedRules` is non-empty. The guide already applied the conversion
-   logic (page rules carry only element actions — hide / show / make-editable / read-only / required /
-   optional — and an action survives only for the referenced elements whose component converts, with element
-   names remapped web→mobile; the condition ALWAYS converts verbatim — every operand type is supported in a
-   mobile page-rule condition, including **SysSetting** (compare against a system setting); a rule whose every
-   action drops is in `droppedRules`). For each `convertedRules[]` entry, pass its `rule` VERBATIM to
-   `create-page-business-rule` (`environment-name`, `package-name`,
+   `guide.pageBusinessRules.convertedRules` is non-empty. The guide already applied the conversion logic
+   (how page rules convert is owned by the guidance article). For each `convertedRules[]` entry, pass its
+   `rule` VERBATIM to `create-page-business-rule` (`environment-name`, `package-name`,
    `page-schema-name = <the new mobile page>`, `rule`). Report any `droppedRules[]` to the developer with
    their reason (not transferred). Object-/entity-level business rules are shared across web and mobile — do NOT touch them.
 8. **Deliver the conversion report** (see below).
@@ -282,14 +215,6 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   *"checkbox → toggle"*.
 - **What is NOT supported / will be dropped** — e.g. Dashboards, Summaries, bulk actions. State it
   explicitly (this bucket takes the step-4 message shape).
-- **Excluded web-template chrome** — present ONLY when `guide.excludedComponents` is in the guide; the field
-  is omitted entirely when nothing was excluded, so if it is absent, say nothing about it. These are NOT
-  unsupported components — do NOT put them in the bucket above and do NOT apply the step-4 "not supported /
-  configure manually" shape. They are excluded BY DESIGN because the mobile template supplies the equivalent
-  chrome. Split the list by `isContainer` / `container`: report inherited header chrome the mobile template
-  replaces (page title, back button) as *provided by the mobile template — nothing lost*, and call out only the
-  page-ADDED action components (e.g. Order/print buttons) as items for the developer to confirm. Do NOT propose
-  re-adding any of them.
 - **Needs a decision** (`requiresManualDecision`) — the items awaiting the developer's call.
 - **Section registration intent** (from `guide.sectionRegistration`) — whether the page is a section
   and whether it would be made available in mobile, and in which workplace (existing mobile one, a new
@@ -299,9 +224,12 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   must be verified manually.
 - **Adaptive layout (per-screen)** — when `guide.adaptiveLayout` is present, state it in plain words:
   *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* This
-  is a PROPOSAL — the developer can adjust the column counts / placement or decline it. (The child
-  placement is already baked into `mobileValues`; the container side is `guide.adaptiveLayout[].adaptiveDiff`,
-  applied in step 7 after approval.)
+  is a PROPOSAL — the developer can adjust the column counts / placement or decline it. (Both the container
+  columns and the child placement are already baked into the pasted `mobileValues`; nothing separate to apply.)
+- **Other guide-surfaced facts to state** — if the guide reports a converted-tab body structure
+  (`guide.tabAreaLayers`) or normalized properties (`guide.normalizations`), state each as ONE aggregated
+  plain-language line. Per the guidance article these are FACTS to report at the gate, not decisions — never
+  offer to skip them. Omit when the field is absent.
 - **Manual follow-ups** — page-level business rules are converted in `guide.pageBusinessRules` and
   re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests: supported ones are baked
   into `mobileValues` (`guide.requestConversions`); components whose request the mobile app does not support are
@@ -332,57 +260,34 @@ After `validate-page`, deliver a report:
   (`convertedRequests`, remapped where the mobile name differs). Components whose request the mobile app does
   NOT support were **dropped entirely** (their `elementMap` entry is `drop`, reason names the request) — list
   those removed action components for the developer.
-- **Excluded web-template chrome:** from `guide.excludedComponents` — present ONLY when the matched template
-  declares non-converting containers; the field is omitted entirely otherwise, so if it is absent, say nothing.
-  When present, these components live inside a non-converting web-template container (for
-  `PageWithTabsFreedomTemplate`, the whole `MainHeader`) and were dropped up front because the mobile template
-  supplies the equivalent chrome. Use `isContainer` / `container` to separate inherited chrome the mobile
-  template replaces (page title, back button — report as *replaced by the mobile template*) from page-added
-  action components (Order/print — the entries worth the developer's attention). Excluded BY DESIGN: this is
-  NOT a remaining manual step, and do NOT re-add any of it.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
-  phone, N columns on tablet), whether the developer adjusted or declined it, and that the child placement
-  was applied via `mobileValues` and the container columns via each `adaptiveLayout[].adaptiveDiff`.
+  phone, N columns on tablet), and whether the developer adjusted or declined it (both sides were applied
+  via the pasted `mobileValues` — nothing separate).
+- **Converted-tab body / normalized properties:** if the guide reported `guide.tabAreaLayers` or
+  `guide.normalizations`, state each as one aggregated line (what standard was applied where).
 - **Remaining manual steps:** dropped business rules, dropped action components (a component whose
   request the mobile app does not support is removed from the page entirely — elementMap `drop`, not a
-  "flagged" component that stayed on the page; this is the request-driven `drop` case only —
-  `guide.excludedComponents`, dropped because the mobile template replaces them, are NOT a remaining manual
-  step), mobile manifest / wizard registration, and any `requiresManualDecision` items still open.
+  "flagged" component that stayed on the page), mobile manifest / wizard registration, and any
+  `requiresManualDecision` items still open.
 - **Hand off** to Freedom UI Mobile Designer (step 9) for final layout review and manual refinement.
 
 ## Mobile constraints (carry into every step)
 
-- Mobile body is plain JSON: `viewConfigDiff` / `viewModelConfigDiff` / `modelConfigDiff` only.
-- No `handlers`, no `validators`, no custom `converters` in the mobile body.
-- **Page-level business rules ARE converted** in `guide.pageBusinessRules` (condition kept; only the
-  surviving hide/show/make-* actions — set-values / apply-filter / apply-static-filter do not exist at
-  page level). Recreate each `convertedRules[].rule` verbatim with `create-page-business-rule` on the
-  mobile page (step 7c). **Object-/entity-level business rules are shared** across web and mobile — do NOT touch them.
-- **Requests (actions) ARE handled** for you: a supported request is kept/remapped in `elementMap[].mobileValues`;
-  a component whose request the Creatio Mobile app does NOT support (and that does not remap to a supported one)
-  is **DROPPED entirely** — its `elementMap` entry is `drop` (reason names the request), never `insert`. A
-  component with a dead action is not shipped. `guide.requestConversions` is the advisory summary of the kept
-  ones. Page `handlers` (web-only AMD) are NEVER transferred.
-- **Non-converting web containers are excluded**, reported in `guide.excludedComponents` (present only when the
-  matched template declares such a container — omitted entirely otherwise). Their named descendants — for
-  `PageWithTabsFreedomTemplate`, the whole `MainHeader` — are dropped up front (step 0a) because the mobile
-  template provides the equivalent chrome, so they never reach `elementMap`; do NOT re-add them. Report
-  inherited chrome (page title, back button — use `isContainer` / `container`) as *replaced by the mobile
-  template* and only page-added action components as items to confirm. Excluded BY DESIGN — never a remaining
-  manual step. Carve-out is name-keyed (a twin in `guide.containerMap` or a mapped component name), not
-  type-level.
-- **Adaptive layout is a PROPOSAL and two-sided.** When `guide.adaptiveLayout` is present, the per-screen
-  field placement is already baked into `elementMap[].mobileValues.layoutConfig.adaptive` (child side); apply
-  each `guide.adaptiveLayout[].adaptiveDiff` for the container columns (container side) — both are needed. The
-  runtime reflows children by `row`/`column` (one item per cell; `colSpan`/`rowSpan` are serialized as 1 for
-  designer parity but not honored per-item). Let the user adjust or decline it at the gate.
-- One data source per page. If the web page used several (see `guide.dataSources`), keep only the
-  primary one.
+These are the invariants to keep in mind across the flow. The full body-building MECHANICS behind them
+live in the `freedom-page-web-to-mobile-conversion` guidance article — do not restate them here.
+
+- Mobile body is plain JSON: `viewConfigDiff` / `viewModelConfigDiff` / `modelConfigDiff` only — no
+  `handlers`, no `validators`, no custom `converters`. Page `handlers` (web-only AMD) are NEVER transferred.
+- **Page-level business rules ARE converted** in `guide.pageBusinessRules`; recreate each
+  `convertedRules[].rule` verbatim with `create-page-business-rule` on the mobile page (step 7c).
+  **Object-/entity-level business rules are shared** across web and mobile — do NOT touch them.
+- **Requests, adaptive layout, tab bodies, and normalized properties are handled by the converter** and
+  baked into `guide.elementMap` / `mobileValues`; the advisory summaries live on the guide
+  (`guide.requestConversions`, `guide.adaptiveLayout`, `guide.tabAreaLayers`, `guide.normalizations`).
+  Present the proposals/facts at the gate (see "Conversion plan"); the article owns how they apply.
+- One data source per page. If the web page used several (see `guide.dataSources`), keep only the primary one.
 - Apply the data sections by pasting `guide.modelConfigDiff` / `guide.viewModelConfigDiff` verbatim — never
-  reconstruct attributes by hand and never source them from a pre-existing body. Keep every attribute with
-  all of its declared properties (related/lookup columns MUST keep their `type`), or the binding is
-  unresolvable in Mobile Designer. `validate-page` flags a missing `type` on a dotted-path attribute and
-  `update-page` blocks the save.
+  reconstruct attributes by hand and never source them from a pre-existing body (the article explains why).
 - Mobile layout is a simplified vertical flow; complex desktop layout may need manual adaptation.
 
 ## Limitations (be transparent)
