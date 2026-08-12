@@ -897,6 +897,40 @@ const RESOLVED_COLUMN_SOURCES = ["schema-default", "entity-default", "none"];
 // exception (network / auth / unreachable stand), i.e. environment and staleness conditions — exactly what a gate
 // is for. Throwing here would abort before any gate is computed and yield no plan at all. Only a manifest
 // AUTHORING error (a missing provenance anchor here; a missing `listColumns` key in `sectionInput`) stays loud.
+// SHAPE + PROVENANCE: is this a well-formed response, and is it evidence for the section we are migrating?
+// Returns the gate reason, or null. Own fn so `normalizeResolvedListColumns` stays under Sonar CC 15 (S3776) and
+// each rejection is a separately named check rather than one condition guarding several distinct cases.
+function resolvedColumnProvenanceIssue(value, expectedEntity, expectedSectionSchema) {
+  if (!RESOLVED_COLUMN_SOURCES.includes(value.source) || !Array.isArray(value.columns)) {
+    const shape = Array.isArray(value.columns) ? `${value.columns.length} column(s)` : "a non-array `columns` field";
+    return `list-column evidence is malformed: source ${JSON.stringify(value.source ?? null)} (expected one of ${RESOLVED_COLUMN_SOURCES.join(" | ")}) with ${shape} — re-run \`get-classic-list-columns\``;
+  }
+  // clio echoes `sectionSchema` back as the CALLER's own spelling (`sectionSchemaName.Trim()`) while resolving the
+  // hierarchy case-insensitively (`OrdinalIgnoreCase`), so `--schema-name applicant1section` legitimately returns
+  // lowercase. Compare the way the producer resolves, or a casing difference reads as evidence for another section.
+  const sameName = (a, b) => typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+  if (!sameName(value.entity, expectedEntity) || !sameName(value.sectionSchema, expectedSectionSchema)) {
+    return `list-column evidence belongs to another section — expected ${expectedSectionSchema}/${expectedEntity}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}; re-run \`get-classic-list-columns\` for ${expectedSectionSchema}`;
+  }
+  return null;
+}
+
+// The COLUMN SET itself: every path usable, and the count consistent with the DECLARED source (`none` ⇒ empty,
+// anything else ⇒ non-empty). Three separate checks, each naming what it received. Returns the gate reason, or null.
+function resolvedColumnSetIssue(source, columns) {
+  const bad = columns.findIndex((name) => typeof name !== "string" || !RESOLVED_COLUMN_PATH.test(name));
+  if (bad !== -1) {
+    return `list-column evidence carries an unusable column path at index ${bad}: ${JSON.stringify(columns[bad] ?? null)} — re-run \`get-classic-list-columns\``;
+  }
+  if (source !== "none" && !columns.length) {
+    return `list-column evidence declares source '${source}' but carries no columns — re-run \`get-classic-list-columns\``;
+  }
+  if (source === "none" && columns.length) {
+    return `list-column evidence declares source 'none' but carries ${columns.length} column(s): ${columns.join(", ")} — re-run \`get-classic-list-columns\``;
+  }
+  return null;
+}
+
 function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSchema) {
   if (value?.success !== true) {
     return { error: `list-column read failed: ${value?.error || "get-classic-list-columns did not return success:true"} — fix the cause and re-run \`get-classic-list-columns\`, or drop \`section.listColumns\` to fall back to the section-chain parse` };
@@ -905,28 +939,12 @@ function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSche
     || typeof expectedSectionSchema !== "string" || !expectedSectionSchema) {
     throw new Error("section.listColumns requires manifest.entity and planMeta.sectionSchema to verify its provenance");
   }
-  if (!RESOLVED_COLUMN_SOURCES.includes(value.source) || !Array.isArray(value.columns)) {
-    return { error: `list-column evidence is malformed: source ${JSON.stringify(value.source ?? null)} (expected one of ${RESOLVED_COLUMN_SOURCES.join(" | ")}) with ${Array.isArray(value.columns) ? `${value.columns.length} column(s)` : "a non-array \`columns\` field"} — re-run \`get-classic-list-columns\`` };
-  }
-  // clio echoes `sectionSchema` back as the CALLER's own spelling (`sectionSchemaName.Trim()`) while resolving the
-  // hierarchy case-insensitively (`OrdinalIgnoreCase`), so `--schema-name applicant1section` legitimately returns
-  // lowercase. Compare the way the producer resolves, or a casing difference reads as evidence for another section.
-  const sameName = (a, b) => typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
-  if (!sameName(value.entity, expectedEntity) || !sameName(value.sectionSchema, expectedSectionSchema)) {
-    return { error: `list-column evidence belongs to another section — expected ${expectedSectionSchema}/${expectedEntity}, got ${value.sectionSchema ?? "?"}/${value.entity ?? "?"}; re-run \`get-classic-list-columns\` for ${expectedSectionSchema}` };
-  }
-  const names = value.columns.map((column) => typeof column === "string" ? column : column?.name);
-  const bad = names.findIndex((name) => typeof name !== "string" || !RESOLVED_COLUMN_PATH.test(name));
-  if (bad !== -1) {
-    return { error: `list-column evidence carries an unusable column path at index ${bad}: ${JSON.stringify(names[bad] ?? null)} — re-run \`get-classic-list-columns\`` };
-  }
-  const columns = [...new Set(names)];   // dedupe BEFORE any count check, so repeats don't read as rejected entries
-  if (value.source !== "none" && !columns.length) {
-    return { error: `list-column evidence declares source '${value.source}' but carries no columns — re-run \`get-classic-list-columns\`` };
-  }
-  if (value.source === "none" && columns.length) {
-    return { error: `list-column evidence declares source 'none' but carries ${columns.length} column(s): ${columns.join(", ")} — re-run \`get-classic-list-columns\`` };
-  }
+  const provenance = resolvedColumnProvenanceIssue(value, expectedEntity, expectedSectionSchema);
+  if (provenance) return { error: provenance };
+  // Dedupe BEFORE the count checks, so repeats never read as rejected entries.
+  const columns = [...new Set(value.columns.map((column) => typeof column === "string" ? column : column?.name))];
+  const set = resolvedColumnSetIssue(value.source, columns);
+  if (set) return { error: set };
   return {
     source: value.source,
     columns,
@@ -952,6 +970,15 @@ function sectionInput(section, manifest) {
   return { schemas, resolvedListColumns: resolved, listColumnIssue: null };
 }
 
+// Provenance of the columns the plan will actually RENDER: the resolver's own `source` when its set is the one
+// shown, `schema-default` when the rendered set came from the section-chain parse, and otherwise the resolver's
+// verdict (`none`) or nothing at all. Own fn rather than a nested ternary inline (Sonar S3358).
+function resolvedColumnSource(useResolved, resolvedListColumns, chainColumns) {
+  if (useResolved) return resolvedListColumns.source;
+  if (chainColumns.length) return "schema-default";
+  return resolvedListColumns?.source ?? null;
+}
+
 // Union the *Section chain's list-page signals (add-record mini page, section actions, list columns, quick
 // filters, process launch) into one section object — null only when NEITHER section schemas nor resolved list
 // columns were supplied. Extracted to keep runMigration under CC 15.
@@ -975,9 +1002,7 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null) {
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
     sectionActions: [...new Set(sectionSchemas.flatMap((l) => l.sectionActions || []))],
     listColumns: useResolved ? resolvedListColumns.columns : chainColumns,
-    listColumnSource: useResolved
-      ? resolvedListColumns.source
-      : (chainColumns.length ? "schema-default" : resolvedListColumns?.source ?? null),
+    listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,
     quickFilters,
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
