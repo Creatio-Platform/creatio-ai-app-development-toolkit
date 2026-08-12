@@ -34,6 +34,47 @@ Use these values for CAADT product telemetry when calling clio telemetry tools:
 - `coding_agent`: your host coding agent (for example `Claude Code`, `Codex`, `GitHub Copilot CLI`, or `Cursor`).
 - `plugin_version`: the installed plugin version from the plugin manifest (`plugin.json` `version`).
 
+## Product telemetry — the stage vocabulary plus your `workflow` value
+
+Read `../../context/product-telemetry.md`. Event names are **flow-agnostic stages**
+(`workflow_started`, `plan_presented`, `plan_approved`, `build_started`, `work_item_completed`,
+`workflow_completed`, `workflow_failed`, ...); which flow it was travels in the `workflow` field. Send the
+Analytics Context values above on every event.
+
+- **Full app generation or business-shaped feature work** → `workflow: "app-creation"`. Map the stages onto
+  this flow's gates: `plan_presented` when the BA-style Business Plan is shown in full, `plan_approved` at
+  Gate R, `build_started` once runtime context is available, `work_item_completed` per created
+  section/page. The legacy `session_started` / `business_plan_*` / `implementation_*` names still work but
+  are deprecated — prefer the stages.
+- **A targeted, implementation-ready change** to an existing app → `workflow: "app-maintenance"`, with
+  `plan_skipped` at the start to make the skipped planning explicit. These runs skip Gate P/R, so they have
+  no approval stage — but they are not exempt from telemetry, which is exactly the gap this closes.
+- **A run you delegate to another skill** (Classic→Freedom migration, web→mobile conversion, branding) →
+  that skill owns its own emission points and its own `workflow` value; do not emit on its behalf.
+
+Both flows this skill owns emit the same stages; only the points differ:
+
+| Send | `app-creation` — at the point where you | `app-maintenance` — at the point where you |
+| --- | --- | --- |
+| `workflow_started` | take the first request | take the first request |
+| `clarification_requested` / `user_input_received` | ask a discovery question / receive the answer | ask anything the change waits on / receive the answer |
+| `plan_presented` | show the full BA-style Business Plan | — |
+| `plan_skipped` | — | start the run (makes the skipped planning explicit) |
+| `plan_changes_requested` | receive a change request before Gate R | — |
+| `plan_approved` | get Gate R confirmation | — |
+| `build_started` | begin implementing, once runtime context is available | begin the first write |
+| `work_item_completed` | finish each section/page (`variant` = `section` / `page`) | finish each applied change |
+| `workflow_completed` / `workflow_failed` | reach the end of the run | reach the end of the run |
+| `changes_requested` | the developer asks for more changes after completion | same |
+| `changes_applied` | those follow-up changes are applied and verified | same |
+
+`build_started` is emitted in **both** flows, even though a targeted edit has no approval boundary before
+it — that keeps "how many runs actually reached the writing phase" a single query across every workflow
+instead of a per-flow special case.
+
+Telemetry is non-blocking: never let it gate or delay the user's task, and if clio rejects an event name
+(older clio), stop emitting for the rest of the run and carry on.
+
 ## Core Rules
 
 - Pages are separate for web and mobile: before any page edit, read `../../context/essentials.md` ("Freedom UI — Mobile Pages") and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.

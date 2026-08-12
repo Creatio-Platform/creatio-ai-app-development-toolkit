@@ -47,6 +47,28 @@ theme name:
 - Everything else still holds: the single final summary and confirmation before applying, and
   the environment-wide visibility warning in Build and apply.
 
+## Product telemetry — emit the shared stages with `workflow: "branding"`
+
+Read `../../context/product-telemetry.md` and emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+identified by the `workflow` field, so do not invent `branding_*` event names — clio rejects them.
+
+| Send | With | At the point where you |
+| --- | --- | --- |
+| `workflow_started` | — | take the first branding request |
+| `clarification_requested` / `user_input_received` | — | ask for brand inputs / receive them, including the palette confirmation |
+| `plan_presented` | — | present the single final summary, before applying anything |
+| `plan_changes_requested` | — | receive a change request before applying |
+| `plan_approved` | — | get confirmation of that summary — before anything is applied environment-wide |
+| `build_started` | — | begin applying |
+| `work_item_completed` | `variant` = `theme` / `logo` / `background` | finish applying each asset |
+| `workflow_completed` / `workflow_failed` | — | reach the end of the run |
+| `changes_requested` | — | the developer asks for further branding changes AFTER it was applied. Emit before starting that follow-up work |
+| `changes_applied` | — | the follow-up changes are applied and verified |
+
+On an asset-only request, emit only the stages that request actually reaches. Keep the consent question
+separate from the brand intake questions. Telemetry is non-blocking: never let it gate or delay the flow,
+and if clio rejects an event name (older clio), stop emitting for the rest of the run and carry on.
+
 ## Resolve the target environment first
 
 Before collecting brand inputs, make sure there is a Creatio environment to apply the branding

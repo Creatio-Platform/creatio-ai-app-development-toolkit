@@ -53,7 +53,7 @@ Reading rules:
 | `Usr` prefixes, casing, GUIDs, binding naming | `context/naming-conventions.md` | naming policy |
 | Local clio CLI commands | `context/clio-cli-reference.md` | environment setup, package management, dev tools |
 | DataForge tool parameter contract and response fields | `context/model-discovery-evidence.md` | DataForge tool reference for Agent 1 availability check |
-| Product telemetry consent, events, and payload | `context/product-telemetry.md` | consent flow, the 14 workflow events, and the agent-sent payload fields |
+| Product telemetry consent, events, and payload | `context/product-telemetry.md` | consent flow, the payload fields, the flow-agnostic stage vocabulary, and the `workflow` values that identify each flow (app-creation, classic-to-freedom-migration, mobile-page-conversion, branding, app-maintenance) |
 | MCP transport helper | `runtime/scripts/mcp_client.py` | stdio client wrapper — explicit opt-in escape hatch only, used after the developer opts in on a host with no native clio MCP; never the automatic response to an unavailable server |
 
 ## Canonical MCP Guidance

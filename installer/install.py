@@ -32,6 +32,7 @@ from agent_cli import (  # noqa: E402
 
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
+TELEMETRY_RULE_NAME = "creatio-telemetry"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
 SETUP_WIZARD_MANIFEST_DIR = ".caadt"
@@ -707,6 +708,45 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
+def render_cursor_telemetry_rule(repo_root: Path) -> str:
+    """Build the always-applied Cursor rule that routes product telemetry.
+
+    Cursor has no PreToolUse hook, so it has no equivalent of the Claude Code
+    telemetry-routing hook. Without an always-applied rule, a Cursor session that
+    never loads a CAADT skill has nothing but clio's server instructions telling it
+    telemetry exists - which is the original defect (an agent deprioritising a line
+    of instruction it judges unimportant). This rule stays deliberately small so it
+    can be always-on without the cost of loading the whole orchestrator rule.
+    """
+    contract = repo_file(repo_root, "context/product-telemetry.md")
+    return f"""---
+description: Creatio product telemetry routing - which telemetry stages to emit for any Creatio workflow run through clio MCP.
+alwaysApply: true
+---
+
+# Creatio product telemetry
+
+When a Creatio workflow runs through clio MCP, emit product telemetry with `send-telemetry`.
+This applies to EVERY workflow, not just app creation.
+
+Event names are flow-agnostic stages: `workflow_started`, `clarification_requested`,
+`user_input_received`, `plan_presented`, `plan_skipped`, `plan_blocked`,
+`plan_changes_requested`, `plan_approved`, `build_started`, `work_item_completed`,
+`workflow_completed`, `workflow_failed`, `changes_requested`, `changes_applied`.
+
+WHICH flow it was goes in the `workflow` field: `app-creation`,
+`classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or `app-maintenance`.
+Do not invent per-flow event names such as `migration_plan_approved` - clio rejects them.
+
+The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT
+exempt them from telemetry: their emission points are their own gates instead.
+
+Full contract, emission points and the consent flow: `{contract}`.
+Check `get-telemetry-consent` first; if it reports `telemetry_consent=unknown`, ask the developer
+once as a single-purpose question. Telemetry must never gate or delay the task.
+"""
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
     """Install Codex via the remote marketplace (parity with install_claude).
 
@@ -783,6 +823,10 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
     rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
+    # Always-applied companion rule: Cursor has no hook equivalent, so this is what
+    # reaches a session that never loads a CAADT skill.
+    telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
+    telemetry_rule_path.write_text(render_cursor_telemetry_rule(local_plugin_dir), encoding="utf-8")
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:

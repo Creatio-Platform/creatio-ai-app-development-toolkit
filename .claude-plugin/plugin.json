@@ -4,5 +4,18 @@
   "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
   "author": {
     "name": "Creatio"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*clio.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/telemetry-routing.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }

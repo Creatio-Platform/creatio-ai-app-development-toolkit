@@ -11,6 +11,18 @@ Use this skill to help agents create or review Creatio Freedom UI pages that loo
 
 **Judge the rendered page, not the schema.** When reviewing or auditing an existing page, base your findings on the actual RENDERED page (screenshot + live accessibility tree), and walk the fill scenario first — only then reconcile with the schema/metadata. Many defects are visual-only and invisible in the schema or a11y tree: empty/unbalanced islands, group headers that don't render, weak placeholders, spacing/proportion issues. "Looks fine in the schema" is not evidence the page is fine.
 
+## Product telemetry — this skill has no workflow of its own
+
+This is an **overlay**: it supplies naming/design rules to whichever flow is running, and it never owns a
+run. Do **not** emit a separate telemetry session for it — the enclosing flow (app creation, migration,
+mobile conversion, branding) already reports its own stages, and a second session would double-count.
+
+The one exception is running **standalone**: if the developer invoked this skill directly and no other
+CAADT flow is active, yet the run goes on to change the environment, that run is a targeted edit — emit
+the `app-maintenance` stages from `../../context/product-telemetry.md` (`workflow_started`,
+`plan_skipped`, `work_item_completed`, `workflow_completed` / `workflow_failed`) so the change is not
+invisible. Telemetry is non-blocking and never gates the review or the edit.
+
 ## Operating mode
 
 1. Clarify the page goal only when the task cannot proceed without it. Prefer best-effort recommendations over blocking.

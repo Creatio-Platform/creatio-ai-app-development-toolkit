@@ -22,6 +22,30 @@ These eight rules are non-negotiable. Everything else in this skill serves them.
 
 > **This plan is standalone.** A Classic→Freedom migration is a technical UI-transformation, not a business-requirements task — so its plan is the engine-written `plan.md` above (Overview / Main scope / Layout / Logic / ⚠ Confirm), **not** a BA-style Business Plan, and it does **not** go through the orchestrator's Gate P/R (`AGENTS.md` exempts this skill). Present the engine's `plan.md` verbatim (rule 2).
 
+## Product telemetry — emit the shared stages with `workflow: "classic-to-freedom-migration"`
+
+Read `../../context/product-telemetry.md` and emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+identified by the `workflow` field, so do not invent `migration_*` event names — clio rejects them.
+
+Every stage lands on a point the Contract above **already** forces you to stop at:
+
+| Send | With | At the point where you |
+| --- | --- | --- |
+| `workflow_started` | `variant` = `single-section` / `package` / `existing-freedom-reconcile` | take the first request and settle the scope |
+| `clarification_requested` / `user_input_received` | — | ask the developer something / receive their answer |
+| `plan_blocked` | `variant=engine-gate` | get a `⛔` run — `gate.blocked` or `structure.complete=false` (rule 3). Emit per blocked run |
+| `plan_presented` | — | present the engine-written `plan.md` verbatim (rule 2) |
+| `plan_changes_requested` | — | receive a change request, including re-approval of an amended frozen plan |
+| `plan_approved` | — | get explicit approval — before the first Freedom artifact (rule 1) |
+| `build_started` | — | begin creating Freedom artifacts |
+| `work_item_completed` | `variant=page` | finish and verify each page, once per page |
+| `workflow_completed` / `workflow_failed` | — | reach the end of the run |
+| `changes_requested` | — | the developer asks for further changes AFTER the run completed. Emit before starting that follow-up work |
+| `changes_applied` | — | the follow-up changes are applied and verified |
+
+Telemetry is non-blocking: never let it gate, delay, or alter the migration, and if clio rejects an event
+name (older clio), stop emitting for the rest of the run and carry on.
+
 ## Inputs
 
 - A Creatio section/page URL, or a section/page/entity name.
