@@ -375,12 +375,14 @@ which applies here in full and is stricter for a build than for an analysis.
 1. **The `Workflow` tool (preferred on Claude Code).** Invoking this skill is the user's opt-in
    to the orchestration its own steps call for, so the workflow needs no separate permission —
    and, unlike the Agent tool, it is not subject to the host rule some sessions carry that
-   forbids launching a sub-agent unless the user asked for one in that turn. Call it **by name**:
-   `Workflow({ name: "creatio-freedom-build-executor", args: {
+   forbids launching a sub-agent unless the user asked for one in that turn. Call it **by script
+   path** — the script ships beside this file:
+   `Workflow({ scriptPath: "./freedom-build-executor.workflow.js", args: {
    manifest, environment, outDir, planFile, engine, customizations, behaviourIndex,
-   sectionSchema } })`. The script also ships beside this file as
-   `./freedom-build-executor.workflow.js` — pass it as `scriptPath`, resolved to its absolute path
-   in the plugin dir, when the name does not resolve (see "Named-workflow availability" below). Resolve
+   sectionSchema } })`, resolved to its absolute path in the plugin dir.
+   `name: "creatio-freedom-build-executor"` resolves only where the installer has mirrored it, which
+   on Claude Code is usually nowhere, so do not spend a call probing it first (see "Named-workflow
+   availability" below). Resolve
    `engine` the same way: it is the absolute path to the migration skill's `engine/migrate.mjs`
    (or the `engine/` directory holding it), it is resolved ONCE and interpolated into every
    prompt, and the run refuses to start without it rather than sending a placeholder to an agent.
@@ -398,16 +400,18 @@ which applies here in full and is stricter for a build than for an analysis.
    multi-unit build it has not once reached a first closed unit before the context ended — say so in
    worklog.md, and prefer 1 or 2 whenever either can run.
 
-**Named-workflow availability.** The toolkit's installer mirrors this script into user scope on
-install — under `~/.claude/workflows/` as `creatio-freedom-build-executor.js`, named after this
-script's own `meta.name` — and re-mirrors it from the updated plugin cache on every Claude update.
-The marketplace itself cannot register a named workflow. That is why `name:` is the normal call: no absolute path to resolve into a
-plugin-cache directory that moves with every version. `scriptPath` stays correct in two cases, and
-neither is an error: user-scope workflows are discovered at **session start**, so a freshly installed
-name only resolves in the next session, and a checkout the installer never ran against has no mirror.
-The in-tree script is the version-matched one by construction — if a `name:` run rejects an argument
-this file documents, the mirror is stale: use `scriptPath` and re-run the installer. **Neither form
-changes permission** — a named workflow is not pre-authorized, so the gate above applies to both.
+**Named-workflow availability — `scriptPath` is the primary call.** A name resolves ONLY from
+`~/.claude/workflows/` (user scope) or a project's `.claude/workflows/`; the plugin cache is never
+scanned. `installer/install.py` mirrors this script there as `creatio-freedom-build-executor.js`
+(after its own `meta.name`) and `update.py` re-mirrors from the updated cache — but **on Claude Code
+nothing invokes either**, because the plugin declares no hook, so a marketplace-installed host has no
+mirror at all and `name:` returns `not found`. Use it only where you know the installer ran against
+this host (`python installer/install.py` — the Cursor/Codex/manual targets) and the mirror predates
+this session, since user-scope workflows are discovered at **session start**. Prefer `scriptPath`
+even then: the in-tree script is version-matched by construction, while a mirror left from another
+version — the normal state after a plugin-branch switch — resolves the right NAME to the wrong
+SCRIPT, silently. **Neither form changes permission** — a named workflow is not pre-authorized, so
+the gate above applies to both.
 
 ## Scope
 
